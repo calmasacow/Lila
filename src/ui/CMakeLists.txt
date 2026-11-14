@@ -10,7 +10,7 @@ lila_module(lila_ui UI
     AdjustLastOp.cpp AdjustLastOp.h
     CommandPreview.cpp CommandPreview.h
     AppMain.cpp AppMain.h
-    FlagFields.cpp FlagFields.h
+    FlagFields.cpp FlagFields.h GroupedChoice.cpp GroupedChoice.h
     OptionBox.cpp OptionBox.h
     MenuSearch.cpp MenuSearch.h
     CommandPalette.cpp CommandPalette.h CommandHistory.h
