@@ -14,6 +14,7 @@
 
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "core/PrefStore.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
@@ -34,6 +35,7 @@
 #include "ui/TextureGraphUi.h"
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
+#include "ui/ViewportLayout.h"
 
 #include <QApplication>
 #include <QCheckBox>
@@ -81,6 +83,40 @@ constexpr int kRoleId = Qt::UserRole + 1;
 constexpr int kRoleLayer = Qt::UserRole + 2;
 constexpr int kRoleFolder = Qt::UserRole + 3;
 constexpr const char* kAllChannels = "";
+constexpr const char* kPrefLinkResolution = "/textureSets/linkResolution";
+/** From this width the panel shows two columns: the set's settings and the smart materials beside the layers. */
+constexpr int kWideWidth = 600;
+constexpr int kSideWidth = 300;
+
+/** A scroll area as tall as its content while there is room for it, scrolling the content when there isn't. */
+class FitScrollArea final : public QScrollArea
+{
+public:
+    explicit FitScrollArea(QWidget* parent) : QScrollArea(parent)
+    {
+        setWidgetResizable(true);
+        setFrameShape(QFrame::NoFrame);
+        setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    }
+
+    QSize sizeHint() const override { return widget() ? widget()->sizeHint() : QScrollArea::sizeHint(); }
+
+protected:
+    bool event(QEvent* e) override
+    {
+        if (e->type() == QEvent::LayoutRequest)
+            updateGeometry();
+        return QScrollArea::event(e);
+    }
+
+    bool eventFilter(QObject* o, QEvent* e) override
+    {
+        if (o == widget() && e->type() == QEvent::LayoutRequest)
+            updateGeometry();
+        return QScrollArea::eventFilter(o, e);
+    }
+};
 
 /** A middle click picks item `index` and commits it as a user pick does (these combos act on activated). */
 void texComboDefaultIndex(QComboBox* c, int index)
@@ -482,6 +518,12 @@ struct TextureSetPanel::Impl
     QScrollArea* propsScroll = nullptr;
     QWidget* props = nullptr;
     QListWidget* shelf = nullptr;
+    QWidget* shelfBox = nullptr;
+    QBoxLayout* columns = nullptr;
+    QWidget* side = nullptr;
+    QVBoxLayout* sideLayout = nullptr;
+    QSplitter* split = nullptr;
+    bool wide = false;
     QWidget* empty = nullptr;
     QTimer* refreshTimer = nullptr;
     int sceneListener = 0;
@@ -1152,6 +1194,8 @@ struct TextureSetPanel::Impl
         rg->setContentsMargins(0, 0, 0, 0);
         rg->setHorizontalSpacing(4);
         rg->setVerticalSpacing(2);
+        rg->setColumnStretch(1, 1);
+        rg->setColumnStretch(3, 1);
         rg->addWidget(new QLabel("Default", res), 0, 0);
         auto* w = sizeBox(res, settings.width, false);
         w->setObjectName("width");
@@ -1159,14 +1203,21 @@ struct TextureSetPanel::Impl
         hgt->setObjectName("height");
         texComboDefaultIndex(w, w->findData(tex::SetSettings{}.width));
         texComboDefaultIndex(hgt, hgt->findData(tex::SetSettings{}.height));
-        auto setSize = [this, w, hgt] {
-            runUi("texSetSettings", args({json{{"width", w->currentData().toInt()}, {"height", hgt->currentData().toInt()}}}));
+        auto* link = toolButton(res, "link", "Link: width and height change together");
+        link->setObjectName("linkResolution");
+        link->setCheckable(true);
+        link->setChecked(PrefStore::get().value<bool>("general", kPrefLinkResolution, true));
+        QObject::connect(link, &QToolButton::toggled, res, [](bool on) { PrefStore::get().set("general", kPrefLinkResolution, on); });
+        auto setSize = [this, w, hgt, link](QComboBox* changed) {
+            const bool both = link->isChecked();
+            runUi("texSetSettings", args({json{{"width", (both ? changed : w)->currentData().toInt()}, {"height", (both ? changed : hgt)->currentData().toInt()}}}));
         };
-        QObject::connect(w, &QComboBox::activated, res, setSize);
-        QObject::connect(hgt, &QComboBox::activated, res, setSize);
+        QObject::connect(w, &QComboBox::activated, res, [setSize, w](int) { setSize(w); });
+        QObject::connect(hgt, &QComboBox::activated, res, [setSize, hgt](int) { setSize(hgt); });
         rg->addWidget(w, 0, 1);
         rg->addWidget(new QLabel(QString(QChar(0x00D7)), res), 0, 2);
         rg->addWidget(hgt, 0, 3);
+        rg->addWidget(link, 0, 4);
         for (size_t i = 0; i < settings.tiles.size(); ++i)
         {
             const tex::Tile& t = settings.tiles[i];
@@ -1178,19 +1229,20 @@ struct TextureSetPanel::Impl
             tw->setToolTip("This tile's width; Set uses the default");
             texComboDefaultIndex(tw, 0);
             texComboDefaultIndex(th, 0);
-            auto setTile = [this, i, tw, th] {
+            auto setTile = [this, i, tw, th, link](QComboBox* changed) {
+                const bool both = link->isChecked();
                 json s = settings.toJson();
                 json& tile = s["tiles"][i];
                 tile.erase("width");
                 tile.erase("height");
-                if (int v = tw->currentData().toInt(); v > 0)
+                if (int v = (both ? changed : tw)->currentData().toInt(); v > 0)
                     tile["width"] = v;
-                if (int v = th->currentData().toInt(); v > 0)
+                if (int v = (both ? changed : th)->currentData().toInt(); v > 0)
                     tile["height"] = v;
                 runUi("texSetSettings", args({json{{"tiles", s["tiles"]}}}));
             };
-            QObject::connect(tw, &QComboBox::activated, res, setTile);
-            QObject::connect(th, &QComboBox::activated, res, setTile);
+            QObject::connect(tw, &QComboBox::activated, res, [setTile, tw](int) { setTile(tw); });
+            QObject::connect(th, &QComboBox::activated, res, [setTile, th](int) { setTile(th); });
             rg->addWidget(tw, r, 1);
             rg->addWidget(new QLabel(QString(QChar(0x00D7)), res), r, 2);
             rg->addWidget(th, r, 3);
@@ -1202,7 +1254,7 @@ struct TextureSetPanel::Impl
                     s["tiles"].erase(s["tiles"].begin() + std::ptrdiff_t(i));
                     runUi("texSetSettings", args({json{{"tiles", s["tiles"]}}}));
                 });
-                rg->addWidget(rm, r, 4);
+                rg->addWidget(rm, r, 5);
             }
         }
         v->addWidget(res);
@@ -1236,6 +1288,11 @@ struct TextureSetPanel::Impl
         auto* conv = new QComboBox(settingsBox);
         conv->addItem("OpenGL (Y+)", "opengl");
         conv->addItem("DirectX (Y-)", "directx");
+        conv->setItemData(0, "Green points up. Unity, Godot, Blender, Maya", Qt::ToolTipRole);
+        conv->setItemData(1, "Green points down. Unreal, 3ds Max, Source", Qt::ToolTipRole);
+        conv->setToolTip("Normals: which way the normal map's green channel points\n"
+                         "OpenGL (Y+): Unity, Godot, Blender, Maya\n"
+                         "DirectX (Y-): Unreal, 3ds Max, Source");
         conv->setCurrentIndex(std::max(0, conv->findData(qs(settings.normalConvention))));
         texComboDefault(conv, qs(tex::SetSettings{}.normalConvention));
         QObject::connect(conv, &QComboBox::activated, settingsBox,
@@ -1290,6 +1347,29 @@ struct TextureSetPanel::Impl
         QObject::connect(box, &QComboBox::activated, parent,
                          [this, box](int) { runUi("texSetSettings", args({json{{"material", box->currentData().toString().toStdString()}}})); });
         return box;
+    }
+
+    /** Wide: the smart materials sit under the settings in the side column. Narrow: one column, with them under the layers. */
+    void setWide(bool on)
+    {
+        if (on == wide)
+            return;
+        wide = on;
+        columns->setDirection(on ? QBoxLayout::LeftToRight : QBoxLayout::TopToBottom);
+        columns->setSpacing(on ? 8 : 4);
+        if (on)
+        {
+            side->setFixedWidth(kSideWidth);
+            sideLayout->addWidget(shelfBox, 1);
+        }
+        else
+        {
+            side->setMinimumWidth(0);
+            side->setMaximumWidth(QWIDGETSIZE_MAX);
+            split->addWidget(shelfBox);
+            split->setStretchFactor(2, 1);
+        }
+        shelfBox->show();
     }
 
     void rebuildChannelPicker()
@@ -1643,6 +1723,7 @@ struct TextureSetPanel::Impl
     void refresh()
     {
         refreshSets();
+        texture2d::showSet(set);
         scene::Node* n = setNode();
         json nextView;
         tex::SetSettings nextSettings;
@@ -1816,6 +1897,8 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     auto* v = new QVBoxLayout(this);
     v->setContentsMargins(4, 4, 4, 4);
     v->setSpacing(4);
+    // The two columns need more width than the panel switches back to one at, so the layout must not hold it wide.
+    v->setSizeConstraint(QLayout::SetNoConstraint);
 
     auto* top = new QHBoxLayout();
     d->sets = new QComboBox(this);
@@ -1829,14 +1912,48 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     controls::setRole(d->follow, "push");
     auto* newSet = toolButton(this, "plus", "New Texture Set");
     QObject::connect(newSet, &QToolButton::clicked, this, [] { actions::run(json("texture.newSet")); });
+    auto* openGraph = toolButton(this, "node-editor", "Texture Graph: open this set's nodes");
+    openGraph->setObjectName("openGraph");
+    connect(openGraph, &QToolButton::clicked, this, [this] { openSelectedAsNodes(); });
     top->addWidget(d->sets, 1);
     top->addWidget(d->follow);
+    top->addWidget(openGraph);
     top->addWidget(newSet);
+    if (ViewportLayout* views = ViewportLayout::main())
+    {
+        auto* mode = new controls::Segmented(this);
+        mode->setObjectName("viewMode");
+        mode->add("3D", {}, "3D: the viewport alone", int(ViewportLayout::TextureView::View3D));
+        mode->add("Split", {}, "Split: the viewport beside the texture laid out in UV space", int(ViewportLayout::TextureView::Split));
+        mode->add("2D", {}, "2D: the texture laid out in UV space, in place of the viewport", int(ViewportLayout::TextureView::View2D));
+        mode->setCurrent(int(views->textureView()));
+        mode->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
+        connect(mode, &controls::Segmented::picked, views, [views](int id) { views->setTextureView(ViewportLayout::TextureView(id)); });
+        connect(views, &ViewportLayout::textureViewChanged, mode, [mode, views] { mode->setCurrent(int(views->textureView())); });
+        top->addSpacing(8);
+        top->addWidget(mode);
+    }
     v->addLayout(top);
 
+    d->columns = new QBoxLayout(QBoxLayout::TopToBottom);
+    d->columns->setContentsMargins(0, 0, 0, 0);
+    d->columns->setSpacing(4);
+    v->addLayout(d->columns, 1);
+    d->side = new QWidget(this);
+    d->sideLayout = new QVBoxLayout(d->side);
+    d->sideLayout->setContentsMargins(0, 0, 0, 0);
+    d->sideLayout->setSpacing(4);
     d->settingsBox = new QWidget(this);
     d->settingsBox->setObjectName("setSettings");
-    v->addWidget(controls::section("Channels and Resolution", d->settingsBox, this, "/textureSets/collapsed", false, &d->settingsToggle));
+    auto* settingsScroll = new FitScrollArea(d->side);
+    settingsScroll->setWidget(controls::section("Channels and Resolution", d->settingsBox, this, "/textureSets/collapsed", false, &d->settingsToggle));
+    d->sideLayout->addWidget(settingsScroll);
+    d->columns->addWidget(d->side);
+    auto* main = new QWidget(this);
+    d->columns->addWidget(main, 1);
+    v = new QVBoxLayout(main);
+    v->setContentsMargins(0, 0, 0, 0);
+    v->setSpacing(4);
 
     d->bannerBox = new QWidget(this);
     d->bannerBox->setObjectName("graphModeBanner");
@@ -1917,7 +2034,8 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->propsScroll = new QScrollArea(split);
     d->propsScroll->setWidgetResizable(true);
     d->propsScroll->setFrameShape(QFrame::NoFrame);
-    auto* shelfBox = new QWidget(split);
+    d->split = split;
+    auto* shelfBox = d->shelfBox = new QWidget(split);
     auto* sv = new QVBoxLayout(shelfBox);
     sv->setContentsMargins(0, 2, 0, 0);
     sv->setSpacing(2);
@@ -2067,6 +2185,14 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
         if (now && isAncestorOf(now))
             lastFocusedPanel() = this;
     });
+}
+
+QSize TextureSetPanel::minimumSizeHint() const { return {240, 160}; }
+
+void TextureSetPanel::resizeEvent(QResizeEvent* e)
+{
+    QWidget::resizeEvent(e);
+    d->setWide(width() >= kWideWidth);
 }
 
 TextureSetPanel::~TextureSetPanel()

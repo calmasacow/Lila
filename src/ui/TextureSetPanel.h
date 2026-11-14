@@ -92,6 +92,11 @@ public:
     /** The panel the textureSets.* actions act on: the focused one, else the last focused, else any. */
     static TextureSetPanel* active();
 
+    QSize minimumSizeHint() const override;
+
+protected:
+    void resizeEvent(QResizeEvent* e) override;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> d;

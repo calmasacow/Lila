@@ -361,13 +361,44 @@ void openSet(const std::string& set)
         e->setGroup(qs(set));
 }
 
+/** The texture size the smallest of a material's maps fills, per side; invalid when it has no map that can be read. */
+QSize sizeFromMaps(const std::string& slot)
+{
+    scene::Node* material = scene::materials::find(scene::Graph::current(), slot);
+    if (!material)
+        return {};
+    QSize least;
+    for (const auto& [channel, attr] : scene::materials::textureChannels())
+    {
+        const std::string path = material->as<std::string>(attr);
+        // The stroke sheet is a brush pattern, not a map of the surface.
+        if (path.empty() || channel == "stroke")
+            continue;
+        const QSize size = QImageReader(qs(scene::materials::resolvePath(path))).size();
+        if (size.isValid())
+            least = least.isValid() ? least.boundedTo(size) : size;
+    }
+    if (!least.isValid())
+        return {};
+    auto snap = [](int side) { return std::clamp(int(std::bit_floor(unsigned(std::max(side, 1)))), 512, 16384); };
+    return {snap(least.width()), snap(least.height())};
+}
+
 void newSet()
 {
     UndoChunk chunk("New Texture Set");
     std::string slot = slotForNewSet();
     json call = argsCall({uniqueName(slot.empty() ? "TextureSet" : tex::defaultSetName(slot))});
     if (!slot.empty())
+    {
         call["settings"] = {{"material", slot}};
+        if (const QSize size = sizeFromMaps(slot); size.isValid())
+        {
+            call["settings"]["width"] = size.width();
+            call["settings"]["height"] = size.height();
+            log::info("{}: {} x {}, the size of the material's smallest map", slot, size.width(), size.height());
+        }
+    }
     json r = runUi("texCreateSet", call);
     if (r.is_string())
         openSet(r.get<std::string>());
@@ -505,6 +536,7 @@ void registerTextureGraphUi()
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
     menus::addActions("Texture", {"texture.newSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.exportMaterial",
-                                  "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview"});
+                                  "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview", "#View", "viewport.textureView3d",
+                                  "viewport.textureViewSplit", "viewport.textureView2d"});
 }
 } // namespace lila::ui
