@@ -302,7 +302,11 @@ BakerPanel::BakerPanel(QWidget* parent) : QWidget(parent)
     mLintTimer = new QTimer(this);
     mLintTimer->setSingleShot(true);
     mLintTimer->setInterval(500);
-    connect(mLintTimer, &QTimer::timeout, this, [this] { runLint(false); });
+    connect(mLintTimer, &QTimer::timeout, this, [this] {
+        // A layout restore shows and hides tabs; only a panel still on screen checks.
+        if (isVisible())
+            runLint(false);
+    });
 
     QPointer<BakerPanel> self(this);
     mGraphListener = graph().addListener([self](scene::Change c, scene::NodeId id) {
