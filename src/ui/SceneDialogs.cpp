@@ -324,6 +324,25 @@ private:
     int mNotches = 0;
 };
 
+/** Holds the examples list at a whole number of rows, so a card is never cut off at the bottom edge. */
+class WholeRows : public QWidget
+{
+public:
+    WholeRows(QListWidget* list, QWidget* parent) : QWidget(parent), mList(list) { mList->setParent(this); }
+
+protected:
+    void resizeEvent(QResizeEvent*) override
+    {
+        const int row = std::max(1, mList->gridSize().height());
+        const int frame = 2 * mList->frameWidth();
+        const int rows = std::max(1, (height() - frame) / row);
+        mList->setGeometry(0, 0, width(), std::min(height(), rows * row + frame));
+    }
+
+private:
+    QListWidget* mList;
+};
+
 QString qpath(const fs::path& p)
 {
     return QString::fromStdWString(p.wstring());
@@ -1207,8 +1226,9 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
                 item->setData(Qt::DecorationRole, QPixmap(qpath(x.thumbnail)));
             mExampleList.push_back(x);
         }
-        mExamples->setFixedWidth(examplesWidth(1));
-        right->addWidget(mExamples, 1);
+        auto* examplesArea = new WholeRows(mExamples, this);
+        examplesArea->setFixedWidth(examplesWidth(1));
+        right->addWidget(examplesArea, 1);
 
         showNews(news::cached());
         QPointer<StartupDialog> self = this;
