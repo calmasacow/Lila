@@ -1198,6 +1198,7 @@ json paintStroke(const Args& a)
 
 void registerPathCommands();
 void registerPickCommands();
+void registerStrokeEditCommands();
 void registerTransferCommands();
 
 void registerCommands()
@@ -1208,6 +1209,7 @@ void registerCommands()
     done = true;
     registerPathCommands();
     registerPickCommands();
+    registerStrokeEditCommands();
     registerTransferCommands();
     installSync();
     // Texture exports and texEvaluate read paint layers from the pages, brought up to date first.

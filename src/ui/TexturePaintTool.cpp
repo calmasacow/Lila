@@ -58,6 +58,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMainWindow>
 #include <QPointer>
 #include <QPushButton>
@@ -426,6 +427,253 @@ QDoubleSpinBox* settingSpin(QWidget* parent, double lo, double hi, double step, 
 
 void setQuickMask(bool on);
 void clearQuickMask();
+
+/** Set while the Strokes list waits for a click on the mesh: the next press picks a stroke instead of painting. */
+bool gPickingStroke = false;
+std::function<void(const json&)> gStrokePicked;
+
+/**
+ * The active paint layer's strokes, newest first: pick one from the list or the viewport, then change its colour, size or
+ * strength, move it up or down the layer's order, or delete it. Each change re-rasterises the layer from its records.
+ */
+class StrokeList final : public QWidget
+{
+public:
+    explicit StrokeList(QWidget* parent) : QWidget(parent)
+    {
+        auto* col = new QVBoxLayout(this);
+        col->setContentsMargins(0, 0, 0, 0);
+        col->setSpacing(4);
+        mList = new QListWidget(this);
+        mList->setObjectName("strokeList");
+        mList->setSelectionMode(QAbstractItemView::SingleSelection);
+        mList->setMaximumHeight(140);
+        col->addWidget(mList);
+        auto* row = new QHBoxLayout;
+        row->setSpacing(2);
+        mColor = new QPushButton(this);
+        mColor->setObjectName("strokeColor");
+        mColor->setToolTip("Colour: the stroke's colour channel");
+        mColor->setFixedWidth(36);
+        mSize = settingSpin(this, 1.0, 1000.0, 5.0, 0, "Size: the stroke's dabs scaled, in percent");
+        mSize->setObjectName("strokeSize");
+        mSize->setSuffix(" %");
+        mStrength = settingSpin(this, 0.0, 1.0, 0.05, 2, "Strength: the stroke's brush strength");
+        mStrength->setObjectName("strokeStrength");
+        row->addWidget(mColor);
+        row->addWidget(mSize, 1);
+        row->addWidget(mStrength, 1);
+        col->addLayout(row);
+        auto* buttons = new QHBoxLayout;
+        buttons->setSpacing(2);
+        mPick = toolIcon("pointer", "Pick: click a stroke on the mesh to select it");
+        mPick->setCheckable(true);
+        mUp = toolIcon("arrow-up", "Up: paint this stroke later, over the ones after it");
+        mDown = toolIcon("arrow-down", "Down: paint this stroke earlier, under the ones before it");
+        mDelete = toolIcon("trash", "Delete the stroke");
+        for (QToolButton* b : {mPick, mUp, mDown, mDelete})
+            buttons->addWidget(b);
+        buttons->addStretch(1);
+        col->addLayout(buttons);
+
+        connect(mList, &QListWidget::currentRowChanged, this, [this] { syncEditors(); });
+        connect(mPick, &QToolButton::toggled, this, [this](bool on) {
+            gPickingStroke = on;
+            gStrokePicked = on ? [this](const json& r) {
+                mPick->setChecked(false);
+                if (r.is_object())
+                    select(r.value("id", uint64_t(0)));
+            } : std::function<void(const json&)>();
+        });
+        connect(mColor, &QPushButton::clicked, this, [this] {
+            const json* st = current();
+            if (!st)
+                return;
+            glm::vec3 c(1.0f);
+            if (const json& ch = (*st)["channels"]; ch.contains("baseColor"))
+                c = {ch["baseColor"][0].get<float>(), ch["baseColor"][1].get<float>(), ch["baseColor"][2].get<float>()};
+            const QColor picked = colorPopup::getColor(QColor::fromRgbF(toDisplay(c.r), toDisplay(c.g), toDisplay(c.b)), mColor, "Stroke Colour");
+            if (picked.isValid())
+                edit({{"color", {fromDisplay(float(picked.redF())), fromDisplay(float(picked.greenF())), fromDisplay(float(picked.blueF()))}}});
+        });
+        connect(mSize, &QDoubleSpinBox::editingFinished, this, [this] {
+            if (mSize->value() != 100.0)
+                edit({{"sizeScale", mSize->value() / 100.0}});
+        });
+        connect(mStrength, &QDoubleSpinBox::editingFinished, this, [this] {
+            if (const json* st = current(); st && std::abs((*st)["strength"].get<double>() - mStrength->value()) > 1e-6)
+                edit({{"strength", mStrength->value()}});
+        });
+        connect(mUp, &QToolButton::clicked, this, [this] { move(+1); });
+        connect(mDown, &QToolButton::clicked, this, [this] { move(-1); });
+        connect(mDelete, &QToolButton::clicked, this, [this] {
+            if (const json* st = current())
+                run("texDeleteStrokes", {{"strokes", {(*st)["id"]}}});
+        });
+        mPoll.setInterval(400);
+        connect(&mPoll, &QTimer::timeout, this, [this] { refresh(); });
+        mPoll.start();
+    }
+
+    ~StrokeList() override
+    {
+        if (gPickingStroke)
+            gPickingStroke = false;
+        gStrokePicked = nullptr;
+    }
+
+    void refresh(bool force = false)
+    {
+        if (!isVisible() && !force)
+            return;
+        const std::string set = currentTextureSet();
+        scene::Node* n = set.empty() ? nullptr : tex::findSet(scene::Graph::current(), set);
+        std::string layer = n ? textureSets::activeLayer(set) : std::string();
+        tex::paint::PaintPtr paint = n ? tex::paint::readPaint(*n) : nullptr;
+        if (!force && set == mSet && layer == mLayer && paint == mPaint)
+            return;
+        mSet = set;
+        mLayer = layer;
+        mPaint = std::move(paint);
+        const uint64_t keep = current() ? (*current())["id"].get<uint64_t>() : 0;
+        mStrokes = json::array();
+        if (n && !layer.empty())
+            try
+            {
+                mStrokes = ops::execute("texStrokes", {{"args", {set, layer}}}, CallSource::UI);
+            }
+            catch (const std::exception&)
+            {
+                mStrokes = json::array();
+            }
+        const QSignalBlocker block(mList);
+        mList->clear();
+        for (size_t i = mStrokes.size(); i-- > 0;)
+        {
+            const json& st = mStrokes[i];
+            QString text = QString("%1  %2").arg(st["index"].get<int>() + 1).arg(QString::fromStdString(kindLabel(st["kind"].get<std::string>())));
+            if (st.value("path", false))
+                text += "  (path)";
+            auto* item = new QListWidgetItem(text, mList);
+            item->setData(Qt::UserRole, int(i));
+            if (const json& ch = st["channels"]; ch.contains("baseColor"))
+            {
+                QPixmap px(12, 12);
+                px.fill(QColor::fromRgbF(toDisplay(ch["baseColor"][0].get<float>()), toDisplay(ch["baseColor"][1].get<float>()), toDisplay(ch["baseColor"][2].get<float>())));
+                item->setIcon(QIcon(px));
+            }
+        }
+        if (mStrokes.empty())
+            new QListWidgetItem(layer.empty() ? "No paint layer selected" : "No strokes", mList);
+        select(keep);
+        syncEditors();
+    }
+
+private:
+    static std::string kindLabel(const std::string& kind)
+    {
+        std::string out = kind;
+        if (!out.empty())
+            out[0] = char(std::toupper(static_cast<unsigned char>(out[0])));
+        return out;
+    }
+
+    QToolButton* toolIcon(const char* name, const char* tip)
+    {
+        auto* b = new QToolButton(this);
+        b->setIcon(icon(name));
+        b->setAutoRaise(true);
+        b->setToolTip(tip);
+        return b;
+    }
+
+    const json* current() const
+    {
+        const QListWidgetItem* item = mList->currentItem();
+        if (!item || !item->data(Qt::UserRole).isValid())
+            return nullptr;
+        const int i = item->data(Qt::UserRole).toInt();
+        return i >= 0 && size_t(i) < mStrokes.size() ? &mStrokes[size_t(i)] : nullptr;
+    }
+
+    void select(uint64_t id)
+    {
+        for (int r = 0; r < mList->count(); ++r)
+            if (const QVariant v = mList->item(r)->data(Qt::UserRole); v.isValid() && mStrokes[size_t(v.toInt())]["id"].get<uint64_t>() == id)
+            {
+                mList->setCurrentRow(r);
+                return;
+            }
+    }
+
+    void syncEditors()
+    {
+        const json* st = current();
+        for (QWidget* w : std::initializer_list<QWidget*>{mColor, mSize, mStrength, mUp, mDown, mDelete})
+            w->setEnabled(st != nullptr);
+        const QSignalBlocker b1(mSize), b2(mStrength);
+        mSize->setValue(100.0);
+        mStrength->setValue(st ? (*st)["strength"].get<double>() : 1.0);
+        QColor c = palette().button().color();
+        if (st)
+            if (const json& ch = (*st)["channels"]; ch.contains("baseColor"))
+                c = QColor::fromRgbF(toDisplay(ch["baseColor"][0].get<float>()), toDisplay(ch["baseColor"][1].get<float>()), toDisplay(ch["baseColor"][2].get<float>()));
+        mColor->setStyleSheet(QString("QPushButton { background: %1; }").arg(c.name()));
+        mColor->setEnabled(st && (*st)["channels"].contains("baseColor"));
+    }
+
+    void edit(json flags)
+    {
+        const json* st = current();
+        if (!st)
+            return;
+        flags["stroke"] = (*st)["id"];
+        if (json r = run("texEditStroke", flags); r.is_object())
+        {
+            refresh(true);
+            select(r.value("id", uint64_t(0)));
+        }
+    }
+
+    void move(int by)
+    {
+        const json* st = current();
+        if (!st)
+            return;
+        const int to = (*st)["index"].get<int>() + by;
+        if (to < 0 || size_t(to) >= mStrokes.size())
+            return;
+        const uint64_t id = (*st)["id"].get<uint64_t>();
+        run("texMoveStroke", {{"stroke", id}, {"index", to}});
+        select(id);
+    }
+
+    json run(const char* cmd, json flags)
+    {
+        flags["args"] = {mSet, mLayer};
+        try
+        {
+            json r = ops::execute(cmd, flags, CallSource::UI);
+            refresh(true);
+            return r;
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Strokes: {}", e.what());
+            return nullptr;
+        }
+    }
+
+    QListWidget* mList = nullptr;
+    QPushButton* mColor = nullptr;
+    QDoubleSpinBox* mSize = nullptr;
+    QDoubleSpinBox* mStrength = nullptr;
+    QToolButton *mPick = nullptr, *mUp = nullptr, *mDown = nullptr, *mDelete = nullptr;
+    QTimer mPoll;
+    std::string mSet, mLayer;
+    tex::paint::PaintPtr mPaint;
+    json mStrokes = json::array();
+};
 
 class TexturePaintPanel final : public QWidget
 {
@@ -1003,6 +1251,7 @@ public:
         col->addLayout(form);
         mStrokeOptions = new brush::ui::StrokeOptions(this, []() -> brush::BrushSettings& { return texturePaintState().stroke; }, [this] { changed(); });
         col->addWidget(mStrokeOptions);
+        col->addWidget(controls::section("Strokes", new StrokeList(this), this, "/texturePaint/collapsed", false));
 
         connect(browseStamp, &QPushButton::clicked, this, [this] {
             const QString f = ui::fileDialog::getOpenFileName(this, "Normal Map Stamp", mStamp->text(), "Images (*.png *.exr *.tga *.tif *.tiff *.psd)");
@@ -1754,6 +2003,12 @@ public:
             return true;
         if (e->button() != Qt::LeftButton)
             return false;
+        if (gPickingStroke)
+        {
+            if (std::optional<Target> t = pick(e->position(), view); t && t->set != kNoNode)
+                pickStroke(*t);
+            return true;
+        }
         const std::string& tool = texturePaintState().tool;
         if (tool == "project")
             return bufferPress(e, view);
@@ -3573,6 +3828,29 @@ private:
             mPanel->sync();
         viewportTools::requestRedraw();
         log::info("Patch Fill: filled; Project (Enter) lays it on the layer");
+    }
+
+    void pickStroke(const Target& t)
+    {
+        scene::Node* set = scene::Graph::current().node(t.set);
+        if (!set)
+            return;
+        json r;
+        try
+        {
+            r = ops::execute("texPickStroke", {{"args", {set->name(), layerFor(*set)}}, {"mesh", t.meshPath},
+                                               {"position", {t.hit.point.x, t.hit.point.y, t.hit.point.z}}},
+                             CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Strokes: {}", e.what());
+        }
+        if (r.is_null())
+            log::info("Strokes: no stroke of the active layer there");
+        gPickingStroke = false;
+        if (auto fn = gStrokePicked)
+            fn(r);
     }
 
     void projectEdited()
