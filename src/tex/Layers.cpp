@@ -791,8 +791,11 @@ bool parseMaskKind(std::string_view s, MaskKind* out)
 
 const std::vector<std::string>& layerBlendModes()
 {
-    static const std::vector<std::string> modes = {"normal",  "add",    "subtract", "multiply",  "screen",   "overlay",
-                                                   "darken",  "lighten", "difference", "softLight", "addSigned"};
+    // Same order as layerBlend's mode options: the shader takes the index.
+    static const std::vector<std::string> modes = {"normal",     "add",        "subtract",  "multiply",    "screen",     "overlay",
+                                                   "darken",     "lighten",    "difference", "softLight",  "addSigned",  "colorBurn",
+                                                   "linearBurn", "colorDodge", "hardLight",  "vividLight", "linearLight", "pinLight",
+                                                   "exclusion",  "divide",     "saturation", "color",      "value"};
     return modes;
 }
 
