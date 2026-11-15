@@ -213,6 +213,8 @@ json Payload::toJson() const
         j["limit"] = limit;
     if (!gradient.is_null())
         j["gradient"] = gradient;
+    if (!limits.is_null())
+        j["limits"] = limits;
     return j;
 }
 
@@ -270,6 +272,8 @@ Payload Payload::fromJson(const json& j)
     std::sort(p.locked.begin(), p.locked.end());
     p.locked.erase(std::unique(p.locked.begin(), p.locked.end()), p.locked.end());
     p.limit = j.value("limit", std::string());
+    if (j.contains("limits") && j["limits"].is_object())
+        p.limits = j["limits"];
     if (j.contains("gradient") && j["gradient"].is_object())
     {
         p.gradient = j["gradient"];

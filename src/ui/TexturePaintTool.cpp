@@ -195,6 +195,8 @@ struct TexturePaintSettings
     std::string quickLimit;
     /** Face groups whose faces strokes leave alone. */
     std::set<std::string> lockedGroups;
+    /** Brush limits (Payload::limits): where on the surface the brush may paint. */
+    json limits = json::object();
     /** Gradient tool: linear, radial, reflected or angle, and whether it dithers. */
     std::string gradientType = "linear";
     bool gradientDither = true;
@@ -269,6 +271,8 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
         p.tip = s.tip;
     if (!s.quickMask)
         p.limit = s.quickLimit;
+    if (!s.limits.empty())
+        p.limits = s.limits;
     // Quick Mask: the stroke paints the quick mask's coverage, nothing else.
     if (s.quickMask && s.tool != "project")
     {
@@ -349,6 +353,7 @@ void applyPreset(TexturePaintSettings& s, const tex::brushes::Preset& p)
     s.source = s.material.empty() ? "values" : "material";
     s.presetId = p.id;
     s.tip = pay.contains("tip") ? pay["tip"] : json();
+    s.limits = pay.contains("limits") && pay["limits"].is_object() ? pay["limits"] : json::object();
     s.particles = p.particles.is_object() ? p.particles.value("kind", std::string()) : std::string();
     s.particleSpec = p.particles.is_object() ? p.particles : json::object();
 }
@@ -824,6 +829,73 @@ public:
         connect(mStencilInvert, &QCheckBox::toggled, this, [this](bool v) { set(texturePaintState().stencil.invert, v); });
         connect(mStencilTile, &QCheckBox::toggled, this, [this](bool v) { set(texturePaintState().stencil.tile, v); });
 
+        // Limits: map ranges the brush stays inside, a face group, and a fade on surfaces turned away.
+        struct LimitRow
+        {
+            const char* key;
+            const char* label;
+            const char* tip;
+        };
+        const LimitRow limitRows[] = {{"cavity", "Cavity", "Paint only where the cavity map is in this range"},
+                                      {"ao", "AO", "Paint only where the ambient occlusion map is in this range"},
+                                      {"height", "Height", "Paint only where the set's height is in this range"}};
+        for (const LimitRow& lr : limitRows)
+        {
+            auto* on = new QCheckBox(this);
+            on->setObjectName(QString("limit:") + lr.key);
+            on->setToolTip(lr.tip);
+            auto* lo = settingSpin(this, 0.0, 1.0, 0.05, 2, "From");
+            auto* hi = settingSpin(this, 0.0, 1.0, 0.05, 2, "To");
+            auto* row = new QHBoxLayout;
+            row->addWidget(on);
+            row->addWidget(lo, 1);
+            row->addWidget(hi, 1);
+            mLimitRows.push_back(addRow(form, lr.label, row));
+            const std::string key = lr.key;
+            auto apply = [this, key, on, lo, hi] {
+                json& l = texturePaintState().limits;
+                if (on->isChecked())
+                    l[key] = {lo->value(), hi->value()};
+                else
+                    l.erase(key);
+                lo->setEnabled(on->isChecked());
+                hi->setEnabled(on->isChecked());
+                changed();
+            };
+            connect(on, &QCheckBox::toggled, this, apply);
+            connect(lo, &QDoubleSpinBox::valueChanged, this, apply);
+            connect(hi, &QDoubleSpinBox::valueChanged, this, apply);
+            mLimitSync.push_back([key, on, lo, hi] {
+                const json& l = texturePaintState().limits;
+                const QSignalBlocker b1(on), b2(lo), b3(hi);
+                on->setChecked(l.contains(key));
+                lo->setValue(l.contains(key) ? l[key][0].get<double>() : 0.0);
+                hi->setValue(l.contains(key) ? l[key][1].get<double>() : 1.0);
+                lo->setEnabled(on->isChecked());
+                hi->setEnabled(on->isChecked());
+            });
+        }
+        mLimitFacing = settingSpin(this, 0.0, 1.0, 0.05, 2, "Fade out surfaces turned away from the view; 0 paints them all");
+        mLimitRows.push_back(addRow(form, "Facing", mLimitFacing));
+        connect(mLimitFacing, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+            if (v > 0.0)
+                texturePaintState().limits["facing"] = v;
+            else
+                texturePaintState().limits.erase("facing");
+            changed();
+        });
+        mLimitGroup = new QComboBox(this);
+        mLimitGroup->setObjectName("limitGroup");
+        mLimitGroup->setToolTip("Paint only the faces of this face group");
+        mLimitRows.push_back(addRow(form, "Only group", mLimitGroup));
+        connect(mLimitGroup, &QComboBox::activated, this, [this](int i) {
+            if (i <= 0)
+                texturePaintState().limits.erase("group");
+            else
+                texturePaintState().limits["group"] = mLimitGroup->itemText(i).toStdString();
+            changed();
+        });
+
         mRadius = new QSpinBox(this);
         mRadius->setRange(1, 2000);
         mRadius->setSuffix(" px");
@@ -985,6 +1057,19 @@ public:
             mPickLayer->setChecked(s.pickLayer);
         }
         syncSwatches();
+        for (auto& fn : mLimitSync)
+            fn();
+        {
+            const QSignalBlocker bf(mLimitFacing), bg(mLimitGroup);
+            mLimitFacing->setValue(s.limits.value("facing", 0.0));
+            mLimitGroup->clear();
+            mLimitGroup->addItem("Any");
+            const std::string setName = currentTextureSet();
+            if (scene::Node* set = setName.empty() ? nullptr : tex::findSet(scene::Graph::current(), setName))
+                for (const auto& [name, g] : tex::readSettings(*set).faceGroups.items())
+                    mLimitGroup->addItem(QString::fromStdString(name));
+            mLimitGroup->setCurrentText(QString::fromStdString(s.limits.value("group", std::string("Any"))));
+        }
         {
             const QSignalBlocker bv(mViews);
             mViews->clear();
@@ -1307,6 +1392,10 @@ private:
     QCheckBox *mStencilInvert = nullptr, *mStencilTile = nullptr;
     QWidget* mStencilOptions = nullptr;
     QComboBox* mViews = nullptr;
+    std::vector<QWidget*> mLimitRows;
+    std::vector<std::function<void()>> mLimitSync;
+    QDoubleSpinBox* mLimitFacing = nullptr;
+    QComboBox* mLimitGroup = nullptr;
     QWidget* mViewsRow = nullptr;
     QCheckBox* mPickLayer = nullptr;
     controls::Segmented* mSelectMode = nullptr;

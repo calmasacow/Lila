@@ -645,6 +645,9 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
     float t = cov * p.strength;
     if (p.limit != nullptr)
         t *= saturate(imageAt(p.limit, p.limitW, p.limitH, float2(frac(uv.x), 1.0 - frac(uv.y)), false).a);
+    // A facing limit: surfaces turned away from the view fade out (a projection fades its own way above).
+    if (p.facingFade > 0.0 && hasView && p.mode != kModeProject)
+        t *= smoothstep(0.0, p.facingFade, dot(nrm, normalize(p.eye.xyz - pos)));
     float gradT = 0.0;
     if (p.gradOn != 0)
     {

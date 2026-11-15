@@ -126,6 +126,12 @@ struct LILA_SCENE_API Payload
      * dither}. Channels a stop leaves out take the payload's value; amount scales how much paints.
      */
     json gradient;
+    /**
+     * Brush limits, as asked: {cavity|convexity|curvature|ao|thickness|height: [lo, hi], id: {color [r, g, b], tolerance},
+     * group: name, facing: 0..1}. The command turns the map ranges into limit (a uv mask) and the group into locked, which
+     * is what replays; this stays for presets and to show what was asked.
+     */
+    json limits;
 
     /** The channels the stroke writes, the mask last. */
     std::vector<std::string> written() const;

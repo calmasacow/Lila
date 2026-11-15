@@ -12,6 +12,7 @@
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
 #include "tex/BrushPresets.h"
+#include "tex/Generators.h"
 #include "tex/Layers.h"
 #include "tex/PaintBuffer.h"
 #include "tex/PaintParticles.h"
@@ -21,6 +22,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 
 namespace lila::render::paint
@@ -488,6 +490,84 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
  * A projection's picture: a PaintImage document ({width, height, data}), the key of one the set already has, or an image
  * file ({path, rect [x, y, w, h], opacity, linear} or the path alone) laid onto a buffer the view's size.
  */
+/**
+ * Brush limits as one uv mask over the set's first tile: each map range (a mesh map of the set's bake project, or the
+ * set's own height) passes 1 inside [lo, hi], fading out over 0.02; an ID colour passes within its tolerance. Multiplied
+ * into prior (a quick mask) when given. Limits whose map is missing are skipped with a warning. Null when nothing applies.
+ */
+std::shared_ptr<const PaintImage> limitImage(Node& set, const json& limits, std::shared_ptr<const PaintImage> prior)
+{
+    const tex::SetSettings s = tex::readSettings(set);
+    const tex::Tile& tile = s.tiles.front();
+    std::vector<std::pair<image::Image, std::function<float(const float*)>>> tests;
+    auto mapImage = [&](const std::string& map) -> image::Image {
+        if (map == "height")
+        {
+            for (const tex::OutputRequest& r : tex::channelRequests(tex::readGraph(set), s))
+                if (r.name == "height")
+                    return tex::evaluateOutputs(set, {r}, tile.udim, 0, 0).at("height");
+            return {};
+        }
+        if (s.bakeProject.empty())
+            return {};
+        image::Image img = tex::readLiveMeshMap(s.bakeProject, map, tile.udim);
+        if (img.width <= 0)
+        {
+            const std::filesystem::path f = tex::bakedMapFile(graph(), s.bakeProject, map, tile.udim);
+            std::string err;
+            if (!f.empty())
+                img = image::read(f, &err);
+        }
+        return img;
+    };
+    for (const char* key : {"cavity", "convexity", "curvature", "ao", "thickness", "height"})
+        if (limits.contains(key) && limits[key].is_array() && limits[key].size() == 2)
+        {
+            const float lo = limits[key][0].get<float>(), hi = limits[key][1].get<float>();
+            image::Image img = mapImage(key);
+            if (img.width <= 0)
+            {
+                log::warn("texPaintStroke: brush limit {} needs the set's {} map, which it doesn't have; the limit is ignored", key, key);
+                continue;
+            }
+            tests.push_back({std::move(img), [lo, hi](const float* t) {
+                                 const float v = t[0];
+                                 return std::clamp((v - lo) / 0.02f + 1.0f, 0.0f, 1.0f) * std::clamp((hi - v) / 0.02f + 1.0f, 0.0f, 1.0f);
+                             }});
+        }
+    if (limits.contains("id") && limits["id"].is_object())
+    {
+        const json c = limits["id"].value("color", json::array({1.0, 1.0, 1.0}));
+        const glm::vec3 want(c[0].get<float>(), c[1].get<float>(), c[2].get<float>());
+        const float tol = limits["id"].value("tolerance", 0.05f);
+        image::Image img = mapImage("id");
+        if (img.width <= 0)
+            log::warn("texPaintStroke: the ID brush limit needs the set's id map, which it doesn't have; the limit is ignored");
+        else
+            tests.push_back({std::move(img), [want, tol](const float* t) { return glm::length(glm::vec3(t[0], t[1], t[2]) - want) <= tol ? 1.0f : 0.0f; }});
+    }
+    if (tests.empty() && !prior)
+        return nullptr;
+    int w = prior ? prior->width : 0, h = prior ? prior->height : 0;
+    for (const auto& [img, fn] : tests)
+        if (img.width > w)
+            w = img.width, h = img.height;
+    std::vector<float> rgba(size_t(w) * size_t(h) * 4, 1.0f);
+    const std::vector<float> priorTexels = prior ? prior->rgba() : std::vector<float>();
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            float a = 1.0f;
+            auto texelOf = [&](int iw, int ih) { return (size_t(std::min(y * ih / h, ih - 1)) * size_t(iw) + size_t(std::min(x * iw / w, iw - 1))) * 4; };
+            if (prior)
+                a *= priorTexels[texelOf(prior->width, prior->height) + 3];
+            for (const auto& [img, fn] : tests)
+                a *= fn(&img.rgba[texelOf(img.width, img.height)]);
+            rgba[(size_t(y) * size_t(w) + size_t(x)) * 4 + 3] = a;
+        }
+    return PaintImage::fromRgba(w, h, rgba);
+}
+
 /** A saved projection view's JSON from the set's settings, or the view itself when it is one. */
 json namedView(const Node& set, const json& v, const char* cmd)
 {
@@ -938,6 +1018,40 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
                 off = pm->uv(src.triangle, src.u, src.v) - pm->uv(first->triangle, first->u, first->v);
             s.payload.sourceOffsets.push_back(off);
         }
+    }
+    if (s.payload.limits.is_object() && !s.payload.limits.empty())
+    {
+        std::shared_ptr<const PaintImage> prior = s.payload.limit.empty() ? nullptr : heldImage(s.payload.limit);
+        if (!prior && !s.payload.limit.empty())
+            if (auto it = readPaint(set)->images.find(s.payload.limit); it != readPaint(set)->images.end())
+                prior = it->second;
+        try
+        {
+            if (std::shared_ptr<const PaintImage> img = limitImage(set, s.payload.limits, prior))
+            {
+                holdImage(img);
+                s.payload.limit = img->key();
+            }
+        }
+        catch (const std::exception& e)
+        {
+            throw CommandError(std::string("texPaintStroke: brush limits: ") + e.what());
+        }
+        if (s.payload.limits.contains("group"))
+        {
+            const json grp = tex::readSettings(set).faceGroups.value(s.payload.limits["group"].get<std::string>(), json());
+            if (!grp.is_object())
+                throw CommandError("texPaintStroke: no face group '" + s.payload.limits["group"].get<std::string>() + "'");
+            const std::vector<uint32_t> inside = pm->ofFaces(grp.value("faces", std::vector<uint32_t>()));
+            const std::set<uint32_t> keep(inside.begin(), inside.end());
+            for (uint32_t t = 0; t < pm->triangleCount(); ++t)
+                if (!keep.contains(t))
+                    s.payload.locked.push_back(t);
+            std::sort(s.payload.locked.begin(), s.payload.locked.end());
+            s.payload.locked.erase(std::unique(s.payload.locked.begin(), s.payload.locked.end()), s.payload.locked.end());
+        }
+        if (s.payload.limits.contains("facing"))
+            s.payload.facingFade = std::clamp(s.payload.limits["facing"].get<float>(), 0.0f, 1.0f);
     }
     if (lockedFaces.is_array())
     {
