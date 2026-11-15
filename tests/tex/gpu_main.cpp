@@ -10,6 +10,7 @@
 #include "render/TexEval.h"
 #include "scene/Node.h"
 #include "scene/SceneCommands.h"
+#include "sculpt/SculptSession.h"
 #include "tex/TextureSet.h"
 #include "ui/TexLive.h"
 #include "vcs/Process.h"
@@ -47,6 +48,7 @@ int main(int argc, char** argv)
     lila::vcs::SourceControl::get().setRunner(std::make_shared<NoTools>());
     lila::render::texgpu::registerTexGpu();
     lila::render::paint::registerCommands();
+    lila::sculpt::registerCommands();
 
     doctest::Context ctx(argc, argv);
     const int rc = ctx.run();

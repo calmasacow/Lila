@@ -27,6 +27,8 @@
 #include "ui/ColorPopup.h"
 #include "ui/Controls.h"
 #include "ui/Icons.h"
+#include "ui/SculptTool.h"
+#include "sculpt/SculptSession.h"
 #include "ui/TexLive.h"
 #include "ui/TextureGraphUi.h"
 #include "ui/TextureSetPanel.h"
@@ -2363,6 +2365,8 @@ public:
                 mBuffer.clear();
                 viewportTools::requestRedraw();
             }
+            else if (sculpt::active())
+                QTimer::singleShot(0, [] { startSculptTool(); });
             else
                 QTimer::singleShot(0, [] { viewportTools::set(nullptr); });
             return true;
@@ -2491,7 +2495,7 @@ private:
             t.meshPath = n->path();
             t.world = w;
             t.hit = hit;
-            scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+            scene::MeshPtr mesh = rp::paintSurface(*n);
             if (scene::Node* set = mesh ? setForFace(g, *mesh, hit.face) : nullptr)
             {
                 t.set = set->id();
@@ -2554,7 +2558,7 @@ private:
         filterChannels(header->payload, *set);
         header->payload.locked = lockedTriangles(*set, t.meshPath, *t.paint);
         const scene::Node* meshNode = g.node(t.mesh);
-        scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        scene::MeshPtr outMesh = rp::paintSurface(*meshNode);
         tp::PaintSymmetry sym = tp::brushSymmetry(texturePaintState().stroke, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
         addUvMirror(sym);
         header->symmetry = sym.toJson();
@@ -2631,7 +2635,7 @@ private:
                 scene::Node* n = g.node(id);
                 if (!n || !n->type().isA("mesh"))
                     continue;
-                scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+                scene::MeshPtr m = rp::paintSurface(*n);
                 if (!m || !m->numFaces())
                     continue;
                 const auto& names = m->materialNames();
@@ -2934,7 +2938,7 @@ private:
         header->payload.locked = lockedTriangles(*set, t.meshPath, *t.paint);
         {
             const scene::Node* meshNode = g.node(t.mesh);
-            scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+            scene::MeshPtr outMesh = rp::paintSurface(*meshNode);
             mSym = tp::brushSymmetry(texturePaintState().stroke, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
             addUvMirror(mSym);
             header->symmetry = mSym.toJson();

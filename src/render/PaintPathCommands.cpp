@@ -174,7 +174,7 @@ std::string meshFor(const Args& a, const Node& set)
         Node* n = graph().node(id);
         if (!n || !n->type().isA("mesh"))
             continue;
-        scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        scene::MeshPtr m = paintSurface(*n);
         if (!m || !m->numFaces())
             continue;
         if (any.empty())

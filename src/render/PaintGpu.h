@@ -41,6 +41,8 @@ using tex::paint::PaintMesh;
 using tex::paint::Stroke;
 using tex::paint::StrokePtr;
 
+/** The surface texture paint works on: the live sculpt while the mesh is in Sculpt, else the mesh's output. */
+LILA_UI_API scene::MeshPtr paintSurface(const scene::Node& meshNode);
 /** The painted part of a mesh node for a material, cached by the node's evaluated mesh. Null when it is not a mesh. */
 LILA_UI_API std::shared_ptr<const PaintMesh> paintMesh(scene::Graph& g, const std::string& meshPath, const std::string& material);
 /** The material a set's tiles bind to (its settings' material, else its name). */

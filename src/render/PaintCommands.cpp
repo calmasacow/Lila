@@ -220,7 +220,7 @@ std::string meshForSet(const Node& set)
         Node* n = g.node(id);
         if (!n || !n->type().isA("mesh"))
             continue;
-        scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        scene::MeshPtr m = paintSurface(*n);
         if (!m || !m->numFaces())
             continue;
         if (any.empty())
@@ -450,7 +450,7 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
     {
         if (pay.contains("material"))
         {
-            scene::MeshPtr m = meshNode.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+            scene::MeshPtr m = paintSurface(meshNode);
             const auto& names = m->materialNames();
             const auto it = std::find(names.begin(), names.end(), pay["material"].get<std::string>());
             if (it == names.end())
@@ -769,7 +769,7 @@ tex::paint::PaintSymmetry spatialSymmetryOf(const json& j, const brush::BrushSet
 {
     const int64_t attr = meshNode.as<int64_t>(scene::MeshNode::kSymmetry);
     int axis = attr >= 1 && attr <= 3 ? int(attr - 1) : 0;
-    scene::MeshPtr mesh = meshNode.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    scene::MeshPtr mesh = paintSurface(meshNode);
     brush::BrushSettings b = bs;
     if (!j.contains("symmetry") || !j["symmetry"].is_object())
         return tex::paint::brushSymmetry(b, mesh.get(), scene::paintSymmetrySpec(meshNode));

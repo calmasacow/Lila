@@ -11,6 +11,7 @@
 #include "render/Renderer.h"
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
+#include "sculpt/SculptSession.h"
 #include "tex/Evaluate.h"
 #include "tex/Library.h"
 #include "tex/NodeDef.h"
@@ -2169,13 +2170,31 @@ std::string setMaterial(const scene::Node& set)
     return s.material.empty() ? set.name() : s.material;
 }
 
+scene::MeshPtr paintSurface(const scene::Node& meshNode)
+{
+    const std::shared_ptr<sculpt::Session> s = sculpt::active();
+    if (!s || s->node != meshNode.id())
+        return meshNode.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    // One copy per sculpt shape, so the paint mesh and its bvh rebuild only after the sculpt moved.
+    static std::weak_ptr<sculpt::Session> session;
+    static uint64_t version = 0;
+    static scene::MeshPtr copy;
+    if (!copy || session.lock() != s || version != s->sculpt.version())
+    {
+        copy = std::make_shared<const geo::Mesh>(s->sculpt.mesh());
+        session = s;
+        version = s->sculpt.version();
+    }
+    return copy;
+}
+
 std::shared_ptr<const PaintMesh> paintMesh(scene::Graph& g, const std::string& meshPath, const std::string& material)
 {
     g.evaluate();
     scene::Node* n = g.find(meshPath);
     if (!n || !n->type().isA("mesh"))
         return nullptr;
-    scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    scene::MeshPtr mesh = paintSurface(*n);
     if (!mesh || !mesh->numFaces())
         return nullptr;
     MeshEntry& e = gMeshes[meshPath];
@@ -2198,7 +2217,7 @@ void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPat
     scene::Node* n = g.find(meshPath);
     if (!n || !n->type().isA("mesh"))
         return;
-    scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    scene::MeshPtr mesh = paintSurface(*n);
     if (!mesh || !mesh->numFaces())
         return;
     const std::string material = setMaterial(set);
