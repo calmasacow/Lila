@@ -10221,6 +10221,27 @@ def texAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str |
         name: Wanted name; made unique.
     """
 
+def texAddShadingChannels(*objects: Any, channels: Sequence[Any] | None = None, c: Sequence[Any] | None = None) -> Any:
+    """Add shading channels to a texture set: sheen, coat, subsurface, anisotropy, transmission, IOR and specular. Each becomes a Material Output input, shades in the viewport and the path-traced view, and exports under the name the preset's renderer uses. The ior channel holds (IOR - 1) / 2. Returns the channels added.
+
+    Args:
+        objects: texture set.
+        channels: Channel names; all of them when left out. Short form c. One of 'sheenColor', 'sheenRoughness', 'coat', 'coatRoughness', 'coatNormal', 'subsurfaceColor', 'subsurfaceRadius', 'anisotropy', 'anisotropyDirection', 'transmission', 'ior', 'specularWeight', 'specularColor'.
+
+    Examples:
+        texAddShadingChannels("RockTex")
+
+        texAddShadingChannels("RockTex", channels=["coat", "coatRoughness"])
+    """
+
+def texAddVariant(*objects: Any, copy: str | None = None) -> Any:
+    """Add a named variant to a texture set and switch to it: from then on layer and mask edits are its overrides, until texSwitchVariant goes back to the base (name ''). copy= starts it from another variant's overrides.
+
+    Args:
+        objects: set name.
+        copy: A variant whose overrides it starts with.
+    """
+
 def texApplySmartMaterial(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, layer: str | None = None, addMaps: bool | None = None) -> Any:
     """Apply a smart material (a saved layer, usually a folder) to a texture set, or a smart mask to one of its layers. By name (built-in, extension pack, user or workspace library) or .lilasmart path. Its generators bind to the set's mesh maps by name; the maps it reads that the set's bake project doesn't make are added to it. Returns {layer or masks, maps, addedMaps}.
 
@@ -10317,6 +10338,21 @@ def texDeleteNode(*objects: Any) -> Any:
         objects: set nodes...
     """
 
+def texDeleteSnapshot(*objects: Any) -> Any:
+    """Drop a texture set's snapshot and the pixels only it held. Returns whether there was one.
+
+    Args:
+        objects: texture set, name.
+    """
+
+def texDeleteStrokes(*objects: Any, strokes: Sequence[Any] | None = None) -> Any:
+    """Delete strokes from a paint layer and re-rasterise it.
+
+    Args:
+        objects: set layer.
+        strokes: Stroke ids.
+    """
+
 def texDisconnect(*objects: Any, source: str | None = None) -> Any:
     """Remove the link into an input, or only the one from `source` when given.
 
@@ -10344,6 +10380,20 @@ def texEditPath(*objects: Any, stroke: int | None = None, layer: str | None = No
         radius: Dab radius in object units.
     """
 
+def texEditStroke(*objects: Any, stroke: int | None = None, color: Any | None = None, channels: Any | None = None, radius: float | None = None, sizeScale: float | None = None, strength: float | None = None, brush: Any | None = None) -> Any:
+    """Change a painted stroke after the fact and re-rasterise its layer: color (the colour channel), channels {name: value, null drops one}, radius (the widest dab's, the rest in proportion) or sizeScale, strength, brush (a patch over its brush settings). The stroke gets a new id, returned with the rest of it.
+
+    Args:
+        objects: set layer.
+        stroke: The stroke's id (texStrokes).
+        color: [r, g, b], linear.
+        channels: {channel: value}.
+        radius: Object units.
+        sizeScale: Multiplies every dab's radius.
+        strength: 0 to 1.
+        brush: Brush settings to change (falloff, roundness, alpha...).
+    """
+
 def texEvaluate(*objects: Any, channels: Sequence[Any] | None = None, resolution: int | None = None, folder: str | None = None, format: str | None = None, bits: int | None = None, backend: str | None = None) -> Any:
     """Evaluate a texture set and write its channels as images, on the GPU when there is one (else on the CPU). Returns the files, pass count, time, how many kernels compiled or came from the cache, and the backend used.
 
@@ -10357,7 +10407,7 @@ def texEvaluate(*objects: Any, channels: Sequence[Any] | None = None, resolution
         backend: gpu or cpu; the GPU when left out and the renderer can run. One of 'gpu', 'cpu'.
     """
 
-def texExport(*objects: Any, preset: str | None = None, folder: str | None = None, resolution: int | None = None, optional: bool | None = None, incremental: bool | None = None, backend: str | None = None, normalFromHeight: bool | None = None) -> Any:
+def texExport(*objects: Any, preset: str | None = None, folder: str | None = None, resolution: int | None = None, optional: bool | None = None, incremental: bool | None = None, backend: str | None = None, normalFromHeight: bool | None = None, variants: bool | None = None) -> Any:
     """Export a texture set's channels through an export preset (a bake target: unreal, substancePainter, or a saved one): its maps, channel packing (ORM), normal convention, names and bit depths. Returns the files.
 
     Args:
@@ -10369,6 +10419,7 @@ def texExport(*objects: Any, preset: str | None = None, folder: str | None = Non
         incremental: Only rewrite files whose inputs or pixels changed since the last export to this folder. Default False.
         backend: gpu or cpu; the GPU when left out and the renderer can run. One of 'gpu', 'cpu'.
         normalFromHeight: Write the normal as detail over the height, with the height at 16 bits, for materials that rebuild normals from it; the set's normalFromHeight when left out.
+        variants: Export the base and every variant in one go, each named by the {variant} token (base for the base). Default False.
     """
 
 def texExportFlattened(*objects: Any, layers: Sequence[Any] | None = None, folder: str | None = None, format: str | None = None) -> Any:
@@ -10409,6 +10460,17 @@ def texExportPsd(*objects: Any, channels: Sequence[Any] | None = None, folder: s
         folder: Output folder; relative ones resolve like bake folders. Default textures/<set>.
         resolution: Width and height, overriding the tiles'.
         backend: gpu or cpu. One of 'gpu', 'cpu'.
+    """
+
+def texExportPtex(*objects: Any, mesh: str | None = None, file: str | None = None, channel: str | None = None, faceResolution: int | None = None) -> Any:
+    """Write one channel of a texture set to a Ptex file (.ptx): every quad of the mesh gets its own texels, sampled from the set through the mesh's uvs. The mesh must be all quads. Returns {file, faces, channels}.
+
+    Args:
+        objects: set.
+        mesh: The mesh the set paints (node path).
+        file: The .ptx to write; relative paths are under the workspace.
+        channel: The set's channel. Default 'baseColor'.
+        faceResolution: Texels per face side as a power of two: 6 is 64 x 64. Default 6.
     """
 
 def texFaceGroup(*objects: Any, faces: Sequence[Any] | None = None, mesh: str | None = None, remove: bool | None = None) -> Any:
@@ -10480,6 +10542,18 @@ def texImportPainterSmartMaterials(*objects: Any, folder: str | None = None, bru
         overwrite: Replace ones of the same name there. Default True.
     """
 
+def texImportPtex(*objects: Any, mesh: str | None = None, file: str | None = None, channel: str | None = None, name: str | None = None, folder: str | None = None) -> Any:
+    """Bring a Ptex file (.ptx) onto a texture set: its faces are baked through the mesh's uvs into an image, which becomes a new fill layer on the channel. The mesh must be the quad mesh the file was painted on. Returns {id, image, faces}.
+
+    Args:
+        objects: set.
+        mesh: The mesh the file was painted on (node path).
+        file: The .ptx to read.
+        channel: The set's channel the layer fills. Default 'baseColor'.
+        name: Layer name; the file's name when left out.
+        folder: Where the baked image goes; textures/<set> under the workspace by default.
+    """
+
 def texLayerStack(*objects: Any) -> Any:
     """A texture set's layer stack as JSON: layers bottom first (with each channel's resolved enable, mode and opacity), masks, anchors, the base values, the mesh maps it reads, and mode: stack, or graph when the graph was edited as nodes beyond what the stack can show (or was never layered).
 
@@ -10517,6 +10591,15 @@ def texMoveNodes(*objects: Any, positions: Any | None = None) -> Any:
     Args:
         objects: set.
         positions: {node: [x, y]}.
+    """
+
+def texMoveStroke(*objects: Any, stroke: int | None = None, index: int | None = None) -> Any:
+    """Move a stroke to another place in its layer's order (0 the bottom) and re-rasterise the layer.
+
+    Args:
+        objects: set layer.
+        stroke: The stroke's id.
+        index: Its new place, 0 the bottom.
     """
 
 def texNodeTypes(linkType: str | None = None, linkInput: bool | None = None, detail: bool | None = None, reload: bool | None = None) -> Any:
@@ -10598,6 +10681,31 @@ def texPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
         position: [x, y] canvas centre for the pasted nodes. Default [0, 0].
     """
 
+def texPatchFill(*objects: Any, holeUv: Sequence[Any] | None = None, hole: str | None = None, sourceUv: Sequence[Any] | None = None, source: str | None = None, mesh: str | None = None, patch: int | None = None, seed: int | None = None, name: str | None = None, folder: str | None = None) -> Any:
+    """Patch Fill a texture set in uv space: the hole (holeUv, a uv polygon, or hole, a mask image) is rebuilt from patches of its surroundings, every channel matched together, and lands as a new fill layer masked to the hole. With mesh=, each piece of the hole draws only from the uv islands it sits on. Returns {id, pieces, mask, channels}.
+
+    Args:
+        objects: set.
+        holeUv: The hole: a polygon in uv space, [[u, v], ...].
+        hole: The hole: a mask image, white to fill.
+        sourceUv: Only take patches from inside this uv polygon.
+        source: Only take patches from where this mask image is white.
+        mesh: The set's mesh: keeps each piece of the hole to its own uv islands.
+        patch: Patch side in texels (odd). Default 7.
+        seed: Random seed. Default 1.
+        name: Layer name. Default 'Patch Fill'.
+        folder: Where the filled images go; textures/<set> under the workspace by default.
+    """
+
+def texPickStroke(*objects: Any, position: Sequence[Any] | None = None, mesh: str | None = None) -> Any:
+    """The topmost stroke of a paint layer with a dab over a surface point, as texStrokes lists it; None when no stroke covers it.
+
+    Args:
+        objects: set layer.
+        position: [x, y, z] in the mesh's object space.
+        mesh: Only strokes on this mesh.
+    """
+
 def texProjectionView(*objects: Any, view: Any | None = None, remove: bool | None = None) -> Any:
     """Save a projection view on a texture set by name (view=, a screen view as texPaintStroke takes it), remove it (remove=True), or recall it (neither): projecting from a saved view lands the same every time. texPaintStroke and texCaptureView take the name as view. Returns the view, or every saved view after a change.
 
@@ -10635,6 +10743,13 @@ def texRemoveMask(*objects: Any) -> Any:
 
     Args:
         objects: set layer mask...
+    """
+
+def texRemoveVariant(*objects: Any) -> Any:
+    """Remove a texture set's variant; the set goes back to the base when it was active.
+
+    Args:
+        objects: set name.
     """
 
 def texSampleChannels(*objects: Any, uv: Sequence[Any] | None = None, mesh: str | None = None, position: Sequence[Any] | None = None, source: str | None = None, layer: str | None = None) -> Any:
@@ -10763,6 +10878,13 @@ def texSetValue(*objects: Any) -> Any:
         objects: set node.id value.
     """
 
+def texSetVariant(*objects: Any) -> Any:
+    """Set or clear a variant's override for one layer without switching to it: props is merged into the override (as texSetLayer takes it, plus maskOverrides {mask id: patch}); props null clears the layer's override.
+
+    Args:
+        objects: set name layer props.
+    """
+
 def texSets() -> Any:
     """Names of the texture sets in the scene."""
 
@@ -10771,6 +10893,40 @@ def texSmartMaterials(tags: Sequence[Any] | None = None) -> Any:
 
     Args:
         tags: Only those carrying all of these tags.
+    """
+
+def texSnapshot(*objects: Any, name: str | None = None, resolution: int | None = None, backend: str | None = None, n: str | None = None, r: int | None = None) -> Any:
+    """Keep a texture set's evaluated channels as they are now, to compare later work against (texCompare). Unchanged regions share their pixels with earlier snapshots. Snapshots last the session. Returns {set, name, channels, newPages}.
+
+    Args:
+        objects: texture set.
+        name: Its name; Snapshot N when left out. An existing snapshot of that name is replaced. Short form n.
+        resolution: Largest side of each tile's images; 0 keeps the tiles' own sizes. Short form r. Default 1024.
+        backend: gpu or cpu; the GPU when left out and the renderer can run. One of 'gpu', 'cpu'.
+
+    Examples:
+        texSnapshot("RockTex", name="before rust")
+    """
+
+def texSnapshots(*objects: Any) -> Any:
+    """A texture set's snapshots, oldest first, and the memory every snapshot holds. Returns {snapshots: [{set, name, channels, newPages}], pages, bytes}.
+
+    Args:
+        objects: texture set.
+    """
+
+def texStrokes(*objects: Any) -> Any:
+    """A paint layer's strokes, bottom first: [{id, index, kind, mesh, channels, radius, strength, dabs, path}].
+
+    Args:
+        objects: set layer.
+    """
+
+def texSwitchVariant(*objects: Any) -> Any:
+    """Show a texture set as one of its variants ('' for the base). Layer and mask edits go to the variant shown.
+
+    Args:
+        objects: set name.
     """
 
 def texTransferSet(*objects: Any, source: str | None = None, onto: str | None = None, into: str | None = None, maxDistance: float | None = None, folder: str | None = None) -> Any:
@@ -10783,6 +10939,13 @@ def texTransferSet(*objects: Any, source: str | None = None, onto: str | None = 
         into: The set that gets the layer; else the same set.
         maxDistance: How far a target texel may be from the source surface.
         folder: Where the pixels go; textures/<target>/transferred by default.
+    """
+
+def texVariants(*objects: Any) -> Any:
+    """A texture set's variants: {active, variants {name: {layer id: override}}}. An override patches the layer's settings (enabled, opacity, material, params...) and maskOverrides {mask id: patch} its masks.
+
+    Args:
+        objects: set.
     """
 
 def textCurves(text: str | None = None, font: str | None = None, size: float | None = None, alignment: str | None = None, anchor: str | None = None, wrapWidth: float | None = None, letterSpacing: float | None = None, wordSpacing: float | None = None, lineSpacing: float | None = None, textCase: str | None = None, width: float | None = None, slant: float | None = None, weight: float | None = None, underline: bool | None = None, strikethrough: bool | None = None, kerning: bool | None = None, mergeOverlaps: bool | None = None, constructionHistory: bool | None = None, name: str | None = None, *, ch: bool | None = None, n: str | None = None) -> Any:
@@ -12114,7 +12277,7 @@ def viewportInspect(pick: Sequence[Any] | None = None, path: str | None = None, 
     """
 
 def viewportStats() -> Any:
-    """The active viewport's last finished frame as the GPU measured it: {frames, gpuMs, aoMs, cpuMs, meshDrawCalls, meshUploads, renderer}. frames counts frames drawn so far, so two calls apart give the frame rate; meshUploads counts GPU mesh copies the same way. Unlike measureView it times what the view really draws, components and highlights included. When an external renderer such as a Hydra delegate draws the view, rendererStats holds what it reports."""
+    """The active viewport's last finished frame as the GPU measured it: {frames, gpuMs, aoMs, cpuMs, meshDrawCalls, meshUploads, pathSamples, renderer}; pathSamples is how many samples the path-traced view has added up (0 when it is off). frames counts frames drawn so far, so two calls apart give the frame rate; meshUploads counts GPU mesh copies the same way. Unlike measureView it times what the view really draws, components and highlights included. When an external renderer such as a Hydra delegate draws the view, rendererStats holds what it reports."""
 
 def viewportToast(*objects: Any, all: bool | None = None, duration: float | None = None, error: bool | None = None, warning: bool | None = None, a: bool | None = None, d: float | None = None, e: bool | None = None, w: bool | None = None) -> Any:
     """Pop up a short message in the bottom-right corner of the active viewport; it fades out after duration. Showing the same text again restarts it instead of adding another.
