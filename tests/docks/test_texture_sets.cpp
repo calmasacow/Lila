@@ -259,6 +259,8 @@ TEST_CASE("smart materials and masks sit apart on the shelf, and a smart materia
     // The shelf shows one kind at a time: materials first.
     QListWidget* shelf = panel->smartShelf();
     REQUIRE(shelf->count() > 0);
+    CHECK(shelf->dragEnabled());
+    CHECK(shelf->dragDropMode() == QAbstractItemView::DragOnly);
     for (int i = 0; i < shelf->count(); ++i)
         CHECK(shelf->item(i)->isHidden() == (shelf->item(i)->data(Qt::UserRole + 1).toString() == "mask"));
 
@@ -266,6 +268,9 @@ TEST_CASE("smart materials and masks sit apart on the shelf, and a smart materia
     QMimeData mime;
     mime.setData("application/x-lila-smart-material", QByteArray("Rusty Iron\nmaterial"));
     ui::viewportHooks::DropTarget target;
+    // The viewport's drag-enter carries no object; the drag has to be taken there to reach the mesh at all.
+    CHECK(ui::viewportHooks::handleDrop(mime, target, false));
+    CHECK_FALSE(ui::viewportHooks::handleDrop(mime, target, true));
     target.node = scene::Graph::current().find(cube)->id();
     target.face = 0;
     CHECK(ui::viewportHooks::handleDrop(mime, target, false));

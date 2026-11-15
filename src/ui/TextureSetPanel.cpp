@@ -1227,12 +1227,18 @@ struct TextureSetPanel::Impl
 
         v->addWidget(boldHeading(settingsBox, "Resolution"));
         auto sizeBox = [](QWidget* parent, int value, bool allowDefault) {
-            auto* b = new QComboBox(parent);
+            auto* b = new QSpinBox(parent);
+            b->setRange(allowDefault ? 0 : 16, 16384);
             if (allowDefault)
-                b->addItem("Set", 0);
-            for (int s = 512; s <= 16384; s *= 2)
-                b->addItem(QString::number(s), s);
-            b->setCurrentIndex(std::max(0, b->findData(value)));
+                b->setSpecialValueText("Set");
+            b->setValue(value);
+            b->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            // Typing commits on Enter or focus out; steps commit at once.
+            b->setKeyboardTracking(false);
+            std::vector<double> presets(ops::kTextureSizePresets.begin(), ops::kTextureSizePresets.end());
+            if (allowDefault)
+                presets.push_back(0.0);
+            controls::setPresets(b, presets);
             return b;
         };
         auto* res = new QWidget(settingsBox);
@@ -1247,19 +1253,19 @@ struct TextureSetPanel::Impl
         w->setObjectName("width");
         auto* hgt = sizeBox(res, settings.height, false);
         hgt->setObjectName("height");
-        texComboDefaultIndex(w, w->findData(tex::SetSettings{}.width));
-        texComboDefaultIndex(hgt, hgt->findData(tex::SetSettings{}.height));
+        setSpinDefault(w, tex::SetSettings{}.width);
+        setSpinDefault(hgt, tex::SetSettings{}.height);
         auto* link = toolButton(res, "link", "Link: width and height change together");
         link->setObjectName("linkResolution");
         link->setCheckable(true);
         link->setChecked(PrefStore::get().value<bool>("general", kPrefLinkResolution, true));
         QObject::connect(link, &QToolButton::toggled, res, [](bool on) { PrefStore::get().set("general", kPrefLinkResolution, on); });
-        auto setSize = [this, w, hgt, link](QComboBox* changed) {
+        auto setSize = [this, w, hgt, link](QSpinBox* changed) {
             const bool both = link->isChecked();
-            runUi("texSetSettings", args({json{{"width", (both ? changed : w)->currentData().toInt()}, {"height", (both ? changed : hgt)->currentData().toInt()}}}));
+            runUi("texSetSettings", args({json{{"width", (both ? changed : w)->value()}, {"height", (both ? changed : hgt)->value()}}}));
         };
-        QObject::connect(w, &QComboBox::activated, res, [setSize, w](int) { setSize(w); });
-        QObject::connect(hgt, &QComboBox::activated, res, [setSize, hgt](int) { setSize(hgt); });
+        QObject::connect(w, &QSpinBox::valueChanged, res, [setSize, w](int) { setSize(w); });
+        QObject::connect(hgt, &QSpinBox::valueChanged, res, [setSize, hgt](int) { setSize(hgt); });
         rg->addWidget(w, 0, 1);
         rg->addWidget(new QLabel(QString(QChar(0x00D7)), res), 0, 2);
         rg->addWidget(hgt, 0, 3);
@@ -1273,22 +1279,23 @@ struct TextureSetPanel::Impl
             tw->setObjectName("tileWidth:" + QString::number(t.udim));
             auto* th = sizeBox(res, t.height, true);
             tw->setToolTip("This tile's width; Set uses the default");
-            texComboDefaultIndex(tw, 0);
-            texComboDefaultIndex(th, 0);
-            auto setTile = [this, i, tw, th, link](QComboBox* changed) {
+            th->setObjectName("tileHeight:" + QString::number(t.udim));
+            setSpinDefault(tw, 0);
+            setSpinDefault(th, 0);
+            auto setTile = [this, i, tw, th, link](QSpinBox* changed) {
                 const bool both = link->isChecked();
                 json s = settings.toJson();
                 json& tile = s["tiles"][i];
                 tile.erase("width");
                 tile.erase("height");
-                if (int v = (both ? changed : tw)->currentData().toInt(); v > 0)
+                if (int v = (both ? changed : tw)->value(); v > 0)
                     tile["width"] = v;
-                if (int v = (both ? changed : th)->currentData().toInt(); v > 0)
+                if (int v = (both ? changed : th)->value(); v > 0)
                     tile["height"] = v;
                 runUi("texSetSettings", args({json{{"tiles", s["tiles"]}}}));
             };
-            QObject::connect(tw, &QComboBox::activated, res, [setTile, tw](int) { setTile(tw); });
-            QObject::connect(th, &QComboBox::activated, res, [setTile, th](int) { setTile(th); });
+            QObject::connect(tw, &QSpinBox::valueChanged, res, [setTile, tw](int) { setTile(tw); });
+            QObject::connect(th, &QSpinBox::valueChanged, res, [setTile, th](int) { setTile(th); });
             rg->addWidget(tw, r, 1);
             rg->addWidget(new QLabel(QString(QChar(0x00D7)), res), r, 2);
             rg->addWidget(th, r, 3);
@@ -1834,7 +1841,12 @@ struct TextureSetPanel::Impl
         if (sKey != settingsKey || !settingsBox->layout())
         {
             settingsKey = sKey;
+            QWidget* focus = QApplication::focusWidget();
+            const QString focusName = focus && settingsBox->isAncestorOf(focus) ? focus->objectName() : QString();
             rebuildSettings();
+            if (!focusName.isEmpty())
+                if (auto* again = settingsBox->findChild<QWidget*>(focusName); again && again->isVisible())
+                    again->setFocus();
             rebuildChannelPicker();
         }
         if (vKey != viewKey)
@@ -2144,8 +2156,6 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     sv->addLayout(shelfHead);
     d->shelf = new SmartShelf(shelfBox);
     d->shelf->setObjectName("smartShelf");
-    d->shelf->setDragEnabled(true);
-    d->shelf->setDragDropMode(QAbstractItemView::DragOnly);
     d->shelf->setViewMode(QListView::IconMode);
     d->shelf->setFlow(QListView::LeftToRight);
     d->shelf->setWrapping(true);
@@ -2155,6 +2165,9 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->shelf->setWordWrap(false);
     d->shelf->setTextElideMode(Qt::ElideRight);
     d->shelf->setMovement(QListView::Static);
+    // After setMovement: Static switches dragging off.
+    d->shelf->setDragEnabled(true);
+    d->shelf->setDragDropMode(QAbstractItemView::DragOnly);
     connect(d->shelf, &QListWidget::itemDoubleClicked, this,
             [this](QListWidgetItem* it) { applySmartMaterial(it->data(Qt::UserRole).toString().toStdString()); });
     sv->addWidget(d->shelf, 1);
@@ -2645,10 +2658,11 @@ bool dropSmartOnViewport(const QMimeData& mime, const viewportHooks::DropTarget&
         return false;
     scene::Graph& g = scene::Graph::current();
     scene::Node* n = target.node == scene::kNoNode ? nullptr : g.node(target.node);
+    // Drag-enter asks with no object under the cursor; refusing there rejects the whole drag.
+    if (!commit)
+        return !n || n->type().isA("mesh");
     if (!n || !n->type().isA("mesh"))
         return false;
-    if (!commit)
-        return true;
     g.evaluate();
     scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
     if (!mesh)
