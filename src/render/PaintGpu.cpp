@@ -1,5 +1,6 @@
 #include "render/PaintGpu.h"
 
+#include "brush/Alphas.h"
 #include "brush/Brush.h"
 #include "core/Log.h"
 #include "core/MainQueue.h"
@@ -899,7 +900,7 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
     else if (!b.alphaPath.empty())
     {
         std::string err;
-        live->alpha = brush::AlphaImage::load(b.alphaPath, &err);
+        live->alpha = brush::AlphaImage::load(brush::alphas::resolve(b.alphaPath), &err);
         if (!live->alpha)
             log::warn("paint stroke: alpha {}: {}", b.alphaPath, err);
     }
