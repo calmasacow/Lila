@@ -529,6 +529,16 @@ public:
         const std::string set = currentTextureSet();
         scene::Node* n = set.empty() ? nullptr : tex::findSet(scene::Graph::current(), set);
         std::string layer = n ? textureSets::activeLayer(set) : std::string();
+        // With no layer picked in the Texture Set dock, the one the brush paints.
+        if (n && layer.empty())
+            try
+            {
+                layer = rp::targetLayer(*n, "", false);
+            }
+            catch (const std::exception&)
+            {
+                layer.clear();
+            }
         tex::paint::PaintPtr paint = n ? tex::paint::readPaint(*n) : nullptr;
         if (!force && set == mSet && layer == mLayer && paint == mPaint)
             return;
