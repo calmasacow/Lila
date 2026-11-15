@@ -13,6 +13,7 @@
 #include "scene/Modifiers.h"
 #include "scene/Relocate.h"
 #include "ui/Deletion.h"
+#include "ui/FeatureStatus.h"
 #include "ui/Hotkeys.h"
 #include "ui/MaterialDraw.h"
 #include "ui/OptionBox.h"
@@ -146,7 +147,11 @@ std::string tooltip(const std::string& id)
         return id;
     std::string key = Hotkeys::get().keyFor(id).toStdString();
     std::string tip = a->label + (key.empty() ? "" : "  (" + key + ")");
-    return a->doc.empty() ? tip : tip + "\n" + a->doc;
+    if (!a->doc.empty())
+        tip += "\n" + a->doc;
+    if (std::string status = featureStatus::label(id); !status.empty())
+        tip += "\n" + status;
+    return tip;
 }
 
 const Action* find(const std::string& id)

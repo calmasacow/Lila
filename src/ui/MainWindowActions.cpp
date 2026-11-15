@@ -3,6 +3,7 @@
 #include "ui/ViewportHeaderConfig.h"
 #include "ui/CameraBookmarks.h"
 #include "ui/DroneCamera.h"
+#include "ui/FeatureStatus.h"
 #include "ui/CreditsDialog.h"
 #include "ui/LicensesDialog.h"
 #include "ui/AudioUi.h"
@@ -313,6 +314,7 @@ void MainWindow::registerActions()
     displayAids::registerActions([this] { return mViewports->active(); });
     cameraBookmarks::install([this] { return mViewports->active(); });
     drone::registerActions([this] { return mViewports->active(); });
+    featureStatus::registerActions();
     viewportToast::setActive([this] { return mViewports->active(); });
     lodDisplay::registerActions([this] { return mViewports->active(); });
     toolBox::registerItems([this] { return mViewports->active(); });

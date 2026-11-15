@@ -1,5 +1,6 @@
 #include "ui/ViewportWidgetDetail.h"
 #include "ui/ViewportToast.h"
+#include "ui/FeatureStatus.h"
 #include "ui/Hotkeys.h"
 #include "ui/ViewportHud.h"
 #include "ui/ViewportToolbar.h"
@@ -607,6 +608,7 @@ void ViewportWidget::drawHud(OverlayPainter& p)
     }
     // The drone's key list takes the corner before the tool messages fill it with the layout's.
     drone::draw(p, this);
+    featureStatus::draw(p, this, width());
     flushToolMessages(p, ctx.view, drawn);
     viewportToast::draw(p, ctx.view, this, drawn);
 }

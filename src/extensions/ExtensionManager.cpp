@@ -3,6 +3,7 @@
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "core/Events.h"
+#include "core/Features.h"
 #include "core/Log.h"
 #include "core/MainQueue.h"
 #include "core/Paths.h"
@@ -234,6 +235,8 @@ FileStamps stampPackage(const fs::path& package)
 json ExtensionInfo::toJson() const
 {
     json j = {{"name", name}, {"path", path.string()}, {"kind", kindName(kind)}, {"loaded", loaded}, {"autoload", autoload}};
+    if (const char* status = features::label(features::extensionStatus(name)); *status)
+        j["status"] = status;
     if (manifest)
     {
         j["displayName"] = manifest->name;
@@ -761,6 +764,8 @@ bool ExtensionManager::autoloads(const ExtensionInfo& info) const
 {
     if (contains(autoloadList(), info.name))
         return true;
+    if (features::extensionStatus(info.name) == features::Status::NotReady)
+        return false;
     return info.manifest && info.manifest->enabledByDefault && !contains(disabledList(), info.name);
 }
 

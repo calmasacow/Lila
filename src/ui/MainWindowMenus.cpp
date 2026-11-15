@@ -29,7 +29,7 @@ QMenu* MainWindow::refreshKeysOnShow(QMenu* menu)
             if (id.empty())
                 continue;
             QString key = Hotkeys::get().keyFor(id);
-            qa->setText(QString::fromStdString(actions::displayLabel(id)) + (key.isEmpty() ? "" : "	" + key));
+            qa->setText(QString::fromStdString(actions::displayLabel(id)) + qa->property(menus::kStatusSuffix).toString() + (key.isEmpty() ? "" : "	" + key));
             qa->setToolTip(QString::fromStdString(actions::tooltip(id)));
             qa->setEnabled(actions::isEnabled(json(id)));
         }
@@ -388,7 +388,7 @@ void MainWindow::buildMenus()
     menus::addActions("Help", {"#Learn", "help.docs"});
     addSubmenu("Help", "Docs Topics", [](QMenu* m) { docs::attachTopicsMenu(m); });
     menus::addActions("Help", {"help.hotkeyCheatSheet", "viewport.toggleKeys", "help.updateDocs", "#Search", "window.searchMenus", "window.searchScene", "window.searchTearOffs",
-                               "#Feedback", "help.reportIssue", "help.requestFeature", "help.myReports", "#Problems", "help.perfTrace", "help.supportBundle", "help.copyLastCrash",
+                               "#Feedback", "help.reportIssue", "help.requestFeature", "help.myReports", "help.roadmap", "#Problems", "help.perfTrace", "help.supportBundle", "help.copyLastCrash",
                                "help.crashReports", "#Setup", "help.agentSetup", "help.telemetry", "help.checkUpdates", "help.prefsFolder", "",
                                "help.licenses", "help.credits", "help.about"});
 

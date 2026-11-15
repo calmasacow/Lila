@@ -173,6 +173,7 @@ lila_module(lila_ui UI
     PerfTrace.cpp PerfTrace.h
     Updater.cpp Updater.h
     WelcomeNews.cpp WelcomeNews.h
+    FeatureStatus.cpp FeatureStatus.h
     Credits.cpp Credits.h
     CreditsDialog.cpp CreditsDialog.h
     ProgressOverlay.cpp ProgressOverlay.h

@@ -110,7 +110,10 @@ public:
 
     /** general.json /extensions/autoload: extensions the user turned on. */
     std::vector<std::string> autoloadList() const;
-    /** Whether the extension loads at startup: turned on by the user, or enabledByDefault and not turned off. */
+    /**
+     * Whether the extension loads at startup: turned on by the user, or enabledByDefault and not turned off. One the
+     * roadmap marks not ready for use (core/Features.h) loads only once the user turns it on.
+     */
     bool autoloads(const ExtensionInfo& info) const;
     void setAutoload(const std::string& name, bool on);
     /** Loads every extension that autoloads, dependencies first, logging failures. */

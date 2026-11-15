@@ -27,6 +27,7 @@
 #include "scene/Georef.h"
 #include "ui/ViewportHud.h"
 #include "ui/DroneCamera.h"
+#include "ui/FeatureStatus.h"
 #include "ui/SurfaceSnap.h"
 #include "ui/GizmoMath.h"
 #include "ui/MaterialDraw.h"
@@ -210,7 +211,10 @@ void drawHud(OverlayPainter& painter, const ViewInfo& view, scene::Graph& g, Vie
     ctx.shownNode = [&g](scene::NodeId id) { return scene::effectivelyVisible(g, id); };
     hud::draw(painter, ctx);
     if (widget)
+    {
         drone::draw(painter, widget);
+        featureStatus::draw(painter, widget, view.width);
+    }
 }
 
 /** The viewport's draw overrides (selected last, as it draws them) and extension drawers, into a capture's frame. */
