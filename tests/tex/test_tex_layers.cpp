@@ -6,6 +6,7 @@
 #include "scene/Graph.h"
 #include "tex/Generators.h"
 #include "tex/Layers.h"
+#include "tex/PaintStrokes.h"
 #include "tex/SmartMaterial.h"
 #include "tex/TextureSet.h"
 
@@ -450,4 +451,22 @@ TEST_CASE("tex layers: scrolling a field folds its edits into one undo step")
     ops::execute("texSetLayer", {{"args", {"Scroll", id, {{"channels", {{"roughness", {{"opacity", 0.4}}}}}}}}}, CallSource::UI);
     REQUIRE(undo.undo());
     CHECK(opacity() == doctest::Approx(0.6));
+}
+
+TEST_CASE("tex layers: a new paint layer points every channel and its mask at its buffers, so strokes never change the graph")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Wired"}}, {"resolution", 4}});
+    const std::string id = run("texAddLayer", {{"args", {"Wired", "paint"}}})["id"].get<std::string>();
+    scene::Node& set = *tex::findSet(scene::Graph::current(), "Wired");
+    const tex::SetSettings settings = tex::readSettings(set);
+    const tex::StackState st = tex::readStack(tex::readGraph(set), settings);
+    const tex::Layer* l = st.stack.find(id);
+    REQUIRE(l);
+    for (const tex::Channel& c : settings.channels)
+        CHECK(l->paint.value(c.name, std::string()) == tex::paint::imageRef(id, c.name));
+    CHECK(l->paint.value("mask", std::string()) == tex::paint::imageRef(id, "mask"));
+    // Unpainted, the layer changes nothing.
+    auto out = evalSet("Wired", 4);
+    REQUIRE(out.contains("baseColor"));
 }

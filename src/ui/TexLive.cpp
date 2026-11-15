@@ -52,7 +52,37 @@ struct TileState
     std::string plannedKey;
     /** Plans each level has been given, for texLiveStatus. */
     std::vector<std::atomic<uint64_t>> plans;
+    /** Worker: the GPU externals each level's plan runs with, so an unchanged graph swaps them instead of replanning. */
+    std::vector<std::map<std::string, GpuImageRef>> externals;
+    /** External updates given without a new plan, per level, for texLiveStatus. */
+    std::vector<std::atomic<uint64_t>> swaps;
 };
+
+/**
+ * Whether a level can take new GPU externals in place: the same names, and each image (or its absence) giving the
+ * buffer the size and format the plan was set with, so only the loads and their readers change.
+ */
+bool externalsSwap(const std::map<std::string, GpuImageRef>& was, const std::map<std::string, GpuImageRef>& now, int width, int height)
+{
+    // The buffer size setPlan gives an external: the level's, or the image's own when it is smaller.
+    auto planned = [&](const GpuImageRef& img) {
+        return !img || (img->width() >= width && img->height() >= height) ? std::pair{width, height} : std::pair{img->width(), img->height()};
+    };
+    for (const auto& [name, img] : now)
+    {
+        auto it = was.find(name);
+        const GpuImageRef old = it == was.end() ? nullptr : it->second;
+        if (planned(img) != planned(old))
+            return false;
+        // A missing external planned as a float uv fill; a present one keeps its format so its half or float buffer holds.
+        if ((old && img && old->format() != img->format()) || (old && !img))
+            return false;
+    }
+    for (const auto& [name, img] : was)
+        if (img && !now.contains(name))
+            return false;
+    return true;
+}
 
 using Tiles = std::vector<std::shared_ptr<TileState>>;
 
@@ -685,6 +715,19 @@ std::string runJob(const Job& job)
                     else if (GpuImageRef map = render::texgpu::meshMap(job.settings.bakeProject, b.name, tile->udim))
                         in.gpuExternals[b.name] = map;
                 }
+            if (tile->externals.size() < tile->levels.size())
+                tile->externals.resize(tile->levels.size());
+            // Same graph: a new plan would reload every image and recompute the whole stack in one slice (a stall on
+            // a stroke's first press or its commit). Only what reads the changed externals runs.
+            if (fullOnly && tile->plans[l] > 0 && externalsSwap(tile->externals[l], in.gpuExternals, req.width, req.height))
+            {
+                tile->externals[l] = in.gpuExternals;
+                tile->levels[l]->setExternals(std::move(in.gpuExternals));
+                ++tile->swaps[l];
+                ensureTask();
+                continue;
+            }
+            tile->externals[l] = in.gpuExternals;
             if (std::string err = tile->levels[l]->setPlan(std::move(plan), std::move(in), stores); !err.empty())
                 return err;
             ++tile->plans[l];
@@ -911,6 +954,7 @@ void rebuild(LiveSet& s)
         }
         tile->levelSizes = levelSizes(tile->width, tile->height, previews);
         tile->plans = std::vector<std::atomic<uint64_t>>(tile->levelSizes.size());
+        tile->swaps = std::vector<std::atomic<uint64_t>>(tile->levelSizes.size());
         std::scoped_lock lock(gTaskMutex);
         for (size_t l = 0; l < tile->levelSizes.size(); ++l)
             tile->levels.push_back(std::make_shared<Evaluator>());
@@ -1280,6 +1324,7 @@ json status()
                                   {"height", t->levelSizes[l].second},
                                   {"idle", t->levels[l]->idle()},
                                   {"plans", l < t->plans.size() ? t->plans[l].load() : 0},
+                                  {"swaps", l < t->swaps.size() ? t->swaps[l].load() : 0},
                                   {"failed", failed},
                                   {"passesDirty", st.passesDirty},
                                   {"passesRun", st.passesRun},

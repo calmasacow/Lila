@@ -9,6 +9,7 @@
 #include "scene/Graph.h"
 #include "scene/Node.h"
 #include "tex/NodeDef.h"
+#include "tex/PaintStrokes.h"
 #include "tex/Ports.h"
 
 #include <algorithm>
@@ -504,6 +505,16 @@ void registerLayerCommands()
             l.filterValues = flagJson(a, "values", json::object());
             if (a.has("channels"))
                 l = patched(l, json{{"channels", a.flags["channels"]}}, "texAddLayer");
+            // A paint layer points every channel and its mask at its buffers from the start, so a stroke only changes
+            // pixels: wiring them on the first stroke would change the graph and re-evaluate the whole stack.
+            if (l.kind == LayerKind::Paint)
+            {
+                for (const Channel& c : s.settings.channels)
+                    if (!l.paint.contains(c.name))
+                        l.paint[c.name] = paint::imageRef(l.id, c.name);
+                if (!l.paint.contains(paint::kMaskChannel))
+                    l.paint[paint::kMaskChannel] = paint::imageRef(l.id, paint::kMaskChannel);
+            }
             checkLayer(s, l);
             const std::string id = l.id;
             insertLayer(s, std::move(l), a);

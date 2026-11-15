@@ -2385,7 +2385,14 @@ GpuImageRef externalImage(NodeId set, const std::string& name, int udim)
             if (gCommandsRegistered)
                 queueSync(set);
         });
-        return GpuImage::create({1, 1, TextureFormat::RGBA16F, false, false, name});
+        GpuImageRef standIn = GpuImage::create({1, 1, TextureFormat::RGBA16F, false, false, name});
+        // A channel never painted covers nothing; a mask never painted masks nothing.
+        if (channel == kMaskChannel)
+        {
+            const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            standIn->updateRgba(0, 0, 1, 1, white);
+        }
+        return standIn;
     }
     e = {GpuImage::create({size->second.first, size->second.second, TextureFormat::RGBA16F, false, false, name}), true};
     // The new image starts blank: fill it from the pages, then have the graph read it again.

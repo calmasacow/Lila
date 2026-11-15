@@ -689,6 +689,7 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
     prep->warnings = std::move(warnings);
     std::scoped_lock lock(m->mutex);
     m->pending = std::move(prep);
+    m->pendingExternals.reset();
     m->done = false;
     return {};
 }
@@ -698,6 +699,18 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
     LILA_ZONE();
     State& st = *m;
     st.adopt(vk.properties.limits.maxStorageBufferRange);
+    {
+        std::unique_ptr<std::map<std::string, GpuImageRef>> externals;
+        {
+            std::scoped_lock lock(st.mutex);
+            externals = std::move(st.pendingExternals);
+        }
+        if (externals && st.cur)
+        {
+            st.cur->inputs.gpuExternals = std::move(*externals);
+            st.refresh = true;
+        }
+    }
     if (st.cur && st.refresh.exchange(false))
         st.markExternals();
     auto pendingNow = [&] {
@@ -725,7 +738,8 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
     try
     {
         ms = st.sub.run(vk, [&](VkCommandBuffer cmd) {
-            st.recordLoads(vk, cmd, temps);
+            if (!st.recordLoads(vk, cmd, temps, budgetMs))
+                return;
             st.arenaFresh = false;
             if (st.uniformsDirty)
             {
@@ -748,6 +762,8 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
     }
     for (compute::Buffer& b : temps)
         compute::destroy(vk, b);
+    if (predicted <= 0.0 && st.sliceLoaded > 0 && ms > 0.5)
+        st.loadRate = std::clamp(compute::adaptRate(st.loadRate, double(st.sliceLoaded) / st.loadRate, ms), 1.0e4, 1.0e8);
     if (predicted > 1.0)
         st.rate = compute::adaptRate(st.rate, predicted, ms);
     if (st.cpuNext)
@@ -780,6 +796,13 @@ bool Evaluator::trim(VulkanContext& vk)
     st.trimmed = true;
     st.arenaFresh = true;
     return true;
+}
+
+void Evaluator::setExternals(std::map<std::string, GpuImageRef> externals)
+{
+    std::scoped_lock lock(m->mutex);
+    m->pendingExternals = std::make_unique<std::map<std::string, GpuImageRef>>(std::move(externals));
+    m->done = false;
 }
 
 void Evaluator::refreshExternals()

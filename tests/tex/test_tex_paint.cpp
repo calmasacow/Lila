@@ -366,14 +366,16 @@ TEST_CASE("texture paint: a committed or undone stroke redraws the viewport at f
     ui::texLive::install();
     REQUIRE(ui::texLive::mapsFor("Sharp"));
     REQUIRE(ui::texLive::waitIdle());
-    auto plans = [] {
+    auto counts = [](const char* key) {
         std::vector<uint64_t> out;
         for (const json& set : ui::texLive::status())
             if (set["set"] == "Sharp")
                 for (const json& level : set["tiles"][0]["levels"])
-                    out.push_back(level["plans"].get<uint64_t>());
+                    out.push_back(level[key].get<uint64_t>());
         return out;
     };
+    auto plans = [&] { return counts("plans"); };
+    auto swaps = [&] { return counts("swaps"); };
     const std::vector<uint64_t> start = plans();
     // The 256 preview, then the 512 tile.
     REQUIRE(start.size() == 2);
@@ -385,14 +387,18 @@ TEST_CASE("texture paint: a committed or undone stroke redraws the viewport at f
     rec.id = 100;
     REQUIRE(ui::texLive::waitIdle());
     const std::vector<uint64_t> before = plans();
+    const std::vector<uint64_t> swapsBefore = swaps();
     gp::beginLive(sg(), set, "P", std::make_shared<const tex::paint::Stroke>(rec));
     gp::liveDabs(set.id(), "P", rec.dabs);
     REQUIRE(ui::texLive::waitIdle());
     paintStroke("Sharp", "P", rec.toJson(false));
     REQUIRE(ui::texLive::waitIdle());
+    // Same graph: the full size takes the new paint in place, with no new plan (which would reload and redo the whole
+    // stack in one slice), and the preview stays put.
     std::vector<uint64_t> now = plans();
     CHECK(now[0] == before[0]);
-    CHECK(now[1] > before[1]);
+    CHECK(now[1] == before[1]);
+    CHECK(swaps()[1] > swapsBefore[1]);
 
     REQUIRE(UndoStack::get().undo());
     mainq::drain();

@@ -1322,6 +1322,10 @@ private:
         }
         if (std::optional<tex::Graph> next = rp::wiredGraph(set, layer, channels))
             texLive::warm(set.name(), *next);
+        // A layer never painted has 1x1 stand-ins for its buffers; sizing them now replans and loads the set here,
+        // in the background, instead of on the first stroke's press.
+        if (!layer.empty() && rp::bufferInfo(set.id(), layer).value("sizes", json::object()).empty())
+            rp::rasterize(scene::Graph::current(), set, layer);
     }
 
     std::string layerFor(scene::Node& set)

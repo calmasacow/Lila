@@ -215,6 +215,14 @@ public:
     void refreshExternals();
 
     /**
+     * Gives the current plan new GPU externals (images that appeared, like a paint layer's first stroke, or were
+     * replaced) without a new plan: the next step loads the ones that differ and reruns only what reads them. The
+     * caller keeps names, sizes and formats as the plan was set with; a later setPlan drops it. Any thread but the
+     * render thread.
+     */
+    void setExternals(std::map<std::string, GpuImageRef> externals);
+
+    /**
      * Render thread: the uv region {x0, y0, x1, y1} (fractions, rows down) the stores wrote since the last call, false
      * when none.
      */

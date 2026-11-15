@@ -813,7 +813,16 @@ json paintStroke(const Args& a)
     for (const StrokePtr& p : buf.strokes)
         if (p->id == s.id)
             throw CommandError("texPaintStroke: " + layer + " already has stroke " + std::to_string(s.id));
-    wireLayer(set, layer, s.payload.written());
+    // Every channel at once on a layer made unwired: the graph then changes on its first stroke only.
+    {
+        std::vector<std::string> wired = s.payload.written();
+        for (const tex::Channel& c : tex::readSettings(set).channels)
+            if (std::find(wired.begin(), wired.end(), c.name) == wired.end())
+                wired.push_back(c.name);
+        if (std::find(wired.begin(), wired.end(), std::string(kMaskChannel)) == wired.end())
+            wired.push_back(kMaskChannel);
+        wireLayer(set, layer, wired);
+    }
     ApplyResult r;
     try
     {
@@ -849,8 +858,9 @@ void registerCommands()
             return {};
         syncBuffer(graph(), set, buffer);
         image::Image img = readChannel(set.id(), buffer, channel, udim);
+        // A channel never painted covers nothing; a mask never painted masks nothing.
         if (img.width <= 0)
-            img = {1, 1, {0.0f, 0.0f, 0.0f, 0.0f}};
+            img = channel == kMaskChannel ? image::Image{1, 1, {1.0f, 1.0f, 1.0f, 1.0f}} : image::Image{1, 1, {0.0f, 0.0f, 0.0f, 0.0f}};
         return img;
     });
 
