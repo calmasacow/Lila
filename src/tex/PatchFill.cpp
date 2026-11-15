@@ -401,7 +401,7 @@ UvPolygon polygonArg(const Args& a, const char* flag, const char* cmd)
     return poly;
 }
 
-bool inside(const UvPolygon& poly, glm::vec2 p)
+bool insidePolygon(const UvPolygon& poly, glm::vec2 p)
 {
     bool in = false;
     for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
@@ -420,7 +420,7 @@ std::vector<uint8_t> maskArg(const Args& a, const char* polyFlag, const char* fi
         m.resize(size_t(w) * h);
         for (int y = 0; y < h; ++y)
             for (int x = 0; x < w; ++x)
-                m[size_t(y) * w + x] = inside(poly, {(x + 0.5f) / w, 1.0f - (y + 0.5f) / h}) ? 1 : 0;
+                m[size_t(y) * w + x] = insidePolygon(poly, {(x + 0.5f) / w, 1.0f - (y + 0.5f) / h}) ? 1 : 0;
         return m;
     }
     const std::string file = a.get<std::string>(fileFlag, "");

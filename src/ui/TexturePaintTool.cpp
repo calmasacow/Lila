@@ -1914,7 +1914,7 @@ tp::StrokeView strokeView(const ViewInfo& view, const glm::dmat4& world)
     return v;
 }
 
-bool sameView(const ViewInfo& a, const ViewInfo& b) { return a.view == b.view && a.proj == b.proj && a.width == b.width && a.height == b.height; }
+bool samePaintView(const ViewInfo& a, const ViewInfo& b) { return a.view == b.view && a.proj == b.proj && a.width == b.width && a.height == b.height; }
 
 class TexturePaintTool final : public ViewportTool, public brush::DabSink
 {
@@ -3422,7 +3422,7 @@ private:
             mBuffer.resize(w, h);
             mBufferView = view;
         }
-        if (!sameView(view, mBufferView))
+        if (!samePaintView(view, mBufferView))
         {
             // Moving the camera leaves the buffer on the screen: project it first when asked to, else it stays to project later.
             if (texturePaintState().autoProject && !mBuffer.empty() && mBufferDrag == BufferDrag::None)

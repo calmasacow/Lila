@@ -26,7 +26,7 @@ struct StorageImage
     VkImageView view = VK_NULL_HANDLE;
 };
 
-void imageBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
+void tracerBarrier(VkCommandBuffer cmd, VkImage image, VkImageLayout from, VkImageLayout to, VkPipelineStageFlags2 srcStage, VkAccessFlags2 srcAccess,
                   VkPipelineStageFlags2 dstStage, VkAccessFlags2 dstAccess)
 {
     VkImageMemoryBarrier2 b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
@@ -447,7 +447,7 @@ bool PathTracer::record(VulkanContext& vk, VkCommandBuffer cmd, View& v, const I
     constexpr auto computeStage = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
     constexpr auto rw = VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
     for (StorageImage* i : {&v.sum, &v.albedo, &v.normal})
-        imageBarrier(cmd, i->image, v.fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+        tracerBarrier(cmd, i->image, v.fresh ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
                      computeStage | VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, rw | VK_ACCESS_2_TRANSFER_READ_BIT, computeStage, rw);
     v.fresh = false;
     v.color->beginWrite(cmd);
@@ -462,7 +462,7 @@ bool PathTracer::record(VulkanContext& vk, VkCommandBuffer cmd, View& v, const I
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m->trace);
         vkCmdDispatch(cmd, gx, gy, 1);
         for (StorageImage* i : {&v.sum, &v.albedo, &v.normal})
-            imageBarrier(cmd, i->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, computeStage, rw, computeStage, rw);
+            tracerBarrier(cmd, i->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, computeStage, rw, computeStage, rw);
     }
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, m->resolve);
     vkCmdDispatch(cmd, gx, gy, 1);
@@ -497,7 +497,7 @@ void PathTracer::recordReadback(VulkanContext& vk, VkCommandBuffer cmd, View& v)
     int k = 0;
     for (StorageImage* i : {&v.sum, &v.albedo})
     {
-        imageBarrier(cmd, i->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, computeStage, rw, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+        tracerBarrier(cmd, i->image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL, computeStage, rw, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
                      VK_ACCESS_2_TRANSFER_READ_BIT);
         VkBufferImageCopy region{};
         region.bufferOffset = VkDeviceSize(k++) * texels * 16;

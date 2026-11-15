@@ -478,7 +478,7 @@ QIcon imageTile(const std::filesystem::path& file, int size)
 }
 
 /** The tool icon a brush preset's payload kind shows. */
-const char* presetIcon(const tex::brushes::Preset& p)
+const char* layerPresetIcon(const tex::brushes::Preset& p)
 {
     if (p.particles.is_object())
         return "droplet";
@@ -577,7 +577,7 @@ QIcon presetPreview(const tex::brushes::Preset& p)
             img.setPixel(x, y, qRgba(enc(rgb.r) * a / 255, enc(rgb.g) * a / 255, enc(rgb.b) * a / 255, a));
         }
     QPainter painter(&img);
-    icon(presetIcon(p)).paint(&painter, QRect(W - 17, H - 17, 16, 16));
+    icon(layerPresetIcon(p)).paint(&painter, QRect(W - 17, H - 17, 16, 16));
     painter.end();
     return QIcon(QPixmap::fromImage(img));
 }

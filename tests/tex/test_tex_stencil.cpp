@@ -11,7 +11,7 @@ namespace tp = lila::tex::paint;
 namespace
 {
 /** Looking straight down at the seam panel: screen x 300 to 500 runs along world x -24 to 24. */
-const json kView = {{"eye", {0.0, 200.0, 0.01}}, {"lookAt", {0.0, 0.0, 0.0}}, {"up", {0.0, 0.0, -1.0}}, {"fov", 40.0}, {"width", 800}, {"height", 600}};
+const json kStencilView = {{"eye", {0.0, 200.0, 0.01}}, {"lookAt", {0.0, 0.0, 0.0}}, {"up", {0.0, 0.0, -1.0}}, {"fov", 40.0}, {"width", 800}, {"height", 600}};
 
 /** w x h texels, rgba per texel from fn(x, y). */
 json picture(int w, int h, const std::function<std::array<float, 4>(int, int)>& fn)
@@ -31,7 +31,7 @@ json stencilStroke(const json& stencil)
     return {{"args", {"Panel"}},
             {"layer", "P"},
             {"points", {{300.0, 300.0, 1.0}, {350.0, 300.0, 1.0}, {400.0, 300.0, 1.0}, {450.0, 300.0, 1.0}, {500.0, 300.0, 1.0}}},
-            {"view", kView},
+            {"view", kStencilView},
             {"brush", brush},
             {"payload", {{"channels", {{"baseColor", {1.0, 0.0, 0.0}}}}}},
             {"stencil", stencil}};

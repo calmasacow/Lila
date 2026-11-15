@@ -66,7 +66,7 @@ const geo::Mesh& meshArg(const Args& a, const std::string& command, scene::MeshP
     return *hold;
 }
 
-scene::Node& setArg(const Args& a, const std::string& command)
+scene::Node& ptexSet(const Args& a, const std::string& command)
 {
     const std::string name = !a.positional.empty() && a.positional[0].is_string() ? a.positional[0].get<std::string>() : std::string();
     scene::Node* set = findSet(scene::Graph::current(), name);
@@ -98,7 +98,7 @@ glm::vec4 sampleImage(const image::Image& img, glm::vec2 uv)
 json exportPtex(const Args& a)
 {
     const char* cmd = "texExportPtex";
-    scene::Node& set = setArg(a, cmd);
+    scene::Node& set = ptexSet(a, cmd);
     scene::MeshPtr hold;
     const geo::Mesh& m = meshArg(a, cmd, hold);
     const QuadFaces q = quadFaces(m, cmd);
@@ -305,7 +305,7 @@ void rasterQuad(image::Image& img, const std::array<glm::vec2, 4>& quv, const Pt
 json importPtex(const Args& a)
 {
     const char* cmd = "texImportPtex";
-    scene::Node& set = setArg(a, cmd);
+    scene::Node& set = ptexSet(a, cmd);
     scene::MeshPtr hold;
     const geo::Mesh& m = meshArg(a, cmd, hold);
     const QuadFaces q = quadFaces(m, cmd);

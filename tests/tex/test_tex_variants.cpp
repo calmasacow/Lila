@@ -7,7 +7,7 @@ using namespace textest;
 
 namespace
 {
-image::Image composite(const char* channel)
+image::Image variantComposite(const char* channel)
 {
     scene::Node& set = *tex::findSet(scene::Graph::current(), "Crate");
     const tex::SetSettings s = tex::readSettings(set);
@@ -23,26 +23,26 @@ TEST_CASE("tex variants: overrides change only what they touch, edits go to the 
     const std::string red =
         run("texAddLayer", {{"args", {"Crate", "fill"}}, {"name", "Paint"}, {"material", {{"baseColor", {1.0, 0.0, 0.0}}}}})["id"];
 
-    const float baseRed = texel(composite("baseColor"), 4, 4)[0];
+    const float baseRed = texel(variantComposite("baseColor"), 4, 4)[0];
     CHECK(baseRed == doctest::Approx(1.0f).epsilon(0.01));
 
     // A variant: edits while it shows are its overrides.
     run("texAddVariant", {{"args", {"Crate", "Blue"}}});
     run("texSetLayer", {{"args", {"Crate", red, {{"material", {{"baseColor", {0.0, 0.0, 1.0}}}}}}}});
-    CHECK(texel(composite("baseColor"), 4, 4)[2] == doctest::Approx(1.0f).epsilon(0.01));
+    CHECK(texel(variantComposite("baseColor"), 4, 4)[2] == doctest::Approx(1.0f).epsilon(0.01));
     const json v = run("texVariants", {{"args", {"Crate"}}});
     CHECK(v["active"] == "Blue");
     CHECK(v["variants"]["Blue"].contains(red));
 
     // The base is untouched.
     run("texSwitchVariant", {{"args", {"Crate", ""}}});
-    CHECK(texel(composite("baseColor"), 4, 4)[0] == doctest::Approx(1.0f).epsilon(0.01));
+    CHECK(texel(variantComposite("baseColor"), 4, 4)[0] == doctest::Approx(1.0f).epsilon(0.01));
 
     // An override set from outside: the second variant hides the paint layer.
     run("texAddVariant", {{"args", {"Crate", "Plain"}}});
     run("texSwitchVariant", {{"args", {"Crate", ""}}});
     run("texSetVariant", {{"args", {"Crate", "Plain", red, {{"enabled", false}}}}});
-    CHECK(texel(composite("baseColor"), 4, 4)[0] == doctest::Approx(1.0f).epsilon(0.01));
+    CHECK(texel(variantComposite("baseColor"), 4, 4)[0] == doctest::Approx(1.0f).epsilon(0.01));
 
     const std::filesystem::path dir = tempDir("variants");
     const json out = run("texExport", {{"args", {"Crate"}}, {"preset", "gltf"}, {"folder", dir.string()}, {"variants", true}, {"backend", "cpu"}});

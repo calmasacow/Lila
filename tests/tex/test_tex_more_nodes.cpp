@@ -5,7 +5,7 @@ using namespace textest;
 namespace
 {
 /** The node fed by perlin noise on its first input. */
-Graph fed(const std::string& type, json values, const std::string& input = "input", const std::string& out = "out")
+Graph fedBy(const std::string& type, json values, const std::string& input = "input", const std::string& out = "out")
 {
     Graph g;
     add(g, "Src", "perlin", {{"scale", 4}, {"seed", 7}});
@@ -43,11 +43,11 @@ TEST_CASE("tex more nodes: golden images")
     const std::vector<Case> cases = {
         {"hexTile", bricks},
         {"compare", wipe},
-        {"colorMask", fed("colorMask", {{"color", {0.5, 0.5, 0.5, 1.0}}, {"tolerance", 0.1}, {"softness", 0.1}})},
-        {"multiColorMask", fed("multiColorMask", {{"count", 2}, {"color1", {0.3, 0.3, 0.3, 1.0}}, {"color2", {0.7, 0.7, 0.7, 1.0}}, {"tolerance", 0.05}})},
-        {"trig", fed("trig", {{"operation", "arcsine"}}, "a")},
-        {"condition", fed("condition", {{"comparison", "greater"}}, "a")},
-        {"remap", fed("remap", {{"fromLow", 0.3}, {"fromHigh", 0.7}, {"toLow", 1.0}, {"toHigh", 0.0}})},
+        {"colorMask", fedBy("colorMask", {{"color", {0.5, 0.5, 0.5, 1.0}}, {"tolerance", 0.1}, {"softness", 0.1}})},
+        {"multiColorMask", fedBy("multiColorMask", {{"count", 2}, {"color1", {0.3, 0.3, 0.3, 1.0}}, {"color2", {0.7, 0.7, 0.7, 1.0}}, {"tolerance", 0.05}})},
+        {"trig", fedBy("trig", {{"operation", "arcsine"}}, "a")},
+        {"condition", fedBy("condition", {{"comparison", "greater"}}, "a")},
+        {"remap", fedBy("remap", {{"fromLow", 0.3}, {"fromHigh", 0.7}, {"toLow", 1.0}, {"toHigh", 0.0}})},
         {"randomPerCell", cells},
     };
     for (const Case& c : cases)

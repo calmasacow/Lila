@@ -96,7 +96,7 @@ void notify()
         fn();
 }
 
-const std::string& boundSet(const std::string& slot)
+const std::string& texBoundSet(const std::string& slot)
 {
     Controller& c = ctl();
     if (c.bindingsDirty)
@@ -182,7 +182,7 @@ bool meshHook(scene::NodeId, const geo::Mesh& mesh, std::vector<render::Material
     const size_t slotCount = std::max<size_t>(mesh.materialNames().size(), 1);
     std::vector<size_t> hits;
     for (size_t i = 0; i < slotCount; ++i)
-        if (boundSet(scene::materials::slotName(mesh, int32_t(i))) == c.source.set)
+        if (texBoundSet(scene::materials::slotName(mesh, int32_t(i))) == c.source.set)
             hits.push_back(i);
     if (hits.empty())
         return false;
@@ -541,7 +541,7 @@ struct Texture2DView::Impl
                 std::vector<int32_t> slots;
                 const size_t slotCount = std::max<size_t>(mesh->materialNames().size(), 1);
                 for (size_t i = 0; i < slotCount; ++i)
-                    if (boundSet(scene::materials::slotName(*mesh, int32_t(i))) == set)
+                    if (texBoundSet(scene::materials::slotName(*mesh, int32_t(i))) == set)
                         slots.push_back(int32_t(i));
                 if (slots.empty())
                     continue;
