@@ -6,6 +6,7 @@
 #include "ops/Command.h"
 #include "render/Displacement.h"
 #include "render/GpuImage.h"
+#include "render/Renderer.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "scene/MeshNodes.h"
@@ -16,6 +17,7 @@
 #include "ui/TexLive.h"
 #include "ui/ViewInfo.h"
 #include "ui/ViewportHooks.h"
+#include "ui/ViewportToast.h"
 #include "ui/ViewportTool.h"
 
 #include <algorithm>
@@ -340,6 +342,113 @@ void registerDisplacementActions()
                   .icon = "mountain",
                   .keywords = {"displace", "tessellation", "height", "parallax", "relief"}});
 }
+
+// ---------------------------------------------------------------- path-traced view
+
+constexpr const char* kPtOn = "/viewport/pathTrace/enabled";
+constexpr const char* kPtBounces = "/viewport/pathTrace/bounces";
+constexpr const char* kPtSamples = "/viewport/pathTrace/samples";
+constexpr const char* kPtDenoise = "/viewport/pathTrace/denoise";
+
+render::FrameState::PathTrace pathTraceSettings()
+{
+    const PrefStore& p = PrefStore::get();
+    render::FrameState::PathTrace t;
+    t.on = p.value<bool>("general", kPtOn, false);
+    t.bounces = std::clamp(p.value<int>("general", kPtBounces, 4), 1, 32);
+    t.maxSamples = std::clamp(p.value<int>("general", kPtSamples, 1024), 1, 65536);
+    t.denoise = p.value<bool>("general", kPtDenoise, true);
+    return t;
+}
+
+bool canTrace()
+{
+    render::Renderer& r = render::Renderer::get();
+    return r.running() && r.gpuInfo().rayTracing;
+}
+
+void drawPathTrace(render::FrameState& s, OverlayPainter& painter, const ViewInfo& view)
+{
+    s.pathTrace = pathTraceSettings();
+    if (s.pathTrace.on && !canTrace())
+    {
+        s.pathTrace.on = false;
+        const QString text = "Path Traced needs a GPU with ray tracing: showing the shaded view";
+        painter.label(QPointF(view.width * 0.5 - OverlayPainter::textWidth(text) * 0.5, 40.0), text, {1.0f, 0.75f, 0.35f, 1.0f});
+    }
+}
+
+json pathTraceState()
+{
+    const render::FrameState::PathTrace t = pathTraceSettings();
+    return {{"enabled", t.on}, {"bounces", t.bounces}, {"samples", t.maxSamples}, {"denoise", t.denoise}, {"supported", canTrace()}};
+}
+
+void registerPathTrace()
+{
+    ops::registerCommand({
+        .name = "pathTracedView",
+        .doc = "Show every viewport path traced: light bounces through the scene (environment, lights, materials and texture sets) "
+               "and the image refines while nothing changes, starting over on any camera, scene or paint change. Needs a GPU with "
+               "ray tracing; without one the views stay shaded and say so. With no flags, reports the settings. Returns "
+               "{enabled, bounces, samples, denoise, supported}.",
+        .flags =
+            {
+                {"enable", "e", T::Bool, nullptr, "On or off."},
+                {"bounces", "b", T::Int, nullptr, "Most surfaces a path bounces off.", {}, {}, 1.0, 32.0},
+                {"samples", "s", T::Int, nullptr, "Samples per pixel the image refines to, then stops.", {}, {}, 1.0, 65536.0},
+                {"denoise", "d", T::Bool, nullptr, "Smooth the noise of the first samples, guided by the surfaces' colours, normals and depth."},
+            },
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            PrefStore& p = PrefStore::get();
+            if (a.has("enable"))
+            {
+                p.set("general", kPtOn, a.get<bool>("enable"));
+                if (a.get<bool>("enable") && !canTrace())
+                    log::warn("pathTracedView: this GPU can't trace rays; the viewports stay shaded");
+            }
+            if (a.has("bounces"))
+                p.set("general", kPtBounces, a.get<int>("bounces"));
+            if (a.has("samples"))
+                p.set("general", kPtSamples, a.get<int>("samples"));
+            if (a.has("denoise"))
+                p.set("general", kPtDenoise, a.get<bool>("denoise"));
+            viewportTools::requestRedraw();
+            return pathTraceState();
+        },
+        .examples = {"pathTracedView(enable=True)", "pathTracedView(bounces=8, samples=4096)"},
+    });
+    viewportHooks::addDrawer("lila.pathTracedView", drawPathTrace);
+}
+
+void registerPathTraceActions()
+{
+    actions::add({.id = "viewport.pathTraced",
+                  .label = "Path Traced",
+                  .category = "Display",
+                  .run =
+                      [] {
+                          const bool on = !pathTraceSettings().on;
+                          ops::execute("pathTracedView", {{"enable", on}}, CallSource::UI);
+                          if (on && !canTrace())
+                              viewportToast::showActive("Path Traced needs a GPU with ray tracing", 4000, viewportToast::Kind::Warning);
+                      },
+                  .doc = "Path trace the viewports: true reflections, shadows and bounced light that refine while the view holds still.",
+                  .python = "pathTracedView(enable=True)",
+                  .checked = [] { return pathTraceSettings().on; },
+                  .icon = "sun",
+                  .keywords = {"path tracing", "ray tracing", "raytrace", "render preview", "progressive", "global illumination", "gi", "iray",
+                               "cycles"}});
+    actions::add({.id = "viewport.pathTracedDenoise",
+                  .label = "Path Traced Denoise",
+                  .category = "Display",
+                  .run = [] { ops::execute("pathTracedView", {{"denoise", !pathTraceSettings().denoise}}, CallSource::UI); },
+                  .doc = "Smooth the path-traced view's early noise; it fades out as samples come in.",
+                  .python = "pathTracedView(denoise=False)",
+                  .checked = [] { return pathTraceSettings().denoise; },
+                  .keywords = {"noise", "denoiser"}});
+}
 } // namespace
 
 std::string displacementStatus(uint64_t node)
@@ -355,13 +464,15 @@ void registerCommands()
         return;
     done = true;
     registerDisplacement();
+    registerPathTrace();
 }
 
 void registerUi()
 {
     registerCommands();
     registerDisplacementActions();
-    menus::addActions("Texture", {"", "texture.displacementPreview"});
-    menus::addActions("Display", {"", "texture.displacementPreview"});
+    menus::addActions("Texture", {"", "texture.displacementPreview", "viewport.pathTraced"});
+    registerPathTraceActions();
+    menus::addActions("Display", {"", "viewport.pathTraced", "viewport.pathTracedDenoise", "texture.displacementPreview"});
 }
 } // namespace lila::ui::previewQuality

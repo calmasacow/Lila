@@ -408,6 +408,20 @@ struct FrameState
         float sunScatter = 0.5f;           // how much the sun lights the fog
         float anisotropy = 0.6f;           // forward scattering toward the sun, 0 to 0.95
     } fog;
+    /**
+     * The path-traced viewport (render/PathTracer.h) in place of the shaded meshes, on GPUs with ray queries: samples add
+     * up while the view, scene, materials and textures stay the same, and start over when any changes.
+     */
+    struct PathTrace
+    {
+        bool on = false;
+        int bounces = 4;
+        int samplesPerFrame = 2;
+        int maxSamples = 1024;
+        bool denoise = true;
+        uint32_t seed = 0;
+        float clamp = 50.0f; // the brightest an indirect sample may be, against fireflies
+    } pathTrace;
     /** No backdrop: what no surface covers stays clear (alpha 0), for renders composited later. */
     bool transparentBackground = false;
     /**

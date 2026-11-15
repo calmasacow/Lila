@@ -42,6 +42,7 @@ public:
         uint64_t meshDrawCalls = 0; // shaded mesh draw calls, prepass included; each draws one batch's placements
         uint64_t meshInstances = 0; // placements those calls drew
         uint64_t meshUploads = 0;   // GPU mesh copies made so far, every view counted
+        uint32_t pathSamples = 0;   // samples behind the path-traced view's image; 0 when the view isn't path traced
     };
 
     bool start();
@@ -88,6 +89,7 @@ public:
         std::string name; // empty while the renderer is not running
         bool discrete = false;
         uint64_t vramBytes = 0; // device-local heaps
+        bool rayTracing = false; // ray queries: traced shadows, AO and the path-traced view
     };
     GpuInfo gpuInfo() const;
 

@@ -18,6 +18,7 @@ lila_module(lila_render UI
     HdrImage.cpp
     HeightfieldRenderer.cpp
     MeshMaps.cpp
+    PathTracer.cpp
     PaintCommands.cpp
     PaintGpu.cpp
     Renderer.cpp
@@ -53,6 +54,7 @@ lila_add_shaders(lila_render FILES
     shaders/contact.slang
     shaders/deform.slang
     shaders/displace.slang
+    shaders/pathtrace.slang
     shaders/exposure.slang
     shaders/external.slang
     shaders/grid.slang
@@ -90,6 +92,8 @@ lila_add_shaders(lila_render FILES
     shaders/heightfield.slang
     shaders/mesh.slang
     shaders/scene_color.slang
+    shaders/tonemap.slang
+    shaders/pathtrace_channels.slang
     shaders/stylised.slang
     shaders/bake_common.slang
     shaders/bake_maps.slang
