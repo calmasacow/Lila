@@ -24,6 +24,7 @@ add_test(NAME lila_tex_tests COMMAND lila_tex_tests)
 add_executable(lila_tex_gpu_tests
     gpu_main.cpp
     test_material_thumbs.cpp
+    test_tex_displacement.cpp
     test_thumbs_live_viewport.cpp
     test_tex_gpu.cpp
     test_tex_paint.cpp

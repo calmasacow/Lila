@@ -109,6 +109,13 @@ struct RenderMesh
      */
     std::vector<uint32_t> edgeMask;
 
+    /**
+     * Displacement preview (render/Displacement.h): per vertex the unit direction it moves along, and per section (or the
+     * one whole-mesh section) its run of vertices {first, count}. Empty for meshes that never displace.
+     */
+    std::vector<glm::vec4> displaceDirs;
+    std::vector<glm::uvec2> displaceRanges;
+
     size_t edgeVertexCount() const { return edgeIndices.empty() ? edgePoints.size() : edgeIndices.size(); }
     const glm::vec3& edgePoint(size_t k) const { return edgeIndices.empty() ? edgePoints[k] : edgePoints[edgeIndices[k]]; }
     glm::vec3 boundsMin{0.0f};
@@ -283,6 +290,13 @@ struct Material
     float bevelRadius = 0.0f;
     /** Shows its own base colour even under the Grey Base Color display (the UV checker). */
     bool keepBaseColor = false;
+    /**
+     * Displacement preview of a tessellated mesh (RenderMesh::displaceDirs): its vertices move by (height - displacementMid)
+     * * displacementDepth cm. The map's first channel is the height; GPU images (or UDIM sets of them) only.
+     */
+    TexturePtr heightMap;
+    float displacementDepth = 0.0f;
+    float displacementMid = 0.5f;
 };
 
 /**

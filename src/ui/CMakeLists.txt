@@ -67,6 +67,7 @@ lila_module(lila_ui UI
     GraphCurveView.cpp GraphCurveView.h GraphModel.cpp GraphModel.h
     GraphMotion.cpp GraphMotion.h
     PoseLibrary.cpp PoseLibrary.h
+    PreviewQuality.cpp PreviewQuality.h
     ControlPicker.cpp ControlPicker.h
     HotkeyBindings.cpp HotkeyBindings.h
     HotkeyCheatSheet.cpp HotkeyCheatSheet.h

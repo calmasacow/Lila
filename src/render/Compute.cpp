@@ -47,6 +47,12 @@ void destroy(VulkanContext& vk, Buffer& b)
     b = {};
 }
 
+void invalidate(VulkanContext& vk, const Buffer& b)
+{
+    if (b.alloc)
+        vmaInvalidateAllocation(vk.allocator, b.alloc, 0, VK_WHOLE_SIZE);
+}
+
 void copy(VkCommandBuffer cmd, const Buffer& from, const Buffer& to, VkDeviceSize size)
 {
     if (!size)

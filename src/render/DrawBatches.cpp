@@ -28,6 +28,7 @@ bool sameMaterial(const Material& a, const Material& b)
     return a.baseColor == b.baseColor && a.opacity == b.opacity && a.metallic == b.metallic && a.roughness == b.roughness &&
            a.specular == b.specular && a.opacityClip == b.opacityClip && a.emissive == b.emissive && a.flags == b.flags &&
            a.baseColorMap == b.baseColorMap && a.normalMap == b.normalMap && a.ormMap == b.ormMap && a.emissiveMap == b.emissiveMap &&
+           a.heightMap == b.heightMap && a.displacementDepth == b.displacementDepth && a.displacementMid == b.displacementMid &&
            sameStyle(a.style, b.style);
 }
 

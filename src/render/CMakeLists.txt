@@ -9,6 +9,7 @@ lila_module(lila_render UI
     CubeLut.cpp
     ClayGpu.cpp
     DeformGpu.cpp
+    Displacement.cpp
     CameraRelative.cpp
     DrawBatches.cpp
     Environment.cpp
@@ -51,6 +52,7 @@ lila_add_shaders(lila_render FILES
     shaders/clay.slang
     shaders/contact.slang
     shaders/deform.slang
+    shaders/displace.slang
     shaders/exposure.slang
     shaders/external.slang
     shaders/grid.slang
