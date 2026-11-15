@@ -253,3 +253,31 @@ TEST_CASE("tex painter: smart material tags filter the library and the user's re
     CHECK(run("texSmartMaterials", {{"tags", {"mine"}}}).empty());
     fs::remove(dir / "tags.json");
 }
+
+TEST_CASE("tex painter: smart masks become Lila mask stacks and brush presets keep their stamp settings")
+{
+    const fs::path dir = fs::path(LILA_TEST_TEX_DATA);
+    painter::Conversion m = painter::convertSpsm(painter::readSpsm(dir / "painter_tiny.spmsk"), "Tiny Mask", {});
+    REQUIRE(m.materials.size() == 1);
+    CHECK(m.materials[0].kind == "mask");
+    const json& masks = m.materials[0].masks;
+    REQUIRE(masks.size() == 2);
+    CHECK(masks[0]["type"] == "genEdgeWear");
+    CHECK(masks[1]["kind"] == "levels");
+    CHECK(masks[1]["values"]["inLow"] == doctest::Approx(0.2));
+
+    painter::Conversion b = painter::convertSpsm(painter::readSpsm(dir / "painter_tiny.sppr"), "Tiny Brush", {});
+    REQUIRE(b.brushes.size() == 1);
+    const json& brush = b.brushes[0].brush;
+    CHECK(b.brushes[0].id == "Imported/Tiny_Brush");
+    CHECK(brush["flow"] == doctest::Approx(0.5));
+    // Painter spaces by diameter, Lila by radius.
+    CHECK(brush["spacing"] == doctest::Approx(0.2));
+    CHECK(brush["followStroke"] == true);
+    CHECK(brush["jitter"]["angle"] == doctest::Approx(180.0).epsilon(0.01));
+    CHECK(brush["jitter"]["position"] == doctest::Approx(0.5));
+    // The tip is the library alpha sharing a word with Painter's, reported as approximate.
+    if (brush.contains("alpha"))
+        CHECK(brush["alpha"].get<std::string>().find("scratch") != std::string::npos);
+    CHECK((b.approximated.size() + b.dropped.size()) == 1);
+}

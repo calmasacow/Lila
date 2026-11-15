@@ -204,3 +204,26 @@ with h5py.File(os.path.join(here, "painter_tiny.spsm"), "w", libver="earliest") 
     webp = io.BytesIO()
     Image.new("RGBA", (4, 4), (255, 128, 0, 255)).save(webp, "WEBP", lossless=True)
     f[".alg_meta/preset.bin"] = np.frombuffer(bytes(4) + b"previews" + webp.getvalue() + bytes(2), dtype=np.uint8)
+
+# A smart mask: a curvature generator, then levels over it.
+levels = o("DataActionFilterLevels", ("enabled", BOOL, True), ("label", STR, ""),
+           ("levels", OBJ, o("DataLevels", ("gamma", VEC3, [1.0, 1.0, 1.0]), ("inputMaximum", VEC3, [0.8, 0.8, 0.8]),
+                             ("inputMinimum", VEC3, [0.2, 0.2, 0.2]), ("outputMaximum", VEC3, [1.0, 1.0, 1.0]),
+                             ("outputMinimum", VEC3, [0.0, 0.0, 0.0]), ("uid", U64, 30))), ("uid", U64, 31))
+smart_mask = o("DataSmartMask", ("actionsStack", OBJ, stack([fill([procedural("/mg_curvature/mg_curvature?version=aa.sbsar", [])], [blend(2, 0)]), levels])),
+               ("preset_dataversion", I32, 88), ("uid", U64, 1), ("uuid", STR, "22222222-2222-3333-4444-555555555555"))
+with h5py.File(os.path.join(here, "painter_tiny.spmsk"), "w", libver="earliest") as f:
+    f["preset.bin"] = np.frombuffer(V1().encode(smart_mask), dtype=np.uint8)
+
+# A brush preset: stamp settings and a scratches tip.
+emitter = o("DataEmitterStroke", ("followPath", BOOL, True), ("positionJitter", F32, 0.25), ("pressureFlowEnabled", BOOL, True),
+            ("pressureSizeEnabled", BOOL, False), ("rotation", F32, 0.0), ("rotationJitter", F32, 3.1415927), ("spacing", F32, 0.1),
+            ("uid", U64, 40))
+stamp = o("DataBrushStamp", ("brushSizeJitter", F32, 0.1), ("flow", F32, 0.5), ("flowJitter", F32, 0.48), ("stampsEmitter", OBJ, emitter),
+          ("uid", U64, 41))
+tip = procedural("/alpha_scratches_01/alpha_scratches_01?version=cc.sbsar", [])
+paint_action = o("DataActionPaint", ("brush", OBJ, stamp), ("enabled", BOOL, True), ("sourceTransparent", OBJS, [tip]), ("uid", U64, 42))
+tool = o("DataToolPreset", ("preset", OBJ, paint_action), ("preset_dataversion", I32, 88), ("type", I32, 2), ("uid", U64, 1),
+         ("uuid", STR, "33333333-2222-3333-4444-555555555555"))
+with h5py.File(os.path.join(here, "painter_tiny.sppr"), "w", libver="earliest") as f:
+    f["preset.bin"] = np.frombuffer(V1().encode(tool), dtype=np.uint8)

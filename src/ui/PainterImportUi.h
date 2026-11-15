@@ -4,10 +4,19 @@
 
 namespace lila::ui
 {
-/** Converts Painter .spsm files into smart materials, reports in a toast and the log; returns how many smart materials it made. */
-int importPainterSmartMaterials(const QStringList& files);
+/** What an import made. */
+struct PainterImported
+{
+    int materials = 0;
+    int masks = 0;
+    int brushes = 0;
+    int total() const { return materials + masks + brushes; }
+};
 
-/** Picks .spsm files (opening in Painter's smart material folder when it exists) and imports them. */
+/** Converts Painter smart materials, smart masks and brush presets, reporting in a toast and the log. */
+PainterImported importPainterSmartMaterials(const QStringList& files);
+
+/** Picks Painter files (opening in Painter's smart material folder when it exists) and imports them. */
 void importPainterSmartMaterialsDialog();
 
 bool isPainterSmartMaterial(const QString& file);

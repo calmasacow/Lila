@@ -10402,13 +10402,14 @@ def texImportImage(*objects: Any, kind: str | None = None, channel: str | None =
         folder: Where the copies go; textures/<set>/imported by default.
     """
 
-def texImportPainterSmartMaterials(*objects: Any, folder: str | None = None, overwrite: bool | None = None) -> Any:
-    """Convert Substance 3D Painter smart materials (.spsm files, or folders of them) into Lila smart materials, written as .lilasmart beside their embedded images. Painter's generators, noises and filters become their nearest Lila nodes; custom Substance graphs and painted strokes can't come across. Returns per file {file, materials, approximated, dropped, error}.
+def texImportPainterSmartMaterials(*objects: Any, folder: str | None = None, brushFolder: str | None = None, overwrite: bool | None = None) -> Any:
+    """Convert Substance 3D Painter smart materials (.spsm), smart masks (.spmsk) and brush presets (.sppr), or folders of them: smart materials and masks as .lilasmart beside their embedded images, brush presets into Imported in your brushes. Painter's generators, noises and filters become their nearest Lila nodes and brush tips the nearest library alpha; custom Substance graphs and painted strokes can't come across. Returns per file {file, materials, brushes, approximated, dropped, error}.
 
     Args:
         objects: file|folder [file|folder...].
         folder: Where they go; your smart materials folder by default.
-        overwrite: Replace smart materials of the same name there. Default True.
+        brushFolder: Where brush presets go; Imported in your brushes folder by default.
+        overwrite: Replace ones of the same name there. Default True.
     """
 
 def texLayerStack(*objects: Any) -> Any:
@@ -10555,7 +10556,7 @@ def texSetFrames(*objects: Any) -> Any:
     """
 
 def texSetLayer(*objects: Any) -> Any:
-    """Change a layer: props is a merge patch over its JSON (texLayerStack shows it): name, enabled, channels {channel: {enabled, mode, opacity}}, material {channel: value, or null to drop it}, paint {channel or mask: image}, graph, source, filter, filterValues, anchor, heightBlend {enabled, sharpness, influence}, masks, kind. Returns the layer.
+    """Change a layer: props is a merge patch over its JSON (texLayerStack shows it): name, enabled, channels {channel: {enabled, mode, opacity}}, material {channel: value, or null to drop it}, paint {channel or mask: image}, graph, source, filter, filterValues, anchor, heightBlend {enabled, sharpness, influence}, tiling {scale, rotation, offsetX, offsetY}, masks, kind; params {name: value} sets a procedural layer's exposed settings (its graph's param inputs and the node values they target). Returns the layer.
 
     Args:
         objects: set layer props.

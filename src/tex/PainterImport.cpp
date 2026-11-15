@@ -1,6 +1,7 @@
 #include "tex/PainterImport.h"
 
 #include "bake/Naming.h"
+#include "brush/Alphas.h"
 #include "core/Paths.h"
 #include "core/PrefStore.h"
 #include "ops/Command.h"
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <optional>
 #include <set>
 
@@ -348,6 +350,20 @@ public:
         Layer l = layer(*group);
         l.name = name;
         return l;
+    }
+
+    /** A Painter smart mask's effects as a Lila mask stack. */
+    std::vector<Mask> smartMask(const json& preset)
+    {
+        std::vector<const json*> effects;
+        flatten(items(preset, "actionsStack"), effects);
+        std::vector<Mask> out;
+        for (const json* e : effects)
+            if (std::optional<Mask> m = mask(*e))
+                out.push_back(std::move(*m));
+        if (out.empty())
+            throw std::runtime_error("none of the smart mask's effects can come across");
+        return out;
     }
 
 private:
@@ -1085,19 +1101,125 @@ json countsJson(const std::map<std::string, int>& m)
     return a;
 }
 
-std::vector<fs::path> spsmFiles(const fs::path& p)
+std::string lowerExt(const fs::path& p)
+{
+    std::string ext = p.extension().string();
+    std::ranges::transform(ext, ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
+    return ext;
+}
+
+/** The words of a Painter alpha's resource name ("alpha_dirt_06" -> dirt), for finding a library alpha like it. */
+std::vector<std::string> alphaWords(const std::string& id)
+{
+    std::vector<std::string> out;
+    std::string w;
+    auto flush = [&] {
+        static const std::set<std::string> filler = {"alpha", "brush", "shape", "special", "maker", "offset"};
+        if (w.size() > 2 && !filler.contains(w))
+            out.push_back(w);
+        w.clear();
+    };
+    for (const char c : id)
+    {
+        if (std::isupper(static_cast<unsigned char>(c)) && !w.empty())
+            flush();
+        if (std::isalpha(static_cast<unsigned char>(c)))
+            w.push_back(char(std::tolower(static_cast<unsigned char>(c))));
+        else
+            flush();
+    }
+    flush();
+    return out;
+}
+
+/** A brush preset from Painter's stamp settings; its tip becomes the library alpha sharing a word with Painter's, else round. */
+brushes::Preset brushPreset(const json& preset, const std::string& name, Conversion& out)
+{
+    const json& paint = preset.value("preset", json::object());
+    const json& b = paint.value("brush", json::object());
+    const json& em = b.value("stampsEmitter", json::object());
+    constexpr double kDeg = 57.29577951308232;
+    json brush = {{"flow", clamp01(num(b, "flow", 1.0))},
+                  // Painter spaces dabs by the tip's diameter, Lila by its radius.
+                  {"spacing", std::clamp(num(em, "spacing", 0.1) * 2.0, 0.01, 4.0)},
+                  {"jitter",
+                   {{"position", std::clamp(num(em, "positionJitter", 0.0) * 2.0, 0.0, 4.0)},
+                    {"size", clamp01(num(b, "brushSizeJitter", 0.0))},
+                    {"opacity", clamp01(num(b, "flowJitter", 0.0))},
+                    {"angle", std::clamp(num(em, "rotationJitter", 0.0) * kDeg, 0.0, 180.0)}}},
+                  {"angle", -num(em, "rotation", 0.0) * kDeg},
+                  {"followStroke", em.value("followPath", false)},
+                  {"pressureFlow", em.value("pressureFlowEnabled", false)},
+                  {"pressureSize", em.value("pressureSizeEnabled", false)}};
+    std::string source;
+    for (const json& s : paint.value("sourceTransparent", json::array()))
+        if (s.is_object())
+        {
+            source = s.contains("procedural") ? resourceId(str(s["procedural"], "urlToSbsRes"))
+                                              : resourceId(str(s.value("bitmap", json::object()), "urlToBitmapRes"));
+            break;
+        }
+    const std::vector<std::string> words = alphaWords(source);
+    if (!source.empty() && std::ranges::find(words, "round") == words.end())
+    {
+        std::vector<const brush::alphas::Entry*> matches;
+        const std::vector<brush::alphas::Entry> lib = brush::alphas::library();
+        // Painter's words first, then what Lila's library calls the same thing.
+        static const std::map<std::string, std::vector<std::string>> kin = {
+            {"dirt", {"grunge", "grime", "stain", "speck", "noise"}}, {"ground", {"mud", "dirt", "crack", "gravel"}},
+            {"tire", {"tread", "track", "grip"}},                    {"hatched", {"hatch", "stripe", "line"}},
+            {"inky", {"ink", "splat", "blot"}},                      {"cracked", {"crack"}},
+            {"wall", {"plaster", "concrete", "stone"}},              {"wood", {"grain", "bark"}}};
+        std::vector<std::string> search = words;
+        for (const std::string& w : words)
+            if (auto it = kin.find(w); it != kin.end())
+                search.insert(search.end(), it->second.begin(), it->second.end());
+        for (const std::string& w : search)
+        {
+            for (const brush::alphas::Entry& e : lib)
+            {
+                std::string hay = e.name + " " + e.category;
+                std::ranges::transform(hay, hay.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
+                if (hay.find(w) != std::string::npos)
+                    matches.push_back(&e);
+            }
+            if (!matches.empty())
+                break;
+        }
+        if (matches.empty())
+            ++out.dropped["brush tip " + source + " (no library alpha like it, so round)"];
+        else
+        {
+            const brush::alphas::Entry* pick = matches[std::hash<std::string>{}(name) % matches.size()];
+            brush["alpha"] = pick->ref;
+            ++out.approximated["brush tip " + source + " as alpha " + pick->name];
+        }
+    }
+    brushes::Preset p;
+    p.id = "Imported/" + bake::fileSafe(name);
+    p.name = name;
+    p.category = "Imported";
+    p.doc = "Converted from Substance 3D Painter.";
+    p.brush = brush;
+    p.payload = {{"kind", "paint"}};
+    return p;
+}
+
+bool isPainterExt(const std::string& ext)
+{
+    return ext == ".spsm" || ext == ".spmsk" || ext == ".sppr";
+}
+
+/** The Painter files a path names: itself, or every one under a folder (brush presets sit in category subfolders). */
+std::vector<fs::path> painterFiles(const fs::path& p)
 {
     std::vector<fs::path> out;
     std::error_code ec;
     if (fs::is_directory(p, ec))
     {
-        for (const auto& e : fs::directory_iterator(p, ec))
-        {
-            std::string ext = e.path().extension().string();
-            std::ranges::transform(ext, ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
-            if (ext == ".spsm")
+        for (const auto& e : fs::recursive_directory_iterator(p, ec))
+            if (e.is_regular_file(ec) && isPainterExt(lowerExt(e.path())))
                 out.push_back(e.path());
-        }
         std::ranges::sort(out);
     }
     else
@@ -1133,8 +1255,25 @@ Conversion convertSpsm(const SpsmFile& file, const std::string& name, const fs::
         std::string n = name;
         for (int k = 2; !used.insert(n).second; ++k)
             n = name + " " + std::to_string(k);
+        const std::string cls = str(file.presets[i], "@");
+        if (cls == "DataToolPreset")
+        {
+            out.brushes.push_back(brushPreset(file.presets[i], n, out));
+            continue;
+        }
         SmartMaterial m;
         m.name = n;
+        m.description = "Converted from Substance 3D Painter.";
+        m.tags = normalizeTags(tagsFromName(n));
+        if (cls == "DataSmartMask")
+        {
+            m.kind = "mask";
+            m.masks = json::array();
+            for (const Mask& mk : c.smartMask(file.presets[i]))
+                m.masks.push_back(mk.toJson());
+            out.materials.push_back(std::move(m));
+            continue;
+        }
         m.kind = "material";
         m.layer = c.root(file.presets[i], n).toJson();
         m.description = "Converted from Substance 3D Painter.";
@@ -1144,22 +1283,29 @@ Conversion convertSpsm(const SpsmFile& file, const std::string& name, const fs::
     return out;
 }
 
+bool isPainterFile(const fs::path& file)
+{
+    return isPainterExt(lowerExt(file));
+}
+
 void registerPainterCommands()
 {
     using T = ArgType;
     ops::registerCommand({
         .name = "texImportPainterSmartMaterials",
-        .doc = "Convert Substance 3D Painter smart materials (.spsm files, or folders of them) into Lila smart materials, written as "
-               ".lilasmart beside their embedded images. Painter's generators, noises and filters become their nearest Lila nodes; "
-               "custom Substance graphs and painted strokes can't come across. Returns per file {file, materials, approximated, "
+        .doc = "Convert Substance 3D Painter smart materials (.spsm), smart masks (.spmsk) and brush presets (.sppr), or folders of them: "
+               "smart materials and masks as .lilasmart beside their embedded images, brush presets into Imported in your brushes. "
+               "Painter's generators, noises and filters become their nearest Lila nodes and brush tips the nearest library alpha; "
+               "custom Substance graphs and painted strokes can't come across. Returns per file {file, materials, brushes, approximated, "
                "dropped, error}.",
         .positionalDoc = "file|folder [file|folder...]",
         .flags = {{"folder", "", T::String, nullptr, "Where they go; your smart materials folder by default."},
-                  {"overwrite", "", T::Bool, true, "Replace smart materials of the same name there."}},
+                  {"brushFolder", "", T::String, nullptr, "Where brush presets go; Imported in your brushes folder by default."},
+                  {"overwrite", "", T::Bool, true, "Replace ones of the same name there."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             if (a.positional.empty())
-                throw CommandError("texImportPainterSmartMaterials: give at least one .spsm file or folder");
+                throw CommandError("texImportPainterSmartMaterials: give at least one Painter file or folder");
             const fs::path dest = a.has("folder") ? paths::fromUtf8(a.get<std::string>("folder")) : PrefStore::get().userDir() / "smartmaterials";
             const bool overwrite = a.get<bool>("overwrite", true);
             std::vector<fs::path> files;
@@ -1167,17 +1313,19 @@ void registerPainterCommands()
             {
                 if (!p.is_string())
                     throw CommandError("texImportPainterSmartMaterials: paths are strings");
-                for (fs::path& f : spsmFiles(paths::fromUtf8(p.get<std::string>())))
+                for (fs::path& f : painterFiles(paths::fromUtf8(p.get<std::string>())))
                     files.push_back(std::move(f));
             }
             if (files.empty())
-                throw CommandError("texImportPainterSmartMaterials: no .spsm files there");
+                throw CommandError("texImportPainterSmartMaterials: no .spsm, .spmsk or .sppr files there");
+            const fs::path brushDest = a.has("brushFolder") ? paths::fromUtf8(a.get<std::string>("brushFolder")) : brushes::tierDir("user") / "Imported";
+            bool anyBrush = false;
             std::error_code ec;
             fs::create_directories(dest, ec);
             json out = json::array();
             for (const fs::path& f : files)
             {
-                json r = {{"file", paths::toUtf8(f)}, {"materials", json::array()}};
+                json r = {{"file", paths::toUtf8(f)}, {"materials", json::array()}, {"brushes", json::array()}};
                 try
                 {
                     const std::string name = paths::toUtf8(f.stem());
@@ -1199,7 +1347,20 @@ void registerPainterCommands()
                     for (size_t i = 0; i < c.materials.size(); ++i)
                     {
                         saveSmartMaterial(c.materials[i], targets[i]);
-                        r["materials"].push_back({{"name", c.materials[i].name}, {"file", paths::toUtf8(targets[i])}});
+                        r["materials"].push_back({{"name", c.materials[i].name}, {"kind", c.materials[i].kind}, {"file", paths::toUtf8(targets[i])}});
+                    }
+                    for (const brushes::Preset& p : c.brushes)
+                    {
+                        const fs::path target = brushDest / (bake::fileSafe(p.name) + ".lilabrush");
+                        if (!overwrite && fs::exists(target, ec))
+                            throw std::runtime_error(paths::toUtf8(target.filename()) + " already exists");
+                        fs::create_directories(brushDest, ec);
+                        std::ofstream o(target, std::ios::binary);
+                        if (!o)
+                            throw std::runtime_error("can't write " + paths::toUtf8(target));
+                        o << p.toJson().dump(2) << '\n';
+                        r["brushes"].push_back({{"name", p.name}, {"file", paths::toUtf8(target)}});
+                        anyBrush = true;
                     }
                     r["approximated"] = countsJson(c.approximated);
                     r["dropped"] = countsJson(c.dropped);
@@ -1210,6 +1371,8 @@ void registerPainterCommands()
                 }
                 out.push_back(std::move(r));
             }
+            if (anyBrush)
+                brushes::reload();
             return out;
         },
     });

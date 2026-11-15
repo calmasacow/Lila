@@ -506,10 +506,10 @@ void registerTextureGraphUi()
                   .doc = "Read .lilamat materials as new texture sets, or add a .lilatexnodes node library to your node library.",
                   .python = "lila.ops.texImportGraph(\"rock.lilamat\")"});
     actions::add({.id = "texture.importPainterSmart",
-                  .label = "Import Painter Smart Materials...",
+                  .label = "Import from Painter...",
                   .category = "Texture",
                   .run = [] { importPainterSmartMaterialsDialog(); },
-                  .doc = "Convert Substance 3D Painter smart materials (.spsm) into Lila smart materials on the smart material shelf. "
+                  .doc = "Convert Substance 3D Painter smart materials, smart masks and brush presets (.spsm, .spmsk, .sppr) for the shelf. "
                          "What can't come across exactly is listed in the log.",
                   .python = "lila.ops.texImportPainterSmartMaterials(\"C:/path/to/smart-materials\")",
                   .keywords = {"substance", "spsm", "adobe", "smart material", "convert"}});
