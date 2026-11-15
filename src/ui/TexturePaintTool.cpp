@@ -3427,6 +3427,28 @@ void registerTexturePaintUi()
                          "Hold S and drag to move it, with Shift to rotate, with Ctrl to scale.",
                   .python = "texPaintStencil(\"<image file>\")",
                   .keywords = {"stencil", "mask", "overlay", "paint through"}});
+    actions::add({.id = "tex.transferSet",
+                  .label = "Transfer Texture Set",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          scene::Graph& g = scene::Graph::current();
+                          std::vector<scene::Node*> meshes;
+                          for (scene::NodeId id : g.selection())
+                              if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+                                  meshes.push_back(n);
+                          const std::string set = currentTextureSet();
+                          if (meshes.size() != 2 || set.empty())
+                          {
+                              log::warn("Transfer Texture Set: select the mesh the set paints, then the mesh to move it onto");
+                              return;
+                          }
+                          actions::run({{"command", "texTransferSet"}, {"args", {{"args", {set}}, {"source", meshes[0]->path()}, {"onto", meshes[1]->path()}}}});
+                      },
+                  .doc = "Move the open texture set's look from the first selected mesh onto the second (an old version onto a new one, a high "
+                         "mesh onto its low one), as a new paint layer.",
+                  .python = "texTransferSet(\"<set>\", source=\"<old mesh>\", onto=\"<new mesh>\")",
+                  .keywords = {"transfer", "reproject", "project texture", "bake to"}});
     actions::add({.id = "tex.paintAlongCurve",
                   .label = "Paint Along Curve",
                   .category = "Texture",

@@ -20,6 +20,7 @@ lila_module(lila_render UI
     PaintCommands.cpp
     PaintPathCommands.cpp
     PaintPickCommands.cpp
+    PaintTransferCommands.cpp
     PaintGpu.cpp
     Renderer.cpp
     ShadingModels.cpp

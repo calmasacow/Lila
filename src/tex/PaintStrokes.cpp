@@ -323,6 +323,15 @@ json Stroke::toJson(bool packedDabs) const
         j["stencil"] = stencil->toJson();
     if (!path.is_null())
         j["path"] = path;
+    if (!anchors.empty())
+    {
+        std::vector<float> a(anchors.size() * 3);
+        for (size_t i = 0; i < anchors.size(); ++i)
+            a[i * 3] = anchors[i].x, a[i * 3 + 1] = anchors[i].y, a[i * 3 + 2] = anchors[i].z;
+        j["anchors"] = packedDabs ? json(packed::make<float>(a, 3)) : json(a);
+        // A string: JSON numbers can't hold every 64-bit value exactly.
+        j["meshSignature"] = std::to_string(meshSignature);
+    }
     if (view)
     {
         const float* m = &view->objectToClip[0][0];
@@ -384,6 +393,13 @@ Stroke Stroke::fromJson(const json& j)
             s.stencil = StrokeStencil::fromJson(j["stencil"]);
         if (j.contains("path") && j["path"].is_object())
             s.path = j["path"];
+        if (j.contains("anchors"))
+        {
+            const std::vector<double> a = rows(j["anchors"], 3, "anchors");
+            for (size_t i = 0; i + 2 < a.size(); i += 3)
+                s.anchors.push_back({f32(a[i]), f32(a[i + 1]), f32(a[i + 2])});
+            s.meshSignature = std::stoull(j.value("meshSignature", std::string("0")));
+        }
         if (j.contains("view") && j["view"].is_object())
         {
             const json& v = j["view"];
@@ -450,7 +466,8 @@ Stroke Stroke::fromJson(const json& j)
 bool Stroke::operator==(const Stroke& o) const
 {
     return id == o.id && mesh == o.mesh && brush == o.brush && payload == o.payload && seed == o.seed && occlusion == o.occlusion && view == o.view &&
-           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry && stencil == o.stencil && path == o.path;
+           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry && stencil == o.stencil && path == o.path &&
+           anchors == o.anchors && meshSignature == o.meshSignature;
 }
 
 std::vector<std::string> Stroke::images() const

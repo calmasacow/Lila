@@ -10731,6 +10731,18 @@ def texSmartMaterials(tags: Sequence[Any] | None = None) -> Any:
         tags: Only those carrying all of these tags.
     """
 
+def texTransferSet(*objects: Any, source: str | None = None, onto: str | None = None, into: str | None = None, maxDistance: float | None = None, folder: str | None = None) -> Any:
+    """Move a texture set's look from one mesh onto another (an old version onto a new one, a high mesh onto its low one): each texel of the target takes the set's evaluated channels at the closest point of the source surface, as a new paint layer of the set into= (else the same set). Texels with no source within maxDistance stay empty and are counted. Returns {layer, texels, missed, channels}.
+
+    Args:
+        objects: set.
+        source: The mesh the set paints now.
+        onto: The mesh to move it onto.
+        into: The set that gets the layer; else the same set.
+        maxDistance: How far a target texel may be from the source surface.
+        folder: Where the pixels go; textures/<target>/transferred by default.
+    """
+
 def textCurves(text: str | None = None, font: str | None = None, size: float | None = None, alignment: str | None = None, anchor: str | None = None, wrapWidth: float | None = None, letterSpacing: float | None = None, wordSpacing: float | None = None, lineSpacing: float | None = None, textCase: str | None = None, width: float | None = None, slant: float | None = None, weight: float | None = None, underline: bool | None = None, strikethrough: bool | None = None, kerning: bool | None = None, mergeOverlaps: bool | None = None, constructionHistory: bool | None = None, name: str | None = None, *, ch: bool | None = None, n: str | None = None) -> Any:
     """Make text as curves (Maya's textCurves): closed Bezier outlines of each glyph, exact, in the XY plane with the first baseline on the origin. The curveText node keeps the text, font and layout live, so editing it updates anything built on the curve (a bevelPlus, say). Returns [curve, curveText].
 

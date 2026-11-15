@@ -55,6 +55,8 @@ struct LILA_SCENE_API PaintMesh
     /** Per corner (three per triangle), the mesh point it is: what a topological symmetry map pairs. */
     std::vector<uint32_t> points;
     std::shared_ptr<const geo::MeshBvh> bvh;
+    /** Hash of the triangulation, its uvs and what is paintable: equal signatures, the same dab triangles and barycentrics. */
+    uint64_t signature = 0;
 
     size_t triangleCount() const { return paintable.size(); }
     glm::vec3 point(uint32_t tri, float u, float v) const;

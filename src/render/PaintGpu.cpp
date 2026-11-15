@@ -493,6 +493,8 @@ struct Layer
     std::map<int, std::pair<int, int>> sizes;
     std::map<TileKey, ChannelTile> tiles;
     std::vector<uint64_t> applied;
+    /** Each painted mesh's signature (PaintMesh::signature) when its strokes were last rasterised. */
+    std::map<std::string, uint64_t> meshSignatures;
     std::shared_ptr<const Baseline> baseline;
     uint64_t clears = 0;
     bool synced = false;
@@ -1363,9 +1365,9 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
         params.gradType = type == "radial" ? 1 : type == "reflected" ? 2 : type == "angle" ? 3 : 0;
         params.gradSpace = gr.value("space", std::string("uv")) == "screen" ? 1 : 0;
         params.gradDither = gr.value("dither", false) ? 1 : 0;
-        const json a = gr.value("start", json::array({0.0, 0.0})), b = gr.value("end", json::array({1.0, 0.0}));
-        params.gradA[0] = a[0].get<float>(), params.gradA[1] = a[1].get<float>();
-        params.gradB[0] = b[0].get<float>(), params.gradB[1] = b[1].get<float>();
+        const json from = gr.value("start", json::array({0.0, 0.0})), to = gr.value("end", json::array({1.0, 0.0}));
+        params.gradA[0] = from[0].get<float>(), params.gradA[1] = from[1].get<float>();
+        params.gradB[0] = to[0].get<float>(), params.gradB[1] = to[1].get<float>();
         params.ramp = live.rampAddr;
         if (h.view)
         {
@@ -1639,14 +1641,69 @@ std::shared_ptr<const PaintImage> stencilOf(const scene::Node* set, const Stroke
 
 std::shared_ptr<const PaintImage> limitOf(const scene::Node* set, const Stroke& s) { return keyedImage(set, s.payload.limit); }
 
+/**
+ * The stroke on a mesh whose triangles or uvs changed since it was painted: each dab moved to the closest surface point to
+ * its anchor; dabs with none within their radius drop out. A fill over the whole mesh fills the new one; any other fill
+ * keeps only what its anchors say, which a fill has none of, so it drops out and is counted.
+ */
+StrokePtr retargetStroke(const StrokePtr& s, const PaintMesh& mesh, RetargetCount& n)
+{
+    auto out = std::make_shared<Stroke>(*s);
+    out->dabs.clear();
+    out->anchors.clear();
+    for (size_t i = 0; i < s->dabs.size() && i < s->anchors.size(); ++i)
+    {
+        const Dab& d = s->dabs[i];
+        geo::BvhClosest hit;
+        if (!mesh.bvh->closestPoint(glm::dvec3(s->anchors[i]), hit, std::max(double(d.radius), 1e-6)) || hit.triangle >= mesh.triangleCount() ||
+            !mesh.paintable[hit.triangle])
+        {
+            ++n.lost;
+            continue;
+        }
+        Dab r = d;
+        r.triangle = uint32_t(hit.triangle);
+        r.u = float(hit.bary.y);
+        r.v = float(hit.bary.z);
+        out->dabs.push_back(r);
+        out->anchors.push_back(s->anchors[i]);
+        ++n.found;
+    }
+    if (s->payload.kind == "fill")
+    {
+        Payload p = s->payload;
+        if (p.fillBy == "mesh")
+            p.triangles = mesh.allTriangles();
+        else
+        {
+            n.lost += p.triangles.size();
+            p.triangles.clear();
+        }
+        out->payload = p;
+    }
+    if (!s->payload.locked.empty())
+        out->payload.locked.clear();
+    out->meshSignature = mesh.signature;
+    return out;
+}
+
 /** Paints a whole stroke with no undo (rasterising from records). */
-void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& material, const StrokePtr& s)
+void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& material, StrokePtr s)
 {
     std::shared_ptr<const PaintMesh> mesh = paintMesh(g, s->mesh, material);
     if (!mesh)
     {
         log::warn("paint buffer {}: stroke {} paints {}, which isn't a mesh any more; skipped", key.buffer, s->id, s->mesh);
         return;
+    }
+    l.meshSignatures[s->mesh] = mesh->signature;
+    if (s->meshSignature != 0 && s->meshSignature != mesh->signature)
+    {
+        RetargetCount n;
+        s = retargetStroke(s, *mesh, n);
+        if (n.lost > 0)
+            log::warn("paint buffer {}: stroke {}: {} of {} dabs found no surface on the changed mesh and were left out", key.buffer, s->id, n.lost,
+                      n.lost + n.found);
     }
     try
     {
@@ -1968,7 +2025,24 @@ void syncOne(scene::Graph& g, scene::Node& set, const std::string& id, const Buf
     const Key key{set.id(), id};
     Layer& l = layerFor(key);
     const std::vector<uint64_t> ids = strokeIds(data);
-    const bool same = l.synced && l.sizes == wantedSizes(set, &data) && l.baseline == data.baseline && l.clears == data.clears;
+    // A mesh whose triangles or uvs changed since its strokes were rasterised: rasterise again, retargeting them.
+    std::map<std::string, uint64_t> signatures;
+    {
+        const std::string material = setMaterial(set);
+        for (const StrokePtr& s : data.strokes)
+            if (!signatures.contains(s->mesh))
+            {
+                std::shared_ptr<const PaintMesh> pm = paintMesh(g, s->mesh, material);
+                signatures[s->mesh] = pm ? pm->signature : 0;
+            }
+    }
+    bool meshesSame = true;
+    for (const auto& [mesh, sig] : signatures)
+        if (auto it = l.meshSignatures.find(mesh); it != l.meshSignatures.end() && it->second != sig)
+            meshesSame = false;
+    for (const auto& [mesh, sig] : signatures)
+        l.meshSignatures[mesh] = sig;
+    const bool same = l.synced && meshesSame && l.sizes == wantedSizes(set, &data) && l.baseline == data.baseline && l.clears == data.clears;
     if (same && l.applied == ids)
         return;
     if (l.live)
@@ -2084,6 +2158,8 @@ void onSceneChange(scene::Change c, NodeId id)
     }
 }
 } // namespace
+
+StrokePtr retarget(const StrokePtr& s, const PaintMesh& mesh, RetargetCount& n) { return retargetStroke(s, mesh, n); }
 
 // ---------------------------------------------------------------------------------------------------- public
 
@@ -2326,6 +2402,8 @@ ApplyResult applyStroke(scene::Graph& g, scene::Node& set, const std::string& bu
             paintWhole(key, l);
     }
     r.dabs = l.live->dabs;
+    if (l.live->mesh)
+        l.meshSignatures[stroke.mesh] = l.live->mesh->signature;
     auto record = std::make_shared<PageRecord>();
     record->key = key;
     record->generation = l.generation;

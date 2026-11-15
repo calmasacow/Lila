@@ -49,6 +49,15 @@ LILA_UI_API std::string setMaterial(const scene::Node& set);
 /** Brings a set's (or one buffer's) pages up to date with its paint data. Throws std::runtime_error on GPU failure. */
 LILA_UI_API void sync(scene::Graph& g, scene::Node& set);
 LILA_UI_API void syncBuffer(scene::Graph& g, scene::Node& set, const std::string& buffer);
+/** Dabs found again on a changed mesh, and those (or fill triangles) that weren't. */
+struct RetargetCount
+{
+    size_t found = 0;
+    size_t lost = 0;
+};
+/** The stroke moved onto a mesh whose triangles or uvs changed: each dab at the closest surface point to its anchor. */
+LILA_UI_API StrokePtr retarget(const StrokePtr& s, const PaintMesh& mesh, RetargetCount& n);
+
 /** Rasterises a buffer from its data from scratch, at its (or the set's) resolution. */
 LILA_UI_API void rasterize(scene::Graph& g, scene::Node& set, const std::string& buffer);
 

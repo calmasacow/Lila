@@ -147,6 +147,16 @@ std::shared_ptr<const PaintMesh> PaintMesh::build(const geo::Mesh& mesh, std::sh
                 out->tangents[t * 3 + k] = tangents[c];
         }
     }
+    uint64_t h = 1469598103934665603ull ^ n;
+    auto mix = [&](const void* data, size_t bytes) {
+        const auto* b = static_cast<const uint8_t*>(data);
+        for (size_t i = 0; i < bytes; ++i)
+            h = (h ^ b[i]) * 1099511628211ull;
+    };
+    mix(out->points.data(), out->points.size() * sizeof(uint32_t));
+    mix(out->uvs.data(), out->uvs.size() * sizeof(glm::vec2));
+    mix(out->paintable.data(), out->paintable.size());
+    out->signature = h;
     return out;
 }
 

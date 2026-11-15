@@ -234,6 +234,12 @@ struct LILA_SCENE_API Stroke
      * came from}. The dabs are already sampled from it; editing it (texEditPath) samples them again.
      */
     json path;
+    /**
+     * Where each dab was, in the stroke mesh's object space, and the mesh's signature (PaintMesh::signature) then: when the
+     * mesh's triangles or uvs change, replay finds each dab again at the closest surface point.
+     */
+    std::vector<glm::vec3> anchors;
+    uint64_t meshSignature = 0;
 
     /** The PaintData::images keys the stroke reads (a projection's picture, its stencil). */
     std::vector<std::string> images() const;

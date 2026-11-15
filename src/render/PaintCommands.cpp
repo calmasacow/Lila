@@ -849,6 +849,11 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         if (s.stencil->mode == "color" && !s.payload.channels.contains(s.stencil->colorChannel))
             s.payload.channels[s.stencil->colorChannel] = glm::vec3(1.0f);
     }
+    // Anchors let the stroke follow the surface when the mesh's triangles or uvs change later.
+    s.anchors.clear();
+    for (const Dab& d : s.dabs)
+        s.anchors.push_back(pm->point(d));
+    s.meshSignature = pm->signature;
     s.brush = bs.toJson();
     if (s.payload.channels.size() > 7)
         throw CommandError("texPaintStroke: a stroke paints at most 7 channels and the mask");
@@ -947,6 +952,7 @@ json paintStroke(const Args& a)
 
 void registerPathCommands();
 void registerPickCommands();
+void registerTransferCommands();
 
 void registerCommands()
 {
@@ -956,6 +962,7 @@ void registerCommands()
     done = true;
     registerPathCommands();
     registerPickCommands();
+    registerTransferCommands();
     installSync();
     // Texture exports and texEvaluate read paint layers from the pages, brought up to date first.
     tex::setExternalSource([](Node& set, const std::string& name, int udim) -> image::Image {
