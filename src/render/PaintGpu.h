@@ -58,6 +58,8 @@ LILA_UI_API void rasterize(scene::Graph& g, scene::Node& set, const std::string&
  * cancelled by the next change to the buffer.
  */
 LILA_UI_API void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, StrokePtr header);
+/** Builds the stroke pipelines on the render thread without waiting, so the first stroke doesn't stall on them. Nothing while the renderer is stopped. */
+LILA_UI_API void prewarm();
 LILA_UI_API void liveDabs(scene::NodeId set, const std::string& buffer, std::span<const Dab> dabs);
 /** Puts the pages back as they were before the live stroke. */
 LILA_UI_API void cancelLive(scene::NodeId set, const std::string& buffer);

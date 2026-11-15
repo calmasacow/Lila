@@ -1963,6 +1963,29 @@ void rasterize(scene::Graph& g, scene::Node& set, const std::string& buffer)
     doRasterize(g, set, buffer, b ? *b : Buffer{});
 }
 
+void prewarm()
+{
+    Renderer& r = Renderer::get();
+    if (!r.running())
+        return;
+    installStopHook();
+    // Not waited on: the driver takes hundreds of milliseconds to build the dab pipeline, which the first stroke would stall on.
+    (void)r.runTask([](VulkanContext& vk) {
+        try
+        {
+            Gpu& g = gpu();
+            g.init(vk);
+            g.pipeline(vk, g.dab, "paintDabCS");
+            g.pipeline(vk, g.depth, "paintDepthCS");
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("texture painting: {}", e.what());
+        }
+        return true;
+    });
+}
+
 void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, StrokePtr header)
 {
     syncBuffer(g, set, buffer);

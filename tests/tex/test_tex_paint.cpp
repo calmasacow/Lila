@@ -348,3 +348,73 @@ TEST_CASE("texture paint: the live viewport composites a painted buffer")
     image::Image file = image::read(fs::path(out["files"][0].get<std::string>()));
     CHECK(at(file, uv)[0] > 0.8f);
 }
+
+TEST_CASE("texture paint: a committed or undone stroke redraws the viewport at full size only, never through a preview")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Sharp", 512);
+    tex::Graph g = tex::Graph::makeMaterial("Sharp");
+    add(g, "Paint", "image", {{"file", tex::paint::imageRef("P", "baseColor")}});
+    link(g, "Paint.out", "Output.baseColor");
+    tex::writeGraph(sg(), set, g);
+    paintStroke("Sharp", "P", redStroke({{25, 0, 0}}, 20.0));
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("Sharp"));
+    REQUIRE(ui::texLive::waitIdle());
+    auto plans = [] {
+        std::vector<uint64_t> out;
+        for (const json& set : ui::texLive::status())
+            if (set["set"] == "Sharp")
+                for (const json& level : set["tiles"][0]["levels"])
+                    out.push_back(level["plans"].get<uint64_t>());
+        return out;
+    };
+    const std::vector<uint64_t> start = plans();
+    // The 256 preview, then the 512 tile.
+    REQUIRE(start.size() == 2);
+
+    // Painted live and committed: the preview would write its upsampled images over the sharp ones.
+    makeSet("Scratch", 512);
+    paintStroke("Scratch", "P", redStroke({{-25, 0, 0}, {-15, 0, 5}}, 15.0, {{"baseColor", {0.0, 0.0, 1.0}}}));
+    tex::paint::Stroke rec = *tex::paint::readPaint(*tex::findSet(sg(), "Scratch"))->buffer("P")->strokes.front();
+    rec.id = 100;
+    REQUIRE(ui::texLive::waitIdle());
+    const std::vector<uint64_t> before = plans();
+    gp::beginLive(sg(), set, "P", std::make_shared<const tex::paint::Stroke>(rec));
+    gp::liveDabs(set.id(), "P", rec.dabs);
+    REQUIRE(ui::texLive::waitIdle());
+    paintStroke("Sharp", "P", rec.toJson(false));
+    REQUIRE(ui::texLive::waitIdle());
+    std::vector<uint64_t> now = plans();
+    CHECK(now[0] == before[0]);
+    CHECK(now[1] > before[1]);
+
+    REQUIRE(UndoStack::get().undo());
+    mainq::drain();
+    REQUIRE(ui::texLive::waitIdle());
+    CHECK(plans()[0] == before[0]);
+
+    // An edit to the graph itself still shows a preview first.
+    tex::Graph edited = tex::readGraph(set);
+    add(edited, "Extra", "color", {});
+    tex::writeGraph(sg(), set, edited);
+    mainq::drain();
+    REQUIRE(ui::texLive::waitIdle());
+    CHECK(plans()[0] > before[0]);
+    ui::texLive::shutdown();
+}
+
+TEST_CASE("texture paint: prewarming builds the stroke pipelines without waiting, and strokes paint after it")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    makeSet("Warm", 128);
+    gp::prewarm();
+    const json r = paintStroke("Warm", "P", redStroke({{25, 0, 0}}, 20.0));
+    CHECK(r["pages"].get<int>() > 0);
+}
