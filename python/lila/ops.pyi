@@ -10308,6 +10308,17 @@ def texDuplicateNodes(*objects: Any, offset: Sequence[Any] | None = None) -> Any
         offset: [x, y] shift for the copies. Default [40, 40].
     """
 
+def texEditPath(*objects: Any, stroke: int | None = None, layer: str | None = None, points: Sequence[Any] | None = None, radius: float | None = None) -> Any:
+    """Move a path stroke's points (points=, as texPaintPath takes them) or change its radius, and paint it again from them: the layer is rebuilt from its strokes with the path's new dabs. One undo step. Returns {layer, stroke (its new id), dabs}.
+
+    Args:
+        objects: set layer.
+        stroke: The path stroke's id.
+        layer: The paint layer.
+        points: The path's new points.
+        radius: Dab radius in object units.
+    """
+
 def texEvaluate(*objects: Any, channels: Sequence[Any] | None = None, resolution: int | None = None, folder: str | None = None, format: str | None = None, bits: int | None = None, backend: str | None = None) -> Any:
     """Evaluate a texture set and write its channels as images, on the GPU when there is one (else on the CPU). Returns the files, pass count, time, how many kernels compiled or came from the cache, and the backend used.
 
@@ -10456,8 +10467,25 @@ def texPaintInfo(*objects: Any, layer: str | None = None) -> Any:
         layer: One paint layer.
     """
 
-def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None = None, mesh: str | None = None, payload: Any | None = None, brush: Any | None = None, points: Sequence[Any] | None = None, view: Any | None = None, space: str | None = None, particles: Any | None = None, id: int | None = None) -> Any:
-    """Paint a stroke into a texture set's paint layer (layer=, else the active one, else the stack's top paint layer, else a new paint layer). The stroke is a record: {mesh, brush (radius, strength, flow, spacing, falloff, roundness, angle, alpha, strokeMode line, lazyRadius, mirror...), payload {kind, channels {baseColor: [r, g, b], roughness: 0.3, ...}, blend normal|erase|add|subtract|multiply, mask}, occlusion, particles}, plus either space=surface with dabs [{triangle, bary [u, v], radius, pressure, opacity, angle}] or [{position [x, y, z], radius}] (object space), or space=screen with points [[x, y, pressure]] and view {width, height, camera | view + proj | viewProj + eye | eye + lookAt + fov}. Payload kinds: paint; direction (tilt, channel: normal, or another channel for a flow map); smudge (amount), blur and sharpen (filterRadius texels, amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|polygon|triangle|selection with at [x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or {width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, count, length, size, spread, rate, seed} adds particle dabs. Each stroke is one undo step and is kept, so texRasterize can replay it. Returns {layer, stroke, dabs, pages}.
+def texPaintPath(*objects: Any, points: Sequence[Any] | None = None, curve: str | None = None, layer: str | None = None, mesh: str | None = None, radius: float | None = None, payload: Any | None = None, brush: Any | None = None, stencil: Any | None = None, particles: Any | None = None, view: Any | None = None) -> Any:
+    """Paint a stroke along a path on the surface: points [[x, y, z], ...] or [{position, in, out}, ...] in the mesh's object space (Bezier handles; left out, they are smooth), or curve= a scene curve, projected onto the mesh. Dabs are spaced by the brush's spacing at radius (object units, default the brush's world radius). The path stays on the stroke, so texEditPath can move it later. Takes texPaintStroke's payload, brush, stencil and view. Returns texPaintStroke's result plus the path.
+
+    Args:
+        objects: set.
+        points: Path points in the mesh's object space.
+        curve: A scene curve to paint along instead of points.
+        layer: The paint layer.
+        mesh: The painted mesh; default the first using the set's material.
+        radius: Dab radius in object units.
+        payload: What the stroke writes (texPaintStroke's payload).
+        brush: Brush settings.
+        stencil: A stencil, as texPaintStroke takes it (needs view).
+        particles: Particle brush.
+        view: The stroke view record {objectToClip, eye, direction, width, height}.
+    """
+
+def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None = None, mesh: str | None = None, payload: Any | None = None, brush: Any | None = None, points: Sequence[Any] | None = None, view: Any | None = None, space: str | None = None, particles: Any | None = None, stencil: Any | None = None, id: int | None = None) -> Any:
+    """Paint a stroke into a texture set's paint layer (layer=, else the active one, else the stack's top paint layer, else a new paint layer). The stroke is a record: {mesh, brush (radius, strength, flow, spacing, falloff, roundness, angle, alpha, strokeMode line, lazyRadius, mirror...), payload {kind, channels {baseColor: [r, g, b], roughness: 0.3, ...}, blend normal|erase|add|subtract|multiply, mask}, occlusion, particles}, plus either space=surface with dabs [{triangle, bary [u, v], radius, pressure, opacity, angle}] or [{position [x, y, z], radius}] (object space), or space=screen with points [[x, y, pressure]] and view {width, height, camera | view + proj | viewProj + eye | eye + lookAt + fov}. Payload kinds: paint; direction (tilt, channel: normal, or another channel for a flow map); smudge (amount), blur and sharpen (filterRadius texels, amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|polygon|triangle|selection with at [x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or {width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, count, length, size, spread, rate, seed} adds particle dabs. stencil {image (file, image key or {width, height, data}), offset [x, y] view pixels, scale, rotation radians, invert, tile, mode mask|color, colorChannel} paints through a picture pinned to the stroke's view: mask scales the amount by its luminance, color paints its rgb into colorChannel. Each stroke is one undo step and is kept, so texRasterize can replay it. Returns {layer, stroke, dabs, pages}.
 
     Args:
         objects: set [layer].
@@ -10470,6 +10498,7 @@ def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None =
         view: Screen view, when stroke has none.
         space: surface or screen (default: screen when there are points). One of 'surface', 'screen'.
         particles: Particle brush {kind, count, length, size, spread, rate, seed}, when stroke has none.
+        stencil: Stencil {image, offset, scale, rotation, invert, tile, mode, colorChannel}, when stroke has none.
         id: The stroke id the paint tool painted live under.
     """
 

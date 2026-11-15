@@ -19,6 +19,7 @@ lila_module(lila_render UI
     MeshMaps.cpp
     PaintCommands.cpp
     PaintPathCommands.cpp
+    PaintPickCommands.cpp
     PaintGpu.cpp
     Renderer.cpp
     ShadingModels.cpp

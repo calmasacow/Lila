@@ -232,6 +232,12 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
     if (!set)
         return true;
     const json s = texturePaintSettings();
+    if (s.value("tool", "") == "pick")
+    {
+        const glm::dvec2 uv = toUv(e->position());
+        pickTextureChannelsAt(m->set, uv.x, uv.y, e->modifiers() & Qt::ShiftModifier);
+        return true;
+    }
     tp::Payload payload;
     try
     {

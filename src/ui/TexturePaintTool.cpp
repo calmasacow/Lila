@@ -96,6 +96,7 @@ constexpr ToolKind kTools[] = {
     {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
     {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
     {"path", "Path", "Click points on the surface (drag to curve), Enter paints along them; drag a point afterwards to repaint.", "ease-in-control-point"},
+    {"pick", "Picker", "Click the mesh to take every channel's value there; Shift+click keeps it as a swatch.", "color-picker"},
     {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it.", "bucket-droplet"},
     {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel.", "photo"},
 };
@@ -170,6 +171,12 @@ struct TexturePaintSettings
     std::string stencilMode = "mask";
     /** Bumped when the stencil's picture or mode changes, so the tool remakes what it derived from it. */
     uint64_t stencilVersion = 0;
+    /** The picker reads the active layer's own paint instead of the whole set. */
+    bool pickLayer = false;
+    /** The tool the picker hands back to after a pick. */
+    std::string pickReturn = "paint";
+    /** Picked channel values kept for later, newest last. */
+    std::vector<std::map<std::string, glm::vec3>> swatches;
 };
 
 TexturePaintSettings& texturePaintState()
@@ -206,7 +213,7 @@ bool filterTool(const std::string& t) { return t == "smudge" || t == "blur" || t
 tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
 {
     tp::Payload p;
-    p.kind = s.tool == "project" ? "project" : s.tool == "path" ? "paint" : s.tool;
+    p.kind = s.tool == "project" ? "project" : (s.tool == "path" || s.tool == "pick") ? "paint" : s.tool;
     for (const ChannelValue& c : s.channels)
         if (c.on)
             p.channels[c.name] = c.color ? c.value : glm::vec3(c.value.x);
@@ -275,6 +282,14 @@ void applyPreset(TexturePaintSettings& s, const tex::brushes::Preset& p)
     s.tip = pay.contains("tip") ? pay["tip"] : json();
     s.particles = p.particles.is_object() ? p.particles.value("kind", std::string()) : std::string();
     s.particleSpec = p.particles.is_object() ? p.particles : json::object();
+}
+
+/** Applies picked or kept values to the brush's channels; the channels it has no value for keep theirs. */
+void applyChannelValues(const std::map<std::string, glm::vec3>& values)
+{
+    for (ChannelValue& c : texturePaintState().channels)
+        if (auto it = values.find(c.name); it != values.end())
+            c.value = c.color ? it->second : glm::vec3(it->second.x);
 }
 
 float toDisplay(float v) { return std::pow(std::clamp(v, 0.0f, 1.0f), 1.0f / 2.2f); }
@@ -367,6 +382,8 @@ public:
             controls::setRole(b, "tile");
             const std::string id = t.id;
             connect(b, &QToolButton::clicked, this, [this, id] {
+                if (id == "pick" && texturePaintState().tool != "pick")
+                    texturePaintState().pickReturn = texturePaintState().tool;
                 texturePaintState().tool = id;
                 syncTools();
                 changed();
@@ -524,6 +541,17 @@ public:
         mParticles->addItem("Sparks", "sparks");
         mParticles->setToolTip("Particles each dab emits, painting as they move over the surface");
         mParticleRow = addRow(form, "Particles", mParticles);
+        mPickLayer = new QCheckBox("Layer only", this);
+        mPickLayer->setObjectName("pickLayer");
+        mPickLayer->setToolTip("Pick the active layer's own paint instead of the whole texture set");
+        mPickRow = addRow(form, "Pick", mPickLayer);
+        connect(mPickLayer, &QCheckBox::toggled, this, [this](bool v) { set(texturePaintState().pickLayer, v); });
+        mSwatchBar = new QWidget(this);
+        mSwatchBar->setObjectName("swatches");
+        mSwatchLayout = new QHBoxLayout(mSwatchBar);
+        mSwatchLayout->setContentsMargins(0, 0, 0, 0);
+        mSwatchLayout->setSpacing(2);
+        mSwatchRow = addRow(form, "Swatches", mSwatchBar);
 
         // Projection buffer.
         mBufferBrush = new QComboBox(this);
@@ -760,6 +788,11 @@ public:
                                                       : QFileInfo(QString::fromStdString(s.stencilPath)).completeBaseName());
         mStencilMode->setCurrent(s.stencilMode == "color" ? 1 : 0);
         {
+            const QSignalBlocker bp(mPickLayer);
+            mPickLayer->setChecked(s.pickLayer);
+        }
+        syncSwatches();
+        {
             const QSignalBlocker bi(mStencilInvert), bt(mStencilTile);
             mStencilInvert->setChecked(s.stencil.invert);
             mStencilTile->setChecked(s.stencil.tile);
@@ -846,9 +879,52 @@ private:
         showRow(mFilterRow, filterTool(t));
         showRow(mFillRow, t == "fill");
         showRow(mParticleRow, t == "paint");
+        showRow(mPickRow, t == "pick");
+        showRow(mSwatchRow, !texturePaintState().swatches.empty());
         for (QWidget* w : {mBufferRow, mBufferFlags, mFacingRow, mBufferButtons})
             showRow(w, t == "project");
         showRow(mStencilOptions, texturePaintState().stencil.active());
+    }
+
+    /** One small square per kept swatch, showing its colour (or its first value as gray); a click paints with it. */
+    void syncSwatches()
+    {
+        while (QLayoutItem* it = mSwatchLayout->takeAt(0))
+        {
+            delete it->widget();
+            delete it;
+        }
+        const auto& swatches = texturePaintState().swatches;
+        for (size_t i = 0; i < swatches.size(); ++i)
+        {
+            const auto& sw = swatches[i];
+            glm::vec3 c = sw.contains("baseColor") ? sw.at("baseColor") : sw.empty() ? glm::vec3(0.5f) : glm::vec3(sw.begin()->second.x);
+            auto* b = new QToolButton(mSwatchBar);
+            b->setObjectName(QString("swatch:%1").arg(i));
+            b->setFixedSize(18, 18);
+            b->setProperty("lilaRawColors", true);
+            b->setStyleSheet(QString("background-color: %1; border: 1px solid #888;").arg(QColor::fromRgbF(toDisplay(c.r), toDisplay(c.g), toDisplay(c.b)).name()));
+            QStringList tip;
+            for (const auto& [name, v] : sw)
+                tip << QString("%1 %2").arg(QString::fromStdString(name)).arg(v.x, 0, 'f', 3);
+            tip << "Click to paint with it, right-click to remove";
+            b->setToolTip(tip.join(QChar('\n')));
+            connect(b, &QToolButton::clicked, this, [this, i] {
+                if (i < texturePaintState().swatches.size())
+                    applyChannelValues(texturePaintState().swatches[i]);
+                sync();
+                changed();
+            });
+            b->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(b, &QToolButton::customContextMenuRequested, this, [this, i] {
+                auto& all = texturePaintState().swatches;
+                if (i < all.size())
+                    all.erase(all.begin() + std::ptrdiff_t(i));
+                QTimer::singleShot(0, this, [this] { sync(); });
+            });
+            mSwatchLayout->addWidget(b);
+        }
+        mSwatchLayout->addStretch(1);
     }
 
     template <class T> void set(T& field, T v)
@@ -934,6 +1010,9 @@ private:
     controls::Segmented* mStencilMode = nullptr;
     QCheckBox *mStencilInvert = nullptr, *mStencilTile = nullptr;
     QWidget* mStencilOptions = nullptr;
+    QCheckBox* mPickLayer = nullptr;
+    QWidget *mPickRow = nullptr, *mSwatchRow = nullptr, *mSwatchBar = nullptr;
+    QHBoxLayout* mSwatchLayout = nullptr;
     std::map<QWidget*, QWidget*> mLabels;
     QSpinBox* mRadius = nullptr;
     QDoubleSpinBox* mStrength = nullptr;
@@ -966,6 +1045,50 @@ void brushChanged()
         gPage->sync();
     viewportTools::requestRedraw();
 }
+
+/**
+ * Picks the channel values of a set at where ({uv} or {mesh, position}) into the brush, or with add into a new swatch.
+ * A pick hands the tool back to the one used before the picker.
+ */
+void pickChannels(const std::string& set, json where, bool add)
+{
+    TexturePaintSettings& s = texturePaintState();
+    where["args"] = {set};
+    where["source"] = s.pickLayer ? "layer" : "set";
+    if (s.pickLayer)
+        where["layer"] = textureSets::activeLayer(set);
+    json r;
+    try
+    {
+        r = ops::execute("texSampleChannels", where, CallSource::UI);
+    }
+    catch (const std::exception& e)
+    {
+        log::warn("Texture paint: {}", e.what());
+        return;
+    }
+    std::map<std::string, glm::vec3> values;
+    for (const auto& [name, v] : r["channels"].items())
+        values[name] = v.is_array() ? glm::vec3(v[0].get<float>(), v[1].get<float>(), v[2].get<float>()) : glm::vec3(v.get<float>());
+    if (values.empty())
+    {
+        log::info("Texture paint: the layer has no paint there to pick");
+        return;
+    }
+    if (add)
+    {
+        s.swatches.push_back(std::move(values));
+        if (s.swatches.size() > 16)
+            s.swatches.erase(s.swatches.begin());
+    }
+    else
+    {
+        applyChannelValues(values);
+        s.tool = s.pickReturn.empty() || s.pickReturn == "pick" ? std::string("paint") : s.pickReturn;
+    }
+    brushChanged();
+}
+
 
 /** What the brush is over: a mesh, the texture set its face's material binds, and the hit in the mesh's object space. */
 struct Target
@@ -1098,6 +1221,13 @@ public:
             return bufferPress(e, view);
         if (tool == "path")
             return pathPress(e, view);
+        if (tool == "pick")
+        {
+            if (std::optional<Target> t = pick(e->position(), view); t && t->set != kNoNode)
+                pickChannels(t->setName, {{"mesh", t->meshPath}, {"position", {t->hit.point.x, t->hit.point.y, t->hit.point.z}}},
+                             e->modifiers() & Qt::ShiftModifier);
+            return true;
+        }
         std::optional<Target> t = pick(e->position(), view);
         if (!t || t->set == kNoNode)
             return true;
@@ -2741,6 +2871,8 @@ void setTexturePaintAlpha(const std::string& alphaPath)
 
 std::string texturePaintTexture() { return texturePaintState().source == "texture" ? texturePaintState().sourceImage : std::string(); }
 
+void pickTextureChannelsAt(const std::string& set, double u, double v, bool add) { pickChannels(set, {{"uv", {u, v}}}, add); }
+
 void setTexturePaintTexture(const std::string& file)
 {
     TexturePaintSettings& s = texturePaintState();
@@ -2763,7 +2895,7 @@ nlohmann::json texturePaintSettings()
         particles = s.particleSpec;
         particles["kind"] = s.particles;
     }
-    return {{"brush", s.stroke.toJson()}, {"payload", payload}, {"particles", particles}};
+    return {{"brush", s.stroke.toJson()}, {"payload", payload}, {"particles", particles}, {"tool", s.tool}};
 }
 
 void registerTexturePaintUi()
