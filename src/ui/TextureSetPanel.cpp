@@ -1688,8 +1688,8 @@ struct TextureSetPanel::Impl
             side->setMinimumWidth(0);
             side->setMaximumWidth(QWIDGETSIZE_MAX);
             split->addWidget(shelfBox);
-            split->setStretchFactor(2, 1);
-            split->setSizes({300, 500, 200});
+            split->setStretchFactor(2, 3);
+            split->setSizes({260, 450, 290});
         }
         shelfBox->show();
     }
@@ -2684,11 +2684,11 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     split->addWidget(d->tree);
     split->addWidget(lowerBox);
     split->addWidget(shelfBox);
+    // Layers about a quarter, the Layer and Brush pane under half, the library the rest; growing keeps those shares.
     split->setStretchFactor(0, 3);
     split->setStretchFactor(1, 5);
-    split->setStretchFactor(2, 1);
-    // Proportions, scaled to the panel's height: the Layer and Brush pane gets half the column.
-    split->setSizes({300, 500, 200});
+    split->setStretchFactor(2, 3);
+    split->setSizes({260, 450, 290});
     v->addWidget(split, 1);
 
     d->tree->onMove = [this](QTreeWidgetItem* dragged, QTreeWidgetItem* target, Drop where) {
