@@ -282,6 +282,31 @@ struct GradeCurves
     uint64_t key = nextResourceKey();
 };
 
+/** An 8-bit RGBA image the post stack samples (lens dirt), top row first. */
+struct PostImage
+{
+    int width = 0, height = 0;
+    std::vector<uint8_t> rgba;
+    uint64_t key = nextResourceKey();
+};
+
+/** Lens flare from the bright parts of the picture, and the lens dirt bloom and flare light up. Lengths are shares of the picture. */
+struct LensFlare
+{
+    float intensity = 0.0f; // 0 is off
+    float threshold = 1.5f; // exposed light that starts to flare
+    float ghosts = 4.0f, ghostSpacing = 0.35f, chroma = 0.015f;
+    float halo = 0.3f, haloRadius = 0.45f;
+    float starburst = 0.4f, streakLength = 0.2f;
+    int blades = 6; // the camera's aperture blades: the star's arm count (twice that for an odd count)
+    float bladeRotation = 0.0f; // degrees
+    float anamorphic = 0.0f;
+    glm::vec3 anamorphicTint{0.45f, 0.65f, 1.0f};
+    float squeeze = 1.0f; // the camera's anamorphic squeeze: ghosts stretch wide
+    std::shared_ptr<const PostImage> dirt;
+    float dirtIntensity = 0.5f;
+};
+
 /** An OpenColorIO display and view baked to a 3D LUT over a log2 shaper of scene-linear light; outputs display code values. */
 struct ViewTransform
 {
@@ -327,6 +352,7 @@ struct PostSettings
     float sharpen = 0.0f;
     std::shared_ptr<const Lut3D> lut;
     float lutIntensity = 1.0f;
+    LensFlare flare;
     /** Colour management: an OCIO view in place of the tonemapper and display gamma; null keeps Lila's tonemapper. */
     std::shared_ptr<const ViewTransform> view;
     /** Off for passes whose values must come out exact, such as object mattes. */
@@ -353,6 +379,9 @@ struct LightDraw
     float cosInner = 1.0f, cosOuter = 0.0f; // spot cone
     float width = 0.0f, height = 0.0f;      // cm
     float radius = 0.0f;                    // cm, softens highlights and shadows
+    /** A lens flare drawn where the light shows on screen: brightness and size on top of the light's own. */
+    bool lensFlare = false;
+    float lensFlareIntensity = 1.0f, lensFlareScale = 1.0f;
     /** The light casts shadows: traced on GPUs with ray queries (any kind), else a shadow map (directional and spot). */
     bool castsShadows = false;
     /** World to the shadow map's clip space (reversed-Z), when it has one. */
@@ -420,6 +449,8 @@ struct FrameState
     float focusDistance = 500.0f;
     int apertureBlades = 0;
     float apertureRotation = 0.0f; // degrees
+    /** Anamorphic squeeze of the lens: the aperture is that much taller than wide, so bokeh stretches tall. */
+    float anamorphicSqueeze = 1.0f;
     std::vector<LightDraw> lights;
     /** Up to four shadowed lights trace their shadows against the scene (GPUs with ray queries) instead of shadow maps. */
     bool rtShadows = false;

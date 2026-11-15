@@ -3,6 +3,9 @@
 #include "core/Export.h"
 #include "scene/Node.h"
 
+#include <string>
+#include <vector>
+
 namespace lila::scene
 {
 class Graph;
@@ -66,8 +69,24 @@ enum Attr
     kFogStart,
     kFogSunScatter,
     kFogAnisotropy,
+    kLensFlare,
+    kFlareThreshold,
+    kFlareGhosts,
+    kFlareGhostSpacing,
+    kFlareChroma,
+    kFlareHalo,
+    kFlareHaloRadius,
+    kFlareStarburst,
+    kFlareStreakLength,
+    kAnamorphicStreaks,
+    kAnamorphicTint,
+    kLensDirt,
+    kLensDirtIntensity,
     kCount
 };
+
+/** The lens presets lensPreset applies, Lila's own names: spherical, anamorphic, vintage and clean glass. */
+LILA_SCENE_API const std::vector<std::string>& lensPresetNames();
 
 /** The node's own attribute indices start after the base node's; this is the first. */
 LILA_SCENE_API int firstAttr();

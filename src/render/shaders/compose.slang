@@ -3,7 +3,8 @@
 
 #include "scene_color.slang"
 
-struct ComposePush
+/** The compose pass's settings, read through the push constant's address; matches render::ComposeParams. */
+struct ComposeParams
 {
     float4 params; // x: display gamma, y: 1 to dither, z: exposure, w: tonemapper (0 neutral, 1 AgX, 2 ACES, 3 linear, 4 OCIO view)
     float4 grade;  // x: contrast, y: saturation, z: 1 for the post stack, w: AgX look (0 none, 1 punchy, 2 golden)
@@ -19,15 +20,28 @@ struct ComposePush
     float4 shadows;    // rgb gains, w: the shadows' upper luminance
     float4 midtones;   // rgb gains
     float4 highlights; // rgb gains, w: the highlights' lower luminance
+    float4 flare;      // x 1 to add flareTex, y lens dirt intensity, z 1 when dirtTex holds dirt
+    float4 halation;   // intensity, threshold, radius, 0
+    float4 grain;      // size (pixels), colour amount, luminance response, 0
+    float4 letterbox;  // aspect (0 none), opacity
 };
 
-[[vk::push_constant]] ComposePush cp;
+struct ComposePush
+{
+    ComposeParams* params;
+    uint pad[2];
+};
+
+[[vk::push_constant]] ComposePush cpc;
+#define cp (*cpc.params)
 [[vk::binding(0, 0)]] Sampler2D composeTex; // compressed scene, linear filtering
 [[vk::binding(1, 0)]] Sampler2D bloomTex;   // half resolution, expanded radiance
 [[vk::binding(2, 0)]] Sampler3D lutTex;     // display-encoded in and out
 [[vk::binding(3, 0)]] Sampler2D exposureTex; // exposure.slang's state: texel 0 is the multiplier
 [[vk::binding(4, 0)]] Sampler3D viewLutTex;  // tonemapper 4: an OCIO view over a log2 shaper, display code values out
 [[vk::binding(5, 0)]] Sampler2D curvesTex;   // grading curves, a row each (render::grade::Curve order)
+[[vk::binding(6, 0)]] Sampler2D flareTex;    // flare.slang's lens flare, quarter resolution, exposed light
+[[vk::binding(7, 0)]] Sampler2D dirtTex;     // lens dirt lit by bloom and flare
 
 struct ComposeOut
 {
@@ -222,8 +236,15 @@ float4 composePS(ComposeOut i) : SV_Target
                        sceneAt(base - float2(0, cp.size.w));
             c = max(c + cp.lens.z * (c - 0.25 * n), 0.0);
         }
+        // Lens dirt catches the light bloom and flare spread over the lens.
+        const float dirt = cp.flare.z > 0.5 ? dot(dirtTex.SampleLevel(base, 0).rgb, float3(0.3333, 0.3333, 0.3333)) * cp.flare.y : 0.0;
         if (cp.lens.w > 0.0)
-            c = lerp(c, bloomTex.SampleLevel(base, 0).rgb * cp.misc.y, cp.lens.w);
+        {
+            float3 glow = bloomTex.SampleLevel(base, 0).rgb * cp.misc.y;
+            c = lerp(c, glow, cp.lens.w) + glow * cp.lens.w * dirt;
+        }
+        if (cp.flare.x > 0.5)
+            c += flareTex.SampleLevel(base, 0).rgb * (1.0 + dirt);
         uv = base;
     }
 

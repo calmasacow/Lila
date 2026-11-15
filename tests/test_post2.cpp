@@ -182,3 +182,21 @@ TEST_CASE("wheels, tonal balance and curves move the display picture as their na
     const glm::vec3 grey = render::grade::applyDisplay(glm::vec3(0.8f, 0.2f, 0.1f), p);
     CHECK(grey.r == doctest::Approx(grey.b).epsilon(1e-3));
 }
+
+TEST_CASE("lens presets set the flare and the lens dirt reaches the frame")
+{
+    post2Run("newScene");
+    const json names = post2Run("lensPreset");
+    REQUIRE(names.size() == 4);
+    post2Run("lensPreset", {{"args", {"Vintage Glass"}}});
+    const std::string pp = post2Run("postProcess", {{"existing", true}}).get<std::string>();
+    CHECK(post2Run("getAttr", {{"args", {pp + ".lensFlare"}}}).get<double>() > 0.0);
+    CHECK(post2Run("getAttr", {{"args", {pp + ".lensDirt"}}}).get<std::string>() == "dust");
+    render::FrameState s;
+    ui::viewportDisplay::applyPostProcess(s, true);
+    CHECK(s.post.flare.intensity > 0.0f);
+    REQUIRE(s.post.flare.dirt);
+    CHECK(s.post.flare.dirt->width > 0);
+    CHECK(s.post.flare.dirt->rgba.size() == size_t(s.post.flare.dirt->width) * s.post.flare.dirt->height * 4);
+    CHECK_THROWS(post2Run("lensPreset", {{"args", {"No Such Lens"}}}));
+}

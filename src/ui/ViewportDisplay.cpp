@@ -1,5 +1,6 @@
 #include "ui/ViewportDisplay.h"
 
+#include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Profile.h"
 #include "core/PrefStore.h"
@@ -11,6 +12,7 @@
 #include "scene/LightingChannels.h"
 #include "scene/Graph.h"
 #include "scene/Light.h"
+#include "scene/Materials.h"
 #include "scene/NodeBounds.h"
 #include "scene/Transform.h"
 #include "scene/PostProcess.h"
@@ -23,12 +25,16 @@
 #include <atomic>
 #include <mutex>
 #include <QGuiApplication>
+#include <QImage>
 #include <QScreen>
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
+#include <cstring>
+#include <filesystem>
+#include <map>
 #include <cmath>
 
 namespace lila::ui::viewportDisplay
@@ -228,6 +234,9 @@ void applyLights(render::FrameState& s)
             d.radius = std::max(d.radius, 0.5f * std::sqrt(std::max(d.width * d.height, 0.0f)));
 
         d.castsShadows = l.castShadows;
+        d.lensFlare = n->as<bool>(scene::Light::kLensFlare);
+        d.lensFlareIntensity = float(n->as<double>(scene::Light::kLensFlareIntensity));
+        d.lensFlareScale = float(n->as<double>(scene::Light::kLensFlareScale));
         const geo::Bounds& b = bounds();
         if (l.castShadows && b.valid() && (d.kind == render::LightDraw::Directional || d.kind == render::LightDraw::Spot))
         {
@@ -261,12 +270,58 @@ void applyLights(render::FrameState& s)
 
 void applyLens(render::FrameState& s, const scene::camera::Lens& lens)
 {
+    // The lens shapes flare (ray count, streak stretch) whether or not it blurs.
+    s.post.flare.blades = lens.blades;
+    s.post.flare.bladeRotation = float(lens.bladeRotation);
+    s.post.flare.squeeze = float(std::max(lens.anamorphicSqueeze, 1.0));
+    s.anamorphicSqueeze = s.post.flare.squeeze;
     if (!lens.depthOfField)
         return;
     s.lensRadius = float(lens.apertureRadius());
     s.focusDistance = float(lens.focusDistance);
     s.apertureBlades = lens.blades;
     s.apertureRotation = float(lens.bladeRotation);
+}
+
+/** A lens dirt value as a file: a built-in by name, else a path. */
+static std::string lensDirtPath(const std::string& name)
+{
+    for (const char* builtin : {"dust", "smudge", "streaks", "rain"})
+        if (name == builtin)
+            return paths::toUtf8(paths::resourcesDir() / "lensdirt" / (name + ".png"));
+    return scene::materials::resolvePath(name);
+}
+
+static std::shared_ptr<const render::PostImage> lensDirt(const std::string& name)
+{
+    // Read once per file and change, so the frame never waits on a decode.
+    static std::mutex mutex;
+    static std::map<std::string, std::pair<std::filesystem::file_time_type, std::shared_ptr<const render::PostImage>>> cache;
+    const std::string path = lensDirtPath(name);
+    std::error_code ec;
+    const auto stamp = std::filesystem::last_write_time(paths::fromUtf8(path), ec);
+    std::lock_guard lock(mutex);
+    if (auto it = cache.find(path); it != cache.end() && it->second.first == stamp)
+        return it->second.second;
+    std::shared_ptr<const render::PostImage> out;
+    QImage img(QString::fromStdString(path));
+    if (img.isNull())
+        log::warn("lens dirt: cannot read {}", path);
+    else
+    {
+        img = img.convertToFormat(QImage::Format_RGBA8888);
+        if (img.width() > 2048)
+            img = img.scaledToWidth(2048, Qt::SmoothTransformation);
+        auto p = std::make_shared<render::PostImage>();
+        p->width = img.width();
+        p->height = img.height();
+        p->rgba.resize(size_t(p->width) * p->height * 4);
+        for (int y = 0; y < p->height; ++y)
+            std::memcpy(p->rgba.data() + size_t(y) * p->width * 4, img.constScanLine(y), size_t(p->width) * 4);
+        out = std::move(p);
+    }
+    cache[path] = {stamp, out};
+    return out;
 }
 
 void applyPostProcess(render::FrameState& s, bool effects)
@@ -323,6 +378,21 @@ void applyPostProcess(render::FrameState& s, bool effects)
     p.lutIntensity = num(pp::kLutIntensity);
     if (const std::string lut = n.as<std::string>(a + pp::kLut); !lut.empty())
         p.lut = render::loadCubeLut(lut);
+    render::LensFlare& flare = p.flare;
+    flare.intensity = num(pp::kLensFlare);
+    flare.threshold = num(pp::kFlareThreshold);
+    flare.ghosts = num(pp::kFlareGhosts);
+    flare.ghostSpacing = num(pp::kFlareGhostSpacing);
+    flare.chroma = num(pp::kFlareChroma);
+    flare.halo = num(pp::kFlareHalo);
+    flare.haloRadius = num(pp::kFlareHaloRadius);
+    flare.starburst = num(pp::kFlareStarburst);
+    flare.streakLength = num(pp::kFlareStreakLength);
+    flare.anamorphic = num(pp::kAnamorphicStreaks);
+    flare.anamorphicTint = vec(pp::kAnamorphicTint);
+    flare.dirtIntensity = num(pp::kLensDirtIntensity);
+    if (const std::string dirt = n.as<std::string>(a + pp::kLensDirt); !dirt.empty() && flare.dirtIntensity > 0.0f)
+        flare.dirt = lensDirt(dirt);
     render::FrameState::Fog& fog = s.fog;
     fog.on = n.as<bool>(a + pp::kFog) && num(pp::kFogDensity) > 0.0f;
     fog.color = vec(pp::kFogColor);

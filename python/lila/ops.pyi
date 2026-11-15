@@ -5215,6 +5215,15 @@ def lattice(*objects: Any, divisions: Sequence[float] | None = None, interpolati
         name: Name for the lattice.
     """
 
+def lensPreset(*objects: Any, node: str | None = None, camera: str | None = None, n: str | None = None, cam: str | None = None) -> Any:
+    """Set a post process's lens flare, streaks and dirt to a lens type: Spherical Prime (round glass, a few ghosts and a star), Anamorphic Scope (long blue streaks, oval ghosts), Vintage Glass (warm ghosts, strong halo, dust), Clean Coated (faint ghosts, no streaks). With no name, lists them.
+
+    Args:
+        objects: preset.
+        node: The post process; the active one (created if needed) when left out. Short form n.
+        camera: Also set this camera's anamorphicSqueeze and apertureBlades to match the lens. Short form cam.
+    """
+
 def light(type: str | None = None, name: str | None = None, parent: str | None = None, position: Sequence[float] | None = None, color: Sequence[float] | None = None, intensity: float | None = None, units: str | None = None, temperature: float | None = None, range: float | None = None, innerConeAngle: float | None = None, outerConeAngle: float | None = None, width: float | None = None, height: float | None = None, castShadows: bool | None = None, provider: str | None = None, skipSelect: bool | None = None, *, t: str | None = None, n: str | None = None, p: str | None = None, pos: Sequence[float] | None = None, c: Sequence[float] | None = None, i: float | None = None, u: str | None = None, tmp: float | None = None, r: float | None = None, ica: float | None = None, oca: float | None = None, w: float | None = None, h: float | None = None, cs: bool | None = None, prv: str | None = None, ss: bool | None = None) -> Any:
     """Create a light. Returns its path. Flags left out keep the light's defaults.
 

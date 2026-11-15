@@ -471,5 +471,34 @@ void registerGradeUi()
                   .icon = "device-floppy",
                   .keywords = {"preset", "look", "grade", "powergrade", "resolve"}});
     attributeEditor::addSection("postProcess", "Grade", [](scene::NodeId id) { return gradePanel(id); });
+    attributeEditor::addSection("postProcess", "Lens", [](scene::NodeId id) -> QWidget* {
+        const scene::Node* n = scene::Graph::current().node(id);
+        if (!n)
+            return nullptr;
+        auto* w = new QWidget;
+        auto* form = new QFormLayout(w);
+        auto* box = new QComboBox;
+        box->addItem("Choose...", QString());
+        for (const std::string& lens : pp::lensPresetNames())
+            box->addItem(QString::fromStdString(lens), QString::fromStdString(lens));
+        box->setToolTip("Sets the lens flare, streaks and dirt below to a kind of lens. Undo puts them back.");
+        QObject::connect(box, &QComboBox::activated, box, [box, name = n->name()](int) {
+            const QString lens = box->currentData().toString();
+            box->setCurrentIndex(0);
+            if (lens.isEmpty())
+                return;
+            try
+            {
+                UndoChunk chunk("Lens " + lens.toStdString());
+                runCmd("lensPreset", {{"args", {lens.toStdString()}}, {"node", name}});
+            }
+            catch (const std::exception& e)
+            {
+                log::error("{}", e.what());
+            }
+        });
+        form->addRow("Lens", box);
+        return w;
+    });
 }
 } // namespace lila::ui

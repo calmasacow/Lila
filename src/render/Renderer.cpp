@@ -166,7 +166,8 @@ struct TaaPush
     glm::vec4 params; // weight of this frame, clip the history, ignore the history
 };
 
-struct ComposePush
+/** The compose pass's settings, in a per-frame buffer its push constant points at. Matches compose.slang. */
+struct ComposeParams
 {
     glm::vec4 params; // display gamma, dither, exposure, tonemapper
     glm::vec4 grade;  // contrast, saturation, post stack on, AgX look
@@ -182,6 +183,32 @@ struct ComposePush
     glm::vec4 shadows;    // rgb, shadows range
     glm::vec4 midtones;   // rgb
     glm::vec4 highlights; // rgb, highlights range
+    glm::vec4 flare;      // x 1 to add the flare, y lens dirt intensity, z 1 when a dirt image is bound
+    glm::vec4 halation;   // intensity, threshold, radius (bloom levels' share), 0
+    glm::vec4 grain;      // size (pixels), colour amount, luminance response, 0
+    glm::vec4 letterbox;  // aspect (0 none), opacity, 0, 0
+};
+
+struct ComposePush
+{
+    uint64_t params = 0;
+    uint32_t pad[2]{};
+};
+
+/** One flaring light for flare.slang. */
+struct FlareLight
+{
+    glm::vec4 screen{0.0f}; // uv, reversed-Z depth (0 for a direction), 1 when in front
+    glm::vec4 color{0.0f};  // exposed radiance times flare intensity, scale
+};
+
+constexpr uint32_t kMaxFlareLights = 8;
+
+/** Matches flare.slang's FlareParams. */
+struct FlareParams
+{
+    glm::vec4 size, a, b, c, tint, d;
+    FlareLight lights[kMaxFlareLights];
 };
 
 struct BloomPush
@@ -594,6 +621,8 @@ struct Frame
     compute::Buffer tlasInstances; // the scene's placements for its top-level acceleration structure
     compute::Buffer traceTable;    // TraceInstance per placement, by its custom index, then their TraceSections
     compute::Buffer reflectParams; // ReflectParams for this frame's reflection passes
+    compute::Buffer flareParams;   // FlareParams for this frame's lens flare
+    compute::Buffer composeParams; // ComposeParams for this frame's compose pass
     std::vector<compute::Buffer> scratch; // acceleration structure builds' scratch, freed with the staging
     vt::Feedback feedback;       // virtual texture page requests, read once the fence signals
     // GPU timestamps: frame start, before and after ambient occlusion, frame end.
@@ -685,6 +714,11 @@ struct Viewport
     uint64_t reflectTlasGeneration = 0, reflectEnvEpoch = ~uint64_t(0);
     int lastComposeInput = -1; // the scene image the last frame composed from, which SSR reads: 0 scene, 1 + i history[i]
     float prevExposure = 1.0f; // the exposure last frame's scene image carries
+    /** Lens flare: quarter-resolution bright pass and flare, and each flaring light's eased visibility. */
+    Image flareBright, flareOut, flareVisibility;
+    VkDescriptorSet flareSets[3][2]{}; // by compose input, then [1] reading aoDepth (single-sample fast AO)
+    bool flareImagesReady = false;
+    uint64_t dirtKey = 0; // the lens dirt image the compose sets point at
     std::array<Frame, kFramesInFlight> frames;
     int frameIndex = 0;
 
@@ -1064,7 +1098,7 @@ struct Renderer::Impl
         destroyImage(v.depth);
         for (Image* img : {&v.aoDepth, &v.aoNormal, &v.aoRaw, &v.aoFinal, &v.bevel, &v.rtShadow, &v.postColor, &v.cloudColor, &v.cloudDepth, &v.sceneMs, &v.scene, &v.sceneDepth, &v.history[0], &v.history[1],
                            &v.bloomDown, &v.bloomUp, &v.histogram, &v.exposureState, &v.hiz, &v.reflectRaw, &v.reflectOut, &v.reflectHistory[0],
-                           &v.reflectHistory[1], &v.curves})
+                           &v.reflectHistory[1], &v.curves, &v.flareBright, &v.flareOut, &v.flareVisibility})
             destroyImage(*img);
         for (std::vector<VkImageView>* views : {&v.bloomDownViews, &v.bloomUpViews, &v.hizViews})
         {
@@ -1290,6 +1324,10 @@ struct Renderer::Impl
             for (VkDescriptorSet& set : v.reflectSpatialSets)
                 set = allocateSet(reflectPool, reflectSetLayout);
         }
+        if (flareSetLayout)
+            for (auto& sets : v.flareSets)
+                for (VkDescriptorSet& set : sets)
+                    set = allocateSet(reflectPool, flareSetLayout);
         v.reflectTlasGeneration = 0;
         v.reflectEnvEpoch = ~uint64_t(0);
         for (VkDescriptorSet set : {v.aoSampleSet, v.postSet, v.edlSet})
@@ -1312,6 +1350,8 @@ struct Renderer::Impl
             compute::destroy(vk, f.tlasInstances);
             compute::destroy(vk, f.traceTable);
             compute::destroy(vk, f.reflectParams);
+            compute::destroy(vk, f.flareParams);
+            compute::destroy(vk, f.composeParams);
             if (f.lines)
             {
                 vmaUnmapMemory(vk.allocator, f.linesAlloc);
@@ -1349,6 +1389,8 @@ struct Renderer::Impl
         std::ranges::for_each(v.reflectTraceSets, freeReflect);
         std::ranges::for_each(v.reflectTemporalSets, freeReflect);
         std::ranges::for_each(v.reflectSpatialSets, freeReflect);
+        for (auto& sets : v.flareSets)
+            std::ranges::for_each(sets, freeReflect);
         if (v.swapchain)
             vkDestroySwapchainKHR(vk.device, v.swapchain, nullptr);
         if (v.surface)
@@ -3205,10 +3247,10 @@ struct Renderer::Impl
         lci.pBindings = cb;
         vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &aoComputeLayout);
 
-        VkDescriptorSetLayoutBinding composeBindings[6];
-        for (uint32_t i = 0; i < 6; ++i)
+        VkDescriptorSetLayoutBinding composeBindings[8];
+        for (uint32_t i = 0; i < 8; ++i)
             composeBindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        lci.bindingCount = 6;
+        lci.bindingCount = 8;
         lci.pBindings = composeBindings;
         vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &composeSetLayout);
         lci.bindingCount = 4;
@@ -3230,7 +3272,7 @@ struct Renderer::Impl
             vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &rtaoSetLayout);
         }
 
-        VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxAoSets * 6}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxAoSets * 2},
+        VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxAoSets * 8}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxAoSets * 2},
                                          {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 64}};
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -3263,10 +3305,12 @@ struct Renderer::Impl
         writeImage(whiteAoSet, 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, whiteAo.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         writeImage(whiteAoSet, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, blackBevel.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         initReflections();
+        initFlares();
     }
 
     void destroyAo()
     {
+        destroyFlares();
         destroyReflections();
         destroyImage(whiteAo);
         if (pointSampler)
@@ -3384,6 +3428,7 @@ struct Renderer::Impl
             }
         createPostTargets(v, extent);
         createReflectTargets(v, extent);
+        createFlareTargets(v, extent);
     }
 
     /** A 2D image of `mips` levels with a view of each besides the whole one, for compute passes writing level by level. */
@@ -4332,6 +4377,229 @@ struct Renderer::Impl
         return mode;
     }
 
+    // ---------------------------------------------------------------- lens flares
+
+    VkDescriptorSetLayout flareSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout flareLayout = VK_NULL_HANDLE;
+    VkPipeline flareBrightPipeline = VK_NULL_HANDLE, flareVisibilityPipeline = VK_NULL_HANDLE, flarePipeline = VK_NULL_HANDLE;
+    /** Post images (lens dirt) by PostImage::key. */
+    std::unordered_map<uint64_t, Image> postImages;
+
+    void initFlares()
+    {
+        if (!reflectPool)
+            return;
+        LILA_ZONE();
+        constexpr auto image = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        constexpr auto storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        constexpr auto stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        const VkDescriptorSetLayoutBinding b[6] = {{0, image, 1, stage, nullptr},   {1, image, 1, stage, nullptr},   {2, image, 1, stage, nullptr},
+                                                   {3, storage, 1, stage, nullptr}, {4, storage, 1, stage, nullptr}, {5, storage, 1, stage, nullptr}};
+        VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        lci.bindingCount = 6;
+        lci.pBindings = b;
+        if (vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &flareSetLayout) != VK_SUCCESS)
+            return;
+        flareLayout = compute::pipelineLayout(vk, sizeof(ReflectPush), stage, std::span(&flareSetLayout, 1));
+        if (VkShaderModule mod = module(loadSpirv("flare.spv")))
+        {
+            flareBrightPipeline = buildCompute(flareLayout, mod, "brightCS");
+            flareVisibilityPipeline = buildCompute(flareLayout, mod, "visibilityCS");
+            flarePipeline = buildCompute(flareLayout, mod, "flareCS");
+            vkDestroyShaderModule(vk.device, mod, nullptr);
+        }
+    }
+
+    void destroyFlares()
+    {
+        for (VkPipeline* p : {&flareBrightPipeline, &flareVisibilityPipeline, &flarePipeline})
+        {
+            if (*p)
+                vkDestroyPipeline(vk.device, *p, nullptr);
+            *p = VK_NULL_HANDLE;
+        }
+        if (flareLayout)
+            vkDestroyPipelineLayout(vk.device, flareLayout, nullptr);
+        if (flareSetLayout)
+            vkDestroyDescriptorSetLayout(vk.device, flareSetLayout, nullptr);
+        flareLayout = VK_NULL_HANDLE;
+        flareSetLayout = VK_NULL_HANDLE;
+        for (auto& [key, img] : postImages)
+            destroyImage(img);
+        postImages.clear();
+    }
+
+    /** The quarter-resolution bright pass and flare, the light visibility, and their sets (one per compose input and depth). */
+    void createFlareTargets(Viewport& v, VkExtent2D extent)
+    {
+        constexpr auto sampler = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        constexpr auto storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        constexpr auto general = VK_IMAGE_LAYOUT_GENERAL;
+        constexpr auto shaderRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        constexpr auto depthRead = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        constexpr auto usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        const VkExtent2D quarter{std::max((extent.width + 3) / 4, 1u), std::max((extent.height + 3) / 4, 1u)};
+        v.flareBright = createImage(VK_FORMAT_R16G16B16A16_SFLOAT, usage, quarter, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        v.flareOut = createImage(VK_FORMAT_R16G16B16A16_SFLOAT, usage, quarter, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        v.flareVisibility = createImage(VK_FORMAT_R32_SFLOAT, usage, {kMaxFlareLights, 1}, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        v.flareImagesReady = false;
+        v.dirtKey = 0;
+        for (VkDescriptorSet set : v.composeSets)
+        {
+            writeImage(set, 6, sampler, v.flareOut.view, general, linearSampler);
+            writeImage(set, 7, sampler, whiteAo.view, shaderRead, linearSampler);
+        }
+        if (!flareSetLayout || !v.flareSets[0][0])
+            return;
+        const bool msaa = vk.msaa != VK_SAMPLE_COUNT_1_BIT;
+        const VkImageView depths[2] = {msaa ? v.sceneDepth.view : v.depth.view, v.aoDepth.view};
+        const std::pair<VkImageView, VkImageLayout> colors[3] = {
+            {v.scene.view, shaderRead}, {v.history[0].view, general}, {v.history[1].view, general}};
+        for (int k = 0; k < 3; ++k)
+            for (int d = 0; d < 2; ++d)
+            {
+                VkDescriptorSet set = v.flareSets[k][d];
+                writeImage(set, 0, sampler, colors[k].first, colors[k].second, linearSampler);
+                writeImage(set, 1, sampler, depths[d], depthRead);
+                writeImage(set, 2, sampler, v.flareBright.view, general, linearSampler);
+                writeImage(set, 3, storage, v.flareBright.view, general);
+                writeImage(set, 4, storage, v.flareOut.view, general);
+                writeImage(set, 5, storage, v.flareVisibility.view, general);
+            }
+    }
+
+    /** A post image's view (lens dirt), uploaded the first time it is seen. */
+    VkImageView postImageView(VkCommandBuffer cmd, Frame& f, const std::shared_ptr<const PostImage>& img)
+    {
+        if (!img || img->width <= 0 || img->height <= 0 || img->rgba.size() < size_t(img->width) * img->height * 4)
+            return VK_NULL_HANDLE;
+        auto it = postImages.find(img->key);
+        if (it != postImages.end())
+            return it->second.view;
+        Image out = createImage(VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                                {uint32_t(img->width), uint32_t(img->height)}, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        if (!out.image)
+            return VK_NULL_HANDLE;
+        AllocatedBuffer staging = createBuffer(img->rgba.data(), img->rgba.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        f.staging.push_back(staging);
+        barrier(cmd, out.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_NONE, 0,
+                VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {uint32_t(img->width), uint32_t(img->height), 1};
+        vkCmdCopyBufferToImage(cmd, staging.buffer, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        barrier(cmd, out.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        return postImages.emplace(img->key, out).first->second.view;
+    }
+
+    /**
+     * Lens flare into v.flareOut from the compose input and the frame's depth: the picture's own (bright pass, ghosts,
+     * halo, rays, streaks) when it has some, and each flaring light's. False when there is nothing to flare.
+     */
+    bool recordFlare(VkCommandBuffer cmd, Frame& f, Viewport& v, const FrameState& s, int input, bool depthIsAo, bool depthReadOnly)
+    {
+        const LensFlare& lf = s.post.flare;
+        if (!s.post.effects || !flarePipeline || !v.flareSets[0][0] || !v.flareOut.image || s.externalScene)
+            return false;
+        FlareParams p{};
+        const glm::dmat4 viewProj = s.proj * s.view;
+        int lights = 0;
+        for (const LightDraw& l : s.lights)
+        {
+            if (!l.lensFlare || lights >= int(kMaxFlareLights))
+                continue;
+            const bool sun = l.kind == LightDraw::Directional;
+            const glm::dvec4 clip = viewProj * (sun ? glm::dvec4(-glm::dvec3(glm::normalize(l.direction)), 0.0) : glm::dvec4(l.position, 1.0));
+            FlareLight& fl = p.lights[lights];
+            if (clip.w <= 1e-6)
+                continue;
+            const glm::dvec3 ndc = glm::dvec3(clip) / clip.w;
+            fl.screen = glm::vec4(float(ndc.x * 0.5 + 0.5), float(ndc.y * 0.5 + 0.5), sun ? 0.0f : float(ndc.z), 1.0f);
+            // How bright the light looks from here: its radiance, falling off with distance (metres) for lights at a point.
+            const double metres = sun ? 1.0 : std::max(glm::length(l.position - s.eye) * 0.01, 0.1);
+            const float falloff = sun ? 1.0f : float(1.0 / std::max(metres * metres, 1.0));
+            fl.color = glm::vec4(l.radiance * (l.lensFlareIntensity * falloff * s.exposure * 0.25f), l.lensFlareScale);
+            ++lights;
+        }
+        const bool own = lf.intensity > 0.0f;
+        if (!own && lights == 0)
+            return false;
+        LILA_ZONE();
+        try
+        {
+            if (f.flareParams.size < sizeof(FlareParams))
+                f.flareParams = compute::makeBuffer(vk, sizeof(FlareParams), 0, compute::Host::Write);
+        }
+        catch (const std::exception& e)
+        {
+            log::error("render: {}", e.what());
+            return false;
+        }
+        const glm::uvec2 quarter((v.extent.width + 3) / 4, (v.extent.height + 3) / 4);
+        p.size = glm::vec4(float(quarter.x), float(quarter.y), float(v.extent.width), float(v.extent.height));
+        p.a = glm::vec4(std::max(lf.threshold, 0.0f), std::clamp(lf.ghosts, 0.0f, 8.0f), lf.ghostSpacing, lf.chroma);
+        p.b = glm::vec4(lf.halo, lf.haloRadius, lf.starburst, lf.streakLength);
+        const int blades = lf.blades > 0 ? lf.blades : 6;
+        // An odd count of blades draws twice as many rays as blades; an even count, one ray pair per blade pair.
+        p.c = glm::vec4(float(blades % 2 ? blades * 2 : blades), glm::radians(lf.bladeRotation), lf.anamorphic, std::max(lf.squeeze, 1.0f));
+        p.tint = glm::vec4(lf.anamorphicTint, float(v.extent.width) / float(std::max(v.extent.height, 1u)));
+        p.d = glm::vec4(float(lights), s.accumulateOnly || v.offscreen ? 1.0f : 0.35f, own ? 1.0f : 0.0f, 6.0f);
+        std::memcpy(f.flareParams.mapped, &p, sizeof(p));
+        vmaFlushAllocation(vk.allocator, f.flareParams.alloc, 0, VK_WHOLE_SIZE);
+
+        constexpr auto compute = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        constexpr auto fragment = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        constexpr auto read = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        constexpr auto write = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        constexpr auto general = VK_IMAGE_LAYOUT_GENERAL;
+        constexpr auto color = VK_IMAGE_ASPECT_COLOR_BIT;
+        if (!v.flareImagesReady)
+        {
+            for (Image* img : {&v.flareBright, &v.flareOut, &v.flareVisibility})
+                barrier(cmd, img->image, VK_IMAGE_LAYOUT_UNDEFINED, general, compute | fragment, 0, compute | VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                        read | write | VK_ACCESS_2_TRANSFER_WRITE_BIT, color);
+            const VkClearColorValue zero{};
+            const VkImageSubresourceRange range{color, 0, 1, 0, 1};
+            vkCmdClearColorImage(cmd, v.flareVisibility.image, general, &zero, 1, &range);
+            barrier(cmd, v.flareVisibility.image, general, general, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, compute,
+                    read | write, color);
+            v.flareImagesReady = true;
+        }
+        const VkImage depthImage = depthIsAo ? v.aoDepth.image : (vk.msaa != VK_SAMPLE_COUNT_1_BIT ? v.sceneDepth.image : v.depth.image);
+        constexpr auto depthStage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        constexpr auto depthAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        if (lights > 0 && !depthReadOnly)
+            barrier(cmd, depthImage, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depthStage, depthAccess,
+                    compute, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+        VkDescriptorSet set = v.flareSets[std::clamp(input, 0, 2)][depthIsAo ? 1 : 0];
+        ReflectPush push;
+        push.params = f.flareParams.address;
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, flareLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, flareLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        barrier(cmd, v.flareOut.image, general, general, fragment, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, compute, write, color);
+        if (own)
+        {
+            barrier(cmd, v.flareBright.image, general, general, compute, read, compute, write, color);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, flareBrightPipeline);
+            vkCmdDispatch(cmd, (quarter.x + 7) / 8, (quarter.y + 7) / 8, 1);
+            barrier(cmd, v.flareBright.image, general, general, compute, write, compute, read, color);
+        }
+        if (lights > 0)
+        {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, flareVisibilityPipeline);
+            vkCmdDispatch(cmd, uint32_t(lights), 1, 1);
+            barrier(cmd, v.flareVisibility.image, general, general, compute, write, compute, read | write, color);
+            if (!depthReadOnly)
+                barrier(cmd, depthImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, compute, 0, depthStage,
+                        depthAccess, VK_IMAGE_ASPECT_DEPTH_BIT);
+        }
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, flarePipeline);
+        vkCmdDispatch(cmd, (quarter.x + 7) / 8, (quarter.y + 7) / 8, 1);
+        barrier(cmd, v.flareOut.image, general, general, compute, write, fragment, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, color);
+        return true;
+    }
+
     /** The live bevel's rounded normals from the prepass into v.bevel. */
     bool recordBevel(VkCommandBuffer cmd, Frame& f, Viewport& v, const FrameState& s, const glm::mat4& viewProj)
     {
@@ -5232,7 +5500,9 @@ struct Renderer::Impl
             if (s.lensRadius > 0.0f && s.focusDistance > 0.0f && s.proj[3][3] == 0.0)
             {
                 // Look from a point of the aperture, sheared so the focus plane stays where it was: x' = x - l (1 - depth / focus).
-                const glm::vec2 l = apertureSample(v.jitterIndex, s.apertureBlades, s.apertureRotation) * s.lensRadius;
+                // An anamorphic lens's aperture is taller than wide by its squeeze, so its bokeh is too.
+                const glm::vec2 l = apertureSample(v.jitterIndex, s.apertureBlades, s.apertureRotation) * s.lensRadius *
+                                    glm::vec2(1.0f / std::max(s.anamorphicSqueeze, 1.0f), 1.0f);
                 glm::dmat4 lens(1.0);
                 lens[2][0] = -double(l.x) / double(s.focusDistance);
                 lens[2][1] = -double(l.y) / double(s.focusDistance);
@@ -5537,7 +5807,17 @@ struct Renderer::Impl
         // Next frame's screen space reflections read this frame's picture from where the compose pass does.
         v.lastComposeInput = s.externalScene ? -1 : composeInput;
         v.prevExposure = s.exposure;
-        const PostResult postResult = recordPostStack(cmd, f, v, s, composeInput);
+        PostResult postResult = recordPostStack(cmd, f, v, s, composeInput);
+        timestamp(cmd, f, kTimeFlare);
+        {
+            LILA_GPU_SECTION(gpuPass, "Lens flare");
+            // TAA left the multisampled scene's resolved depth read-only; every other depth is still an attachment.
+            const bool depthReadOnly = taa && msaa;
+            postResult.flare = recordFlare(cmd, f, v, s, composeInput, depthIsAo, depthReadOnly);
+            f.flareTimed = postResult.flare;
+        }
+        timestamp(cmd, f, kTimeFlare + 1);
+        postResult.dirt = updateDirt(cmd, f, v, s);
 
         // The frame: the composed scene, then lines and overlays depth tested against the scene's depth.
         LILA_GPU_SECTION(gpuPass, "Compose and overlays");
@@ -5562,7 +5842,20 @@ struct Renderer::Impl
         overlayDepth.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         ri.pColorAttachments = &frameColor;
         ri.pDepthAttachment = &overlayDepth;
-        const ComposePush composePush = composeParams(v, s, postResult);
+        const ComposeParams composeValues = composeParams(v, s, postResult);
+        ComposePush composePush;
+        try
+        {
+            if (f.composeParams.size < sizeof(ComposeParams))
+                f.composeParams = compute::makeBuffer(vk, sizeof(ComposeParams), 0, compute::Host::Write);
+            std::memcpy(f.composeParams.mapped, &composeValues, sizeof(composeValues));
+            vmaFlushAllocation(vk.allocator, f.composeParams.alloc, 0, VK_WHOLE_SIZE);
+            composePush.params = f.composeParams.address;
+        }
+        catch (const std::exception& e)
+        {
+            log::error("render: {}", e.what());
+        }
         auto drawCompose = [&](VkPipeline pipeline) {
             vkCmdSetViewport(cmd, 0, 1, &viewport);
             vkCmdSetScissor(cmd, 0, 1, &scissor);
@@ -5705,7 +5998,7 @@ struct Renderer::Impl
             f.feedback.end(vk, cmd);
         gpuPass.end();
         gpuFrame.end();
-        for (uint32_t q : {kTimeFlare, kTimeDof, kTimeMotionBlur})
+        for (uint32_t q : {kTimeDof, kTimeMotionBlur})
         {
             timestamp(cmd, f, q);
             timestamp(cmd, f, q + 1);
@@ -5862,7 +6155,27 @@ struct Renderer::Impl
         bool lut = false;
         bool view = false;   // the OCIO view LUT is bound
         bool curves = false; // grading curves are bound
+        bool flare = false;  // v.flareOut holds this frame's flare
+        bool dirt = false;   // a lens dirt image is bound
     };
+
+    /** Points the compose sets at the frame's lens dirt (or white) when it changed; true when dirt is bound. */
+    bool updateDirt(VkCommandBuffer cmd, Frame& f, Viewport& v, const FrameState& s)
+    {
+        const bool want = s.post.effects && s.post.flare.dirt && s.post.flare.dirtIntensity > 0.0f;
+        VkImageView view = want ? postImageView(cmd, f, s.post.flare.dirt) : VK_NULL_HANDLE;
+        const uint64_t key = view ? s.post.flare.dirt->key : 1;
+        if (key != v.dirtKey)
+        {
+            Frame& other = v.frames[(v.frameIndex + 1) % kFramesInFlight];
+            vkWaitForFences(vk.device, 1, &other.fence, VK_TRUE, UINT64_MAX);
+            for (VkDescriptorSet set : v.composeSets)
+                writeImage(set, 7, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, view ? view : whiteAo.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                           linearSampler);
+            v.dirtKey = key;
+        }
+        return view != VK_NULL_HANDLE;
+    }
 
     /**
      * The compute half of the post stack, between the TAA and the compose pass: auto exposure from a histogram of the
@@ -5987,10 +6300,10 @@ struct Renderer::Impl
     }
 
     /** Push constants for the compose pass from the frame's post settings and what recordPostStack produced. */
-    ComposePush composeParams(const Viewport& v, const FrameState& s, const PostResult& r) const
+    ComposeParams composeParams(const Viewport& v, const FrameState& s, const PostResult& r) const
     {
         const PostSettings& p = s.post;
-        ComposePush c;
+        ComposeParams c{};
         c.params = glm::vec4(s.gamma, p.dither ? 1.0f : 0.0f, 1.0f, float(int(p.tonemapper)));
         c.grade = glm::vec4(p.contrast, p.saturation, p.effects ? 1.0f : 0.0f, float(p.agxLook));
         c.white = glm::vec4(p.whiteBalance, r.lut ? std::clamp(p.lutIntensity, 0.0f, 1.0f) : 0.0f);
@@ -6008,6 +6321,7 @@ struct Renderer::Impl
         c.shadows = glm::vec4(p.shadows, p.shadowsRange);
         c.midtones = glm::vec4(p.midtones, 0.0f);
         c.highlights = glm::vec4(p.highlights, p.highlightsRange);
+        c.flare = glm::vec4(r.flare ? 1.0f : 0.0f, r.dirt ? p.flare.dirtIntensity : 0.0f, r.dirt ? 1.0f : 0.0f, 0.0f);
         return c;
     }
 
