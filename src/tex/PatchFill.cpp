@@ -4,6 +4,7 @@
 #include "core/Paths.h"
 #include "core/Profile.h"
 #include "geo/Attribute.h"
+#include "geo/Mesh.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
@@ -440,8 +441,32 @@ std::vector<uint8_t> maskArg(const Args& a, const char* polyFlag, const char* fi
     return m;
 }
 
-/** Each texel's uv island (faces joined by edges whose uvs match on both sides), -1 outside every island. */
-std::vector<int> islandMap(const geo::Mesh& m, int w, int h)
+/** Each face's uv island (faces joined by edges whose uvs match on both sides) as its root face, and each texel's. */
+struct Islands
+{
+    std::vector<int> faceRoot; // -1 for removed faces
+    std::vector<int> texels;   // -1 outside every island
+};
+
+/** Corners of the face across c's edge at c's two points; kInvalid when the edge has no other face. */
+std::pair<geo::Index, geo::Index> across(const geo::Mesh& m, geo::Index c)
+{
+    const geo::Index o = m.cornerRadial(c);
+    if (o == c || o == geo::kInvalid)
+        return {geo::kInvalid, geo::kInvalid};
+    const geo::Index g = m.cornerFace(o);
+    const geo::Index oa = m.findCorner(g, m.cornerPoint(c)), ob = m.findCorner(g, m.cornerNextPoint(c));
+    if (oa == geo::kInvalid || ob == geo::kInvalid)
+        return {geo::kInvalid, geo::kInvalid};
+    return {oa, ob};
+}
+
+bool sameUvs(std::span<const glm::vec2> uv, const geo::Mesh& m, geo::Index c, geo::Index oa, geo::Index ob)
+{
+    return glm::distance(uv[c], uv[oa]) < 1e-5f && glm::distance(uv[m.cornerNext(c)], uv[ob]) < 1e-5f;
+}
+
+Islands islandMap(const geo::Mesh& m, int w, int h)
 {
     std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
     std::vector<int> parent(m.faceCapacity());
@@ -459,23 +484,21 @@ std::vector<int> islandMap(const geo::Mesh& m, int w, int h)
         geo::Index c = m.faceCorner(f);
         for (geo::Index k = 0; k < m.faceSize(f); ++k, c = m.cornerNext(c))
         {
-            const geo::Index o = m.cornerRadial(c);
-            if (o == c || o == geo::kInvalid)
-                continue;
-            const geo::Index g = m.cornerFace(o);
-            const geo::Index oa = m.findCorner(g, m.cornerPoint(c)), ob = m.findCorner(g, m.cornerNextPoint(c));
-            if (oa == geo::kInvalid || ob == geo::kInvalid)
-                continue;
-            if (glm::distance(uv[c], uv[oa]) < 1e-5f && glm::distance(uv[m.cornerNext(c)], uv[ob]) < 1e-5f)
-                parent[size_t(root(int(f)))] = root(int(g));
+            const auto [oa, ob] = across(m, c);
+            if (oa != geo::kInvalid && sameUvs(uv, m, c, oa, ob))
+                parent[size_t(root(int(f)))] = root(int(m.cornerFace(oa)));
         }
     }
-    std::vector<int> ids(size_t(w) * h, -1);
+    Islands out;
+    out.faceRoot.assign(m.faceCapacity(), -1);
+    out.texels.assign(size_t(w) * h, -1);
+    std::vector<int>& ids = out.texels;
     for (geo::Index f = 0; f < m.faceCapacity(); ++f)
     {
         if (!m.faceValid(f))
             continue;
         const int id = root(int(f));
+        out.faceRoot[f] = id;
         const geo::Index c0 = m.faceCorner(f);
         for (geo::Index c1 = m.cornerNext(c0), c2 = m.cornerNext(c1); c2 != c0; c1 = c2, c2 = m.cornerNext(c2))
         {
@@ -501,7 +524,110 @@ std::vector<int> islandMap(const geo::Mesh& m, int w, int h)
                 }
         }
     }
-    return ids;
+    return out;
+}
+
+/** A texel outside a piece's islands standing in for what lies across a seam: where it samples, and on which island. */
+struct Pad
+{
+    int texel = 0;
+    glm::vec2 from{0.0f}; // image pixels
+    int island = -1;
+    float s = 0.0f; // texels out from the seam
+};
+
+/**
+ * The texels within reach outside the islands marked in isles, across each of their seam edges: each mapped through the
+ * shared 3D edge to the same distance into the face on the other side, scaled by the two edges' uv lengths.
+ */
+std::vector<Pad> seamPads(const geo::Mesh& m, const Islands& isl, const std::vector<uint8_t>& isles, int w, int h, float reach)
+{
+    std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
+    auto px = [&](glm::vec2 t) { return glm::vec2(t.x * w, (1.0f - t.y) * h); };
+    auto centroid = [&](geo::Index f) {
+        glm::vec2 sum(0.0f);
+        geo::Index c = m.faceCorner(f);
+        for (geo::Index k = 0; k < m.faceSize(f); ++k, c = m.cornerNext(c))
+            sum += px(uv[c]);
+        return sum / float(std::max<geo::Index>(m.faceSize(f), 1));
+    };
+    std::vector<Pad> best(size_t(w) * h);
+    std::vector<uint8_t> has(size_t(w) * h, 0);
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f) || isl.faceRoot[f] < 0 || !isles[size_t(isl.faceRoot[f])])
+            continue;
+        geo::Index c = m.faceCorner(f);
+        for (geo::Index k = 0; k < m.faceSize(f); ++k, c = m.cornerNext(c))
+        {
+            const auto [oa, ob] = across(m, c);
+            if (oa == geo::kInvalid || sameUvs(uv, m, c, oa, ob))
+                continue;
+            const geo::Index g = m.cornerFace(oa);
+            const glm::vec2 a0 = px(uv[c]), a1 = px(uv[m.cornerNext(c)]), b0 = px(uv[oa]), b1 = px(uv[ob]);
+            const glm::vec2 ea = a1 - a0, eb = b1 - b0;
+            const float la = glm::length(ea), lb = glm::length(eb);
+            if (la < 1e-4f || lb < 1e-4f)
+                continue;
+            glm::vec2 na = glm::vec2(-ea.y, ea.x) / la, nb = glm::vec2(-eb.y, eb.x) / lb;
+            if (glm::dot(centroid(f) - a0, na) > 0.0f)
+                na = -na;
+            if (glm::dot(centroid(g) - b0, nb) < 0.0f)
+                nb = -nb;
+            const glm::vec2 far0 = a0 + na * reach, far1 = a1 + na * reach;
+            const int x0 = std::max(0, int(std::floor(std::min({a0.x, a1.x, far0.x, far1.x})))),
+                      x1 = std::min(w - 1, int(std::ceil(std::max({a0.x, a1.x, far0.x, far1.x}))));
+            const int y0 = std::max(0, int(std::floor(std::min({a0.y, a1.y, far0.y, far1.y})))),
+                      y1 = std::min(h - 1, int(std::ceil(std::max({a0.y, a1.y, far0.y, far1.y}))));
+            for (int y = y0; y <= y1; ++y)
+                for (int x = x0; x <= x1; ++x)
+                {
+                    const size_t i = size_t(y) * w + x;
+                    if (isl.texels[i] >= 0 && isles[size_t(isl.texels[i])])
+                        continue;
+                    const glm::vec2 d = glm::vec2(x + 0.5f, y + 0.5f) - a0;
+                    const float t = glm::dot(d, ea) / (la * la), s = glm::dot(d, na);
+                    if (t < 0.0f || t > 1.0f || s <= 0.0f || s > reach || (has[i] && best[i].s <= s))
+                        continue;
+                    has[i] = 1;
+                    best[i] = {int(i), b0 + eb * t + nb * (s * lb / la), isl.faceRoot[g], s};
+                }
+        }
+    }
+    std::vector<Pad> out;
+    for (size_t i = 0; i < best.size(); ++i)
+        if (has[i])
+            out.push_back(best[i]);
+    return out;
+}
+
+/** The image at pixel position p from the texels of island that are filled, bilinear; false when none is near. */
+bool sampleIsland(const image::Image& img, const Islands& isl, const std::vector<uint8_t>& pending, int island, glm::vec2 p, float* out)
+{
+    const int w = img.width, h = img.height;
+    const float fx = p.x - 0.5f, fy = p.y - 0.5f;
+    const int x0 = int(std::floor(fx)), y0 = int(std::floor(fy));
+    const float tx = fx - float(x0), ty = fy - float(y0);
+    float sum[4] = {0.0f, 0.0f, 0.0f, 0.0f}, wsum = 0.0f;
+    for (int dy = 0; dy < 2; ++dy)
+        for (int dx = 0; dx < 2; ++dx)
+        {
+            const int x = x0 + dx, y = y0 + dy;
+            if (x < 0 || y < 0 || x >= w || y >= h)
+                continue;
+            const size_t i = size_t(y) * w + x;
+            if (isl.texels[i] != island || pending[i])
+                continue;
+            const float wt = (dx ? tx : 1.0f - tx) * (dy ? ty : 1.0f - ty) + 1e-6f;
+            for (int k = 0; k < 4; ++k)
+                sum[k] += img.rgba[i * 4 + size_t(k)] * wt;
+            wsum += wt;
+        }
+    if (wsum <= 0.0f)
+        return false;
+    for (int k = 0; k < 4; ++k)
+        out[k] = sum[k] / wsum;
+    return true;
 }
 
 /** The hole's 4-connected pieces, as texel lists. */
@@ -573,15 +699,14 @@ json patchFillCommand(const Args& a)
     if (hole.empty())
         throw CommandError(std::string(cmd) + ": give holeUv= (a uv polygon) or hole= (a mask image)");
     const std::vector<uint8_t> allowed = maskArg(a, "sourceUv", "source", w, h, cmd);
-    std::vector<int> islands;
+    scene::MeshPtr mesh;
     if (const std::string meshPath = a.get<std::string>("mesh", ""); !meshPath.empty())
     {
         g.evaluate();
         scene::Node* n = g.find(meshPath);
-        scene::MeshPtr mesh = n && n->type().isA("mesh") ? n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
+        mesh = n && n->type().isA("mesh") ? n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
         if (!mesh || mesh->cornerAttrs().get<glm::vec2>(geo::attr::uvName(0)).empty())
             throw CommandError(std::string(cmd) + ": " + meshPath + " isn't a mesh with uvs");
-        islands = islandMap(*mesh, w, h);
     }
 
     std::vector<std::string> names;
@@ -597,56 +722,14 @@ json patchFillCommand(const Args& a)
     PatchFillOptions o;
     o.patch = int(a.get<int64_t>("patch", 7)) | 1;
     o.seed = uint32_t(a.get<int64_t>("seed", 1));
-    int islandCount = 0;
-    for (int id : islands)
-        islandCount = std::max(islandCount, id + 1);
-    const std::vector<std::vector<int>> pieces = components(hole, w, h);
-    for (const std::vector<int>& piece : pieces)
+    const size_t pieces = components(hole, w, h).size();
+    try
     {
-        // The piece's source: the islands it sits on (all of uv space without a mesh), less the hole, within source= if given.
-        std::vector<uint8_t> isles(size_t(islandCount), 0);
-        for (int p : piece)
-            if (!islands.empty() && islands[size_t(p)] >= 0)
-                isles[size_t(islands[size_t(p)])] = 1;
-        std::vector<uint8_t> src(hole.size(), 0);
-        int x0 = w, y0 = h, x1 = -1, y1 = -1;
-        auto grow = [&](int i) {
-            x0 = std::min(x0, i % w);
-            x1 = std::max(x1, i % w);
-            y0 = std::min(y0, i / w);
-            y1 = std::max(y1, i / w);
-        };
-        for (int i = 0; i < w * h; ++i)
-        {
-            const bool onIsland = islands.empty() || (islands[size_t(i)] >= 0 && isles[size_t(islands[size_t(i)])]);
-            src[size_t(i)] = !hole[size_t(i)] && onIsland && (allowed.empty() || allowed[size_t(i)]) ? 1 : 0;
-            if (src[size_t(i)])
-                grow(i);
-        }
-        for (int p : piece)
-            grow(p);
-        const int cw = x1 - x0 + 1, ch = y1 - y0 + 1;
-        std::vector<image::Image> cropped;
-        for (const image::Image& im : filled)
-            cropped.push_back(crop(im, x0, y0, x1, y1));
-        std::vector<uint8_t> cHole(size_t(cw) * ch, 0), cSrc(size_t(cw) * ch, 0);
-        for (int p : piece)
-            cHole[size_t(p / w - y0) * cw + (p % w - x0)] = 1;
-        for (int y = 0; y < ch; ++y)
-            for (int x = 0; x < cw; ++x)
-                cSrc[size_t(y) * cw + x] = src[size_t(y + y0) * w + x + x0];
-        std::vector<image::Image> out;
-        try
-        {
-            out = patchFill(cropped, cHole, cSrc, o);
-        }
-        catch (const std::exception& e)
-        {
-            throw CommandError(std::string(cmd) + ": " + e.what() + "; the area around the hole is too small for patch=" + std::to_string(o.patch));
-        }
-        for (size_t m = 0; m < filled.size(); ++m)
-            for (int p : piece)
-                std::copy_n(&out[m].rgba[(size_t(p / w - y0) * cw + (p % w - x0)) * 4], 4, &filled[m].rgba[size_t(p) * 4]);
+        filled = patchFillUv(std::move(filled), hole, allowed, mesh.get(), a.get<bool>("acrossSeams", true), o);
+    }
+    catch (const std::exception& e)
+    {
+        throw CommandError(std::string(cmd) + ": " + e.what() + "; the area around the hole is too small for patch=" + std::to_string(o.patch));
     }
 
     const std::filesystem::path folder = bake::resolveFolder(a.get<std::string>("folder", "textures/" + set->name()));
@@ -671,9 +754,126 @@ json patchFillCommand(const Args& a)
                                .at("id")
                                .get<std::string>();
     ops::execute("texAddMask", {{"args", {setName, id, "paint"}}, {"image", paths::toUtf8(maskFile)}});
-    return {{"id", id}, {"pieces", pieces.size()}, {"mask", paths::toUtf8(maskFile)}, {"channels", material}};
+    return {{"id", id}, {"pieces", pieces}, {"mask", paths::toUtf8(maskFile)}, {"channels", material}};
 }
 } // namespace
+
+std::vector<image::Image> patchFillUv(std::vector<image::Image> images, std::span<const uint8_t> hole, std::span<const uint8_t> source,
+                                      const geo::Mesh* mesh, bool acrossSeams, const PatchFillOptions& o)
+{
+    LILA_ZONE();
+    if (images.empty())
+        return images;
+    const int w = images[0].width, h = images[0].height;
+    if (hole.size() != size_t(w) * h || (!source.empty() && source.size() != hole.size()))
+        throw std::runtime_error("Patch Fill: the hole or source mask doesn't match the image");
+    Islands isl;
+    if (mesh)
+        isl = islandMap(*mesh, w, h);
+    const std::vector<int>& islands = isl.texels;
+    int islandCount = 0;
+    for (int id : isl.faceRoot)
+        islandCount = std::max(islandCount, id + 1);
+    // Room for a few patches across the seam: what the matching sees beyond the island's edge.
+    const float reach = float(std::max(3 * o.patch, 12));
+    // Hole texels not filled yet; a piece filled earlier is content for the pieces after it, across seams too.
+    std::vector<uint8_t> pending(hole.begin(), hole.end());
+    for (const std::vector<int>& piece : components(pending, w, h))
+    {
+        // The piece's source: the islands it sits on (all of uv space without a mesh), less the hole, within source if given.
+        std::vector<uint8_t> isles(size_t(islandCount), 0);
+        for (int p : piece)
+            if (!islands.empty() && islands[size_t(p)] >= 0)
+                isles[size_t(islands[size_t(p)])] = 1;
+        std::vector<uint8_t> src(hole.size(), 0);
+        int x0 = w, y0 = h, x1 = -1, y1 = -1;
+        auto grow = [&](int i) {
+            x0 = std::min(x0, i % w);
+            x1 = std::max(x1, i % w);
+            y0 = std::min(y0, i / w);
+            y1 = std::max(y1, i / w);
+        };
+        for (int i = 0; i < w * h; ++i)
+        {
+            const bool onIsland = islands.empty() || (islands[size_t(i)] >= 0 && isles[size_t(islands[size_t(i)])]);
+            src[size_t(i)] = !pending[size_t(i)] && onIsland && (source.empty() || source[size_t(i)]) ? 1 : 0;
+            if (src[size_t(i)])
+                grow(i);
+        }
+        for (int p : piece)
+            grow(p);
+
+        // Across seams: texels past the islands' seam edges take what the far side holds; a far side still in the hole is
+        // filled with the piece (unknown), so both sides match together, but only the piece is written back.
+        struct Known
+        {
+            int texel;
+            bool known;
+            std::vector<float> values;
+        };
+        std::vector<Known> padded;
+        if (mesh && acrossSeams)
+        {
+            std::vector<uint8_t> inPiece(hole.size(), 0);
+            for (int p : piece)
+                inPiece[size_t(p)] = 1;
+            for (const Pad& pad : seamPads(*mesh, isl, isles, w, h, reach))
+            {
+                if (inPiece[size_t(pad.texel)])
+                    continue;
+                Known k{pad.texel, true, std::vector<float>(images.size() * 4, 0.0f)};
+                const int nx = std::clamp(int(std::floor(pad.from.x)), 0, w - 1), ny = std::clamp(int(std::floor(pad.from.y)), 0, h - 1);
+                const size_t near = size_t(ny) * w + nx;
+                if (pending[near] && islands[near] == pad.island)
+                    k.known = false;
+                else
+                    for (size_t m = 0; m < images.size() && k.known; ++m)
+                        k.known = sampleIsland(images[m], isl, pending, pad.island, pad.from, &k.values[m * 4]);
+                if (!k.known && !(pending[near] && islands[near] == pad.island))
+                    continue;
+                padded.push_back(std::move(k));
+                grow(pad.texel);
+            }
+        }
+
+        const int cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+        auto local = [&](int i) { return size_t(i / w - y0) * cw + size_t(i % w - x0); };
+        std::vector<image::Image> cropped;
+        for (const image::Image& im : images)
+            cropped.push_back(crop(im, x0, y0, x1, y1));
+        std::vector<uint8_t> cHole(size_t(cw) * ch, 0), cSrc(size_t(cw) * ch, 0);
+        for (int y = 0; y < ch; ++y)
+            for (int x = 0; x < cw; ++x)
+                cSrc[size_t(y) * cw + x] = src[size_t(y + y0) * w + x + x0];
+        for (const Known& k : padded)
+        {
+            const size_t li = local(k.texel);
+            if (k.known)
+            {
+                for (size_t m = 0; m < images.size(); ++m)
+                    std::copy_n(&k.values[m * 4], 4, &cropped[m].rgba[li * 4]);
+                cSrc[li] = source.empty() || source[size_t(k.texel)] ? 1 : 0;
+            }
+            else
+            {
+                cHole[li] = 1;
+                cSrc[li] = 0;
+            }
+        }
+        for (int p : piece)
+        {
+            cHole[local(p)] = 1;
+            cSrc[local(p)] = 0;
+        }
+        const std::vector<image::Image> out = patchFill(cropped, cHole, cSrc, o);
+        for (size_t m = 0; m < images.size(); ++m)
+            for (int p : piece)
+                std::copy_n(&out[m].rgba[local(p) * 4], 4, &images[m].rgba[size_t(p) * 4]);
+        for (int p : piece)
+            pending[size_t(p)] = 0;
+    }
+    return images;
+}
 
 void registerPatchFillCommands()
 {
@@ -682,13 +882,14 @@ void registerPatchFillCommands()
         .name = "texPatchFill",
         .doc = "Patch Fill a texture set in uv space: the hole (holeUv, a uv polygon, or hole, a mask image) is rebuilt from patches of its "
                "surroundings, every channel matched together, and lands as a new fill layer masked to the hole. With mesh=, each piece of the "
-               "hole draws only from the uv islands it sits on. Returns {id, pieces, mask, channels}.",
+               "hole draws only from the uv islands it sits on, and sees across their seams to the content on the other side. Returns {id, pieces, mask, channels}.",
         .positionalDoc = "set",
         .flags = {{"holeUv", "", T::List, nullptr, "The hole: a polygon in uv space, [[u, v], ...]."},
                   {"hole", "", T::String, nullptr, "The hole: a mask image, white to fill."},
                   {"sourceUv", "", T::List, nullptr, "Only take patches from inside this uv polygon."},
                   {"source", "", T::String, nullptr, "Only take patches from where this mask image is white."},
                   {"mesh", "", T::String, nullptr, "The set's mesh: keeps each piece of the hole to its own uv islands."},
+                  {"acrossSeams", "", T::Bool, true, "With mesh: match across uv seams, each island padded with what lies on the other side."},
                   {"patch", "", T::Int, 7, "Patch side in texels (odd).", {}, {}, 3.0, 31.0},
                   {"seed", "", T::Int, 1, "Random seed."},
                   {"name", "", T::String, "Patch Fill", "Layer name."},

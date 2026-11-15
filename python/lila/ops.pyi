@@ -10714,8 +10714,8 @@ def texPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
         position: [x, y] canvas centre for the pasted nodes. Default [0, 0].
     """
 
-def texPatchFill(*objects: Any, holeUv: Sequence[Any] | None = None, hole: str | None = None, sourceUv: Sequence[Any] | None = None, source: str | None = None, mesh: str | None = None, patch: int | None = None, seed: int | None = None, name: str | None = None, folder: str | None = None) -> Any:
-    """Patch Fill a texture set in uv space: the hole (holeUv, a uv polygon, or hole, a mask image) is rebuilt from patches of its surroundings, every channel matched together, and lands as a new fill layer masked to the hole. With mesh=, each piece of the hole draws only from the uv islands it sits on. Returns {id, pieces, mask, channels}.
+def texPatchFill(*objects: Any, holeUv: Sequence[Any] | None = None, hole: str | None = None, sourceUv: Sequence[Any] | None = None, source: str | None = None, mesh: str | None = None, acrossSeams: bool | None = None, patch: int | None = None, seed: int | None = None, name: str | None = None, folder: str | None = None) -> Any:
+    """Patch Fill a texture set in uv space: the hole (holeUv, a uv polygon, or hole, a mask image) is rebuilt from patches of its surroundings, every channel matched together, and lands as a new fill layer masked to the hole. With mesh=, each piece of the hole draws only from the uv islands it sits on, and sees across their seams to the content on the other side. Returns {id, pieces, mask, channels}.
 
     Args:
         objects: set.
@@ -10724,6 +10724,7 @@ def texPatchFill(*objects: Any, holeUv: Sequence[Any] | None = None, hole: str |
         sourceUv: Only take patches from inside this uv polygon.
         source: Only take patches from where this mask image is white.
         mesh: The set's mesh: keeps each piece of the hole to its own uv islands.
+        acrossSeams: With mesh: match across uv seams, each island padded with what lies on the other side. Default True.
         patch: Patch side in texels (odd). Default 7.
         seed: Random seed. Default 1.
         name: Layer name. Default 'Patch Fill'.
