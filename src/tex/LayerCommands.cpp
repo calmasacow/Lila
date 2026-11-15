@@ -686,13 +686,52 @@ void registerLayerCommands()
 
     ops::registerCommand({
         .name = "texSmartMaterials",
-        .doc = "The smart materials and masks in the libraries: name, kind, description, tier and file.",
+        .doc = "The smart materials and masks in the libraries: name, kind, description, tags, tier and file. tags= keeps those with every "
+               "tag given.",
+        .flags = {{"tags", "", T::List, nullptr, "Only those carrying all of these tags."}},
         .undoable = false,
-        .run = [](const Args&) -> json {
+        .run = [](const Args& a) -> json {
+            const std::vector<std::string> want = normalizeTags(a.get<std::vector<std::string>>("tags", {}));
             json out = json::array();
             for (const SmartMaterial& m : listSmartMaterials())
-                out.push_back({{"name", m.name}, {"kind", m.kind}, {"description", m.description}, {"tier", m.tier}, {"file", paths::toUtf8(m.file)}});
+            {
+                if (!std::ranges::all_of(want, [&](const std::string& t) { return std::ranges::binary_search(m.tags, t); }))
+                    continue;
+                out.push_back({{"name", m.name}, {"kind", m.kind}, {"description", m.description}, {"tags", m.tags}, {"tier", m.tier},
+                               {"file", paths::toUtf8(m.file)}});
+            }
             return out;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "texSetSmartMaterialTags",
+        .doc = "Set, add or remove a smart material's or mask's tags, for you only (built-in ones too). Returns its tags.",
+        .positionalDoc = "smartMaterial",
+        .flags = {{"tags", "", T::List, nullptr, "Replace its tags with these."},
+                  {"add", "", T::List, nullptr, "Tags to add."},
+                  {"remove", "", T::List, nullptr, "Tags to remove."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            if (a.positional.empty() || !a.positional[0].is_string())
+                throw CommandError("texSetSmartMaterialTags: give a smart material name");
+            SmartMaterial m;
+            try
+            {
+                m = loadSmartMaterial(a.positional[0].get<std::string>());
+            }
+            catch (const std::exception& e)
+            {
+                throw CommandError(std::string("texSetSmartMaterialTags: ") + e.what());
+            }
+            std::vector<std::string> tags = a.has("tags") ? a.get<std::vector<std::string>>("tags") : m.tags;
+            for (const std::string& t : a.get<std::vector<std::string>>("add", {}))
+                tags.push_back(t);
+            tags = normalizeTags(tags);
+            for (const std::string& t : normalizeTags(a.get<std::vector<std::string>>("remove", {})))
+                std::erase(tags, t);
+            setSmartMaterialTags(m.name, tags);
+            return tags;
         },
     });
 }
