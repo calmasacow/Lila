@@ -21,33 +21,55 @@ namespace lila::tex
 {
 namespace
 {
-/** A quad mesh's faces in Ptex order, each with its corners from the face's first. */
-struct QuadFaces
+/**
+ * An all-quad or all-triangle mesh's faces in Ptex order, each with its corners from the face's first (the fourth unused
+ * for triangles).
+ */
+struct PtexFaces
 {
+    int sides = 4;
     std::vector<std::array<geo::Index, 4>> corners;
     std::vector<geo::Index> faces;
+
+    Ptex::MeshType meshType() const { return sides == 3 ? Ptex::mt_triangle : Ptex::mt_quad; }
 };
 
-QuadFaces quadFaces(const geo::Mesh& m, const std::string& command)
+PtexFaces ptexFaces(const geo::Mesh& m, const std::string& command)
 {
-    QuadFaces q;
+    PtexFaces q;
+    q.sides = 0;
     for (geo::Index f = 0; f < m.faceCapacity(); ++f)
     {
         if (!m.faceValid(f))
             continue;
-        if (m.faceSize(f) != 4)
-            throw CommandError(command + ": Ptex needs an all-quad mesh; face " + std::to_string(q.faces.size()) + " has " +
-                               std::to_string(m.faceSize(f)) + " sides");
-        std::array<geo::Index, 4> c;
+        const int n = int(m.faceSize(f));
+        if (q.sides == 0 && (n == 3 || n == 4))
+            q.sides = n;
+        if (n != q.sides)
+            throw CommandError(command + ": Ptex needs an all-quad or all-triangle mesh; face " + std::to_string(q.faces.size()) + " has " +
+                               std::to_string(n) + " sides" + (q.sides ? " where the first has " + std::to_string(q.sides) : std::string()));
+        std::array<geo::Index, 4> c{geo::kInvalid, geo::kInvalid, geo::kInvalid, geo::kInvalid};
         c[0] = m.faceCorner(f);
-        for (int k = 1; k < 4; ++k)
-            c[k] = m.cornerNext(c[k - 1]);
+        for (int k = 1; k < n; ++k)
+            c[size_t(k)] = m.cornerNext(c[size_t(k - 1)]);
         q.corners.push_back(c);
         q.faces.push_back(f);
     }
     if (q.faces.empty())
         throw CommandError(command + ": the mesh has no faces");
     return q;
+}
+
+/**
+ * A triangle face's texel (x, y) of an n x n grid as the barycentric (u, v) of its sub-triangle's centre, per the Ptex
+ * triangle layout: texels with x + y < n are the upright sub-triangles at (x, y), the rest the inverted ones at
+ * (n - 1 - y, n - 1 - x).
+ */
+glm::vec2 triangleTexelCentre(int x, int y, int n)
+{
+    if (x + y < n)
+        return {(float(x) + 1.0f / 3.0f) / float(n), (float(y) + 1.0f / 3.0f) / float(n)};
+    return {(float(n - 1 - y) + 2.0f / 3.0f) / float(n), (float(n - 1 - x) + 2.0f / 3.0f) / float(n)};
 }
 
 const geo::Mesh& meshArg(const Args& a, const std::string& command, scene::MeshPtr& hold)
@@ -101,7 +123,7 @@ json exportPtex(const Args& a)
     scene::Node& set = ptexSet(a, cmd);
     scene::MeshPtr hold;
     const geo::Mesh& m = meshArg(a, cmd, hold);
-    const QuadFaces q = quadFaces(m, cmd);
+    const PtexFaces q = ptexFaces(m, cmd);
     const SetSettings settings = readSettings(set);
     const std::string channel = a.get<std::string>("channel", "baseColor");
     const Channel* c = settings.channel(channel);
@@ -125,7 +147,7 @@ json exportPtex(const Args& a)
         ptexId[q.faces[i]] = int(i);
 
     Ptex::String err;
-    PtexWriter* w = PtexWriter::open(paths::toUtf8(bake::resolveFolder(file)).c_str(), Ptex::mt_quad, Ptex::dt_float, nch, -1, int(q.faces.size()), err, true);
+    PtexWriter* w = PtexWriter::open(paths::toUtf8(bake::resolveFolder(file)).c_str(), q.meshType(), Ptex::dt_float, nch, -1, int(q.faces.size()), err, true);
     if (!w)
         throw CommandError(std::string(cmd) + ": " + err.c_str());
     const int n = 1 << resLog2;
@@ -134,12 +156,10 @@ json exportPtex(const Args& a)
     {
         const auto& cs = q.corners[i];
         std::array<glm::vec2, 4> quv;
-        int adjfaces[4], adjedges[4];
-        for (int k = 0; k < 4; ++k)
+        int adjfaces[4] = {-1, -1, -1, -1}, adjedges[4] = {0, 0, 0, 0};
+        for (int k = 0; k < q.sides; ++k)
         {
             quv[k] = uv[cs[k]];
-            adjfaces[k] = -1;
-            adjedges[k] = 0;
             // Edge k runs from corner k to corner k + 1; its neighbour is the face across it.
             const geo::Index other = m.cornerRadial(cs[k]);
             if (other != cs[k] && other != geo::kInvalid && ptexId[m.cornerFace(other)] >= 0)
@@ -152,7 +172,15 @@ json exportPtex(const Args& a)
         for (int y = 0; y < n; ++y)
             for (int x = 0; x < n; ++x)
             {
-                const glm::vec4 v = sampleImage(img, bilinear(quv, (x + 0.5f) / n, (y + 0.5f) / n));
+                glm::vec2 at;
+                if (q.sides == 3)
+                {
+                    const glm::vec2 b = triangleTexelCentre(x, y, n);
+                    at = quv[0] * (1.0f - b.x - b.y) + quv[1] * b.x + quv[2] * b.y;
+                }
+                else
+                    at = bilinear(quv, (x + 0.5f) / n, (y + 0.5f) / n);
+                const glm::vec4 v = sampleImage(img, at);
                 for (int ch = 0; ch < nch; ++ch)
                     data[(size_t(y) * n + x) * nch + ch] = v[ch];
             }
@@ -190,7 +218,7 @@ struct PtexFace
     }
 };
 
-std::vector<PtexFace> readPtex(const std::string& file, size_t wantFaces, const char* cmd)
+std::vector<PtexFace> readPtex(const std::string& file, size_t wantFaces, Ptex::MeshType wantType, const char* cmd)
 {
     Ptex::String err;
     PtexTexture* t = PtexTexture::open(file.c_str(), err);
@@ -199,8 +227,9 @@ std::vector<PtexFace> readPtex(const std::string& file, size_t wantFaces, const 
     std::vector<PtexFace> out;
     try
     {
-        if (t->meshType() != Ptex::mt_quad)
-            throw CommandError(std::string(cmd) + ": only quad Ptex files are read; " + file + " is for triangles");
+        if (t->meshType() != wantType)
+            throw CommandError(std::string(cmd) + ": " + file + " is for " + (t->meshType() == Ptex::mt_quad ? "quads" : "triangles") +
+                               ", the mesh has " + (wantType == Ptex::mt_quad ? "quads" : "triangles"));
         if (size_t(t->numFaces()) != wantFaces)
             throw CommandError(std::string(cmd) + ": " + file + " has " + std::to_string(t->numFaces()) + " faces, the mesh " + std::to_string(wantFaces));
         out.resize(wantFaces);
@@ -302,13 +331,63 @@ void rasterQuad(image::Image& img, const std::array<glm::vec2, 4>& quv, const Pt
     }
 }
 
+/** The Ptex triangle face's texel holding barycentric (u, v): the upright or inverted sub-triangle it falls in. */
+glm::vec4 triangleTexel(const PtexFace& face, float u, float v)
+{
+    const int n = face.w;
+    const float tu = std::clamp(u, 0.0f, 1.0f) * n, tv = std::clamp(v, 0.0f, 1.0f) * n;
+    const int ui = std::clamp(int(tu), 0, n - 1), vi = std::clamp(int(tv), 0, n - 1);
+    int x = ui, y = vi;
+    if ((tu - ui) + (tv - vi) > 1.0f)
+    {
+        x = n - 1 - vi;
+        y = n - 1 - ui;
+    }
+    glm::vec4 out(0.0f, 0.0f, 0.0f, 1.0f);
+    for (int ch = 0; ch < std::min(face.nch, 4); ++ch)
+        out[ch] = face.texels[(size_t(y) * face.w + x) * face.nch + ch];
+    if (face.nch == 1)
+        out = glm::vec4(out.r, out.r, out.r, 1.0f);
+    return out;
+}
+
+/** Fills every texel inside the triangle's uvs from the Ptex triangle face. */
+void rasterTriangle(image::Image& img, const std::array<glm::vec2, 4>& tuv, const PtexFace& face)
+{
+    glm::vec2 p[3];
+    for (int k = 0; k < 3; ++k)
+        p[k] = glm::vec2(tuv[k].x * img.width, (1.0f - tuv[k].y) * img.height);
+    const float area = (p[1].x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (p[1].y - p[0].y);
+    if (std::abs(area) < 1e-12f || face.w <= 0)
+        return;
+    const int x0 = std::max(0, int(std::floor(std::min({p[0].x, p[1].x, p[2].x})))),
+              x1 = std::min(img.width - 1, int(std::ceil(std::max({p[0].x, p[1].x, p[2].x}))));
+    const int y0 = std::max(0, int(std::floor(std::min({p[0].y, p[1].y, p[2].y})))),
+              y1 = std::min(img.height - 1, int(std::ceil(std::max({p[0].y, p[1].y, p[2].y}))));
+    for (int y = y0; y <= y1; ++y)
+        for (int x = x0; x <= x1; ++x)
+        {
+            const glm::vec2 c(x + 0.5f, y + 0.5f);
+            const float w1 = ((c.x - p[0].x) * (p[2].y - p[0].y) - (p[2].x - p[0].x) * (c.y - p[0].y)) / area;
+            const float w2 = ((p[1].x - p[0].x) * (c.y - p[0].y) - (c.x - p[0].x) * (p[1].y - p[0].y)) / area;
+            if (w1 < -1e-5f || w2 < -1e-5f || 1.0f - w1 - w2 < -1e-5f)
+                continue;
+            const glm::vec4 v = triangleTexel(face, w1, w2);
+            float* d = &img.rgba[(size_t(y) * img.width + x) * 4];
+            d[0] = v.r;
+            d[1] = v.g;
+            d[2] = v.b;
+            d[3] = 1.0f;
+        }
+}
+
 json importPtex(const Args& a)
 {
     const char* cmd = "texImportPtex";
     scene::Node& set = ptexSet(a, cmd);
     scene::MeshPtr hold;
     const geo::Mesh& m = meshArg(a, cmd, hold);
-    const QuadFaces q = quadFaces(m, cmd);
+    const PtexFaces q = ptexFaces(m, cmd);
     const SetSettings settings = readSettings(set);
     const std::string channel = a.get<std::string>("channel", "baseColor");
     if (!settings.channel(channel))
@@ -317,7 +396,7 @@ json importPtex(const Args& a)
     if (file.empty())
         throw CommandError(std::string(cmd) + ": give file=");
     const std::filesystem::path in = bake::resolveFolder(file);
-    const std::vector<PtexFace> faces = readPtex(paths::toUtf8(in), q.faces.size(), cmd);
+    const std::vector<PtexFace> faces = readPtex(paths::toUtf8(in), q.faces.size(), q.meshType(), cmd);
 
     const Tile& tile = settings.tiles.front();
     image::Image img;
@@ -327,10 +406,13 @@ json importPtex(const Args& a)
     std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
     for (size_t i = 0; i < q.faces.size(); ++i)
     {
-        std::array<glm::vec2, 4> quv;
-        for (int k = 0; k < 4; ++k)
+        std::array<glm::vec2, 4> quv{};
+        for (int k = 0; k < q.sides; ++k)
             quv[k] = uv[q.corners[i][k]];
-        rasterQuad(img, quv, faces[i]);
+        if (q.sides == 3)
+            rasterTriangle(img, quv, faces[i]);
+        else
+            rasterQuad(img, quv, faces[i]);
     }
     dilate(img, 4);
     for (size_t i = 3; i < img.rgba.size(); i += 4)
@@ -353,8 +435,8 @@ void registerPtexCommands()
     using T = ArgType;
     ops::registerCommand({
         .name = "texExportPtex",
-        .doc = "Write one channel of a texture set to a Ptex file (.ptx): every quad of the mesh gets its own texels, sampled from the set "
-               "through the mesh's uvs. The mesh must be all quads. Returns {file, faces, channels}.",
+        .doc = "Write one channel of a texture set to a Ptex file (.ptx): every face of the mesh gets its own texels, sampled from the set "
+               "through the mesh's uvs. The mesh must be all quads or all triangles. Returns {file, faces, channels}.",
         .positionalDoc = "set",
         .flags = {{"mesh", "", T::String, nullptr, "The mesh the set paints (node path)."},
                   {"file", "", T::String, nullptr, "The .ptx to write; relative paths are under the workspace."},
@@ -366,7 +448,7 @@ void registerPtexCommands()
     ops::registerCommand({
         .name = "texImportPtex",
         .doc = "Bring a Ptex file (.ptx) onto a texture set: its faces are baked through the mesh's uvs into an image, which becomes a new "
-               "fill layer on the channel. The mesh must be the quad mesh the file was painted on. Returns {id, image, faces}.",
+               "fill layer on the channel. The mesh must be the quad or triangle mesh the file was painted on. Returns {id, image, faces}.",
         .positionalDoc = "set",
         .flags = {{"mesh", "", T::String, nullptr, "The mesh the file was painted on (node path)."},
                   {"file", "", T::String, nullptr, "The .ptx to read."},

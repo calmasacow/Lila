@@ -10496,7 +10496,7 @@ def texExportPsd(*objects: Any, channels: Sequence[Any] | None = None, folder: s
     """
 
 def texExportPtex(*objects: Any, mesh: str | None = None, file: str | None = None, channel: str | None = None, faceResolution: int | None = None) -> Any:
-    """Write one channel of a texture set to a Ptex file (.ptx): every quad of the mesh gets its own texels, sampled from the set through the mesh's uvs. The mesh must be all quads. Returns {file, faces, channels}.
+    """Write one channel of a texture set to a Ptex file (.ptx): every face of the mesh gets its own texels, sampled from the set through the mesh's uvs. The mesh must be all quads or all triangles. Returns {file, faces, channels}.
 
     Args:
         objects: set.
@@ -10576,7 +10576,7 @@ def texImportPainterSmartMaterials(*objects: Any, folder: str | None = None, bru
     """
 
 def texImportPtex(*objects: Any, mesh: str | None = None, file: str | None = None, channel: str | None = None, name: str | None = None, folder: str | None = None) -> Any:
-    """Bring a Ptex file (.ptx) onto a texture set: its faces are baked through the mesh's uvs into an image, which becomes a new fill layer on the channel. The mesh must be the quad mesh the file was painted on. Returns {id, image, faces}.
+    """Bring a Ptex file (.ptx) onto a texture set: its faces are baked through the mesh's uvs into an image, which becomes a new fill layer on the channel. The mesh must be the quad or triangle mesh the file was painted on. Returns {id, image, faces}.
 
     Args:
         objects: set.
