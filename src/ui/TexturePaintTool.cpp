@@ -27,6 +27,7 @@
 #include "ui/Controls.h"
 #include "ui/Icons.h"
 #include "ui/TexLive.h"
+#include "ui/TextureGraphUi.h"
 #include "ui/TextureSetPanel.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewInfo.h"
@@ -94,6 +95,7 @@ constexpr ToolKind kTools[] = {
     {"sharpen", "Sharpen", "Crispens the paint.", "focus-2"},
     {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
     {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
+    {"path", "Path", "Click points on the surface (drag to curve), Enter paints along them; drag a point afterwards to repaint.", "ease-in-control-point"},
     {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it.", "bucket-droplet"},
     {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel.", "photo"},
 };
@@ -204,7 +206,7 @@ bool filterTool(const std::string& t) { return t == "smudge" || t == "blur" || t
 tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
 {
     tp::Payload p;
-    p.kind = s.tool == "project" ? "project" : s.tool;
+    p.kind = s.tool == "project" ? "project" : s.tool == "path" ? "paint" : s.tool;
     for (const ChannelValue& c : s.channels)
         if (c.on)
             p.channels[c.name] = c.color ? c.value : glm::vec3(c.value.x);
@@ -227,7 +229,7 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
     p.amount = s.amount;
     p.facingFade = s.facingFade;
     p.fillBy = s.fillBy;
-    const bool sourced = s.tool == "paint" || s.tool == "fill" || s.tool == "project";
+    const bool sourced = s.tool == "paint" || s.tool == "fill" || s.tool == "project" || s.tool == "path";
     if (sourced && s.source == "material" && !s.material.empty())
         p.source = {{"library", s.material}, {"resolution", 512}, {"scale", s.materialScale}};
     else if (sourced && s.source == "texture" && !s.sourceImage.empty())
@@ -820,7 +822,7 @@ private:
     void showForTool()
     {
         const std::string& t = texturePaintState().tool;
-        const bool values = t == "paint" || t == "fill" || t == "project";
+        const bool values = t == "paint" || t == "fill" || t == "project" || t == "path";
         const std::string& source = texturePaintState().source;
         for (QCheckBox* on : mOn)
             on->setEnabled(values || filterTool(t));
@@ -977,6 +979,9 @@ struct Target
     geo::BvhHit hit;
 };
 
+/** The view the paint tool last drew in, so Paint Along Curve can size its dabs as the brush shows them. */
+std::optional<ViewInfo> gLastPaintView;
+
 /** The last layer painted per set, so the panel and the actions know it. */
 std::map<NodeId, std::string> gLayers;
 
@@ -1091,6 +1096,8 @@ public:
         const std::string& tool = texturePaintState().tool;
         if (tool == "project")
             return bufferPress(e, view);
+        if (tool == "path")
+            return pathPress(e, view);
         std::optional<Target> t = pick(e->position(), view);
         if (!t || t->set == kNoNode)
             return true;
@@ -1123,6 +1130,11 @@ public:
         if (mStencilDrag != StencilDrag::None)
         {
             stencilMove(e, view);
+            return true;
+        }
+        if (mPathDrag >= 0)
+        {
+            pathMove(e, view);
             return true;
         }
         if (mBufferDrag != BufferDrag::None)
@@ -1166,6 +1178,11 @@ public:
         {
             stencilMove(e, view);
             mStencilDrag = StencilDrag::None;
+            return true;
+        }
+        if (mPathDrag >= 0)
+        {
+            pathRelease();
             return true;
         }
         if (mBufferDrag != BufferDrag::None)
@@ -1272,10 +1289,235 @@ public:
         viewportTools::requestRedraw();
     }
 
+    // ------------------------------------------------------------------------------------------------ path strokes
+
+    /** The path's points as texPaintPath takes them: handles only where a drag set them, the rest smooth. */
+    json pathPointsJson() const
+    {
+        json pts = json::array();
+        for (size_t i = 0; i < mPath.pts.size(); ++i)
+        {
+            const glm::dvec3& p = mPath.pts[i];
+            json o = {{"position", {p.x, p.y, p.z}}};
+            if (mPath.manual[i])
+            {
+                o["in"] = {mPath.in[i].x, mPath.in[i].y, mPath.in[i].z};
+                o["out"] = {mPath.out[i].x, mPath.out[i].y, mPath.out[i].z};
+            }
+            pts.push_back(o);
+        }
+        return pts;
+    }
+
+    /** The path's Bezier on the screen, sampled. Smooth handles as the command makes them. */
+    std::vector<QPointF> pathOnScreen(const ViewInfo& view) const
+    {
+        std::vector<QPointF> out;
+        const size_t n = mPath.pts.size();
+        auto handles = [&](size_t i, glm::dvec3& in, glm::dvec3& o) {
+            if (mPath.manual[i])
+            {
+                in = mPath.in[i];
+                o = mPath.out[i];
+                return;
+            }
+            const glm::dvec3 prev = mPath.pts[i > 0 ? i - 1 : i], next = mPath.pts[i + 1 < n ? i + 1 : i];
+            const glm::dvec3 t = (next - prev) * (i > 0 && i + 1 < n ? 0.5 : 1.0);
+            in = mPath.pts[i] - t / 3.0;
+            o = mPath.pts[i] + t / 3.0;
+        };
+        for (size_t i = 0; i + 1 < n; ++i)
+        {
+            glm::dvec3 ai, ao, bi, bo;
+            handles(i, ai, ao);
+            handles(i + 1, bi, bo);
+            for (int k = 0; k <= 24; ++k)
+            {
+                const double t = k / 24.0, s = 1.0 - t;
+                const glm::dvec3 p = mPath.pts[i] * (s * s * s) + ao * (3 * s * s * t) + bi * (3 * s * t * t) + mPath.pts[i + 1] * (t * t * t);
+                if (auto q = view.project(glm::dvec3(mPath.world * glm::dvec4(p, 1.0))))
+                    out.push_back(*q);
+            }
+        }
+        return out;
+    }
+
+    std::optional<QPointF> pathPointOnScreen(const ViewInfo& view, const glm::dvec3& p) const
+    {
+        return view.project(glm::dvec3(mPath.world * glm::dvec4(p, 1.0)));
+    }
+
+    bool pathPress(QMouseEvent* e, const ViewInfo& view)
+    {
+        for (size_t i = 0; i < mPath.pts.size(); ++i)
+            if (auto q = pathPointOnScreen(view, mPath.pts[i]); q && QLineF(*q, e->position()).length() < 8.0)
+            {
+                mPathDrag = int(i);
+                mPathHandle = false;
+                mPathMoved = false;
+                return true;
+            }
+        std::optional<Target> t = pick(e->position(), view);
+        if (!t || t->set == kNoNode)
+            return true;
+        if (mPath.stroke != 0 || mPath.set != t->set || mPath.mesh != t->mesh)
+        {
+            mPath = {};
+            mPath.set = t->set;
+            mPath.mesh = t->mesh;
+            mPath.meshPath = t->meshPath;
+            mPath.world = t->world;
+            mPath.view = strokeView(view, t->world);
+        }
+        mPath.pts.push_back(t->hit.point);
+        mPath.in.push_back(t->hit.point);
+        mPath.out.push_back(t->hit.point);
+        mPath.manual.push_back(false);
+        mPathDrag = int(mPath.pts.size()) - 1;
+        mPathHandle = true;
+        mPathMoved = false;
+        viewportTools::requestRedraw();
+        return true;
+    }
+
+    void pathMove(QMouseEvent* e, const ViewInfo& view)
+    {
+        std::optional<Target> t = pick(e->position(), view);
+        if (!t || t->mesh != mPath.mesh || mPathDrag < 0 || size_t(mPathDrag) >= mPath.pts.size())
+            return;
+        const size_t i = size_t(mPathDrag);
+        if (mPathHandle)
+        {
+            // A drag past a few pixels pulls the handle out; a plain click leaves the point smooth.
+            const auto at = pathPointOnScreen(view, mPath.pts[i]);
+            if (at && QLineF(*at, e->position()).length() < 4.0)
+                return;
+            mPath.out[i] = t->hit.point;
+            mPath.in[i] = mPath.pts[i] * 2.0 - t->hit.point;
+            mPath.manual[i] = true;
+        }
+        else
+        {
+            const glm::dvec3 d = t->hit.point - mPath.pts[i];
+            mPath.pts[i] += d;
+            mPath.in[i] += d;
+            mPath.out[i] += d;
+        }
+        mPathMoved = true;
+        viewportTools::requestRedraw();
+    }
+
+    void pathRelease()
+    {
+        const bool edit = mPathMoved && mPath.stroke != 0;
+        mPathDrag = -1;
+        if (!edit)
+            return;
+        scene::Node* set = scene::Graph::current().node(mPath.set);
+        if (!set)
+            return;
+        try
+        {
+            json r = ops::execute("texEditPath", {{"args", {set->name(), mPath.layer}}, {"stroke", mPath.stroke}, {"points", pathPointsJson()}},
+                                  CallSource::UI);
+            mPath.stroke = r.value("stroke", mPath.stroke);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("Texture paint: {}", ex.what());
+        }
+    }
+
+    /** Paints the placed path as one stroke; it stays editable until another path starts. */
+    void commitPath()
+    {
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* set = g.node(mPath.set);
+        if (!set || mPath.stroke != 0 || mPath.pts.size() < 2)
+            return;
+        mPath.layer = layerFor(*set);
+        if (mPath.layer.empty())
+            return;
+        const TexturePaintSettings& s = texturePaintState();
+        tp::Payload pay = payloadFor(s, false);
+        filterChannels(pay, *set);
+        const double scale = std::max(1e-12, glm::length(glm::dvec3(mPath.world[0])));
+        const double radius = s.stroke.radius * mLastView.unitsPerPixel(glm::dvec3(mPath.world * glm::dvec4(mPath.pts.front(), 1.0))) / scale;
+        tp::Stroke viewOnly;
+        viewOnly.view = mPath.view;
+        json call = {{"args", {set->name()}},
+                     {"layer", mPath.layer},
+                     {"mesh", mPath.meshPath},
+                     {"points", pathPointsJson()},
+                     {"radius", radius},
+                     {"brush", s.stroke.toJson()},
+                     {"payload", pay.toJson()},
+                     {"view", viewOnly.toJson(false)["view"]}};
+        if (std::optional<tp::StrokeStencil> st = strokeStencil())
+            call["stencil"] = st->toJson();
+        try
+        {
+            json r = ops::execute("texPaintPath", call, CallSource::UI);
+            mPath.stroke = r.value("stroke", uint64_t(0));
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("Texture paint: {}", ex.what());
+        }
+        viewportTools::requestRedraw();
+    }
+
+    void drawPath(OverlayPainter& p, const ViewInfo& view)
+    {
+        if (mPath.pts.empty() || mPath.mesh == kNoNode)
+            return;
+        const std::vector<QPointF> line = pathOnScreen(view);
+        const glm::vec4 ink = p.ink(mPath.stroke ? 0.6f : 0.9f);
+        for (size_t i = 1; i < line.size(); ++i)
+            p.line(line[i - 1], line[i], 1.5f, ink);
+        for (size_t i = 0; i < mPath.pts.size(); ++i)
+        {
+            const auto at = pathPointOnScreen(view, mPath.pts[i]);
+            if (!at)
+                continue;
+            if (mPath.manual[i] && mPath.stroke == 0)
+                if (auto a = pathPointOnScreen(view, mPath.in[i]), b = pathPointOnScreen(view, mPath.out[i]); a && b)
+                {
+                    p.line(*a, *b, 1.0f, p.ink(0.7f));
+                    p.disc(*a, 2.5f, p.ink(0.7f));
+                    p.disc(*b, 2.5f, p.ink(0.7f));
+                }
+            p.disc(*at, int(i) == mPathDrag ? 5.0f : 4.0f, ink);
+        }
+    }
+
     bool keyPress(QKeyEvent* e, const ViewInfo&) override
     {
         if (mControls.keyPress(e))
             return true;
+        if (texturePaintState().tool == "path")
+        {
+            if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && mPath.stroke == 0 && mPath.pts.size() >= 2)
+            {
+                commitPath();
+                return true;
+            }
+            if (e->key() == Qt::Key_Backspace && mPath.stroke == 0 && !mPath.pts.empty())
+            {
+                mPath.pts.pop_back();
+                mPath.in.pop_back();
+                mPath.out.pop_back();
+                mPath.manual.pop_back();
+                viewportTools::requestRedraw();
+                return true;
+            }
+            if (e->key() == Qt::Key_Escape && !mPath.pts.empty())
+            {
+                mPath = {};
+                viewportTools::requestRedraw();
+                return true;
+            }
+        }
         if (e->key() == Qt::Key_S && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) && texturePaintState().stencil.active())
             return holdStencilKey(*e);
         if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && texturePaintState().tool == "project")
@@ -1305,6 +1547,7 @@ public:
 
         const TexturePaintSettings& st = texturePaintState();
         mLastView = view;
+        gLastPaintView = view;
         const Target* t = mStroking ? &mTarget : (mOver ? &*mOver : nullptr);
         ToolStatus status{.tool = "Texture Paint"};
         if (st.tool == "project")
@@ -1336,6 +1579,14 @@ public:
         }
         if (st.tool != "project")
             drawStencil(fs, view);
+        if (st.tool == "path")
+        {
+            drawPath(p, view);
+            if (mPath.stroke)
+                status.keys = {{"drag point", "repaint"}, {"click", "new path"}};
+            else
+                status.keys = {{"click", "point"}, {"drag", "curve"}, {"Enter", "paint"}, {"Backspace", "undo point"}};
+        }
         if (st.stencil.active())
             status.keys.insert(status.keys.end(), {{"S+drag", "move stencil"}, {"S+Shift+drag", "rotate"}, {"S+Ctrl+drag", "scale"}});
         drawToolStatus(p, view, status);
@@ -2390,6 +2641,19 @@ private:
     } mStencilDrag = StencilDrag::None;
     QPointF mStencilFrom;
     tp::Placement mStencilStart;
+    /** The path being placed, or the last one painted (stroke set), whose points can still be dragged. Object space. */
+    struct PathEdit
+    {
+        NodeId set = kNoNode, mesh = kNoNode;
+        std::string meshPath, layer;
+        glm::dmat4 world{1.0};
+        tp::StrokeView view;
+        std::vector<glm::dvec3> pts, in, out;
+        std::vector<bool> manual;
+        uint64_t stroke = 0;
+    } mPath;
+    int mPathDrag = -1;
+    bool mPathHandle = false, mPathMoved = false;
     uint64_t mShownVersion = 0;
     bool mShownTransform = false;
     BufferDrag mBufferDrag = BufferDrag::None;
@@ -2541,6 +2805,36 @@ void registerTexturePaintUi()
                          "Hold S and drag to move it, with Shift to rotate, with Ctrl to scale.",
                   .python = "texPaintStencil(\"<image file>\")",
                   .keywords = {"stencil", "mask", "overlay", "paint through"}});
+    actions::add({.id = "tex.paintAlongCurve",
+                  .label = "Paint Along Curve",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          scene::Graph& g = scene::Graph::current();
+                          scene::Node* curve = nullptr;
+                          for (scene::NodeId id : g.selection())
+                              if (scene::Node* n = g.node(id); n && n->type().isA("curve"))
+                                  curve = n;
+                          const std::string set = currentTextureSet();
+                          if (!curve || set.empty())
+                          {
+                              log::warn("Paint Along Curve: select a curve, with a texture set open");
+                              return;
+                          }
+                          const TexturePaintSettings& s = texturePaintState();
+                          tp::Payload pay = payloadFor(s, false);
+                          pay.kind = "paint";
+                          json call = {{"args", {set}}, {"curve", curve->path()}, {"brush", s.stroke.toJson()}, {"payload", pay.toJson()}};
+                          if (gLastPaintView)
+                              call["radius"] = s.stroke.radius * gLastPaintView->unitsPerPixel(glm::dvec3(curve->as<glm::dmat4>(scene::Transform::kWorldMatrix)[3]));
+                          else
+                              log::info("Paint Along Curve: no paint view yet, so the brush's world radius ({}) sizes the dabs", s.stroke.worldRadius);
+                          actions::run({{"command", "texPaintPath"}, {"args", call}});
+                      },
+                  .doc = "Paint along the selected curve, projected onto the mesh the open texture set paints, with the Texture Paint brush "
+                         "and channels. The path stays on the stroke: the Path tool can move its points afterwards.",
+                  .python = "texPaintPath(\"<set>\", curve=\"<curve>\", payload={\"channels\": {\"baseColor\": [1, 0, 0]}})",
+                  .keywords = {"stroke curve", "paint along", "spline paint"}});
     ops::registerCommand({
         .name = "texPaintStencil",
         .doc = "The texture paint tool's stencil: a picture pinned to the screen that strokes and the projection buffer paint through. "

@@ -907,12 +907,15 @@ json paintStroke(const Args& a)
 }
 } // namespace
 
+void registerPathCommands();
+
 void registerCommands()
 {
     static bool done = false;
     if (done)
         return;
     done = true;
+    registerPathCommands();
     installSync();
     // Texture exports and texEvaluate read paint layers from the pages, brought up to date first.
     tex::setExternalSource([](Node& set, const std::string& name, int udim) -> image::Image {

@@ -18,6 +18,7 @@ lila_module(lila_render UI
     HeightfieldRenderer.cpp
     MeshMaps.cpp
     PaintCommands.cpp
+    PaintPathCommands.cpp
     PaintGpu.cpp
     Renderer.cpp
     ShadingModels.cpp

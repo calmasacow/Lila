@@ -217,6 +217,11 @@ struct LILA_SCENE_API Stroke
      */
     json symmetry;
     std::optional<StrokeStencil> stencil;
+    /**
+     * A path stroke's Bezier, in the stroke mesh's object space: {points: [{position, in, out}], curve?: the scene curve it
+     * came from}. The dabs are already sampled from it; editing it (texEditPath) samples them again.
+     */
+    json path;
 
     /** The PaintData::images keys the stroke reads (a projection's picture, its stencil). */
     std::vector<std::string> images() const;

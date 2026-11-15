@@ -297,6 +297,8 @@ json Stroke::toJson(bool packedDabs) const
         j["symmetry"] = symmetry;
     if (stencil)
         j["stencil"] = stencil->toJson();
+    if (!path.is_null())
+        j["path"] = path;
     if (view)
     {
         const float* m = &view->objectToClip[0][0];
@@ -356,6 +358,8 @@ Stroke Stroke::fromJson(const json& j)
             s.symmetry = j["symmetry"];
         if (j.contains("stencil") && j["stencil"].is_object())
             s.stencil = StrokeStencil::fromJson(j["stencil"]);
+        if (j.contains("path") && j["path"].is_object())
+            s.path = j["path"];
         if (j.contains("view") && j["view"].is_object())
         {
             const json& v = j["view"];
@@ -415,7 +419,7 @@ Stroke Stroke::fromJson(const json& j)
 bool Stroke::operator==(const Stroke& o) const
 {
     return id == o.id && mesh == o.mesh && brush == o.brush && payload == o.payload && seed == o.seed && occlusion == o.occlusion && view == o.view &&
-           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry && stencil == o.stencil;
+           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry && stencil == o.stencil && path == o.path;
 }
 
 std::vector<std::string> Stroke::images() const
