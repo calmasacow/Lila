@@ -7,6 +7,7 @@
 #include "core/ImageIO.h"
 #include "tex/TextureSet.h"
 #include "tex/Plan.h"
+#include "core/PackedArray.h"
 #include "core/Paths.h"
 #include "core/PrefStore.h"
 #include "gn/Group.h"
@@ -492,6 +493,22 @@ void renamePaint(Layer& l, const std::map<std::string, std::string>& ids)
         renamePaint(c, ids);
 }
 
+/** Packed binary arrays as plain number arrays: text can't hold binary, and the readers take either form. */
+void unpackArrays(json& j)
+{
+    if (packed::is(j))
+    {
+        const auto& bin = j.get_binary();
+        json flat = json::array();
+        for (size_t k = 0, n = packed::count(j); k < n; ++k)
+            flat.push_back(packed::element(packed::dtype(j), bin.data(), k));
+        j = std::move(flat);
+    }
+    else if (j.is_object() || j.is_array())
+        for (json& v : j)
+            unpackArrays(v);
+}
+
 json copyLayers(const Args& a)
 {
     Session s = open(a, "texCopyLayers", false);
@@ -511,7 +528,9 @@ json copyLayers(const Args& a)
             kept->buffers[b] = *buf;
     kept->images = data->images;
     kept->pruneImages();
-    const json clip = {{"format", "lilaLayers"}, {"version", 1}, {"layers", layers}, {"paint", kept->toJson()}};
+    json paintJson = kept->toJson();
+    unpackArrays(paintJson);
+    const json clip = {{"format", "lilaLayers"}, {"version", 1}, {"layers", layers}, {"paint", paintJson}};
     return clip.dump();
 }
 

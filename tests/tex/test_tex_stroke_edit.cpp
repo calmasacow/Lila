@@ -73,3 +73,22 @@ TEST_CASE("texture paint stroke editing: a stroke's colour changes only its texe
     run("undo");
     CHECK(run("texStrokes", {{"args", {"Set", "P"}}}).size() == 2);
 }
+
+TEST_CASE("texture paint copy and paste: a painted layer's strokes come through the clipboard text")
+{
+    if (!gpu())
+        return;
+    newScene();
+    const std::string panel = addMesh("Panel", seamPanel());
+    scene::Node& set = makeSet("Set", 64);
+    const std::string layer = run("texAddLayer", {{"args", {"Set", "paint"}}})["id"];
+    paintStroke("Set", layer, dot(panel, 30.0, 0.0, {1.0f, 0.0f, 0.0f}));
+    const std::string text = run("texCopyLayers", {{"args", {"Set"}}, {"layers", {layer}}});
+    const json pasted = run("texPasteLayers", {{"args", {"Set", text}}});
+    REQUIRE(pasted["layers"].size() == 1);
+    // The original's buffer and the pasted copy's each hold the one stroke.
+    int painted = 0;
+    for (const auto& [name, buf] : tex::paint::readPaint(set)->buffers)
+        painted += buf.strokes.size() == 1 ? 1 : 0;
+    CHECK(painted == 2);
+}
