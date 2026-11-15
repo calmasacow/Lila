@@ -43,6 +43,8 @@ LILA_UI_API void setTexturePaintAlpha(const std::string& alphaPath);
 /** The image the brush paints through, empty unless the Texture source is on. Setting one turns it on and starts Texture Paint. */
 LILA_UI_API std::string texturePaintTexture();
 LILA_UI_API void setTexturePaintTexture(const std::string& file);
+/** The texture set the quick mask limits strokes on (Quick Mask on, or its mask held), empty when it holds nothing. */
+LILA_UI_API std::string quickMaskSet();
 /** The paint picker at a uv of a set (the 2D View and UV editor): its channel values into the brush, or with add a new swatch. */
 LILA_UI_API void pickTextureChannelsAt(const std::string& set, double u, double v, bool add);
 /** The paint tool's gradient as a fill payload from (u0, v0) to (u1, v1) in uv, for the 2D View and UV editor. */

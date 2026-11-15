@@ -123,10 +123,12 @@ LILA_UI_API image::Image screenUvs(scene::Graph& g, const std::string& meshPath,
 
 /**
  * A GPU image resampled (nearest) over a uv rectangle (u0, v0, u1, v1; v up) into width x height RGBA8 pixels, rows top
- * first, transparent outside the image's 0-1 tile. colorDisplay shows linear colour as sRGB. For 2D views (the UV
- * editor's background); only the view-sized result comes back from the GPU.
+ * first, transparent outside the image's 0-1 tile. colorDisplay shows linear colour as sRGB; keepAlpha keeps the image's
+ * alpha, else it is opaque inside the tile. For 2D views (the UV editor's background); only the view-sized result comes
+ * back from the GPU.
  */
-LILA_UI_API std::vector<uint8_t> viewImage(const GpuImageRef& image, const glm::vec4& uvRect, int width, int height, bool colorDisplay);
+LILA_UI_API std::vector<uint8_t> viewImage(const GpuImageRef& image, const glm::vec4& uvRect, int width, int height, bool colorDisplay,
+                                           bool keepAlpha = false);
 
 /** A buffer channel's tile as a GPU image (RGBA16F), the one the texture graph reads; null when the buffer has no such tile. */
 LILA_UI_API GpuImageRef channelImage(scene::NodeId set, const std::string& buffer, const std::string& channel, int udim = 1001);

@@ -17,7 +17,9 @@
 #include "ui/Icons.h"
 #include "ui/MaterialDraw.h"
 #include "ui/TexCompare.h"
+#include "ui/QuickMaskOverlay.h"
 #include "ui/TexPreview.h"
+#include "ui/TexturePaintTool.h"
 #include "ui/Theme.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewportHooks.h"
@@ -256,6 +258,9 @@ public:
     /** Shown in place of the image while there is none. */
     QString emptyText;
     std::function<void(int x, int y, bool inside)> onHover;
+    /** The quick mask tint last drawn, and its version. */
+    QImage mTint;
+    uint64_t mTintVersion = 0;
 
     void fit()
     {
@@ -311,6 +316,13 @@ protected:
             for (int tx = -reach; tx <= reach; ++tx)
                 p.drawImage(QRectF(topLeft + QPointF(tx * sz.width(), ty * sz.height()), sz), image);
         texCompare::paint2D(p, QRectF(topLeft, sz));
+        if (const QImage tint = quickMaskTint(); !tint.isNull())
+        {
+            p.setRenderHint(QPainter::SmoothPixmapTransform);
+            for (int ty = -reach; ty <= reach; ++ty)
+                for (int tx = -reach; tx <= reach; ++tx)
+                    p.drawImage(QRectF(topLeft + QPointF(tx * sz.width(), ty * sz.height()), sz), tint);
+        }
         if (tiled)
         {
             p.setPen(QPen(gray(200, 120), 1.0, Qt::DashLine));
@@ -321,6 +333,24 @@ protected:
             drawUvs(p, topLeft, sz);
         if (histogram && !bins[0].empty())
             drawHistogram(p);
+    }
+
+    /** The quick mask's tint while it limits strokes on the set shown, kept per tint version. */
+    QImage quickMaskTint()
+    {
+        const std::string& set = ctl().source.set;
+        uint64_t version = 0;
+        if (set.empty() || quickMaskSet() != set || !quickMaskOverlay::style().shown || !quickMaskOverlay::tint(set, &version))
+        {
+            mTint = {};
+            return {};
+        }
+        if (version != mTintVersion || mTint.isNull())
+        {
+            mTint = quickMaskOverlay::tintImage(set);
+            mTintVersion = version;
+        }
+        return mTint;
     }
 
     void drawUvs(QPainter& p, const QPointF& topLeft, const QSizeF& size)
@@ -520,6 +550,7 @@ struct Texture2DView::Impl
     texture2d::Source shownSource;
     std::vector<const geo::Mesh*> uvMeshes;
     int sceneListener = 0;
+    int redrawListener = 0;
     bool uvsQueued = false;
 
     /** The UV edges of the faces the shown set textures, on every mesh whose material it drives. */
@@ -792,6 +823,11 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
         if (self)
             self->d->sync();
     };
+    // The quick mask's tint follows its paint, which asks for a redraw as it changes.
+    d->redrawListener = viewportTools::addListener([self] {
+        if (self && self->isVisible() && (!quickMaskSet().empty() || !self->d->canvas->mTint.isNull()))
+            self->d->canvas->update();
+    });
     // Mesh edits and material assignments change the UVs drawn without touching the set.
     d->sceneListener = scene::Graph::current().addListener([self](scene::Change change, scene::NodeId) {
         if (!self || change == scene::Change::Selection || self->d->uvsQueued || !self->isVisible())
@@ -812,6 +848,7 @@ Texture2DView::~Texture2DView()
 {
     ctl().listeners.erase(d->listener);
     scene::Graph::current().removeListener(d->sceneListener);
+    viewportTools::removeListener(d->redrawListener);
 }
 
 QImage Texture2DView::displayed() const { return d->canvas->image; }

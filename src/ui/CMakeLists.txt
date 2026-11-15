@@ -70,6 +70,7 @@ lila_module(lila_ui UI
     PoseLibrary.cpp PoseLibrary.h
     PreviewQuality.cpp PreviewQuality.h
     TexCompare.cpp TexCompare.h
+    QuickMaskOverlay.cpp QuickMaskOverlay.h
     ControlPicker.cpp ControlPicker.h
     HotkeyBindings.cpp HotkeyBindings.h
     HotkeyCheatSheet.cpp HotkeyCheatSheet.h

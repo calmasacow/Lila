@@ -2758,7 +2758,7 @@ image::Image screenUvs(scene::Graph& g, const std::string& meshPath, const Strok
     return out;
 }
 
-std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, int width, int height, bool colorDisplay)
+std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, int width, int height, bool colorDisplay, bool keepAlpha)
 {
     LILA_ZONE();
     width = std::clamp(width, 1, 8192);
@@ -2784,7 +2784,7 @@ std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, 
                       uint32_t(width),
                       uint32_t(height),
                       gx,
-                      colorDisplay ? 1u : 0u};
+                      (colorDisplay ? 1u : 0u) | (keepAlpha ? 2u : 0u)};
         bool ok = false;
         gp.sub.run(vk, [&](VkCommandBuffer cmd) {
             ok = img->prepare(vk, cmd, temps) && img->realized();

@@ -28,6 +28,7 @@
 #include "ui/ColorPopup.h"
 #include "ui/Controls.h"
 #include "ui/Icons.h"
+#include "ui/QuickMaskOverlay.h"
 #include "ui/SculptTool.h"
 #include "sculpt/SculptSession.h"
 #include "ui/TexLive.h"
@@ -214,8 +215,7 @@ struct TexturePaintSettings
     bool gradientDither = true;
 };
 
-/** The paint buffer Quick Mask paints, outside the stack. */
-constexpr const char* kQuickMaskBuffer = "quickmask";
+constexpr const char* kQuickMaskBuffer = quickMaskOverlay::kBuffer;
 
 TexturePaintSettings& texturePaintState()
 {
@@ -998,8 +998,17 @@ public:
         clearQuick->setIcon(icon("x"));
         clearQuick->setAutoRaise(true);
         clearQuick->setToolTip("Clear the quick mask: strokes paint everywhere again");
+        mQuickOverlay = new QToolButton(this);
+        mQuickOverlay->setObjectName("quickMaskOverlay");
+        mQuickOverlay->setIcon(icon("eye"));
+        mQuickOverlay->setCheckable(true);
+        mQuickOverlay->setAutoRaise(true);
+        mQuickOverlay->setChecked(quickMaskOverlay::style().shown);
+        mQuickOverlay->setToolTip("Overlay: tint what the quick mask leaves out (colour and opacity in Preferences > General > Textures)");
+        connect(mQuickOverlay, &QToolButton::toggled, this, [](bool on) { quickMaskOverlay::setShown(on); });
         auto* quickRow = new QHBoxLayout;
         quickRow->addWidget(mQuickMask, 1);
+        quickRow->addWidget(mQuickOverlay);
         quickRow->addWidget(clearQuick);
         addRow(form, "Limit", quickRow);
         connect(mQuickMask, &QToolButton::toggled, this, [this](bool on) {
@@ -1446,8 +1455,9 @@ public:
             mGradientDither->setChecked(s.gradientDither);
         }
         {
-            const QSignalBlocker bq(mQuickMask), bg(mGroups), bl(mLock);
+            const QSignalBlocker bq(mQuickMask), bo(mQuickOverlay), bg(mGroups), bl(mLock);
             mQuickMask->setChecked(s.quickMask);
+            mQuickOverlay->setChecked(quickMaskOverlay::style().shown);
             const QString keep = mGroups->currentText();
             mGroups->clear();
             const std::string setName = currentTextureSet();
@@ -1767,7 +1777,7 @@ private:
     QCheckBox* mGradientDither = nullptr;
     QWidget* mGradientRow = nullptr;
     QWidget* mSelectRow = nullptr;
-    QToolButton *mQuickMask = nullptr, *mLock = nullptr;
+    QToolButton *mQuickMask = nullptr, *mQuickOverlay = nullptr, *mLock = nullptr;
     QComboBox* mGroups = nullptr;
     QWidget *mPickRow = nullptr, *mSwatchRow = nullptr, *mSwatchBar = nullptr;
     QHBoxLayout* mSwatchLayout = nullptr;
@@ -2705,6 +2715,7 @@ public:
             if (st.selectMode == "polygon")
                 status.keys.insert(status.keys.end(), {{"click", "corner"}, {"Enter", "close"}});
         }
+        quickMaskOverlay::addDraws(fs, quickMaskSet());
         if (st.quickMask)
             status.flags.push_back({"quick mask", true});
         else if (!st.quickLimit.empty())
@@ -4221,6 +4232,12 @@ QWidget* texturePaintPage(QWidget* parent)
 
 std::string texturePaintPreset() { return texturePaintState().presetId; }
 
+std::string quickMaskSet()
+{
+    const TexturePaintSettings& s = texturePaintState();
+    return s.quickMask || !s.quickLimit.empty() ? currentTextureSet() : std::string();
+}
+
 void applyTexturePaintPreset(const std::string& id)
 {
     std::optional<tex::brushes::Preset> p = tex::brushes::find(id);
@@ -4316,6 +4333,19 @@ void registerTexturePaintUi()
                          "Hold S and drag to move it, with Shift to rotate, with Ctrl to scale.",
                   .python = "texPaintStencil(\"<image file>\")",
                   .keywords = {"stencil", "mask", "overlay", "paint through"}});
+    actions::add({.id = "tex.quickMaskOverlay",
+                  .label = "Quick Mask Overlay",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          quickMaskOverlay::setShown(!quickMaskOverlay::style().shown);
+                          brushChanged();
+                      },
+                  .doc = "Show or hide the tint over what the quick mask leaves out, on the meshes and in the 2D View. Its colour and "
+                         "opacity are in Preferences > General > Textures.",
+                  .checked = [] { return quickMaskOverlay::style().shown; },
+                  .icon = "eye",
+                  .keywords = {"quick mask", "mask overlay", "selection tint", "rubylith"}});
     actions::add({.id = "tex.materialFromMaps",
                   .label = "Material from Maps...",
                   .category = "Texture",
