@@ -988,7 +988,7 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         {
             const tex::paint::ParticleSpec spec = tex::paint::ParticleSpec::fromJson(j["particles"]);
             if (!j["particles"].value("expanded", false))
-                s.dabs = tex::paint::withParticles(*pm, s.dabs, 0, spec);
+                s.dabs = withParticles(pm, s.dabs, 0, spec);
             s.particles = spec.toJson();
             s.particles["expanded"] = true;
         }

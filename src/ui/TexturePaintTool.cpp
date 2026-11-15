@@ -3321,10 +3321,7 @@ private:
         // The dab and its particles, then every symmetry copy of each, so particles mirror too.
         std::vector<tp::Dab> base{r};
         if (mParticles)
-        {
-            std::vector<tp::Dab> extra = tp::emitParticles(*mTarget.paint, r, mParticleIndex, *mParticles);
-            base.insert(base.end(), extra.begin(), extra.end());
-        }
+            base = rp::withParticles(mTarget.paint, base, mParticleIndex, *mParticles);
         ++mParticleIndex;
         for (const tp::Dab& b : base)
         {

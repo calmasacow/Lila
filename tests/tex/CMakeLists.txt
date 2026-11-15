@@ -52,6 +52,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_tilt.cpp
     test_tex_selection.cpp
     test_tex_quick_mask_overlay.cpp
+    test_tex_particles_gpu.cpp
     test_tex_gradient.cpp
     test_tex_retarget.cpp
     test_tex_image_editor.cpp

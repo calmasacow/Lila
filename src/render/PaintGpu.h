@@ -6,6 +6,7 @@
 #include "render/GpuImage.h"
 #include "scene/Graph.h"
 #include "tex/Graph.h"
+#include "tex/PaintParticles.h"
 #include "tex/PaintStrokes.h"
 #include "tex/PaintSurface.h"
 
@@ -129,6 +130,17 @@ LILA_UI_API image::Image screenUvs(scene::Graph& g, const std::string& meshPath,
  */
 LILA_UI_API std::vector<uint8_t> viewImage(const GpuImageRef& image, const glm::vec4& uvRect, int width, int height, bool colorDisplay,
                                            bool keepAlpha = false);
+
+/**
+ * tex::paint::withParticles on the GPU (paint_particles.slang): every dab followed by its particles' dabs, the same walks
+ * from the same seeds as the CPU reference, within float rounding. nullopt when the renderer isn't running or the device
+ * has no 64-bit integers.
+ */
+LILA_UI_API std::optional<std::vector<Dab>> withParticlesGpu(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs,
+                                                             uint32_t firstIndex, const tex::paint::ParticleSpec& spec);
+/** withParticlesGpu, or the CPU reference when it can't run (logged). */
+LILA_UI_API std::vector<Dab> withParticles(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs, uint32_t firstIndex,
+                                           const tex::paint::ParticleSpec& spec);
 
 /** A buffer channel's tile as a GPU image (RGBA16F), the one the texture graph reads; null when the buffer has no such tile. */
 LILA_UI_API GpuImageRef channelImage(scene::NodeId set, const std::string& buffer, const std::string& channel, int udim = 1001);

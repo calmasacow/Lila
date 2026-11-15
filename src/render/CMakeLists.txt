@@ -74,6 +74,7 @@ lila_add_shaders(lila_render FILES
     shaders/paint_dab.slang
     shaders/paint_depth.slang
     shaders/paint_gather.slang
+    shaders/paint_particles.slang
     shaders/paint_screen.slang
     shaders/post.slang
     shaders/reflect.slang

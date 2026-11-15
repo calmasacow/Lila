@@ -182,6 +182,36 @@ struct GatherPush
 };
 static_assert(sizeof(GatherPush) == 64);
 
+/** paint_particles.slang ParticlePush. */
+struct ParticlePush
+{
+    glm::vec4 down;
+    VkDeviceAddress nodes, corners, tris, paintable, dabs, out, counts;
+    uint32_t threads, perDab, firstIndex, seed, maxOut, triCount, groupsX, kind, emitter, pad;
+    VkDeviceAddress spec;
+};
+static_assert(sizeof(ParticlePush) == 120);
+
+/** paint_particles.slang Spec: the particle settings the walk reads. */
+struct ParticleSpecGpu
+{
+    float length, size, spread, rate, gravity, friction, wander, pool, fade;
+};
+
+/** paint_particles.slang InDab and OutDab. */
+struct ParticleInDab
+{
+    uint32_t triangle;
+    float u, v, radius, opacity;
+    uint32_t pad[3];
+};
+struct ParticleOutDab
+{
+    uint32_t triangle;
+    float u, v, radius, opacity;
+    uint32_t pad;
+};
+
 struct ViewPush
 {
     VkDeviceAddress src, dst;
@@ -266,6 +296,13 @@ struct TriBuffer
     compute::Buffer buffer;
 };
 
+/** A paint mesh's BVH on the device (geo::FlatBvh) and which triangles are paintable, for surface walks. */
+struct BvhBuffer
+{
+    std::shared_ptr<const PaintMesh> mesh;
+    compute::Buffer nodes, corners, paintable;
+};
+
 /** Render-thread state shared by every buffer. */
 struct Gpu
 {
@@ -274,8 +311,9 @@ struct Gpu
     uint32_t zeroPage = kNone;
     compute::Submitter sub;
     bool ready = false;
-    Kernel dab, depth, vis, uvmap, view, gather;
+    Kernel dab, depth, vis, uvmap, view, gather, particles;
     std::map<const PaintMesh*, TriBuffer> tris;
+    std::map<const PaintMesh*, BvhBuffer> bvhs;
 
     void init(VulkanContext& vk)
     {
@@ -288,6 +326,7 @@ struct Gpu
         loadKernel(vk, uvmap, "paint_screen.spv", sizeof(UvPush));
         loadKernel(vk, view, "paint_screen.spv", sizeof(ViewPush));
         loadKernel(vk, gather, "paint_gather.spv", sizeof(GatherPush));
+        loadKernel(vk, particles, "paint_particles.spv", sizeof(ParticlePush));
         zeroPage = half.alloc(vk);
         sub.run(vk, [&](VkCommandBuffer cmd) { vkCmdFillBuffer(cmd, half.buffer(zeroPage), half.offset(zeroPage), kHalfPage, 0); });
         ready = true;
@@ -331,6 +370,29 @@ struct Gpu
         return tris.emplace(mesh.get(), std::move(tb)).first->second;
     }
 
+    const BvhBuffer& bvh(VulkanContext& vk, const std::shared_ptr<const PaintMesh>& mesh)
+    {
+        if (auto it = bvhs.find(mesh.get()); it != bvhs.end())
+            return it->second;
+        const geo::FlatBvh flat = mesh->bvh->exportFlat();
+        std::vector<uint32_t> paint(std::max<size_t>(mesh->triangleCount(), 1), 0);
+        for (size_t i = 0; i < mesh->triangleCount(); ++i)
+            paint[i] = mesh->paintable[i] ? 1u : 0u;
+        auto upload = [&](const void* data, size_t bytes) {
+            compute::Buffer b = compute::makeBuffer(vk, std::max<size_t>(bytes, 16), 0, compute::Host::None);
+            if (bytes > 0)
+            {
+                compute::Buffer staging = compute::hostBuffer(vk, data, bytes);
+                sub.run(vk, [&](VkCommandBuffer cmd) { compute::copy(cmd, staging, b, bytes); });
+                compute::destroy(vk, staging);
+            }
+            return b;
+        };
+        BvhBuffer bb{mesh, upload(flat.nodes.data(), flat.nodes.size() * sizeof(geo::FlatBvh::Node)),
+                     upload(flat.corners.data(), flat.corners.size() * sizeof(glm::vec4)), upload(paint.data(), paint.size() * 4)};
+        return bvhs.emplace(mesh.get(), std::move(bb)).first->second;
+    }
+
     void release(VulkanContext& vk)
     {
         if (!ready)
@@ -338,6 +400,10 @@ struct Gpu
         for (auto& [k, t] : tris)
             compute::destroy(vk, t.buffer);
         tris.clear();
+        for (auto& [k, b] : bvhs)
+            for (compute::Buffer* x : {&b.nodes, &b.corners, &b.paintable})
+                compute::destroy(vk, *x);
+        bvhs.clear();
         for (auto& [k, v] : gViews)
             compute::destroy(vk, v.table);
         gViews.clear();
@@ -2709,6 +2775,126 @@ std::pair<uint32_t, uint32_t> linearGroups(uint64_t items)
     return {gx, uint32_t((groups + gx - 1) / gx)};
 }
 } // namespace
+
+std::optional<std::vector<Dab>> withParticlesGpu(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs, uint32_t firstIndex,
+                                                 const tex::paint::ParticleSpec& spec)
+{
+    LILA_ZONE();
+    Renderer& r = Renderer::get();
+    if (!r.running() || !mesh || !mesh->bvh || mesh->bvh->empty())
+        return std::nullopt;
+    std::vector<Dab> out;
+    if (dabs.empty())
+        return out;
+    const uint32_t perDab = uint32_t(std::max(spec.count, 0));
+    if (perDab == 0)
+        return std::vector<Dab>(dabs.begin(), dabs.end());
+    const bool flow = spec.kind != "drips" && spec.kind != "rain" && spec.kind != "sparks";
+    // A walk never takes more steps than its longest travel over its shortest step (2% of the brush radius).
+    const uint32_t steps = std::min<uint32_t>(flow ? 1024u : 512u, uint32_t(std::ceil(double(spec.length) * (flow ? 50.0 : 75.0))) + 1u);
+    const uint32_t maxOut = steps + 2u;
+    const ParticleSpecGpu specGpu{spec.length, spec.size, spec.spread, spec.rate, spec.gravity, spec.friction, spec.wander, spec.pool, spec.fade};
+    const uint32_t kind = spec.kind == "drips" ? 0u : spec.kind == "rain" ? 1u : spec.kind == "sparks" ? 2u : 3u;
+    const uint32_t emitter = spec.emitter == "dab" ? 0u : spec.emitter == "ring" ? 2u : 1u;
+    // Dabs per dispatch, so the output slots stay within about 64 MB.
+    const size_t chunk = std::max<size_t>(1, (size_t(64) << 20) / (size_t(perDab) * maxOut * sizeof(ParticleOutDab)));
+    bool ok = true;
+    std::vector<ParticleOutDab> slots;
+    std::vector<uint32_t> counts;
+    for (size_t first = 0; first < dabs.size() && ok; first += chunk)
+    {
+        const size_t n = std::min(chunk, dabs.size() - first);
+        std::vector<ParticleInDab> in(n);
+        for (size_t i = 0; i < n; ++i)
+        {
+            const Dab& d = dabs[first + i];
+            in[i] = {d.triangle, d.u, d.v, d.radius, d.opacity, {0, 0, 0}};
+        }
+        const uint32_t threads = uint32_t(n) * perDab;
+        slots.assign(size_t(threads) * maxOut, {});
+        counts.assign(threads, 0);
+        gpuRun([&](VulkanContext& vk, Gpu& gp) {
+            if (!vk.shaderInt64)
+            {
+                ok = false;
+                return;
+            }
+            const TriBuffer& tb = gp.triangles(vk, mesh);
+            const BvhBuffer& bb = gp.bvh(vk, mesh);
+            compute::Buffer inBuf = compute::hostBuffer(vk, in.data(), in.size() * sizeof(ParticleInDab));
+            compute::Buffer specBuf = compute::hostBuffer(vk, &specGpu, sizeof(specGpu));
+            const VkDeviceSize outBytes = VkDeviceSize(slots.size()) * sizeof(ParticleOutDab), countBytes = VkDeviceSize(threads) * 4;
+            compute::Buffer outBuf = compute::makeBuffer(vk, outBytes, 0, compute::Host::None);
+            compute::Buffer countBuf = compute::makeBuffer(vk, countBytes, 0, compute::Host::None);
+            compute::Buffer hostOut = compute::makeBuffer(vk, outBytes, 0, compute::Host::Read);
+            compute::Buffer hostCount = compute::makeBuffer(vk, countBytes, 0, compute::Host::Read);
+            const auto [gx, gy] = linearGroups(threads);
+            ParticlePush push{glm::vec4(spec.down, 0.0f), bb.nodes.address, bb.corners.address, tb.buffer.address, bb.paintable.address,
+                              inBuf.address, outBuf.address, countBuf.address, threads, perDab, firstIndex + uint32_t(first), spec.seed, maxOut,
+                              uint32_t(mesh->triangleCount()), gx, kind, emitter, 0, specBuf.address};
+            gp.sub.run(vk, [&](VkCommandBuffer cmd) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, gp.pipeline(vk, gp.particles, "paintParticlesCS"));
+                vkCmdPushConstants(cmd, gp.particles.layout, kCompute, 0, sizeof(push), &push);
+                vkCmdDispatch(cmd, gx, gy, 1);
+                compute::memoryBarrier(cmd);
+                compute::copy(cmd, outBuf, hostOut, outBytes);
+                compute::copy(cmd, countBuf, hostCount, countBytes);
+            });
+            vmaInvalidateAllocation(vk.allocator, hostOut.alloc, 0, VK_WHOLE_SIZE);
+            vmaInvalidateAllocation(vk.allocator, hostCount.alloc, 0, VK_WHOLE_SIZE);
+            std::memcpy(slots.data(), hostOut.mapped, size_t(outBytes));
+            std::memcpy(counts.data(), hostCount.mapped, size_t(countBytes));
+            for (compute::Buffer* b : {&inBuf, &specBuf, &outBuf, &countBuf, &hostOut, &hostCount})
+                compute::destroy(vk, *b);
+        });
+        if (!ok)
+            break;
+        // The CPU reference's order: each brush dab, then its particles' dabs one particle after another.
+        for (size_t i = 0; i < n; ++i)
+        {
+            const Dab& from = dabs[first + i];
+            out.push_back(from);
+            for (uint32_t pi = 0; pi < perDab; ++pi)
+            {
+                const size_t t = i * perDab + pi;
+                for (uint32_t k = 0; k < std::min(counts[t], maxOut); ++k)
+                {
+                    const ParticleOutDab& s = slots[t * maxOut + k];
+                    Dab d;
+                    d.triangle = s.triangle;
+                    d.u = s.u;
+                    d.v = s.v;
+                    d.radius = s.radius;
+                    d.pressure = 1.0f;
+                    d.opacity = s.opacity;
+                    d.angle = 0.0f;
+                    d.copy = from.copy;
+                    out.push_back(d);
+                }
+            }
+        }
+    }
+    if (!ok)
+        return std::nullopt;
+    return out;
+}
+
+std::vector<Dab> withParticles(const std::shared_ptr<const PaintMesh>& mesh, std::span<const Dab> dabs, uint32_t firstIndex,
+                               const tex::paint::ParticleSpec& spec)
+{
+    try
+    {
+        if (std::optional<std::vector<Dab>> gpu = withParticlesGpu(mesh, dabs, firstIndex, spec))
+            return std::move(*gpu);
+    }
+    catch (const std::exception& e)
+    {
+        log::warn("Particle brush: the GPU walk failed ({}); using the CPU", e.what());
+    }
+    static std::once_flag told;
+    std::call_once(told, [] { log::info("Particle brush: walking particles on the CPU (no renderer running)"); });
+    return tex::paint::withParticles(*mesh, dabs, firstIndex, spec);
+}
 
 image::Image screenUvs(scene::Graph& g, const std::string& meshPath, const StrokeView& view, int width, int height)
 {
