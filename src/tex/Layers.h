@@ -42,6 +42,9 @@ enum class LayerKind : uint8_t
     Folder,
     Instance,
     Filter,
+    Decal,
+    Text,
+    Scatter,
 };
 
 enum class MaskKind : uint8_t
@@ -151,6 +154,15 @@ struct LILA_SCENE_API Layer
      */
     json projection = json::object();
     std::vector<Mask> masks;
+    /** Decal: {maps: {channel: image file}, columns, rows, cell} (an atlas cell when columns or rows > 1), placed by projection. */
+    json decal = json::object();
+    /** Text: {text, font, tracking, outline (ems), outlineColor, resolution}; the letters take the material's baseColor. */
+    json text = json::object();
+    /**
+     * Scatter: {pattern (an image whose brightness is the shape), maps {channel: image file}, countX, countY, perCell, size,
+     * sizeRandom, rotationRandom, hueRandom, seed, avoidOverlap}: copies of the pattern over the uvs, painting the material.
+     */
+    json scatter = json::object();
     /** Folder: bottom first. */
     std::vector<Layer> children;
 

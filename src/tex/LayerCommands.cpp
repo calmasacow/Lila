@@ -474,8 +474,9 @@ void registerLayerCommands()
         .name = "texAddLayer",
         .doc = "Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint "
                "buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another "
-               "layer's values and mask), filter (a filter node applied to the composite below). A graph made by hand joins the stack as its "
-               "bottom layer. Returns {id}.",
+               "layer's values and mask), filter (a filter node applied to the composite below), decal (pictures per channel placed by "
+               "projection), text (words drawn in the material's base colour, placed like a decal) and scatter (copies of a pattern "
+               "over the uvs). A graph made by hand joins the stack as its bottom layer. Returns {id}.",
         .positionalDoc = "set kind",
         .flags = {{"name", "", T::String, nullptr, "Display name."},
                   {"above", "", T::String, nullptr, "Insert right above this layer (in its folder)."},
@@ -487,16 +488,26 @@ void registerLayerCommands()
                   {"source", "", T::String, nullptr, "Instance: the source layer."},
                   {"filter", "", T::String, nullptr, "Filter: the node type (blur, hsv, levels...)."},
                   {"values", "", T::Any, nullptr, "Filter: its parameter values."},
-                  {"channels", "", T::Any, nullptr, "Per-channel {enabled, mode, opacity}."}},
+                  {"channels", "", T::Any, nullptr, "Per-channel {enabled, mode, opacity}."},
+                  {"projection", "", T::Any, nullptr, "Fill, procedural, decal and text: layerProjection's values {mode, positionX...}."},
+                  {"decal", "", T::Any, nullptr, "Decal: {maps {channel: file}, columns, rows, cell}."},
+                  {"text", "", T::Any, nullptr, "Text: {text, font, tracking, outline, outlineColor, resolution}."},
+                  {"scatter", "", T::Any, nullptr, "Scatter: {pattern, maps, countX, countY, perCell, size, sizeRandom, rotationRandom, hueRandom, seed, avoidOverlap}."}},
         .run = [](const Args& a) -> json {
             Session s = open(a, "texAddLayer");
             Layer l;
             if (!parseLayerKind(positional(a, 1, "texAddLayer", "kind"), &l.kind))
-                throw CommandError("texAddLayer: kind is fill, paint, procedural, folder, instance or filter");
+                throw CommandError("texAddLayer: kind is fill, paint, procedural, folder, instance, filter, decal, text or scatter");
             l.id = s.stack().newId('L');
             l.name = a.get<std::string>("name", std::string(layerKindName(l.kind)) + " " + l.id.substr(1));
             if (l.kind == LayerKind::Fill || l.kind == LayerKind::Paint)
                 l.material = flagJson(a, "material", defaultMaterial(s.settings));
+            else if (l.kind == LayerKind::Decal || l.kind == LayerKind::Text || l.kind == LayerKind::Scatter)
+                l.material = flagJson(a, "material", json::object());
+            l.projection = flagJson(a, "projection", json::object());
+            l.decal = flagJson(a, "decal", json::object());
+            l.text = flagJson(a, "text", json{{"text", "Text"}});
+            l.scatter = flagJson(a, "scatter", json::object());
             if (!l.material.is_object())
                 throw CommandError("texAddLayer: material must be a dict");
             l.graph = flagJson(a, "graph", json());

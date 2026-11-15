@@ -1,4 +1,5 @@
 #include "tex/Layers.h"
+#include "tex/TextImage.h"
 
 #include "core/Profile.h"
 #include "gn/Group.h"
@@ -26,6 +27,7 @@ constexpr const char* kStackKey = "layerStack";
 const std::vector<std::pair<LayerKind, const char*>> kLayerKinds = {
     {LayerKind::Fill, "fill"},         {LayerKind::Paint, "paint"},       {LayerKind::Procedural, "procedural"},
     {LayerKind::Folder, "folder"},     {LayerKind::Instance, "instance"}, {LayerKind::Filter, "filter"},
+    {LayerKind::Decal, "decal"},       {LayerKind::Text, "text"},         {LayerKind::Scatter, "scatter"},
 };
 
 const std::vector<std::pair<MaskKind, const char*>> kMaskKinds = {
@@ -482,6 +484,129 @@ private:
                 }
             }
             break;
+        case LayerKind::Decal:
+        case LayerKind::Text:
+        {
+            // Placed like a decal: planar and following the surface unless the layer says otherwise.
+            json place = hasProjection(l.projection) ? l.projection : json{{"mode", "planar"}, {"follow", 1.0}};
+            json maps = l.kind == LayerKind::Decal ? l.decal.value("maps", json::object()) : json::object();
+            if (l.kind == LayerKind::Text)
+            {
+                TextImageSpec spec;
+                spec.text = l.text.value("text", std::string());
+                spec.font = l.text.value("font", std::string());
+                spec.tracking = l.text.value("tracking", 0.0);
+                spec.outline = l.text.value("outline", 0.0);
+                spec.resolution = l.text.value("resolution", 256);
+                auto colour = [](const json& v, glm::vec3 d) {
+                    return v.is_array() && v.size() >= 3 ? glm::vec3(v[0].get<float>(), v[1].get<float>(), v[2].get<float>()) : d;
+                };
+                spec.color = colour(l.material.value("baseColor", json()), glm::vec3(1.0f));
+                spec.outlineColor = colour(l.text.value("outlineColor", json()), glm::vec3(0.0f));
+                const TextImage t = renderText(spec);
+                if (!t.error.empty())
+                    mWarnings.push_back(l.id + ": " + t.error);
+                else
+                {
+                    maps["baseColor"] = t.file;
+                    // The box keeps the words' proportions unless its width was set.
+                    if (!place.contains("sizeX"))
+                        place["sizeX"] = place.value("sizeY", 20.0) * t.aspect;
+                }
+            }
+            json values = place;
+            for (const char* k : {"columns", "rows", "cell"})
+                if (l.decal.contains(k))
+                    values[k] = l.decal[k];
+            if (values.value("mode", "planar") == "uv")
+                values["mode"] = "planar";
+            std::string first;
+            for (const Channel* c : outs)
+            {
+                if (maps.contains(c->name) && maps[c->name].is_string())
+                {
+                    GNode& img = subNode(s, "I_" + c->name, "layerImage", {-700.0, y});
+                    img.values["file"] = maps[c->name];
+                    const std::string imgName = img.name;
+                    GNode& d = subNode(s, "D_" + c->name, "layerDecal", {-400.0, y}, values);
+                    const std::string decalName = d.name;
+                    subLink(s, {imgName, "out"}, decalName, "input");
+                    out(*c, {decalName, "out"});
+                    if (first.empty() || c->name == "baseColor")
+                        first = decalName;
+                }
+                else
+                {
+                    json v = l.material.contains(c->name) ? l.material[c->name] : channelDefault(c->name, c->type);
+                    out(*c, constantNode(s, "C_" + c->name, *c, v, lp + "/material/" + c->name, {-400.0, y}));
+                }
+                y += 120.0;
+            }
+            if (first.empty())
+            {
+                mWarnings.push_back(l.id + ": the decal has no picture, so it covers nothing");
+                GNode& none = subNode(s, "NoCover", "constant", {-400.0, y});
+                none.values["value"] = 0.0;
+                contentMask = Src{none.name, "out"};
+            }
+            else
+                contentMask = Src{first, "mask"};
+            break;
+        }
+        case LayerKind::Scatter:
+        {
+            const json& sc = l.scatter;
+            json sv = {{"countX", sc.value("countX", 6)},
+                       {"countY", sc.value("countY", sc.value("countX", 6))},
+                       {"perCell", sc.value("perCell", 3)},
+                       {"size", sc.value("size", 0.6)},
+                       {"sizeRandom", sc.value("sizeRandom", 0.4)},
+                       {"rotationRandom", sc.value("rotationRandom", 1.0)},
+                       {"seed", sc.value("seed", 0)},
+                       {"blend", "top"}};
+            // No overlap: one copy per cell, kept inside it.
+            if (sc.value("avoidOverlap", false))
+            {
+                sv["perCell"] = 1;
+                sv["offsetRandom"] = std::clamp(1.0 - sc.value("size", 0.6), 0.0, 1.0);
+            }
+            GNode& sp = subNode(s, "Scatter", "splatter", {-500.0, 400.0}, sv);
+            const std::string spn = sp.name;
+            if (sc.contains("pattern") && sc["pattern"].is_string())
+            {
+                GNode& pat = subNode(s, "Pattern", "layerImage", {-800.0, 400.0});
+                pat.values["file"] = sc["pattern"];
+                const std::string patName = pat.name;
+                subLink(s, {patName, "out"}, spn, "pattern");
+            }
+            else
+                mWarnings.push_back(l.id + ": the scatter has no pattern image; it scatters the splatter's own shape");
+            const json maps = sc.value("maps", json::object());
+            for (const Channel* c : outs)
+            {
+                if (maps.contains(c->name) && maps[c->name].is_string())
+                {
+                    GNode& img = subNode(s, "I_" + c->name, "layerImage", {-700.0, y});
+                    img.values["file"] = maps[c->name];
+                    const std::string imgName = img.name;
+                    GNode& at = subNode(s, "S_" + c->name, "layerSampleAt", {-300.0, y},
+                                        {{"hue", c->name == "baseColor" ? sc.value("hueRandom", 0.0) : 0.0}});
+                    const std::string atName = at.name;
+                    subLink(s, {imgName, "out"}, atName, "input");
+                    subLink(s, {spn, "instanceUv"}, atName, "coord");
+                    subLink(s, {spn, "random"}, atName, "random");
+                    out(*c, {atName, "out"});
+                }
+                else
+                {
+                    json v = l.material.contains(c->name) ? l.material[c->name] : channelDefault(c->name, c->type);
+                    out(*c, constantNode(s, "C_" + c->name, *c, v, lp + "/material/" + c->name, {-400.0, y}));
+                }
+                y += 120.0;
+            }
+            contentMask = Src{spn, "out"};
+            break;
+        }
         case LayerKind::Procedural:
         {
             const std::string name = l.id + "_content";
@@ -934,8 +1059,14 @@ json Layer::toJson() const
         }
         j["channels"] = ch;
     }
-    if (kind == LayerKind::Fill || kind == LayerKind::Paint)
+    if (kind == LayerKind::Fill || kind == LayerKind::Paint || kind == LayerKind::Decal || kind == LayerKind::Text || kind == LayerKind::Scatter)
         j["material"] = material;
+    if (kind == LayerKind::Decal)
+        j["decal"] = decal;
+    if (kind == LayerKind::Text)
+        j["text"] = text;
+    if (kind == LayerKind::Scatter)
+        j["scatter"] = scatter;
     if (kind == LayerKind::Paint)
         j["paint"] = paint;
     if (kind == LayerKind::Procedural)
@@ -1016,6 +1147,11 @@ Layer Layer::fromJson(const json& j)
             l.tiling.offsetX = field<double>(*it, "offsetX", 0.0);
             l.tiling.offsetY = field<double>(*it, "offsetY", 0.0);
         }
+        l.decal = field<json>(j, "decal", json::object());
+        l.text = field<json>(j, "text", json::object());
+        l.scatter = field<json>(j, "scatter", json::object());
+        if (!l.decal.is_object() || !l.text.is_object() || !l.scatter.is_object())
+            throw std::invalid_argument("decal, text and scatter must be objects");
         l.projection = field<json>(j, "projection", json::object());
         if (!l.projection.is_object())
             throw std::invalid_argument("projection must be an object");
@@ -1147,6 +1283,9 @@ bool channelOn(const LayerStack& stack, const Layer& layer, const std::string& c
     switch (layer.kind)
     {
     case LayerKind::Fill: return layer.material.contains(channel);
+    case LayerKind::Decal: return layer.material.contains(channel) || layer.decal.value("maps", json::object()).contains(channel);
+    case LayerKind::Text: return channel == "baseColor" || layer.material.contains(channel);
+    case LayerKind::Scatter: return layer.material.contains(channel) || layer.scatter.value("maps", json::object()).contains(channel);
     // Unpainted channels leave the stack below alone; the material is what the brushes start from.
     case LayerKind::Paint: return !paintImage(layer, channel).empty();
     case LayerKind::Procedural:

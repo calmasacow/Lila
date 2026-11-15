@@ -1,3 +1,4 @@
+#include "curve/Text.h"
 #include "ui/TextureSetPanel.h"
 
 // Plan.h has a member named like Qt's slots macro.
@@ -246,6 +247,12 @@ QString kindIcon(const std::string& kind, bool open = false)
         return "link";
     if (kind == "filter")
         return "filter";
+    if (kind == "decal")
+        return "sticker";
+    if (kind == "text")
+        return "typography";
+    if (kind == "scatter")
+        return "confetti";
     return "square";
 }
 
@@ -992,6 +999,17 @@ struct TextureSetPanel::Impl
             }
             call["source"] = selLayer;
             call["name"] = src->value("name", selLayer) + " instance";
+        }
+        if (kind == "decal" || kind == "scatter")
+        {
+            const QString f = ui::fileDialog::getOpenFileName(self, kind == "decal" ? "Decal Picture" : "Scatter Pattern", {},
+                                                              "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.psd)");
+            if (f.isEmpty())
+                return {};
+            if (kind == "decal")
+                call["decal"] = {{"maps", {{"baseColor", f.toStdString()}}}};
+            else
+                call["scatter"] = {{"pattern", f.toStdString()}};
         }
         std::string id;
         {
@@ -1933,7 +1951,9 @@ struct TextureSetPanel::Impl
         auto* head = boldHeading(w, qs(l.value("name", id)) + "  (" + capitalised(kind) + " layer, " + qs(id) + ")");
         v->addWidget(head);
 
-        if (kind == "fill" || kind == "paint")
+        if (kind == "decal" || kind == "text" || kind == "scatter")
+            placedProps(w, v, l, kind);
+        if (kind == "fill" || kind == "paint" || kind == "decal" || kind == "text" || kind == "scatter")
         {
             json node = {{"name", id}, {"label", kind == "paint" ? "Brush Material" : "Material"}, {"params", json::array()}};
             json inputs = json::array();
@@ -1959,7 +1979,7 @@ struct TextureSetPanel::Impl
                 v->addWidget(paint);
             }
             v->addWidget(texParams::nodePanel(w, node, [this](const std::string& c, const json& value) { propsLayer({{"material", {{c, value}}}}); }));
-            if (kind == "fill")
+            if (kind == "fill" || kind == "decal" || kind == "text")
                 projectionProps(w, v, l.value("projection", json::object()), id, {}, [this](const json& p) { propsLayer({{"projection", p}}); });
         }
         else if (kind == "procedural")
@@ -2105,6 +2125,116 @@ struct TextureSetPanel::Impl
         });
         aForm->addRow("Anchor", anchor);
         v->addLayout(aForm);
+    }
+
+    /** A row naming a picture file, picking another on click. */
+    QToolButton* pictureButton(QWidget* w, const std::string& file, std::function<void(const std::string&)> picked)
+    {
+        auto* b = new QToolButton(w);
+        controls::setRole(b, "row");
+        b->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        b->setIcon(icon("photo"));
+        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        b->setText(file.empty() ? QString("None") : QFileInfo(qs(file)).fileName());
+        b->setToolTip(file.empty() ? QString("Pick a picture") : qs(file));
+        QObject::connect(b, &QToolButton::clicked, w, [this, picked] {
+            const QString f = ui::fileDialog::getOpenFileName(this->self, "Picture", {}, "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.psd)");
+            if (!f.isEmpty())
+                picked(f.toStdString());
+        });
+        return b;
+    }
+
+    /** Decal, text and scatter: what they draw (pictures, words, pattern) and how. */
+    void placedProps(QWidget* w, QVBoxLayout* v, const json& l, const std::string& kind)
+    {
+        auto* form = new QFormLayout();
+        form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        auto spin = [&](const char* objectName, double lo, double hi, double step, int decimals, double value, std::function<void(double)> set) {
+            auto* f = new QDoubleSpinBox(w);
+            f->setObjectName(objectName);
+            f->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            f->setRange(lo, hi);
+            f->setSingleStep(step);
+            f->setDecimals(decimals);
+            f->setKeyboardTracking(false);
+            f->setValue(value);
+            QObject::connect(f, &QDoubleSpinBox::valueChanged, w, [set](double x) { set(x); });
+            return f;
+        };
+        if (kind == "decal")
+        {
+            const json d = l.value("decal", json::object());
+            const json maps = d.value("maps", json::object());
+            for (const tex::Channel& c : settings.channels)
+            {
+                const std::string ch = c.name;
+                form->addRow(qs(ch), pictureButton(w, maps.value(ch, std::string()), [this, ch](const std::string& f) {
+                    propsLayer({{"decal", {{"maps", {{ch, f}}}}}});
+                }));
+            }
+            auto* atlas = new QHBoxLayout;
+            for (const char* k : {"columns", "rows", "cell"})
+                atlas->addWidget(spin(k, k == std::string("cell") ? 0 : 1, 64, 1, 0, d.value(k, k == std::string("cell") ? 0 : 1),
+                                      [this, key = std::string(k)](double x) { propsLayer({{"decal", {{key, int(x)}}}}); }));
+            auto* atlasRow = new QWidget(w);
+            atlas->setContentsMargins(0, 0, 0, 0);
+            atlasRow->setLayout(atlas);
+            atlasRow->setToolTip("Atlas: columns, rows and the cell shown (left to right, top to bottom)");
+            form->addRow("Atlas", atlasRow);
+        }
+        else if (kind == "text")
+        {
+            const json t = l.value("text", json::object());
+            auto* words = new QLineEdit(qs(t.value("text", std::string())), w);
+            words->setObjectName("layerText");
+            QObject::connect(words, &QLineEdit::editingFinished, w, [this, words] { propsLayer({{"text", {{"text", words->text().toStdString()}}}}); });
+            form->addRow("Text", words);
+            auto* font = new QComboBox(w);
+            font->setObjectName("layerFont");
+            font->addItem("Default", QString());
+            for (const std::string& f : curve::fontNames())
+                font->addItem(qs(f), qs(f));
+            font->setCurrentIndex(std::max(0, font->findData(qs(t.value("font", std::string())))));
+            QObject::connect(font, &QComboBox::activated, w, [this, font](int) { propsLayer({{"text", {{"font", font->currentData().toString().toStdString()}}}}); });
+            form->addRow("Font", font);
+            form->addRow("Tracking", spin("layerTracking", -0.5, 2.0, 0.01, 3, t.value("tracking", 0.0),
+                                          [this](double x) { propsLayer({{"text", {{"tracking", x}}}}); }));
+            form->addRow("Outline", spin("layerOutline", 0.0, 0.5, 0.01, 3, t.value("outline", 0.0),
+                                         [this](double x) { propsLayer({{"text", {{"outline", x}}}}); }));
+        }
+        else
+        {
+            const json sc = l.value("scatter", json::object());
+            form->addRow("Pattern", pictureButton(w, sc.value("pattern", std::string()), [this](const std::string& f) {
+                propsLayer({{"scatter", {{"pattern", f}}}});
+            }));
+            form->addRow("Picture", pictureButton(w, sc.value("maps", json::object()).value("baseColor", std::string()), [this](const std::string& f) {
+                propsLayer({{"scatter", {{"maps", {{"baseColor", f}}}}}});
+            }));
+            struct Num
+            {
+                const char* key;
+                const char* label;
+                double lo, hi, step, def;
+                int decimals;
+            };
+            const Num nums[] = {{"countX", "Across", 1, 64, 1, 6, 0},       {"countY", "Down", 1, 64, 1, 6, 0},
+                                {"perCell", "Per cell", 1, 16, 1, 3, 0},    {"size", "Size", 0.01, 2, 0.05, 0.6, 2},
+                                {"sizeRandom", "Size jitter", 0, 1, 0.05, 0.4, 2}, {"rotationRandom", "Turn jitter", 0, 1, 0.05, 1.0, 2},
+                                {"hueRandom", "Hue jitter", 0, 1, 0.05, 0.0, 2},   {"seed", "Seed", 0, 99999, 1, 0, 0}};
+            for (const Num& n : nums)
+                form->addRow(n.label, spin(n.key, n.lo, n.hi, n.step, n.decimals, sc.value(n.key, n.def), [this, key = std::string(n.key), d = n.decimals](double x) {
+                    propsLayer({{"scatter", {{key, d == 0 ? json(int(x)) : json(x)}}}});
+                }));
+            auto* avoid = new QCheckBox("Avoid overlap", w);
+            avoid->setObjectName("scatterAvoid");
+            avoid->setToolTip("One copy per cell, kept inside it");
+            avoid->setChecked(sc.value("avoidOverlap", false));
+            QObject::connect(avoid, &QCheckBox::toggled, w, [this](bool on) { propsLayer({{"scatter", {{"avoidOverlap", on}}}}); });
+            form->addRow(avoid);
+        }
+        v->addLayout(form);
     }
 
     /** Where the layer's or mask's content lands: layerProjection's fields, and a button to place it on the mesh. */
@@ -2337,6 +2467,9 @@ struct TextureSetPanel::Impl
         menu->addAction(icon("bucket"), "Add Fill Layer", [this] { addLayer("fill", {}); });
         menu->addAction(icon("brush"), "Add Paint Layer", [this] { addLayer("paint", {}); });
         menu->addAction(icon("topology-star-3"), "Add Procedural Layer", [this] { addLayer("procedural", {}); });
+        menu->addAction(icon("sticker"), "Add Decal Layer", [this] { addLayer("decal", {}); });
+        menu->addAction(icon("typography"), "Add Text Layer", [this] { addLayer("text", {}); });
+        menu->addAction(icon("confetti"), "Add Scatter Layer", [this] { addLayer("scatter", {}); });
         menu->addAction(icon("folder-plus"), "Add Folder", [this] { addLayer("folder", {}); });
         QMenu* filters = menu->addMenu(icon("filter"), "Add Filter Layer");
         for (const tex::NodeDef* def : filterNodes())

@@ -10171,8 +10171,8 @@ def texAddGenerator(*objects: Any, name: str | None = None, mode: str | None = N
         index: Position in the mask stack, 0 the bottom; the top when left out.
     """
 
-def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, material: Any | None = None, graph: Any | None = None, source: str | None = None, filter: str | None = None, values: Any | None = None, channels: Any | None = None) -> Any:
-    """Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another layer's values and mask), filter (a filter node applied to the composite below). A graph made by hand joins the stack as its bottom layer. Returns {id}.
+def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, material: Any | None = None, graph: Any | None = None, source: str | None = None, filter: str | None = None, values: Any | None = None, channels: Any | None = None, projection: Any | None = None, decal: Any | None = None, text: Any | None = None, scatter: Any | None = None) -> Any:
+    """Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another layer's values and mask), filter (a filter node applied to the composite below), decal (pictures per channel placed by projection), text (words drawn in the material's base colour, placed like a decal) and scatter (copies of a pattern over the uvs). A graph made by hand joins the stack as its bottom layer. Returns {id}.
 
     Args:
         objects: set kind.
@@ -10187,6 +10187,10 @@ def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None
         filter: Filter: the node type (blur, hsv, levels...).
         values: Filter: its parameter values.
         channels: Per-channel {enabled, mode, opacity}.
+        projection: Fill, procedural, decal and text: layerProjection's values {mode, positionX...}.
+        decal: Decal: {maps {channel: file}, columns, rows, cell}.
+        text: Text: {text, font, tracking, outline, outlineColor, resolution}.
+        scatter: Scatter: {pattern, maps, countX, countY, perCell, size, sizeRandom, rotationRandom, hueRandom, seed, avoidOverlap}.
     """
 
 def texAddMask(*objects: Any, name: str | None = None, mode: str | None = None, opacity: float | None = None, invert: bool | None = None, values: Any | None = None, bindings: Any | None = None, index: int | None = None, type: str | None = None, value: float | None = None, image: str | None = None, anchor: str | None = None, channel: str | None = None) -> Any:
@@ -10538,6 +10542,18 @@ def texRemoveMask(*objects: Any) -> Any:
 
     Args:
         objects: set layer mask...
+    """
+
+def texSampleChannels(*objects: Any, uv: Sequence[Any] | None = None, mesh: str | None = None, position: Sequence[Any] | None = None, source: str | None = None, layer: str | None = None) -> Any:
+    """Pick a texture set's channel values at a point: uv=[u, v], or mesh= and position=[x, y, z] in its object space. source=set reads every channel as the stack evaluates it; source=layer reads one paint layer's own paint (layer=, else the active one), leaving out channels it didn't paint there. Values are linear: [r, g, b] for colour and vector channels, a number for gray ones. Returns {uv, udim, source, channels}.
+
+    Args:
+        objects: set.
+        uv: [u, v].
+        mesh: The mesh position is on.
+        position: [x, y, z] in the mesh's object space.
+        source: set or layer. One of 'set', 'layer'. Default 'set'.
+        layer: The paint layer, for source=layer.
     """
 
 def texSaveBrushPreset(*objects: Any, brush: Any | None = None, payload: Any | None = None, particles: Any | None = None, category: str | None = None, doc: str | None = None, tier: str | None = None) -> Any:

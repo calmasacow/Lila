@@ -29,12 +29,13 @@ lila_module(lila_tex Scene
     SetOps.cpp
     SlangRt.cpp
     SmartMaterial.cpp
+    TextImage.cpp
     TextureSet.cpp
     Types.cpp)
 
 find_package(slang CONFIG REQUIRED)
 find_package(zstd CONFIG REQUIRED)
-target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd lila_uv)
+target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd lila_uv lila_curve)
 
 # The CPU evaluator JIT-compiles through slang-llvm, which Slang loads at runtime (so app-local deployment misses it),
 # along with its standard modules. Copy them beside the binaries.
