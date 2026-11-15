@@ -17,6 +17,7 @@
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "render/GpuImage.h"
+#include "scene/Components.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "scene/MeshNodes.h"
@@ -92,8 +93,24 @@ constexpr ToolKind kTools[] = {
     {"sharpen", "Sharpen", "Crispens the paint.", "focus-2"},
     {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
     {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
-    {"fill", "Fill", "Click to fill a polygon, a triangle, a UV island, a material, the mesh or the selected faces.", "bucket-droplet"},
+    {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it.", "bucket-droplet"},
     {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel.", "photo"},
+};
+
+/** What a fill click (or a drag's box) fills, in the panel's order. */
+struct FillMode
+{
+    const char* id;
+    const char* icon;
+    const char* tip;
+};
+constexpr FillMode kFillModes[] = {
+    {"triangle", "triangle", "Triangle: the triangle under the cursor"},
+    {"polygon", "square", "Polygon: the face under the cursor"},
+    {"island", "puzzle", "UV Island: the uv island under the cursor"},
+    {"material", "palette", "Material: every face with the material under the cursor"},
+    {"mesh", "cube", "Mesh: the whole painted surface of the mesh"},
+    {"selection", "pointer", "Selection: the selected faces"},
 };
 
 struct TexturePaintSettings
@@ -468,13 +485,10 @@ public:
         filterRow->addWidget(mFilterRadius);
         filterRow->addWidget(mAmount);
         mFilterRow = addRow(form, "Filter", filterRow);
-        mFillBy = new QComboBox(this);
-        mFillBy->addItem("Polygon", "polygon");
-        mFillBy->addItem("Triangle", "triangle");
-        mFillBy->addItem("UV island", "island");
-        mFillBy->addItem("Material", "material");
-        mFillBy->addItem("Mesh", "mesh");
-        mFillBy->addItem("Selected faces", "selection");
+        mFillBy = new controls::Segmented(this);
+        mFillBy->setObjectName("fillBy");
+        for (size_t f = 0; f < std::size(kFillModes); ++f)
+            mFillBy->add({}, kFillModes[f].icon, kFillModes[f].tip, int(f));
         mFillRow = addRow(form, "Fill", mFillBy);
         mParticles = new QComboBox(this);
         mParticles->addItem("None", QString());
@@ -579,8 +593,8 @@ public:
         });
         connect(mFilterRadius, &QDoubleSpinBox::valueChanged, this, [this](double v) { set(texturePaintState().filterRadius, float(v)); });
         connect(mAmount, &QDoubleSpinBox::valueChanged, this, [this](double v) { set(texturePaintState().amount, float(v)); });
-        connect(mFillBy, &QComboBox::currentIndexChanged, this, [this](int i) {
-            texturePaintState().fillBy = mFillBy->itemData(i).toString().toStdString();
+        connect(mFillBy, &controls::Segmented::picked, this, [this](int i) {
+            texturePaintState().fillBy = kFillModes[std::clamp(i, 0, int(std::size(kFillModes)) - 1)].id;
             changed();
         });
         connect(mParticles, &QComboBox::currentIndexChanged, this, [this](int i) {
@@ -648,7 +662,7 @@ public:
         syncTools();
         const QSignalBlocker b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion), b7(mMirror);
         const QSignalBlocker b8(mMaterial), b9(mMaterialScale), b10(mFlow), b11(mNormalMode), b12(mIntensity), b13(mStamp), b14(mFilterRadius);
-        const QSignalBlocker b15(mAmount), b16(mFillBy), b17(mParticles), b18(mBufferBrush), b19(mBufferScale), b20(mTransform), b21(mWarp);
+        const QSignalBlocker b15(mAmount), b17(mParticles), b18(mBufferBrush), b19(mBufferScale), b20(mTransform), b21(mWarp);
         const QSignalBlocker b22(mAuto), b23(mFacing);
         mBlend->setCurrentIndex(int(s.blend));
         mTilt->setValue(s.tilt);
@@ -658,7 +672,9 @@ public:
         mStamp->setText(QString::fromStdString(s.stampImage));
         mFilterRadius->setValue(s.filterRadius);
         mAmount->setValue(s.amount);
-        mFillBy->setCurrentIndex(std::max(0, mFillBy->findData(QString::fromStdString(s.fillBy))));
+        for (size_t f = 0; f < std::size(kFillModes); ++f)
+            if (s.fillBy == kFillModes[f].id)
+                mFillBy->setCurrent(int(f));
         mParticles->setCurrentIndex(std::max(0, mParticles->findData(QString::fromStdString(s.particles))));
         mMaterial->setCurrentIndex(std::max(0, mMaterial->findData(QString::fromStdString(s.material))));
         mMaterialScale->setValue(s.materialScale);
@@ -830,7 +846,7 @@ private:
     QLineEdit* mStamp = nullptr;
     QDoubleSpinBox* mFilterRadius = nullptr;
     QDoubleSpinBox* mAmount = nullptr;
-    QComboBox* mFillBy = nullptr;
+    controls::Segmented* mFillBy = nullptr;
     QComboBox* mParticles = nullptr;
     QComboBox* mBufferBrush = nullptr;
     QDoubleSpinBox* mBufferScale = nullptr;
@@ -1008,7 +1024,10 @@ public:
         }
         if (tool == "fill")
         {
-            fill(*t);
+            // The fill waits for the release: a drag instead boxes every region in it.
+            mFillPress = *t;
+            mMarqueeFrom = mMarqueeTo = e->position();
+            mMarquee = false;
             return true;
         }
         beginStroke(*t, e, view);
@@ -1031,6 +1050,13 @@ public:
             flush();
             return true;
         }
+        if (mFillPress && (e->buttons() & Qt::LeftButton))
+        {
+            mMarqueeTo = e->position();
+            mMarquee = mMarquee || (mMarqueeTo - mMarqueeFrom).manhattanLength() > 4;
+            viewportTools::requestRedraw();
+            return true;
+        }
         if (e->buttons() == Qt::NoButton)
         {
             mOver = pick(mHover, view);
@@ -1040,6 +1066,7 @@ public:
                     mWarmedSet = set->id();
                     warmGraph(*set);
                 }
+            updateFillHover();
         }
         viewportTools::requestRedraw();
         return false;
@@ -1058,6 +1085,20 @@ public:
                 bufferSamples();
             }
             mBufferDrag = BufferDrag::None;
+            viewportTools::requestRedraw();
+            return true;
+        }
+        if (mFillPress)
+        {
+            const Target t = *mFillPress;
+            mFillPress.reset();
+            if (mMarquee)
+                fillBox(t, QRectF(mMarqueeFrom, mMarqueeTo).normalized(), view);
+            else
+                fill(t);
+            mMarquee = false;
+            mFillKey.clear();
+            updateFillHover();
             viewportTools::requestRedraw();
             return true;
         }
@@ -1132,6 +1173,8 @@ public:
                 status.keys = {{"Ctrl+Alt+click", "set source"}};
         }
         drawToolStatus(p, view, status);
+        if (st.tool == "fill")
+            drawFill(p, view);
 
         const QPointF at = mControls.anchor(brush::ui::ringPosition(mStroke, mHover));
         std::optional<brush::ui::CursorSurface> surface;
@@ -1352,6 +1395,136 @@ private:
         p.channels.clear();
         for (const tex::Channel& c : tex::readSettings(set).channels)
             p.channels[c.name] = glm::vec3(0.0f);
+    }
+
+    /** The paintable triangles a fill seeded at tri covers in the current Fill mode. Ascending. */
+    static std::vector<uint32_t> fillRegion(const tp::PaintMesh& pm, uint32_t tri, NodeId mesh)
+    {
+        const std::string& by = texturePaintState().fillBy;
+        if (tri >= pm.triangleCount())
+            return {};
+        if (by == "mesh")
+            return pm.allTriangles();
+        if (by == "island")
+            return pm.islandOf(tri);
+        if (by == "material")
+            return pm.materialOf(tri);
+        if (by == "selection")
+        {
+            const std::vector<uint32_t> faces = scene::components::selected(mesh, scene::ComponentMode::Face);
+            return faces.empty() ? std::vector<uint32_t>{} : pm.ofFaces(faces);
+        }
+        if (by == "polygon")
+        {
+            const uint32_t face = pm.faces[tri];
+            return pm.ofFaces(std::span<const uint32_t>(&face, 1));
+        }
+        return pm.paintable[tri] ? std::vector<uint32_t>{tri} : std::vector<uint32_t>{};
+    }
+
+    /** Keeps the highlighted region on what a click would fill; recomputed only when the hover leaves it. */
+    void updateFillHover()
+    {
+        const TexturePaintSettings& st = texturePaintState();
+        if (st.tool != "fill" || !mOver || mOver->set == kNoNode || !mOver->paint)
+        {
+            mFillTris.clear();
+            mFillKey.clear();
+            return;
+        }
+        const uint32_t tri = uint32_t(mOver->hit.triangle);
+        const std::string key = std::to_string(mOver->mesh) + "|" + st.fillBy;
+        if (key == mFillKey && st.fillBy != "triangle" && std::binary_search(mFillTris.begin(), mFillTris.end(), tri))
+            return;
+        mFillKey = key;
+        mFillPaint = mOver->paint;
+        mFillWorld = mOver->world;
+        mFillTris = fillRegion(*mOver->paint, tri, mOver->mesh);
+    }
+
+    /** The region under the cursor tinted (front faces only), and the box while dragging one. */
+    void drawFill(OverlayPainter& p, const ViewInfo& view)
+    {
+        constexpr size_t kMaxShown = 200000;
+        const glm::vec4 tint(1.0f, 1.0f, 1.0f, 0.22f);
+        if (!mMarquee && mFillPaint && !mFillTris.empty() && mFillTris.size() <= kMaxShown)
+        {
+            const tp::PaintMesh& pm = *mFillPaint;
+            for (uint32_t t : mFillTris)
+            {
+                const glm::dvec3 a(mFillWorld * glm::dvec4(glm::dvec3(pm.positions[3 * t]), 1.0));
+                const glm::dvec3 b(mFillWorld * glm::dvec4(glm::dvec3(pm.positions[3 * t + 1]), 1.0));
+                const glm::dvec3 c(mFillWorld * glm::dvec4(glm::dvec3(pm.positions[3 * t + 2]), 1.0));
+                if (glm::dot(glm::cross(b - a, c - a), view.eye - a) <= 0.0)
+                    continue;
+                const auto pa = view.project(a), pb = view.project(b), pc = view.project(c);
+                if (pa && pb && pc)
+                    p.triangle(*pa, *pb, *pc, tint);
+            }
+        }
+        if (mMarquee)
+        {
+            const QRectF r = QRectF(mMarqueeFrom, mMarqueeTo).normalized();
+            p.rect(r, glm::vec4(1.0f, 1.0f, 1.0f, 0.08f));
+            p.polyline({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()}, 1.0f, glm::vec4(1.0f, 1.0f, 1.0f, 0.8f), true);
+        }
+    }
+
+    /** Fills every region with a front-facing triangle centred in the box (visible ones only with occlusion on). */
+    void fillBox(const Target& t, const QRectF& box, const ViewInfo& view)
+    {
+        if (!t.paint)
+            return;
+        const tp::PaintMesh& pm = *t.paint;
+        const bool occlusion = texturePaintState().occlusion && pm.bvh;
+        const glm::dmat4 inv = glm::inverse(t.world);
+        const glm::dvec3 eyeObj(inv * glm::dvec4(view.eye, 1.0));
+        std::vector<uint32_t> tris;
+        for (uint32_t tri = 0; tri < pm.triangleCount(); ++tri)
+        {
+            if (!pm.paintable[tri] || std::binary_search(tris.begin(), tris.end(), tri))
+                continue;
+            const glm::dvec3 a(pm.positions[3 * tri]), b(pm.positions[3 * tri + 1]), c(pm.positions[3 * tri + 2]);
+            const glm::dvec3 centre = (a + b + c) / 3.0;
+            if (glm::dot(glm::cross(b - a, c - a), eyeObj - centre) <= 0.0)
+                continue;
+            const auto at = view.project(glm::dvec3(t.world * glm::dvec4(centre, 1.0)));
+            if (!at || !box.contains(*at))
+                continue;
+            if (occlusion)
+            {
+                const glm::dvec3 dir = centre - eyeObj;
+                geo::BvhHit hit;
+                if (pm.bvh->raycast(eyeObj, glm::normalize(dir), hit) && hit.t < glm::length(dir) * 0.999 &&
+                    hit.triangle < pm.triangleCount() && pm.faces[uint32_t(hit.triangle)] != pm.faces[tri])
+                    continue;
+            }
+            std::vector<uint32_t> add = fillRegion(pm, tri, t.mesh);
+            std::vector<uint32_t> merged;
+            std::set_union(tris.begin(), tris.end(), add.begin(), add.end(), std::back_inserter(merged));
+            tris = std::move(merged);
+            if (texturePaintState().fillBy == "mesh" || texturePaintState().fillBy == "selection")
+                break;
+        }
+        if (tris.empty())
+            return;
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* set = g.node(t.set);
+        if (!set)
+            return;
+        const std::string layer = layerFor(*set);
+        json payload = payloadFor(texturePaintState(), false).toJson();
+        payload["triangles"] = tris;
+        try
+        {
+            ops::execute("texPaintStroke",
+                         {{"args", {set->name(), layer}}, {"stroke", {{"mesh", t.meshPath}, {"brush", texturePaintState().stroke.toJson()}, {"payload", payload}}}},
+                         CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
     }
 
     void fill(const Target& t)
@@ -1950,6 +2123,14 @@ private:
     QPointer<TexturePaintPanel> mPanel;
     /** The set the hover last compiled the next graph for. */
     NodeId mWarmedSet = kNoNode;
+    /** Fill: the region a click fills, on the hovered mesh, and the press waiting to become a click or a box. */
+    std::vector<uint32_t> mFillTris;
+    std::shared_ptr<const tp::PaintMesh> mFillPaint;
+    glm::dmat4 mFillWorld{1.0};
+    std::string mFillKey;
+    std::optional<Target> mFillPress;
+    QPointF mMarqueeFrom, mMarqueeTo;
+    bool mMarquee = false;
     QPointF mHover;
     std::optional<Target> mOver;
     Target mTarget;
