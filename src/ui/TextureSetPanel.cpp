@@ -53,6 +53,7 @@
 #include "ui/ViewportLayout.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -2524,6 +2525,12 @@ struct TextureSetPanel::Impl
         const bool any = layer(selLayer) != nullptr;
         QAction* dup = menu.addAction(icon("copy"), "Duplicate", [this] { self->duplicateSelected(); });
         dup->setEnabled(any && selMask.empty());
+        menu.addAction(icon("clipboard-copy"), "Copy Layer", [this] { self->copySelected(); })->setEnabled(any && selMask.empty());
+        menu.addAction(icon("clipboard"), "Paste Layers", [this] { self->paste(); })
+            ->setEnabled(QApplication::clipboard()->text().contains("\"lilaLayers\""));
+        menu.addAction(icon("arrow-merge"), "Merge Down", [this] { self->flattenSelected(true); })->setEnabled(any && selMask.empty());
+        menu.addAction(icon("stack-pop"), "Flatten Layer", [this] { self->flattenSelected(false); })->setEnabled(any && selMask.empty());
+        menu.addAction(icon("file-export"), "Export Flattened...", [this] { self->exportFlattened(); })->setEnabled(any && selMask.empty());
         menu.addAction(icon("trash"), selMask.empty() ? "Delete Layer" : "Delete Mask", [this] { self->deleteSelected(); })->setEnabled(any);
         menu.addSeparator();
         QAction* nodes = menu.addAction(icon("binary-tree"), "Open as Nodes", [this] { self->openSelectedAsNodes(); });
@@ -3104,6 +3111,56 @@ void TextureSetPanel::dropMaterial(const std::string& material, const std::strin
     refresh();
 }
 
+void TextureSetPanel::copySelected()
+{
+    if (!d->setNode() || !d->layer(d->selLayer))
+        return;
+    if (json r = runUi("texCopyLayers", d->args({d->selLayer})); r.is_string())
+        QApplication::clipboard()->setText(QString::fromStdString(r.get<std::string>()));
+}
+
+void TextureSetPanel::paste()
+{
+    if (!d->setNode())
+        return;
+    json call = d->args({QApplication::clipboard()->text().toStdString()});
+    if (d->layer(d->selLayer))
+        call["above"] = d->selLayer;
+    json r = runUi("texPasteLayers", call);
+    if (r.is_object() && !r["layers"].empty())
+        d->selLayer = r["layers"].back().get<std::string>();
+    refresh();
+}
+
+void TextureSetPanel::flattenSelected(bool down)
+{
+    if (!d->setNode() || !d->layer(d->selLayer))
+        return;
+    json call = d->args({d->selLayer});
+    call["down"] = down;
+    json r = runUi("texFlattenLayers", call);
+    if (r.is_object())
+    {
+        d->selLayer = r.value("layer", std::string());
+        for (const json& w : r.value("warnings", json::array()))
+            log::warn("{}: {}", down ? "Merge Down" : "Flatten Layer", w.get<std::string>());
+    }
+    refresh();
+}
+
+void TextureSetPanel::exportFlattened()
+{
+    if (!d->setNode() || !d->layer(d->selLayer))
+        return;
+    const QString dir = ui::fileDialog::getExistingDirectory(this, "Export Flattened");
+    if (dir.isEmpty())
+        return;
+    json call = d->args({d->selLayer});
+    call["folder"] = dir.toStdString();
+    if (json r = runUi("texExportFlattened", call); r.is_object())
+        log::info("exported {} images", r.value("files", json::object()).size());
+}
+
 void TextureSetPanel::duplicateSelected()
 {
     scene::Node* n = d->setNode();
@@ -3441,6 +3498,34 @@ void registerTextureSetPanel()
                   .doc = "Copy the selected layer (with its masks, or a folder with its contents) right above it.",
                   .python = "lila.ops.texSaveSmartMaterial(\"RockTex\", \"L1\", \"copy.lilasmart\")\n"
                             "lila.ops.texApplySmartMaterial(\"RockTex\", \"copy.lilasmart\", above=\"L1\")"});
+    actions::add({.id = "textureSets.copyLayer",
+                  .label = "Copy Layer",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.copySelected(); }),
+                  .doc = "Copy the selected layer (masks, children and paint) to the clipboard, to paste into any texture set.",
+                  .python = "text = texCopyLayers(\"RockTex\", \"L1\")",
+                  .keywords = {"copy layer", "clipboard"}});
+    actions::add({.id = "textureSets.pasteLayers",
+                  .label = "Paste Layers",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.paste(); }),
+                  .doc = "Paste copied layers above the selection, with fresh ids and their own copies of the paint.",
+                  .python = "texPasteLayers(\"RockTex\", text)",
+                  .keywords = {"paste layer", "clipboard"}});
+    actions::add({.id = "textureSets.mergeDown",
+                  .label = "Merge Layer Down",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.flattenSelected(true); }),
+                  .doc = "Bake the selected layer and the one below it into one paint layer that shows the same.",
+                  .python = "texFlattenLayers(\"RockTex\", \"L2\", down=True)",
+                  .keywords = {"merge down", "combine layers"}});
+    actions::add({.id = "textureSets.flatten",
+                  .label = "Flatten Layer",
+                  .category = "Texture",
+                  .run = onPanel([](TextureSetPanel& p) { p.flattenSelected(false); }),
+                  .doc = "Bake the selected layer or folder (with what is below it) into one paint layer that shows the same.",
+                  .python = "texFlattenLayers(\"RockTex\", layers=[\"L1\", \"L2\"])",
+                  .keywords = {"flatten", "bake layers", "rasterize"}});
     actions::add({.id = "textureSets.delete",
                   .label = "Delete Layer or Mask",
                   .category = "Texture",

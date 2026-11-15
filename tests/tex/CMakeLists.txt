@@ -15,6 +15,7 @@ add_executable(lila_tex_tests
     test_tex_plan.cpp
     test_tex_projection.cpp
     test_tex_decal_layers.cpp
+    test_tex_layer_clipboard.cpp
     test_tex_routing.cpp
     test_tex_ties.cpp)
 target_link_libraries(lila_tex_tests PRIVATE LilaScene doctest::doctest)

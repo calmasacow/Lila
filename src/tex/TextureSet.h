@@ -140,6 +140,11 @@ LILA_SCENE_API std::map<std::string, image::Image> evaluateOutputs(scene::Node& 
                                                                    int height, const std::string& backend = {},
                                                                    std::vector<std::string>* warnings = nullptr);
 
+/** As evaluateOutputs, for another graph in the set's place (its paint buffers and mesh maps): a stack not yet written. Throws. */
+LILA_SCENE_API std::map<std::string, image::Image> evaluateGraphOutputs(scene::Node& set, const Graph& g, const std::vector<OutputRequest>& requests,
+                                                                        int udim, int width, int height, const std::string& backend = {},
+                                                                        std::vector<std::string>* warnings = nullptr);
+
 /** Evaluates the set and writes <folder>/<set>_<channel>[.<udim>].<ext>. Returns {files, passes, milliseconds, compiled, cached, warnings, backend}. Throws. */
 LILA_SCENE_API json evaluateSet(scene::Node& set, const EvaluateOptions& options);
 

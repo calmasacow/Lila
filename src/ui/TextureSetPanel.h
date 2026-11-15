@@ -83,6 +83,13 @@ public:
     /** Adds a library material as a fill or procedural layer placed as a drop onto target's row; empty target puts it on top. */
     void dropMaterial(const std::string& material, const std::string& target, Drop where);
     void duplicateSelected();
+    /** The selected layer to the clipboard as text (texCopyLayers), and back above the selection, in this set or another. */
+    void copySelected();
+    void paste();
+    /** Bake the selected layer into one paint layer: alone (flatten) or with the layer below (merge down). */
+    void flattenSelected(bool down);
+    /** Write what flattening the selected layer would make as images. */
+    void exportFlattened();
     void deleteSelected();
     /** Shows the Texture Graph editor on the set with the selected layer's node selected. */
     void openSelectedAsNodes();

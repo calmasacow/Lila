@@ -282,8 +282,13 @@ void setExternalSource(ExternalSource fn) { externalSource() = std::move(fn); }
 std::map<std::string, image::Image> evaluateOutputs(scene::Node& set, const std::vector<OutputRequest>& requests, int udim, int width, int height,
                                                     const std::string& backend, std::vector<std::string>* warnings)
 {
+    return evaluateGraphOutputs(set, readGraph(set), requests, udim, width, height, backend, warnings);
+}
+
+std::map<std::string, image::Image> evaluateGraphOutputs(scene::Node& set, const Graph& g, const std::vector<OutputRequest>& requests, int udim,
+                                                         int width, int height, const std::string& backend, std::vector<std::string>* warnings)
+{
     LILA_ZONE();
-    Graph g = readGraph(set);
     SetSettings s = readSettings(set);
     const Tile* tile = &s.tiles.front();
     for (const Tile& t : s.tiles)

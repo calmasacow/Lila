@@ -2,6 +2,10 @@
 #include "tex/Layers.h"
 #include "tex/SmartMaterial.h"
 
+#include "bake/Bake.h"
+#include "core/ImageIO.h"
+#include "tex/TextureSet.h"
+#include "tex/Plan.h"
 #include "core/Paths.h"
 #include "core/PrefStore.h"
 #include "gn/Group.h"
@@ -14,7 +18,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <filesystem>
 #include <functional>
+#include <set>
 
 namespace lila::tex
 {
@@ -440,6 +446,280 @@ void applyGraphParams(Layer& l, const json& params)
     }
 }
 
+// ---------------------------------------------------------------------------------------------------- copy, paste, flatten
+
+/** The paint buffers a layer (and its children) read, by id. */
+void paintBuffersOf(const Layer& l, std::set<std::string>& out)
+{
+    auto take = [&](const json& v) {
+        std::string ref = v.is_string() ? v.get<std::string>() : std::string();
+        constexpr std::string_view kPrefix = "external:";
+        if (ref.starts_with(kPrefix))
+            ref = ref.substr(kPrefix.size());
+        std::string buffer, channel;
+        if (paint::parseExternalName(ref, &buffer, &channel))
+            out.insert(buffer);
+    };
+    if (l.paint.is_object())
+        for (const auto& [k, v] : l.paint.items())
+            take(v);
+    for (const Mask& m : l.masks)
+        take(json(m.image));
+    for (const Layer& c : l.children)
+        paintBuffersOf(c, out);
+}
+
+/** Points the layer's (and children's) paint references from old buffer ids to new ones. */
+void renamePaint(Layer& l, const std::map<std::string, std::string>& ids)
+{
+    auto fix = [&](std::string& ref) {
+        for (const auto& [from, to] : ids)
+            if (ref.find("paint/" + from + "/") != std::string::npos)
+                ref.replace(ref.find("paint/" + from + "/"), from.size() + 7, "paint/" + to + "/");
+    };
+    if (l.paint.is_object())
+        for (auto& [k, v] : l.paint.items())
+            if (v.is_string())
+            {
+                std::string s = v.get<std::string>();
+                fix(s);
+                v = s;
+            }
+    for (Mask& m : l.masks)
+        fix(m.image);
+    for (Layer& c : l.children)
+        renamePaint(c, ids);
+}
+
+json copyLayers(const Args& a)
+{
+    Session s = open(a, "texCopyLayers", false);
+    const json ids = a.has("layers") ? a.flags["layers"] : json::array({positional(a, 1, "texCopyLayers", "layer")});
+    json layers = json::array();
+    std::set<std::string> buffers;
+    for (const json& id : ids)
+    {
+        const Layer& l = s.layer(id.get<std::string>());
+        layers.push_back(l.toJson());
+        paintBuffersOf(l, buffers);
+    }
+    const paint::PaintPtr data = paint::readPaint(*s.set);
+    auto kept = std::make_shared<paint::PaintData>();
+    for (const std::string& b : buffers)
+        if (const paint::Buffer* buf = data->buffer(b))
+            kept->buffers[b] = *buf;
+    kept->images = data->images;
+    kept->pruneImages();
+    const json clip = {{"format", "lilaLayers"}, {"version", 1}, {"layers", layers}, {"paint", kept->toJson()}};
+    return clip.dump();
+}
+
+json pasteLayers(const Args& a)
+{
+    Session s = open(a, "texPasteLayers");
+    json clip;
+    try
+    {
+        clip = json::parse(positional(a, 1, "texPasteLayers", "clipboard text"));
+    }
+    catch (const json::exception&)
+    {
+        throw CommandError("texPasteLayers: the text isn't copied layers");
+    }
+    if (clip.value("format", std::string()) != "lilaLayers")
+        throw CommandError("texPasteLayers: the text isn't copied layers (texCopyLayers makes them)");
+    // Paint buffers come along under fresh ids, so the pasted layers paint independently of their originals.
+    const scene::DataPtr pd = paint::PaintData::fromJson(clip.value("paint", json::object()));
+    const auto* pasted = dynamic_cast<const paint::PaintData*>(pd.get());
+    auto data = std::make_shared<paint::PaintData>(*paint::readPaint(*s.set));
+    std::map<std::string, std::string> renamed;
+    if (pasted)
+    {
+        for (const auto& [id, buf] : pasted->buffers)
+        {
+            const std::string fresh = data->uniqueId();
+            data->buffers[fresh] = buf;
+            renamed[id] = fresh;
+        }
+        for (const auto& [k, img] : pasted->images)
+            data->images[k] = img;
+    }
+    json out = json::array();
+    const json layers = clip.value("layers", json::array());
+    for (const json& lj : layers)
+    {
+        Layer l = instantiateLayer(lj, s.stack());
+        renamePaint(l, renamed);
+        out.push_back(l.id);
+        insertLayer(s, std::move(l), a);
+    }
+    if (!renamed.empty())
+        paint::writePaint(scene(), *s.set, data);
+    json r = {{"layers", out}};
+    r["warnings"] = s.commit();
+    return r;
+}
+
+/** The composite of the stack up to and including the top of the given root layers, per channel those layers write, at the first tile. */
+std::map<std::string, image::Image> flattenedImages(Session& s, const std::vector<std::string>& ids, std::vector<std::string>* warnings)
+{
+    if (ids.empty())
+        throw CommandError(std::string(s.cmd) + ": give the layers to flatten");
+    LayerStack copy = s.stack();
+    size_t top = 0;
+    std::set<std::string> channels;
+    for (const std::string& id : ids)
+    {
+        size_t at = 0;
+        std::vector<Layer>* list = s.stack().listOf(id, &at);
+        if (!list)
+            throw CommandError(std::string(s.cmd) + ": no layer " + id);
+        if (list != &s.stack().layers)
+            throw CommandError(std::string(s.cmd) + ": " + id + " is inside a folder; flatten the folder");
+        top = std::max(top, at);
+        std::function<void(const Layer&)> collect = [&](const Layer& l) {
+            for (const Channel& c : s.settings.channels)
+                if (l.kind != LayerKind::Folder && channelOn(s.stack(), l, c.name))
+                    channels.insert(c.name);
+            for (const Layer& c : l.children)
+                collect(c);
+        };
+        collect(*s.stack().find(id));
+    }
+    for (size_t i = top + 1; i < copy.layers.size(); ++i)
+        copy.layers[i].enabled = false;
+    const StackCompile c = compileStack(copy, s.settings, s.graph);
+    std::vector<std::pair<std::string, PortType>> wanted;
+    for (const Channel& ch : s.settings.channels)
+        if (channels.contains(ch.name))
+            wanted.push_back({ch.name, ch.type});
+    if (s.settings.tiles.size() > 1 && warnings)
+        warnings->push_back("only the first UDIM tile is flattened; the others keep showing the stack below");
+    try
+    {
+        return evaluateGraphOutputs(*s.set, c.graph, materialRequests(c.graph, wanted), s.settings.tiles.front().udim, 0, 0, {}, warnings);
+    }
+    catch (const std::exception& e)
+    {
+        throw CommandError(std::string(s.cmd) + ": " + e.what());
+    }
+}
+
+std::vector<std::string> idsArg(const Args& a, const char* cmd)
+{
+    std::vector<std::string> ids;
+    if (a.has("layers"))
+        for (const json& id : a.flags["layers"])
+            ids.push_back(id.get<std::string>());
+    else
+        ids.push_back(positional(a, 1, cmd, "layer"));
+    return ids;
+}
+
+/** Writes each image (full coverage) as <folder>/<set>_<prefix>_<channel>.exr; returns the files by channel. */
+std::map<std::string, std::string> writeFlattened(const std::map<std::string, image::Image>& images, const std::filesystem::path& folder,
+                                                  const std::string& stem)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    std::map<std::string, std::string> files;
+    for (const auto& [channel, img] : images)
+    {
+        std::vector<float> rgba = img.rgba;
+        for (size_t i = 3; i < rgba.size(); i += 4)
+            rgba[i] = 1.0f;
+        const std::filesystem::path f = folder / (stem + "_" + channel + ".exr");
+        image::writeExr(f, img.width, img.height, rgba, 32);
+        files[channel] = paths::toUtf8(f);
+    }
+    return files;
+}
+
+json flattenLayers(const Args& a)
+{
+    Session s = open(a, "texFlattenLayers");
+    std::vector<std::string> ids = idsArg(a, "texFlattenLayers");
+    // Merge Down takes the layer below the one named as well.
+    if (a.get<bool>("down", false))
+    {
+        size_t at = 0;
+        std::vector<Layer>* list = s.stack().listOf(ids.front(), &at);
+        if (!list || at == 0)
+            throw CommandError("texFlattenLayers: nothing below " + ids.front() + " to merge into");
+        ids.push_back((*list)[at - 1].id);
+    }
+    std::vector<std::string> warnings;
+    const std::map<std::string, image::Image> images = flattenedImages(s, ids, &warnings);
+    Layer merged;
+    merged.id = s.stack().newId('L');
+    merged.kind = LayerKind::Paint;
+    merged.name = a.get<std::string>("name", ids.size() > 1 ? std::string("Merged") : s.layer(ids.front()).name + " flattened");
+    const std::filesystem::path folder = bake::resolveFolder(a.get<std::string>("folder", "textures/" + s.set->name() + "/flattened"));
+    for (const auto& [channel, file] : writeFlattened(images, folder, s.set->name() + "_" + merged.id))
+    {
+        merged.paint[channel] = file;
+        merged.channels[channel] = ChannelBlend{};
+    }
+    // The new layer sits where the top one was; the flattened layers go, or stay hidden below it with keep.
+    size_t top = 0;
+    for (const std::string& id : ids)
+    {
+        size_t at = 0;
+        s.stack().listOf(id, &at);
+        top = std::max(top, at);
+    }
+    std::vector<Layer>& root = s.stack().layers;
+    root.insert(root.begin() + std::ptrdiff_t(top + 1), merged);
+    const bool keep = a.get<bool>("keep", false);
+    for (const std::string& id : ids)
+    {
+        size_t at = 0;
+        std::vector<Layer>* list = s.stack().listOf(id, &at);
+        if (!list)
+            continue;
+        if (keep)
+            (*list)[at].enabled = false;
+        else
+            list->erase(list->begin() + std::ptrdiff_t(at));
+    }
+    for (const std::string& w : s.commit())
+        warnings.push_back(w);
+    return {{"layer", merged.id}, {"channels", merged.paint}, {"warnings", warnings}};
+}
+
+json exportFlattened(const Args& a)
+{
+    Session s = open(a, "texExportFlattened", false);
+    const std::vector<std::string> ids = idsArg(a, "texExportFlattened");
+    std::vector<std::string> warnings;
+    const auto images = flattenedImages(s, ids, &warnings);
+    const std::filesystem::path folder = bake::resolveFolder(a.get<std::string>("folder", "textures/" + s.set->name()));
+    std::map<std::string, std::string> files;
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    const std::string format = a.get<std::string>("format", "png");
+    for (const auto& [channel, img] : images)
+    {
+        const std::filesystem::path f = folder / (s.set->name() + "_" + ids.front() + "_" + channel + "." + format);
+        if (format == "exr")
+            image::writeExr(f, img.width, img.height, img.rgba, 32);
+        else
+        {
+            // Colour channels go to 8 and 16-bit files as sRGB, data channels as they are.
+            const Channel* c = s.settings.channel(channel);
+            std::vector<float> rgba = img.rgba;
+            if (c && c->type == PortType::Color)
+                for (size_t i = 0; i < rgba.size(); ++i)
+                    if (i % 4 != 3)
+                        rgba[i] = std::clamp(rgba[i], 0.0f, 1.0f) <= 0.0031308f ? rgba[i] * 12.92f
+                                                                              : 1.055f * std::pow(std::clamp(rgba[i], 0.0f, 1.0f), 1.0f / 2.4f) - 0.055f;
+            image::writePng(f, img.width, img.height, rgba, 16);
+        }
+        files[channel] = paths::toUtf8(f);
+    }
+    return {{"files", files}, {"warnings", warnings}};
+}
+
 } // namespace
 
 void registerLayerCommands()
@@ -791,6 +1071,50 @@ void registerLayerCommands()
             setSmartMaterialTags(m.name, tags);
             return tags;
         },
+    });
+    ops::registerCommand({
+        .name = "texCopyLayers",
+        .doc = "Copy layers (with their masks, children and paint) as text for texPasteLayers, into this set or another, in this scene "
+               "or another. Returns the text.",
+        .positionalDoc = "set [layer]",
+        .flags = {{"layers", "", T::List, nullptr, "The layers to copy, bottom first; else the positional one."}},
+        .undoable = false,
+        .run = copyLayers,
+    });
+    ops::registerCommand({
+        .name = "texPasteLayers",
+        .doc = "Paste layers texCopyLayers copied, with fresh layer and mask ids, unique anchor names and their own copies of the paint. "
+               "Placed like texAddLayer (above, below, parent, index). Returns {layers, warnings}.",
+        .positionalDoc = "set text",
+        .flags = {{"above", "", T::String, nullptr, "Insert right above this layer."},
+                  {"below", "", T::String, nullptr, "Insert right below this layer."},
+                  {"parent", "", T::String, nullptr, "Folder to put them in."},
+                  {"index", "", T::Int, nullptr, "Position in the root or parent, 0 the bottom.", {}, {}, 0.0}},
+        .run = pasteLayers,
+    });
+    ops::registerCommand({
+        .name = "texFlattenLayers",
+        .doc = "Flatten root layers into one paint layer: what the stack shows with them (the stack below them included, every channel "
+               "they write, masks baked in) becomes the new layer's pixels, written to folder as EXR. down=True merges the layer into "
+               "the one below it. keep=True leaves the originals hidden under it. Returns {layer, channels, warnings}.",
+        .positionalDoc = "set [layer]",
+        .flags = {{"layers", "", T::List, nullptr, "Root layers to flatten together; else the positional one."},
+                  {"down", "", T::Bool, false, "Merge the layer with the one below it."},
+                  {"keep", "", T::Bool, false, "Keep the flattened layers, hidden."},
+                  {"name", "", T::String, nullptr, "The new layer's name."},
+                  {"folder", "", T::String, nullptr, "Where its pixels go; textures/<set>/flattened by default."}},
+        .run = flattenLayers,
+    });
+    ops::registerCommand({
+        .name = "texExportFlattened",
+        .doc = "Write what flattening root layers would make (the stack with them, every channel they write) as images, leaving the stack "
+               "alone. Returns {files, warnings}.",
+        .positionalDoc = "set [layer]",
+        .flags = {{"layers", "", T::List, nullptr, "Root layers; else the positional one."},
+                  {"folder", "", T::String, nullptr, "Where the files go; textures/<set> by default."},
+                  {"format", "", T::String, "png", "png (16 bit, colour as sRGB) or exr (32 bit linear).", {"png", "exr"}}},
+        .undoable = false,
+        .run = exportFlattened,
     });
 }
 } // namespace lila::tex

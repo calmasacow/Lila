@@ -10273,6 +10273,14 @@ def texConnect(*objects: Any) -> Any:
         objects: set from to.
     """
 
+def texCopyLayers(*objects: Any, layers: Sequence[Any] | None = None) -> Any:
+    """Copy layers (with their masks, children and paint) as text for texPasteLayers, into this set or another, in this scene or another. Returns the text.
+
+    Args:
+        objects: set [layer].
+        layers: The layers to copy, bottom first; else the positional one.
+    """
+
 def texCopyNodes(*objects: Any) -> Any:
     """Nodes as shareable text (JSON with a format header): their values and the links between them. Paste with texPasteNodes.
 
@@ -10350,6 +10358,16 @@ def texExport(*objects: Any, preset: str | None = None, folder: str | None = Non
         normalFromHeight: Write the normal as detail over the height, with the height at 16 bits, for materials that rebuild normals from it; the set's normalFromHeight when left out.
     """
 
+def texExportFlattened(*objects: Any, layers: Sequence[Any] | None = None, folder: str | None = None, format: str | None = None) -> Any:
+    """Write what flattening root layers would make (the stack with them, every channel they write) as images, leaving the stack alone. Returns {files, warnings}.
+
+    Args:
+        objects: set [layer].
+        layers: Root layers; else the positional one.
+        folder: Where the files go; textures/<set> by default.
+        format: png (16 bit, colour as sRGB) or exr (32 bit linear). One of 'png', 'exr'. Default 'png'.
+    """
+
 def texExportGraph(*objects: Any) -> Any:
     """Write a texture set to a file: .lilamat holds its graph and settings (import it to make the set again); .lilatexnodes holds its node groups as graph nodes for the node library. Returns the path.
 
@@ -10386,6 +10404,18 @@ def texFlattenLayer(*objects: Any, layer: str | None = None) -> Any:
     Args:
         objects: set [layer].
         layer: The paint layer.
+    """
+
+def texFlattenLayers(*objects: Any, layers: Sequence[Any] | None = None, down: bool | None = None, keep: bool | None = None, name: str | None = None, folder: str | None = None) -> Any:
+    """Flatten root layers into one paint layer: what the stack shows with them (the stack below them included, every channel they write, masks baked in) becomes the new layer's pixels, written to folder as EXR. down=True merges the layer into the one below it. keep=True leaves the originals hidden under it. Returns {layer, channels, warnings}.
+
+    Args:
+        objects: set [layer].
+        layers: Root layers to flatten together; else the positional one.
+        down: Merge the layer with the one below it. Default False.
+        keep: Keep the flattened layers, hidden. Default False.
+        name: The new layer's name.
+        folder: Where its pixels go; textures/<set>/flattened by default.
     """
 
 def texGraphInfo(*objects: Any, source: bool | None = None) -> Any:
@@ -10504,6 +10534,17 @@ def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None =
         particles: Particle brush {kind, count, length, size, spread, rate, seed}, when stroke has none.
         stencil: Stencil {image, offset, scale, rotation, invert, tile, mode, colorChannel}, when stroke has none.
         id: The stroke id the paint tool painted live under.
+    """
+
+def texPasteLayers(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
+    """Paste layers texCopyLayers copied, with fresh layer and mask ids, unique anchor names and their own copies of the paint. Placed like texAddLayer (above, below, parent, index). Returns {layers, warnings}.
+
+    Args:
+        objects: set text.
+        above: Insert right above this layer.
+        below: Insert right below this layer.
+        parent: Folder to put them in.
+        index: Position in the root or parent, 0 the bottom.
     """
 
 def texPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
