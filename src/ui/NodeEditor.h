@@ -171,6 +171,11 @@ private:
     QString mOwner;
     nlohmann::json mShownValues;
     bool mValueCheck = false;
+    /** What the canvas was last built from, so a refresh with an unchanged group stamp can skip the rebuild. */
+    std::optional<size_t> mBuiltStamp;
+    QString mBuiltGroup;
+    QString mBuiltOwner;
+    nlohmann::json mBuiltInfo;
     std::set<std::string> mSelectNext; // selected by the next refresh, after a paste or duplicate
     QWidget* mBar = nullptr;
     QComboBox* mGroups = nullptr;

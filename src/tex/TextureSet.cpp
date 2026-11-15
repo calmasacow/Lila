@@ -228,6 +228,12 @@ SetSettings readSettings(const Node& set)
     }
 }
 
+size_t setStamp(const Node& set)
+{
+    const size_t graph = std::hash<std::string>{}(set.as<std::string>(attr(set, "graph")));
+    return graph ^ (std::hash<std::string>{}(set.as<std::string>(attr(set, "settings"))) + 0x9e3779b97f4a7c15ull + (graph << 6) + (graph >> 2));
+}
+
 void writeGraph(scene::Graph& g, Node& set, const Graph& graph)
 {
     if (graph.ties.empty() && graph.frames.empty())

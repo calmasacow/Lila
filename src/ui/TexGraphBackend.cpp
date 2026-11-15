@@ -153,6 +153,12 @@ public:
     std::vector<std::string> groupNames(scene::Graph& g) const override { return tex::setNames(g); }
     bool hasGroup(scene::Graph& g, const std::string& group) const override { return tex::findSet(g, group) != nullptr; }
     bool isGroupNode(const scene::Node& n) const override { return n.type().name == tex::kTextureSetType; }
+    std::optional<size_t> groupStamp(scene::Graph& g, const std::string& group) const override
+    {
+        if (scene::Node* n = tex::findSet(g, group))
+            return tex::setStamp(*n);
+        return std::nullopt;
+    }
     std::string newGroupAction() const override { return "texture.newSet"; }
     std::vector<std::string> fileSuffixes() const override { return {"lilamat", "lilatexnodes", "lilatexnode"}; }
 

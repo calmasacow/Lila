@@ -95,6 +95,8 @@ LILA_SCENE_API std::string defaultSetName(std::string_view material);
 /** Throw std::invalid_argument when the stored JSON is unreadable. */
 LILA_SCENE_API Graph readGraph(const scene::Node& set);
 LILA_SCENE_API SetSettings readSettings(const scene::Node& set);
+/** A hash of the set's stored graph and settings: equal stamps mean texGraphInfo would answer the same. */
+LILA_SCENE_API size_t setStamp(const scene::Node& set);
 /** Undoable writes (inside a command). */
 LILA_SCENE_API void writeGraph(scene::Graph& g, scene::Node& set, const Graph& graph);
 LILA_SCENE_API void writeSettings(scene::Graph& g, scene::Node& set, const SetSettings& settings);

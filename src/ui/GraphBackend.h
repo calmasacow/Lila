@@ -99,6 +99,11 @@ public:
     virtual bool rebuildsOn(scene::Change /*change*/, const scene::Node* /*n*/) const { return false; }
     /** Whether undo and redo rebuild the canvas, for a backend keeping view state (positions, flags) outside its group nodes. */
     virtual bool rebuildsOnUndo() const { return false; }
+    /**
+     * A cheap fingerprint of everything the group's canvas and panel show, or nullopt when the backend has none. A refresh
+     * whose stamp matches the last one skips the rebuild, so commands that leave the group alone cost nothing here.
+     */
+    virtual std::optional<size_t> groupStamp(scene::Graph& /*g*/, const std::string& /*group*/) const { return std::nullopt; }
     /** The group the node at path runs, empty when it isn't an owner. */
     virtual std::string groupOfOwner(scene::Graph& g, const std::string& path) const;
     /** "modifier": what an owner is called in the side panel. */

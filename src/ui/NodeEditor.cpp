@@ -670,6 +670,7 @@ bool NodeEditor::setBackend(const std::string& id)
         return true;
     mBackend = std::move(next);
     mCanvas->backend = mBackend.get();
+    mBuiltStamp.reset();
     mGroup.clear();
     mOwner.clear();
     mSelectedNode.clear();
@@ -1032,10 +1033,11 @@ nlohmann::json NodeEditor::shownValues() const
     std::string owner = ownerInView();
     if (owner.empty() || mGroup.isEmpty())
         return out;
-    json info = run("GroupInfo", args({mGroup.toStdString()}));
+    scene::Graph& g = scene::Graph::current();
+    const bool cached = mBuiltStamp && mGroup == mBuiltGroup && mBackend->groupStamp(g, mGroup.toStdString()) == mBuiltStamp;
+    json info = cached ? mBuiltInfo : run("GroupInfo", args({mGroup.toStdString()}));
     if (!info.is_object() || !info.contains("definition"))
         return out;
-    scene::Graph& g = scene::Graph::current();
     for (const json& in : info["definition"].value("inputs", json::array()))
         if (std::string plug = owner + "." + in.value("name", ""); hasPlug(plug))
             out[plug] = scene::toJson(g.value(g.plug(plug)));
@@ -1100,6 +1102,15 @@ void NodeEditor::refresh(bool panel)
 
     refreshGroups();
     refreshSendButton();
+    std::optional<size_t> stamp = mGroup.isEmpty() ? std::nullopt : mBackend->groupStamp(scene::Graph::current(), mGroup.toStdString());
+    if (stamp && stamp == mBuiltStamp && mGroup == mBuiltGroup && mOwner == mBuiltOwner && mSelectNext.empty() &&
+        qs(mCanvas->group()) == mGroup)
+    {
+        if (panel && shownValues() != mShownValues)
+            rebuildSidePanel();
+        mCanvas->refreshThumbs();
+        return;
+    }
     std::set<std::string> selected = std::move(mSelectNext);
     mSelectNext.clear();
     // Edits rebuild the canvas; what was selected stays selected.
@@ -1109,6 +1120,10 @@ void NodeEditor::refresh(bool panel)
     if (selected.empty() && !mSelectedNode.isEmpty())
         selected.insert(mSelectedNode.toStdString());
     json info = mGroup.isEmpty() ? json() : run("GroupInfo", args({mGroup.toStdString()}));
+    mBuiltStamp = stamp;
+    mBuiltGroup = mGroup;
+    mBuiltOwner = mOwner;
+    mBuiltInfo = stamp ? info : json();
     mCanvas->build(mGroup.toStdString(), info, selected);
     if (panel)
         rebuildSidePanel();
