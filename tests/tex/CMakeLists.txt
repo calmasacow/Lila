@@ -37,6 +37,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_path.cpp
     test_tex_pick.cpp
     test_tex_tilt.cpp
+    test_tex_selection.cpp
     test_tex_vt.cpp)
 target_link_libraries(lila_tex_gpu_tests PRIVATE LilaUI doctest::doctest)
 add_dependencies(lila_tex_gpu_tests lila_slang_runtime)

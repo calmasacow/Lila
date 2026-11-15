@@ -116,6 +116,10 @@ struct LILA_SCENE_API Payload
     std::string normalMode = "bump";
     std::string stampImage;
     float intensity = 1.0f;
+    /** Triangles of the stroke mesh's triangulation the stroke leaves alone (locked faces), ascending. */
+    std::vector<uint32_t> locked;
+    /** A PaintData::images key: a uv mask (its alpha, tile 1001) every texel's amount is multiplied by (the quick mask). */
+    std::string limit;
 
     /** The channels the stroke writes, the mask last. */
     std::vector<std::string> written() const;

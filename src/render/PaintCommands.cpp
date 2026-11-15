@@ -420,7 +420,7 @@ uint32_t triangleAt(const PaintMesh& mesh, const json& at, float* u = nullptr, f
 }
 
 /** A fill's triangles from fillBy (mesh, island, material, polygon, triangle, selection) and at / triangle / faces / material. */
-std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const Node& meshNode)
+std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const Node& meshNode, const Node* setOf)
 {
     const std::string by = pay.value("fillBy", std::string("mesh"));
     auto seed = [&]() -> uint32_t {
@@ -462,6 +462,14 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
         }
         return pm.materialOf(seed());
     }
+    if (by == "group")
+    {
+        const std::string name = pay.value("group", std::string());
+        const json g = setOf ? tex::readSettings(*setOf).faceGroups.value(name, json()) : json();
+        if (!g.is_object())
+            throw CommandError("texPaintStroke: no face group '" + name + "'");
+        return pm.ofFaces(g.value("faces", std::vector<uint32_t>()));
+    }
     if (by == "selection" || by == "faces")
     {
         std::vector<uint32_t> faces;
@@ -473,7 +481,7 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
             throw CommandError("texPaintStroke: fillBy selection needs selected faces (or faces [...])");
         return pm.ofFaces(faces);
     }
-    throw CommandError("texPaintStroke: fillBy is mesh, island, material, polygon, triangle or selection, not " + by);
+    throw CommandError("texPaintStroke: fillBy is mesh, island, material, polygon, triangle, selection or group, not " + by);
 }
 
 /**
@@ -656,6 +664,17 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             ch[c.name] = 0.0;
         pay["channels"] = ch;
     }
+    // The limit mask (quick mask) comes as texels or a key; the record keeps its key.
+    if (pay.contains("limit") && pay["limit"].is_object())
+    {
+        auto img = PaintImage::fromJson(pay["limit"]);
+        if (!img)
+            throw CommandError("texPaintStroke: payload limit needs width, height and data");
+        holdImage(img);
+        pay["limit"] = img->key();
+    }
+    json lockedFaces = pay.contains("lockedFaces") ? pay["lockedFaces"] : json();
+    pay.erase("lockedFaces");
     json projection;
     if (kind == "project")
     {
@@ -714,7 +733,7 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             if (s.payload.fillBy.empty())
                 s.payload.fillBy = pay.value("fillBy", std::string("mesh"));
             if (s.payload.triangles.empty())
-                s.payload.triangles = symmetricFill(fillTriangles(pay, *pm, *meshNode), s.payload.fillBy, *pm, sym);
+                s.payload.triangles = symmetricFill(fillTriangles(pay, *pm, *meshNode, &set), s.payload.fillBy, *pm, sym);
             s.view.reset();
         }
         else
@@ -802,6 +821,16 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
                 off = pm->uv(src.triangle, src.u, src.v) - pm->uv(first->triangle, first->u, first->v);
             s.payload.sourceOffsets.push_back(off);
         }
+    }
+    if (lockedFaces.is_array())
+    {
+        std::vector<uint32_t> faces;
+        for (const json& f : lockedFaces)
+            faces.push_back(f.get<uint32_t>());
+        std::vector<uint32_t> tris = pm->ofFaces(faces);
+        s.payload.locked.insert(s.payload.locked.end(), tris.begin(), tris.end());
+        std::sort(s.payload.locked.begin(), s.payload.locked.end());
+        s.payload.locked.erase(std::unique(s.payload.locked.begin(), s.payload.locked.end()), s.payload.locked.end());
     }
     if (s.stencil)
     {
@@ -893,15 +922,17 @@ json paintStroke(const Args& a)
         throw CommandError(std::string("texPaintStroke: ") + e.what());
     }
     std::shared_ptr<const PaintImage> stencil = s.stencil ? heldImage(s.stencil->image) : nullptr;
+    std::shared_ptr<const PaintImage> limit = s.payload.limit.empty() ? nullptr : heldImage(s.payload.limit);
     buf.strokes.push_back(std::make_shared<const Stroke>(std::move(s)));
     const uint64_t id = buf.strokes.back()->id;
     PaintPtr next = withBuffer(*readPaint(set), layer, std::move(buf), true, image);
-    if (stencil && !next->images.contains(stencil->key()))
-    {
-        auto withStencil = std::make_shared<PaintData>(*next);
-        withStencil->images[stencil->key()] = stencil;
-        next = withStencil;
-    }
+    for (const auto& img : {stencil, limit})
+        if (img && !next->images.contains(img->key()))
+        {
+            auto withImage = std::make_shared<PaintData>(*next);
+            withImage->images[img->key()] = img;
+            next = withImage;
+        }
     writePaint(graph(), set, next);
     return {{"layer", layer}, {"stroke", id}, {"dabs", r.dabs}, {"pages", r.pages}};
 }

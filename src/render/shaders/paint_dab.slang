@@ -152,6 +152,10 @@ struct Params
     uint stencilColor;
     float4* stencil;
     float4x4 stencilToClip;
+    uint* locked;
+    float4* limit;
+    uint limitW;
+    uint limitH;
 };
 
 static const uint kStencilOn = 1;
@@ -463,6 +467,8 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
     GeoTexel g = item.geo[texel];
     if (g.triangle == kNoTriangle)
         return;
+    if (p.locked != nullptr && (p.locked[g.triangle >> 5] & (1u << (g.triangle & 31u))) != 0)
+        return;
     Tri tri = p.tris[g.triangle];
     float w0 = 1.0 - g.u - g.v;
     float3 pos = tri.p[0].xyz * w0 + tri.p[1].xyz * g.u + tri.p[2].xyz * g.v;
@@ -596,6 +602,8 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         return;
     item.acc[texel] = float4(value, cov);
     float t = cov * p.strength;
+    if (p.limit != nullptr)
+        t *= saturate(imageAt(p.limit, p.limitW, p.limitH, float2(frac(uv.x), 1.0 - frac(uv.y)), false).a);
     float3 stencilRgb = float3(0.0);
     if ((p.stencilFlags & kStencilOn) != 0)
     {

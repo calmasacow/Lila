@@ -70,6 +70,10 @@ double areaUv(const tp::PaintMesh& m, uint32_t t)
 
 struct UvTexturePaint::State
 {
+    /** Selection tool: the shape drawn so far, in uv, and the modifiers it started with. */
+    std::vector<glm::dvec2> select;
+    bool selecting = false;
+    Qt::KeyboardModifiers selectMods;
     std::string set, channel;
     bool painting = false;
     struct Tile
@@ -232,6 +236,13 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
     if (!set)
         return true;
     const json s = texturePaintSettings();
+    if (s.value("tool", "") == "select")
+    {
+        m->select = {toUv(e->position())};
+        m->selecting = true;
+        m->selectMods = e->modifiers();
+        return true;
+    }
     if (s.value("tool", "") == "pick")
     {
         const glm::dvec2 uv = toUv(e->position());
@@ -325,6 +336,11 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
 bool UvTexturePaint::mouseMove(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
 {
     m->cursor = e->position();
+    if (m->selecting)
+    {
+        m->select.push_back(toUv(e->position()));
+        return true;
+    }
     if (!m->stroking)
         return false;
     if (e->type() == QEvent::MouseMove)
@@ -366,6 +382,28 @@ bool UvTexturePaint::mouseMove(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
 
 bool UvTexturePaint::mouseRelease(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
 {
+    if (m->selecting)
+    {
+        // A drag is a lasso in uv; the layer selected in the Texture Set dock takes the mask.
+        m->selecting = false;
+        std::vector<glm::dvec2> pts = std::exchange(m->select, {});
+        const std::string layer = textureSets::activeLayer(m->set);
+        if (pts.size() < 3 || layer.empty())
+            return true;
+        json list = json::array();
+        for (const glm::dvec2& q : pts)
+            list.push_back({q.x, q.y});
+        const char* mode = (m->selectMods & Qt::ShiftModifier) ? "add" : (m->selectMods & Qt::ControlModifier) ? "subtract" : "replace";
+        try
+        {
+            ops::execute("texSelectionMask", {{"args", {m->set, layer}}, {"uvPoints", list}, {"mode", mode}}, CallSource::UI);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("UV editor: {}", ex.what());
+        }
+        return true;
+    }
     if (!m->stroking)
         return false;
     m->sampler.end();

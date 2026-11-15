@@ -149,6 +149,7 @@ std::vector<std::string> Payload::written() const
         for (const auto& [name, v] : channels)
             if (name != kMaskChannel)
                 out.push_back(name);
+    // A projection with no colour channel paints only the mask (a selection made on screen).
     if (kind == "project" && !colorChannel.empty() && std::find(out.begin(), out.end(), colorChannel) == out.end())
         out.insert(out.begin(), colorChannel);
     if (mask || channels.contains(kMaskChannel))
@@ -206,6 +207,10 @@ json Payload::toJson() const
         j["source"] = source;
     if (!tip.is_null())
         j["tip"] = tip;
+    if (!locked.empty())
+        j["locked"] = packed::make<uint32_t>(locked, 1);
+    if (!limit.empty())
+        j["limit"] = limit;
     return j;
 }
 
@@ -257,6 +262,12 @@ Payload Payload::fromJson(const json& j)
     std::sort(p.triangles.begin(), p.triangles.end());
     p.triangles.erase(std::unique(p.triangles.begin(), p.triangles.end()), p.triangles.end());
     p.fillBy = j.value("fillBy", std::string());
+    if (j.contains("locked"))
+        for (double t : rows(j["locked"], 1, "payload locked"))
+            p.locked.push_back(uint32_t(t));
+    std::sort(p.locked.begin(), p.locked.end());
+    p.locked.erase(std::unique(p.locked.begin(), p.locked.end()), p.locked.end());
+    p.limit = j.value("limit", std::string());
     p.image = j.value("image", std::string());
     p.colorChannel = j.value("colorChannel", p.colorChannel);
     p.facingFade = std::clamp(j.value("facingFade", p.facingFade), 0.0f, 1.0f);
@@ -438,6 +449,8 @@ std::vector<std::string> Stroke::images() const
         out.push_back(payload.image);
     if (stencil && !stencil->image.empty())
         out.push_back(stencil->image);
+    if (!payload.limit.empty())
+        out.push_back(payload.limit);
     return out;
 }
 

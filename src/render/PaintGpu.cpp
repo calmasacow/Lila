@@ -112,6 +112,9 @@ struct GpuParams
     VkDeviceAddress stencil = 0;
     /** The view the stencil is pinned to (a projection's symmetry copies project through other views). */
     glm::mat4 stencilToClip{1.0f};
+    /** Locked triangles (a bit each), and the limit mask's texels (RGBA, its alpha read) with its size. */
+    VkDeviceAddress locked = 0, limit = 0;
+    uint32_t limitW = 0, limitH = 0;
 };
 static_assert(offsetof(GpuParams, items) == 288);
 static_assert(offsetof(GpuParams, valueImages) == 376);
@@ -119,7 +122,8 @@ static_assert(offsetof(GpuParams, depthW) == 440);
 static_assert(offsetof(GpuParams, strength) == 520);
 static_assert(offsetof(GpuParams, stencilW) == 560);
 static_assert(offsetof(GpuParams, stencil) == 600);
-static_assert(sizeof(GpuParams) == 672);
+static_assert(offsetof(GpuParams, locked) == 672);
+static_assert(sizeof(GpuParams) == 696);
 
 struct DabPush
 {
@@ -425,6 +429,11 @@ struct Live
     uint32_t mode = 0, sub = 0;
     /** fill: a bit per triangle. */
     std::vector<uint32_t> triMask;
+    /** A bit per locked triangle, and the limit mask (RGBA floats); empty when the stroke has none. */
+    std::vector<uint32_t> lockMask;
+    std::vector<float> limit;
+    int limitW = 0, limitH = 0;
+    VkDeviceAddress lockAddr = 0, limitAddr = 0;
     /** project: the picture (RGBA floats) and the NDC box (x0, y0, x1, y1) of its covered pixels. */
     std::vector<float> image;
     int imageW = 0, imageH = 0;
@@ -899,7 +908,7 @@ uint32_t modeOf(const Payload& p, uint32_t& sub)
 
 /** What a stroke needs on the GPU besides its dabs, from its header. image is a project stroke's picture. */
 std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh> mesh, std::shared_ptr<const PaintImage> image = nullptr,
-                               std::shared_ptr<const PaintImage> stencil = nullptr)
+                               std::shared_ptr<const PaintImage> stencil = nullptr, std::shared_ptr<const PaintImage> limit = nullptr)
 {
     auto live = std::make_unique<Live>();
     live->header = header;
@@ -984,6 +993,24 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
         live->sourceImages = valueImages(p.source, live->channels);
         live->valueScale = float(p.source.value("scale", 1.0));
     }
+    if (!header->payload.locked.empty())
+    {
+        live->lockMask.assign((live->mesh->triangleCount() + 31) / 32 + 1, 0u);
+        for (uint32_t t : header->payload.locked)
+            if (t < live->mesh->triangleCount())
+                live->lockMask[t >> 5] |= 1u << (t & 31u);
+    }
+    if (!header->payload.limit.empty())
+    {
+        if (!limit)
+            log::warn("paint stroke {}: its limit mask {} is missing; painted without it", header->id, header->payload.limit);
+        else
+        {
+            live->limit = limit->rgba();
+            live->limitW = limit->width;
+            live->limitH = limit->height;
+        }
+    }
     if (header->stencil)
     {
         if (!header->view)
@@ -1028,6 +1055,10 @@ void ensureUploads(VulkanContext& vk, Gpu& g, Live& live)
         live.stampAddr = upload(live.stamp.data(), live.stamp.size() * 4);
     if (!live.stencil.empty())
         live.stencilAddr = upload(live.stencil.data(), live.stencil.size() * 4);
+    if (!live.lockMask.empty())
+        live.lockAddr = upload(live.lockMask.data(), live.lockMask.size() * 4);
+    if (!live.limit.empty())
+        live.limitAddr = upload(live.limit.data(), live.limit.size() * 4);
     if (live.sourceImages)
         for (size_t c = 0; c < live.channels.size(); ++c)
             if (auto it = live.sourceImages->channels.find(live.channels[c]); it != live.sourceImages->channels.end())
@@ -1264,6 +1295,10 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
         params.valueW = uint32_t(live.sourceImages->width);
         params.valueH = uint32_t(live.sourceImages->height);
     }
+    params.locked = live.lockAddr;
+    params.limit = live.limitAddr;
+    params.limitW = uint32_t(live.limitW);
+    params.limitH = uint32_t(live.limitH);
     if (live.stencilAddr && h.stencil && h.view)
     {
         const StrokeStencil& st = *h.stencil;
@@ -1504,19 +1539,26 @@ std::shared_ptr<const PaintImage> imageOf(const scene::Node* set, const Stroke& 
     return it == data->images.end() ? nullptr : it->second;
 }
 
-/** The stroke's stencil picture: the set's, else one the paint tool holds for a stroke not yet stored. */
-std::shared_ptr<const PaintImage> stencilOf(const scene::Node* set, const Stroke& s)
+/** An image a stroke refers to by key: the set's, else one the paint tool holds for a stroke not yet stored. */
+std::shared_ptr<const PaintImage> keyedImage(const scene::Node* set, const std::string& key)
 {
-    if (!s.stencil || s.stencil->image.empty())
+    if (key.empty())
         return nullptr;
     if (set)
     {
         PaintPtr data = readPaint(*set);
-        if (auto it = data->images.find(s.stencil->image); it != data->images.end())
+        if (auto it = data->images.find(key); it != data->images.end())
             return it->second;
     }
-    return heldImage(s.stencil->image);
+    return heldImage(key);
 }
+
+std::shared_ptr<const PaintImage> stencilOf(const scene::Node* set, const Stroke& s)
+{
+    return s.stencil ? keyedImage(set, s.stencil->image) : nullptr;
+}
+
+std::shared_ptr<const PaintImage> limitOf(const scene::Node* set, const Stroke& s) { return keyedImage(set, s.payload.limit); }
 
 /** Paints a whole stroke with no undo (rasterising from records). */
 void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& material, const StrokePtr& s)
@@ -1529,7 +1571,7 @@ void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& materi
     }
     try
     {
-        l.live = makeLive(s, mesh, imageOf(g.node(key.set), *s), stencilOf(g.node(key.set), *s));
+        l.live = makeLive(s, mesh, imageOf(g.node(key.set), *s), stencilOf(g.node(key.set), *s), limitOf(g.node(key.set), *s));
     }
     catch (const std::exception& e)
     {
@@ -2146,8 +2188,8 @@ void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, Str
     std::shared_ptr<const PaintMesh> mesh = paintMesh(g, header->mesh, setMaterial(set));
     if (!mesh)
         throw std::runtime_error(header->mesh + " isn't a mesh with faces");
-    std::shared_ptr<const PaintImage> stencil = stencilOf(&set, *header);
-    l.live = makeLive(std::move(header), std::move(mesh), nullptr, std::move(stencil));
+    std::shared_ptr<const PaintImage> stencil = stencilOf(&set, *header), limit = limitOf(&set, *header);
+    l.live = makeLive(std::move(header), std::move(mesh), nullptr, std::move(stencil), std::move(limit));
 }
 
 void liveDabs(NodeId set, const std::string& buffer, std::span<const Dab> dabs)
@@ -2199,7 +2241,7 @@ ApplyResult applyStroke(scene::Graph& g, scene::Node& set, const std::string& bu
         std::shared_ptr<const PaintMesh> mesh = paintMesh(g, stroke.mesh, setMaterial(set));
         if (!mesh)
             throw std::runtime_error(stroke.mesh + " isn't a mesh with faces");
-        l.live = makeLive(header, std::move(mesh), image ? image : imageOf(&set, stroke), stencilOf(&set, stroke));
+        l.live = makeLive(header, std::move(mesh), image ? image : imageOf(&set, stroke), stencilOf(&set, stroke), limitOf(&set, stroke));
         paintDabs(key, l, stroke.dabs);
         if (wholeStroke(*l.live))
             paintWhole(key, l);

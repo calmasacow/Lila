@@ -10398,6 +10398,16 @@ def texExportPsd(*objects: Any, channels: Sequence[Any] | None = None, folder: s
         backend: gpu or cpu. One of 'gpu', 'cpu'.
     """
 
+def texFaceGroup(*objects: Any, faces: Sequence[Any] | None = None, mesh: str | None = None, remove: bool | None = None) -> Any:
+    """Save a named face set on a texture set for painting (the faces given, else those selected on the mesh), or remove it. Groups make selection masks (texSelectionMask group=), fill targets (fillBy group) and locks (the paint tool's Lock). Returns every group.
+
+    Args:
+        objects: set name.
+        faces: Face indices; else the mesh's selected faces.
+        mesh: The mesh; else the selected one.
+        remove: Remove the group. Default False.
+    """
+
 def texFlattenLayer(*objects: Any, layer: str | None = None) -> Any:
     """Flatten a paint layer: keep its pixels and drop its stroke records, so the layer no longer replays or re-rasterises them (the pixels resample instead).
 
@@ -10618,6 +10628,21 @@ def texSaveSmartMaterial(*objects: Any, name: str | None = None, description: st
         name: Library name; the layer's when left out.
         description: Shown in the library.
         mask: Save the layer's mask stack as a smart mask. Default False.
+    """
+
+def texSelectionMask(*objects: Any, points: Sequence[Any] | None = None, rect: Sequence[Any] | None = None, view: Any | None = None, uvPoints: Sequence[Any] | None = None, group: str | None = None, mode: str | None = None, occlusion: bool | None = None, mesh: str | None = None) -> Any:
+    """Make a layer's selection mask from a shape: a lasso or polygon (points, screen pixels) or a rectangle (rect [x0, y0, x1, y1]) through view, projected into the texels the view sees (occlusion=False reaches hidden ones too); a polygon in uv space (uvPoints, the triangles whose middle is inside); or a face group (group). mode replace, add or subtract. A paint layer's own mask takes it; any other layer gets a paint mask named Selection. Returns texPaintStroke's result.
+
+    Args:
+        objects: set layer.
+        points: Lasso or polygon, [[x, y], ...] screen pixels.
+        rect: [x0, y0, x1, y1] screen pixels.
+        view: The screen view, as texPaintStroke takes it.
+        uvPoints: A polygon in uv space.
+        group: A face group (texFaceGroup).
+        mode: replace, add or subtract. One of 'replace', 'add', 'subtract'. Default 'replace'.
+        occlusion: Only what the view sees. Default True.
+        mesh: The painted mesh.
     """
 
 def texSetBookmarks(*objects: Any) -> Any:

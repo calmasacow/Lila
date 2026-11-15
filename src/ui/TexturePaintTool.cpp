@@ -96,6 +96,7 @@ constexpr ToolKind kTools[] = {
     {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
     {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
     {"path", "Path", "Click points on the surface (drag to curve), Enter paints along them; drag a point afterwards to repaint.", "ease-in-control-point"},
+    {"select", "Selection", "Draw a lasso, polygon or rectangle to mask the active layer: Shift adds, Ctrl subtracts.", "lasso"},
     {"pick", "Picker", "Click the mesh to take every channel's value there; Shift+click keeps it as a swatch.", "color-picker"},
     {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it.", "bucket-droplet"},
     {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel.", "photo"},
@@ -177,7 +178,18 @@ struct TexturePaintSettings
     std::string pickReturn = "paint";
     /** Picked channel values kept for later, newest last. */
     std::vector<std::map<std::string, glm::vec3>> swatches;
+    /** Selection tool: lasso, polygon or rect. */
+    std::string selectMode = "lasso";
+    /** Quick Mask on: strokes paint the quick mask instead of the layer. */
+    bool quickMask = false;
+    /** The quick mask strokes are limited by once it is off (a held PaintImage key); empty for none. */
+    std::string quickLimit;
+    /** Face groups whose faces strokes leave alone. */
+    std::set<std::string> lockedGroups;
 };
+
+/** The paint buffer Quick Mask paints, outside the stack. */
+constexpr const char* kQuickMaskBuffer = "quickmask";
 
 TexturePaintSettings& texturePaintState()
 {
@@ -213,7 +225,7 @@ bool filterTool(const std::string& t) { return t == "smudge" || t == "blur" || t
 tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
 {
     tp::Payload p;
-    p.kind = s.tool == "project" ? "project" : (s.tool == "path" || s.tool == "pick") ? "paint" : s.tool;
+    p.kind = s.tool == "project" ? "project" : (s.tool == "path" || s.tool == "pick" || s.tool == "select") ? "paint" : s.tool;
     for (const ChannelValue& c : s.channels)
         if (c.on)
             p.channels[c.name] = c.color ? c.value : glm::vec3(c.value.x);
@@ -243,7 +255,32 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
         p.source = {{"node", "layerImage"}, {"values", {{"file", s.sourceImage}}}, {"resolution", 1024}, {"scale", s.materialScale}};
     if (!s.tip.is_null())
         p.tip = s.tip;
+    if (!s.quickMask)
+        p.limit = s.quickLimit;
+    // Quick Mask: the stroke paints the quick mask's coverage, nothing else.
+    if (s.quickMask && s.tool != "project")
+    {
+        p.channels.clear();
+        p.mask = true;
+        p.limit.clear();
+    }
     return p;
+}
+
+/** Triangles of the locked face groups on this mesh, for a stroke's payload. */
+std::vector<uint32_t> lockedTriangles(const scene::Node& set, const std::string& meshPath, const tex::paint::PaintMesh& mesh)
+{
+    std::vector<uint32_t> out;
+    const json groups = tex::readSettings(set).faceGroups;
+    for (const std::string& name : texturePaintState().lockedGroups)
+        if (const json g = groups.value(name, json()); g.is_object() && g.value("mesh", std::string()) == meshPath)
+        {
+            std::vector<uint32_t> t = mesh.ofFaces(g.value("faces", std::vector<uint32_t>()));
+            out.insert(out.end(), t.begin(), t.end());
+        }
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return out;
 }
 
 /** Applies a preset over the settings: only what it names changes. */
@@ -319,6 +356,9 @@ QDoubleSpinBox* settingSpin(QWidget* parent, double lo, double hi, double step, 
     s->setToolTip(tip);
     return s;
 }
+
+void setQuickMask(bool on);
+void clearQuickMask();
 
 class TexturePaintPanel final : public QWidget
 {
@@ -545,6 +585,78 @@ public:
         mPickLayer->setObjectName("pickLayer");
         mPickLayer->setToolTip("Pick the active layer's own paint instead of the whole texture set");
         mPickRow = addRow(form, "Pick", mPickLayer);
+        mSelectMode = new controls::Segmented(this);
+        mSelectMode->setObjectName("selectMode");
+        mSelectMode->add({}, "lasso", "Lasso: drag around what to select", 0);
+        mSelectMode->add({}, "lasso-polygon", "Polygon: click corners, Enter or double-click closes it", 1);
+        mSelectMode->add({}, "square", "Rectangle: drag a box", 2);
+        mSelectRow = addRow(form, "Shape", mSelectMode);
+        connect(mSelectMode, &controls::Segmented::picked, this, [this](int id) {
+            texturePaintState().selectMode = id == 1 ? "polygon" : id == 2 ? "rect" : "lasso";
+            changed();
+        });
+        mQuickMask = new QToolButton(this);
+        mQuickMask->setObjectName("quickMask");
+        mQuickMask->setText("Quick Mask");
+        mQuickMask->setCheckable(true);
+        mQuickMask->setToolTip("Quick Mask: while on, strokes paint a temporary mask; once off, every stroke stays inside it");
+        auto* clearQuick = new QToolButton(this);
+        clearQuick->setObjectName("clearQuickMask");
+        clearQuick->setIcon(icon("x"));
+        clearQuick->setAutoRaise(true);
+        clearQuick->setToolTip("Clear the quick mask: strokes paint everywhere again");
+        auto* quickRow = new QHBoxLayout;
+        quickRow->addWidget(mQuickMask, 1);
+        quickRow->addWidget(clearQuick);
+        addRow(form, "Limit", quickRow);
+        connect(mQuickMask, &QToolButton::toggled, this, [this](bool on) {
+            setQuickMask(on);
+            changed();
+        });
+        connect(clearQuick, &QToolButton::clicked, this, [this] {
+            clearQuickMask();
+            sync();
+            changed();
+        });
+        mGroups = new QComboBox(this);
+        mGroups->setObjectName("faceGroups");
+        mGroups->setToolTip("Face groups: named face sets of the texture set");
+        auto* groupMenu = new QToolButton(this);
+        groupMenu->setIcon(icon("dots"));
+        groupMenu->setAutoRaise(true);
+        groupMenu->setPopupMode(QToolButton::InstantPopup);
+        groupMenu->setStyleSheet("QToolButton::menu-indicator { image: none; width: 0; }");
+        groupMenu->setToolTip("Face group commands");
+        auto* gm = new QMenu(groupMenu);
+        gm->addAction("New Group from Selected Faces...", this, [this] { newGroup(); });
+        gm->addAction("Mask Active Layer to Group", this, [this] { maskToGroup(); });
+        gm->addAction("Fill Group", this, [this] { fillGroup(); });
+        gm->addAction("Remove Group", this, [this] { removeGroup(); });
+        groupMenu->setMenu(gm);
+        mLock = new QToolButton(this);
+        mLock->setObjectName("lockGroup");
+        mLock->setIcon(icon("lock"));
+        mLock->setCheckable(true);
+        mLock->setToolTip("Lock: strokes and fills leave this group's faces alone");
+        auto* groupRow = new QHBoxLayout;
+        groupRow->addWidget(mGroups, 1);
+        groupRow->addWidget(mLock);
+        groupRow->addWidget(groupMenu);
+        addRow(form, "Group", groupRow);
+        connect(mLock, &QToolButton::toggled, this, [this](bool on) {
+            const std::string g = mGroups->currentText().toStdString();
+            if (g.empty())
+                return;
+            if (on)
+                texturePaintState().lockedGroups.insert(g);
+            else
+                texturePaintState().lockedGroups.erase(g);
+            changed();
+        });
+        connect(mGroups, &QComboBox::currentIndexChanged, this, [this](int) {
+            const QSignalBlocker b(mLock);
+            mLock->setChecked(texturePaintState().lockedGroups.contains(mGroups->currentText().toStdString()));
+        });
         connect(mPickLayer, &QCheckBox::toggled, this, [this](bool v) { set(texturePaintState().pickLayer, v); });
         mSwatchBar = new QWidget(this);
         mSwatchBar->setObjectName("swatches");
@@ -792,6 +904,20 @@ public:
             mPickLayer->setChecked(s.pickLayer);
         }
         syncSwatches();
+        mSelectMode->setCurrent(s.selectMode == "polygon" ? 1 : s.selectMode == "rect" ? 2 : 0);
+        {
+            const QSignalBlocker bq(mQuickMask), bg(mGroups), bl(mLock);
+            mQuickMask->setChecked(s.quickMask);
+            const QString keep = mGroups->currentText();
+            mGroups->clear();
+            const std::string setName = currentTextureSet();
+            if (scene::Node* set = setName.empty() ? nullptr : tex::findSet(scene::Graph::current(), setName))
+                for (const auto& [name, g] : tex::readSettings(*set).faceGroups.items())
+                    mGroups->addItem(QString::fromStdString(name));
+            mGroups->setCurrentText(keep);
+            mLock->setChecked(s.lockedGroups.contains(mGroups->currentText().toStdString()));
+            mLock->setEnabled(mGroups->count() > 0);
+        }
         {
             const QSignalBlocker bi(mStencilInvert), bt(mStencilTile);
             mStencilInvert->setChecked(s.stencil.invert);
@@ -880,10 +1006,84 @@ private:
         showRow(mFillRow, t == "fill");
         showRow(mParticleRow, t == "paint");
         showRow(mPickRow, t == "pick");
+        showRow(mSelectRow, t == "select");
         showRow(mSwatchRow, !texturePaintState().swatches.empty());
         for (QWidget* w : {mBufferRow, mBufferFlags, mFacingRow, mBufferButtons})
             showRow(w, t == "project");
         showRow(mStencilOptions, texturePaintState().stencil.active());
+    }
+
+    void newGroup()
+    {
+        const std::string set = currentTextureSet();
+        if (set.empty())
+            return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, "New Face Group", "Name", QLineEdit::Normal, "group", &ok);
+        if (!ok || name.trimmed().isEmpty())
+            return;
+        try
+        {
+            ops::execute("texFaceGroup", {{"args", {set, name.trimmed().toStdString()}}}, CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
+        sync();
+        mGroups->setCurrentText(name.trimmed());
+    }
+
+    void maskToGroup()
+    {
+        const std::string set = currentTextureSet(), group = mGroups->currentText().toStdString();
+        const std::string layer = textureSets::activeLayer(set);
+        if (set.empty() || group.empty() || layer.empty())
+        {
+            log::warn("Texture paint: pick a face group and select a layer first");
+            return;
+        }
+        try
+        {
+            ops::execute("texSelectionMask", {{"args", {set, layer}}, {"group", group}}, CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
+    }
+
+    void fillGroup()
+    {
+        const std::string set = currentTextureSet(), group = mGroups->currentText().toStdString();
+        if (set.empty() || group.empty())
+            return;
+        tp::Payload p = payloadFor(texturePaintState(), false);
+        p.kind = "fill";
+        json payload = p.toJson();
+        payload.erase("triangles");
+        payload["fillBy"] = "group";
+        payload["group"] = group;
+        const std::string layer = textureSets::activeLayer(set);
+        try
+        {
+            ops::execute("texPaintStroke", {{"args", {set, layer}}, {"stroke", {{"brush", texturePaintState().stroke.toJson()}, {"payload", payload}}}},
+                         CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
+    }
+
+    void removeGroup()
+    {
+        const std::string set = currentTextureSet(), group = mGroups->currentText().toStdString();
+        if (set.empty() || group.empty())
+            return;
+        texturePaintState().lockedGroups.erase(group);
+        ops::execute("texFaceGroup", {{"args", {set, group}}, {"remove", true}}, CallSource::UI);
+        sync();
     }
 
     /** One small square per kept swatch, showing its colour (or its first value as gray); a click paints with it. */
@@ -1011,6 +1211,10 @@ private:
     QCheckBox *mStencilInvert = nullptr, *mStencilTile = nullptr;
     QWidget* mStencilOptions = nullptr;
     QCheckBox* mPickLayer = nullptr;
+    controls::Segmented* mSelectMode = nullptr;
+    QWidget* mSelectRow = nullptr;
+    QToolButton *mQuickMask = nullptr, *mLock = nullptr;
+    QComboBox* mGroups = nullptr;
     QWidget *mPickRow = nullptr, *mSwatchRow = nullptr, *mSwatchBar = nullptr;
     QHBoxLayout* mSwatchLayout = nullptr;
     std::map<QWidget*, QWidget*> mLabels;
@@ -1050,6 +1254,40 @@ void brushChanged()
  * Picks the channel values of a set at where ({uv} or {mesh, position}) into the brush, or with add into a new swatch.
  * A pick hands the tool back to the one used before the picker.
  */
+/**
+ * Quick Mask on: strokes paint the quick mask. Off: what it holds limits every later stroke (until cleared), so painting
+ * stays inside it.
+ */
+void setQuickMask(bool on)
+{
+    TexturePaintSettings& s = texturePaintState();
+    s.quickMask = on;
+    if (on)
+        return;
+    s.quickLimit.clear();
+    const std::string setName = currentTextureSet();
+    scene::Node* set = setName.empty() ? nullptr : tex::findSet(scene::Graph::current(), setName);
+    if (!set || !tex::paint::readPaint(*set)->buffer(kQuickMaskBuffer))
+        return;
+    const image::Image m = rp::readChannel(set->id(), kQuickMaskBuffer, tex::paint::kMaskChannel);
+    if (m.width <= 0)
+        return;
+    auto img = tex::paint::PaintImage::fromRgba(m.width, m.height, m.rgba);
+    tex::paint::holdImage(img);
+    s.quickLimit = img->key();
+}
+
+void clearQuickMask()
+{
+    TexturePaintSettings& s = texturePaintState();
+    s.quickLimit.clear();
+    s.quickMask = false;
+    const std::string setName = currentTextureSet();
+    if (scene::Node* set = setName.empty() ? nullptr : tex::findSet(scene::Graph::current(), setName))
+        if (tex::paint::readPaint(*set)->buffer(kQuickMaskBuffer))
+            ops::execute("texClearLayer", {{"args", {setName, kQuickMaskBuffer}}}, CallSource::UI);
+}
+
 void pickChannels(const std::string& set, json where, bool add)
 {
     TexturePaintSettings& s = texturePaintState();
@@ -1221,6 +1459,8 @@ public:
             return bufferPress(e, view);
         if (tool == "path")
             return pathPress(e, view);
+        if (tool == "select")
+            return selectPress(e, view);
         if (tool == "pick")
         {
             if (std::optional<Target> t = pick(e->position(), view); t && t->set != kNoNode)
@@ -1265,6 +1505,11 @@ public:
         if (mPathDrag >= 0)
         {
             pathMove(e, view);
+            return true;
+        }
+        if (mSelecting)
+        {
+            selectMove(e);
             return true;
         }
         if (mBufferDrag != BufferDrag::None)
@@ -1313,6 +1558,11 @@ public:
         if (mPathDrag >= 0)
         {
             pathRelease();
+            return true;
+        }
+        if (mSelecting)
+        {
+            finishSelection(view);
             return true;
         }
         if (mBufferDrag != BufferDrag::None)
@@ -1417,6 +1667,96 @@ public:
             place.rotation = mStencilStart.rotation + (std::atan2(b.y, b.x) - std::atan2(a.y, a.x));
         }
         viewportTools::requestRedraw();
+    }
+
+    // ------------------------------------------------------------------------------------------------ selection shapes
+
+    bool selectPress(QMouseEvent* e, const ViewInfo& view)
+    {
+        const std::string& mode = texturePaintState().selectMode;
+        mSelectMods = e->modifiers();
+        if (mode == "polygon")
+        {
+            // Clicking near the first corner closes the polygon too.
+            if (mSelect.size() >= 3 && QLineF(mSelect.front(), e->position()).length() < 8.0)
+            {
+                finishSelection(view);
+                return true;
+            }
+            mSelect.push_back(e->position());
+            viewportTools::requestRedraw();
+            return true;
+        }
+        mSelect = {e->position()};
+        mSelecting = true;
+        return true;
+    }
+
+    void selectMove(QMouseEvent* e)
+    {
+        if (texturePaintState().selectMode == "rect")
+            mSelect = {mSelect.front(), e->position()};
+        else if (QLineF(mSelect.back(), e->position()).length() > 2.0)
+            mSelect.push_back(e->position());
+        viewportTools::requestRedraw();
+    }
+
+    /** Masks the active layer with the shape drawn: plain replaces, Shift adds, Ctrl subtracts. */
+    void finishSelection(const ViewInfo& view)
+    {
+        mSelecting = false;
+        std::vector<QPointF> pts = std::exchange(mSelect, {});
+        const std::string set = currentTextureSet();
+        const std::string layer = set.empty() ? std::string() : textureSets::activeLayer(set);
+        if (layer.empty())
+        {
+            log::warn("Texture paint: select a layer in the Texture Set dock to mask");
+            return;
+        }
+        json call = {{"args", {set, layer}},
+                     {"view", viewJson(view)},
+                     {"mode", (mSelectMods & Qt::ShiftModifier) ? "add" : (mSelectMods & Qt::ControlModifier) ? "subtract" : "replace"},
+                     {"occlusion", texturePaintState().occlusion}};
+        if (texturePaintState().selectMode == "rect")
+        {
+            if (pts.size() < 2)
+                return;
+            call["rect"] = {pts[0].x(), pts[0].y(), pts[1].x(), pts[1].y()};
+        }
+        else
+        {
+            if (pts.size() < 3)
+                return;
+            json list = json::array();
+            for (const QPointF& q : pts)
+                list.push_back({q.x(), q.y()});
+            call["points"] = list;
+        }
+        try
+        {
+            ops::execute("texSelectionMask", call, CallSource::UI);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("Texture paint: {}", ex.what());
+        }
+        viewportTools::requestRedraw();
+    }
+
+    void drawSelection(OverlayPainter& p)
+    {
+        if (mSelect.empty())
+            return;
+        std::vector<QPointF> pts = mSelect;
+        if (texturePaintState().selectMode == "rect" && pts.size() == 2)
+            pts = {pts[0], {pts[1].x(), pts[0].y()}, pts[1], {pts[0].x(), pts[1].y()}};
+        const glm::vec4 ink = p.ink(0.9f);
+        for (size_t i = 1; i < pts.size(); ++i)
+            p.line(pts[i - 1], pts[i], 1.5f, ink);
+        if (pts.size() > 2 && texturePaintState().selectMode != "polygon")
+            p.line(pts.back(), pts.front(), 1.0f, p.ink(0.6f));
+        if (texturePaintState().selectMode == "polygon")
+            p.line(pts.back(), mHover, 1.0f, p.ink(0.6f));
     }
 
     // ------------------------------------------------------------------------------------------------ path strokes
@@ -1625,6 +1965,20 @@ public:
     {
         if (mControls.keyPress(e))
             return true;
+        if (texturePaintState().tool == "select" && texturePaintState().selectMode == "polygon" && !mSelect.empty())
+        {
+            if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter)
+            {
+                finishSelection(mLastView);
+                return true;
+            }
+            if (e->key() == Qt::Key_Escape)
+            {
+                mSelect.clear();
+                viewportTools::requestRedraw();
+                return true;
+            }
+        }
         if (texturePaintState().tool == "path")
         {
             if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && mPath.stroke == 0 && mPath.pts.size() >= 2)
@@ -1709,6 +2063,17 @@ public:
         }
         if (st.tool != "project")
             drawStencil(fs, view);
+        if (st.tool == "select")
+        {
+            drawSelection(p);
+            status.keys = {{"drag", "replace"}, {"Shift", "add"}, {"Ctrl", "subtract"}};
+            if (st.selectMode == "polygon")
+                status.keys.insert(status.keys.end(), {{"click", "corner"}, {"Enter", "close"}});
+        }
+        if (st.quickMask)
+            status.flags.push_back({"quick mask", true});
+        else if (!st.quickLimit.empty())
+            status.flags.push_back({"limited", true});
         if (st.tool == "path")
         {
             drawPath(p, view);
@@ -2089,6 +2454,8 @@ private:
         json payload = p.toJson();
         payload.erase("triangles");
         payload["triangle"] = t.hit.triangle;
+        if (std::vector<uint32_t> locked = lockedTriangles(*set, t.meshPath, *t.paint); !locked.empty())
+            payload["locked"] = locked;
         try
         {
             ops::execute("texPaintStroke",
@@ -2115,7 +2482,7 @@ private:
             return;
         }
         mTarget = t;
-        mLayer = layerFor(*set);
+        mLayer = texturePaintState().quickMask ? std::string(kQuickMaskBuffer) : layerFor(*set);
         if (mLayer.empty())
             return;
         updatePanel();
@@ -2131,6 +2498,7 @@ private:
         header->brush = texturePaintState().stroke.toJson();
         header->payload = payloadFor(texturePaintState(), e->modifiers() & Qt::ControlModifier);
         filterChannels(header->payload, *set);
+        header->payload.locked = lockedTriangles(*set, t.meshPath, *t.paint);
         {
             const scene::Node* meshNode = g.node(t.mesh);
             scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
@@ -2783,6 +3151,9 @@ private:
         uint64_t stroke = 0;
     } mPath;
     int mPathDrag = -1;
+    std::vector<QPointF> mSelect;
+    bool mSelecting = false;
+    Qt::KeyboardModifiers mSelectMods;
     bool mPathHandle = false, mPathMoved = false;
     uint64_t mShownVersion = 0;
     bool mShownTransform = false;
