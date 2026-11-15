@@ -162,6 +162,13 @@ struct LILA_SCENE_API BrushSettings
     PressureCurve pressureSize;
     PressureCurve pressureOpacity;
     PressureCurve pressureFlow;
+    /** Pen tilt (0 upright, 1 at 60 degrees) through the same curves: size and opacity grow with it, roundness flattens toward the floor. */
+    PressureCurve tiltSize;
+    PressureCurve tiltOpacity;
+    PressureCurve tiltRoundness;
+    /** The tip turns to the direction the pen leans, and with the pen's barrel rotation (art pens). */
+    bool tiltAngle = false;
+    bool rotationAngle = false;
     Jitter jitter;
 
     /** Tip angle in degrees, counterclockwise on screen; with followStroke it is relative to the direction of travel. */
@@ -217,6 +224,9 @@ struct Dab
     double radius = 1.0;
     /** Raw pen pressure, 0 to 1 (1 for a mouse). */
     double pressure = 1.0;
+    /** Pen tilt 0 to 1 and barrel rotation (radians), 0 for a mouse. */
+    double tilt = 0.0;
+    double rotation = 0.0;
     /** Weight multiplier: the pressure curve, jitter. */
     double opacity = 1.0;
     /** Per dab amount for brushes that build up. */

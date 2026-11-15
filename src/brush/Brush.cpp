@@ -17,7 +17,7 @@ constexpr const char* kPrefs = "general";
 
 /** Every key toJson writes, for loading them back from prefs one by one. */
 constexpr std::string_view kKeys[] = {"radiusUnit", "radius", "worldRadius", "strength", "flow", "spacing", "falloff",
-                                      "pressureSize", "pressureOpacity", "pressureFlow", "pressureCurve", "jitter",
+                                      "pressureSize", "pressureOpacity", "pressureFlow", "pressureCurve", "tilt", "jitter",
                                       "angle", "followStroke", "roundness", "alpha", "strokeMode", "lazyRadius",
                                       "smoothing", "mirror", "radial", "seed", "params"};
 
@@ -175,6 +175,13 @@ json BrushSettings::toJson() const
             {"pressureOpacity", pressureOpacity.enabled},
             {"pressureFlow", pressureFlow.enabled},
             {"pressureCurve", {{"size", curveJson(pressureSize)}, {"opacity", curveJson(pressureOpacity)}, {"flow", curveJson(pressureFlow)}}},
+            {"tilt",
+             {{"size", tiltSize.enabled},
+              {"opacity", tiltOpacity.enabled},
+              {"roundness", tiltRoundness.enabled},
+              {"curve", curveJson(tiltSize)},
+              {"angle", tiltAngle},
+              {"rotation", rotationAngle}}},
             {"jitter", {{"position", jitter.position}, {"size", jitter.size}, {"opacity", jitter.opacity}, {"angle", jitter.angle}}},
             {"angle", angle},
             {"followStroke", followStroke},
@@ -211,6 +218,17 @@ BrushSettings BrushSettings::fromJson(const json& j, const BrushSettings& defaul
         readCurve(it->value("size", json()), s.pressureSize);
         readCurve(it->value("opacity", json()), s.pressureOpacity);
         readCurve(it->value("flow", json()), s.pressureFlow);
+    }
+    if (auto it = j.find("tilt"); it != j.end() && it->is_object())
+    {
+        read(*it, "size", s.tiltSize.enabled);
+        read(*it, "opacity", s.tiltOpacity.enabled);
+        read(*it, "roundness", s.tiltRoundness.enabled);
+        readCurve(it->value("curve", json()), s.tiltSize);
+        s.tiltOpacity.floor = s.tiltRoundness.floor = s.tiltSize.floor;
+        s.tiltOpacity.exponent = s.tiltRoundness.exponent = s.tiltSize.exponent;
+        read(*it, "angle", s.tiltAngle);
+        read(*it, "rotation", s.rotationAngle);
     }
     if (auto it = j.find("jitter"); it != j.end() && it->is_object())
     {

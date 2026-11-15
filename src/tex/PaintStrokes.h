@@ -145,6 +145,8 @@ struct Dab
     float angle = 0.0f;
     /** 0 for the dab, k for its k-th symmetry copy: direction strokes follow each copy separately. */
     uint32_t copy = 0;
+    /** Pen tilt, 0 upright to 1: the brush's tilt roundness narrows the tip by it. Size, opacity and angle already hold their tilt. */
+    float tilt = 0.0f;
 
     bool operator==(const Dab&) const = default;
 };
@@ -228,8 +230,8 @@ struct LILA_SCENE_API Stroke
     /** packed stores the dabs as binary arrays (for binary scene files); plain JSON otherwise. */
     json toJson(bool packed = true) const;
     /**
-     * Dabs as packed arrays, rows [triangle, u, v, radius, pressure, opacity, angle, copy], or objects
-     * {triangle, bary: [u, v], radius, pressure?, opacity?, angle?, copy?}. Throws std::invalid_argument.
+     * Dabs as packed arrays, rows [triangle, copy] and [u, v, radius, pressure, opacity, angle, tilt] (tilt optional), or objects
+     * {triangle, bary: [u, v], radius, pressure?, opacity?, angle?, copy?, tilt?}. Throws std::invalid_argument.
      */
     static Stroke fromJson(const json& j);
     bool operator==(const Stroke&) const;

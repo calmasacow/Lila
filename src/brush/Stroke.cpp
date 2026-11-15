@@ -49,6 +49,7 @@ void StrokeSampler::begin(const BrushSettings& s, const StrokeInput& in, double 
     setRadius(radiusPx);
     mStart = mCursor = mBrush = mLast = in.position;
     mPressure = mLastPressure = in.pressure;
+    mPen = in;
     mDir = glm::dvec2(0.0);
     mDistance = 0.0;
     mIndex = 0;
@@ -71,6 +72,7 @@ void StrokeSampler::move(const StrokeInput& in)
         return;
     mCursor = in.position;
     mPressure = in.pressure;
+    mPen = in;
     if (mMode == StrokeMode::Line)
     {
         mBrush = mCursor;
@@ -219,6 +221,9 @@ void StrokeSampler::push(glm::dvec2 at, double pressure, glm::dvec2 dir)
     s.pressure = std::clamp(pressure, 0.0, 1.0);
     s.direction = dir;
     s.distance = mDistance;
+    s.tilt = std::clamp(mPen.tilt, 0.0, 1.0);
+    s.tiltDirection = mPen.tiltDirection;
+    s.rotation = mPen.rotation;
     if (glm::length(dir) > 0.0)
         mDir = dir;
     s.angle = mAngle;
@@ -266,6 +271,18 @@ Dab makeDab(const BrushSettings& s, const StrokeSample& sample, const SurfaceHit
     d.direction = previous ? hit.center - previous->center : glm::dvec3(0.0);
     d.angle = sample.angle;
     d.roundness = s.roundness;
+    d.tilt = sample.tilt;
+    d.rotation = sample.rotation;
+    if (sample.tilt > 0.0)
+    {
+        d.radius *= std::max(0.05, s.tiltSize.map(sample.tilt));
+        d.opacity *= s.tiltOpacity.map(sample.tilt);
+        d.roundness = std::clamp(d.roundness * s.tiltRoundness.map(1.0 - sample.tilt), 0.02, 1.0);
+        if (s.tiltAngle)
+            d.angle = sample.tiltDirection + s.angle * std::numbers::pi / 180.0;
+    }
+    if (s.rotationAngle)
+        d.angle += sample.rotation;
     d.alpha = s.alpha;
     d.screen = sample.position;
     d.index = sample.index;

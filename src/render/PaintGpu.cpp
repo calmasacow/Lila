@@ -419,6 +419,8 @@ struct Live
     std::vector<float> falloff;
     std::shared_ptr<const brush::AlphaImage> alpha;
     float roundness = 1.0f;
+    /** Narrows the tip per dab by its pen tilt. */
+    brush::PressureCurve tiltRoundness;
     float strength = 1.0f;
     uint32_t mode = 0, sub = 0;
     /** fill: a bit per triangle. */
@@ -904,6 +906,7 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
     live->mesh = std::move(mesh);
     const brush::BrushSettings b = brush::BrushSettings::fromJson(header->brush);
     live->roundness = float(std::clamp(b.roundness, 1e-3, 1.0));
+    live->tiltRoundness = b.tiltRoundness;
     live->strength = float(std::clamp(b.strength, 0.0, 1.0));
     const brush::Falloff f = b.resolveFalloff();
     live->falloff.resize(257);
@@ -1048,12 +1051,14 @@ GpuDab gpuDab(Live& live, const Dab& d)
     const glm::vec3 c = m.point(d), n = m.normal(d.triangle, d.u, d.v);
     g.centerRadius = glm::vec4(c, d.radius);
     g.normalAmount = glm::vec4(n, d.opacity);
-    const bool round = live.roundness >= 1.0f && !live.alpha && live.stamp.empty();
+    const bool round = live.roundness >= 1.0f && !live.tiltRoundness.enabled && !live.alpha && live.stamp.empty();
     if (!round)
     {
         const glm::vec3 t0 = tipFrame(n), b0 = glm::cross(n, t0);
+        const float roundness =
+            d.tilt > 0.0f ? std::clamp(live.roundness * float(live.tiltRoundness.map(1.0 - d.tilt)), 0.02f, 1.0f) : live.roundness;
         // A negative roundness tells the kernel the copy is mirrored: its tip, alpha and stamp turn the other way.
-        g.tangentRoundness = glm::vec4(t0 * std::cos(d.angle) + b0 * std::sin(d.angle), live.sym.mirrored(d.copy) ? -live.roundness : live.roundness);
+        g.tangentRoundness = glm::vec4(t0 * std::cos(d.angle) + b0 * std::sin(d.angle), live.sym.mirrored(d.copy) ? -roundness : roundness);
     }
     if (auto it = live.last.find(d.copy); it != live.last.end() && it->second != c)
         g.direction = glm::vec4(c - it->second, 1.0f);

@@ -22,6 +22,11 @@ struct StrokeInput
 {
     glm::dvec2 position{0.0};
     double pressure = 1.0;
+    /** Pen tilt, 0 upright to 1 at 60 degrees or more, and the screen direction it leans toward (radians, counterclockwise). */
+    double tilt = 0.0;
+    double tiltDirection = 0.0;
+    /** Pen barrel rotation, radians. */
+    double rotation = 0.0;
 };
 
 /** Where a dab goes on screen, with its per-dab variation. */
@@ -39,6 +44,10 @@ struct StrokeSample
     double opacity = 1.0;
     /** Tip angle, radians, counterclockwise on screen. */
     double angle = 0.0;
+    /** The pen's tilt, its direction and barrel rotation at this dab (StrokeInput). */
+    double tilt = 0.0;
+    double tiltDirection = 0.0;
+    double rotation = 0.0;
 };
 
 /** Screen-space stroke sampling: spacing, stabiliser, line strokes, jitter and tip angle. */
@@ -78,6 +87,8 @@ private:
     double mSpacing = 0.15;
     double mRadius = 1.0;
     double mStep = 1.0;
+    /** The pen as the last input left it: tilt and rotation go to every sample until the next. */
+    StrokeInput mPen;
     double mLazy = 0.0;
     double mSmoothing = 0.0;
     Jitter mJitter;

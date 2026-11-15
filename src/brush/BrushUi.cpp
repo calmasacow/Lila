@@ -44,6 +44,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <numbers>
 #include <filesystem>
 #include <map>
 
@@ -55,6 +56,7 @@ constexpr double kPi = 3.14159265358979323846;
 constexpr double kMinRadius = 2.0, kMaxRadius = 2000.0;
 constexpr const char* kOpenPref = "/brush/strokeOptionsOpen";
 constexpr const char* kPressureOpenPref = "/brush/pressureOptionsOpen";
+constexpr const char* kTiltOpenPref = "/brush/tiltOptionsOpen";
 
 bool isViewport(QWidget* w) { return w && w->inherits("lila::ui::ViewportWidget"); }
 
@@ -82,8 +84,11 @@ public:
         {
         case QEvent::TabletPress:
         case QEvent::TabletMove:
-            mControls->tablet(static_cast<QTabletEvent*>(e)->pressure());
+        {
+            const auto* t = static_cast<QTabletEvent*>(e);
+            mControls->tablet(t->pressure(), t->xTilt(), t->yTilt(), t->rotation());
             return false;
+        }
         case QEvent::ApplicationDeactivate:
             mControls->mArmed = Adjust::None;
             mControls->mArmedKey = 0;
@@ -197,11 +202,21 @@ void BrushControls::tablet(double pressure)
     mPressureAt = nowMs();
 }
 
+void BrushControls::tablet(double pressure, double xTilt, double yTilt, double rotation)
+{
+    tablet(pressure);
+    mTilt = std::clamp(std::hypot(xTilt, yTilt) / 60.0, 0.0, 1.0);
+    // Qt's y tilt is positive toward the user, down the screen; angles here are counterclockwise.
+    mTiltDirection = std::atan2(-yTilt, xTilt);
+    mRotation = rotation * std::numbers::pi / 180.0;
+}
+
 double BrushControls::pressure() const { return mPressureAt && nowMs() - mPressureAt < 100 ? mPressure : 1.0; }
 
 StrokeInput BrushControls::input(const QMouseEvent* e) const
 {
-    return {glm::dvec2(e->position().x(), e->position().y()), pressure()};
+    const bool pen = mPressureAt && nowMs() - mPressureAt < 100;
+    return {glm::dvec2(e->position().x(), e->position().y()), pressure(), pen ? mTilt : 0.0, pen ? mTiltDirection : 0.0, pen ? mRotation : 0.0};
 }
 
 bool BrushControls::mousePress(const QMouseEvent* e)
@@ -620,6 +635,25 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
     add(numberField("pressureCurve", "Curve", false, 0.1, 5.0, 0.1, "Below 1 a light touch already reaches far, above 1 it takes a firm press"),
         [](const BrushSettings& s) { return json(s.pressureSize.exponent); },
         [](BrushSettings& s, const json& v) { s.pressureSize.exponent = s.pressureOpacity.exponent = s.pressureFlow.exponent = numberOf(v); });
+
+    QWidget* tilt = collapsible(mBody, bodyCol, "Tilt", "How leaning and turning the pen shape the tip", kTiltOpenPref);
+    target = new QFormLayout(tilt);
+    target->setContentsMargins(8, 0, 0, 0);
+    const char* tiltNames[] = {"Size", "Opacity", "Roundness"};
+    PressureCurve BrushSettings::* tiltCurves[] = {&BrushSettings::tiltSize, &BrushSettings::tiltOpacity, &BrushSettings::tiltRoundness};
+    for (int k = 0; k < 3; ++k)
+    {
+        PressureCurve BrushSettings::* c = tiltCurves[k];
+        add(checkField("tilt", tiltNames[k], "Leaning the pen scales this"), [c](const BrushSettings& s) { return json((s.*c).enabled); },
+            [c](BrushSettings& s, const json& v) { (s.*c).enabled = numberOf(v) != 0.0; });
+    }
+    add(numberField("tiltFloor", "Minimum", false, 0.0, 1.0, 0.05, "What an upright pen gives"),
+        [](const BrushSettings& s) { return json(s.tiltSize.floor); },
+        [](BrushSettings& s, const json& v) { s.tiltSize.floor = s.tiltOpacity.floor = s.tiltRoundness.floor = numberOf(v); });
+    add(checkField("tiltAngle", "Angle", "The tip turns toward where the pen leans"), [](const BrushSettings& s) { return json(s.tiltAngle); },
+        [](BrushSettings& s, const json& v) { s.tiltAngle = numberOf(v) != 0.0; });
+    add(checkField("penRotation", "Rotation", "The tip turns with the pen's barrel (art pens)"), [](const BrushSettings& s) { return json(s.rotationAngle); },
+        [](BrushSettings& s, const json& v) { s.rotationAngle = numberOf(v) != 0.0; });
     sync();
 }
 

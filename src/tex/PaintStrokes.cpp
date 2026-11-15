@@ -20,6 +20,8 @@ namespace lila::tex::paint
 {
 namespace
 {
+/** Floats per dab row in a stroke record: u, v, radius, pressure, opacity, angle, tilt. */
+constexpr size_t kDabFloats = 7;
 constexpr const char* kBlendNames[] = {"normal", "erase", "add", "subtract", "multiply"};
 
 constexpr char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -309,19 +311,19 @@ json Stroke::toJson(bool packedDabs) const
                      {"height", view->height}};
     }
     std::vector<uint32_t> tri(dabs.size() * 2);
-    std::vector<float> d(dabs.size() * 6);
+    std::vector<float> d(dabs.size() * kDabFloats);
     for (size_t i = 0; i < dabs.size(); ++i)
     {
         const Dab& a = dabs[i];
         tri[i * 2] = a.triangle;
         tri[i * 2 + 1] = a.copy;
-        const float row[6] = {a.u, a.v, a.radius, a.pressure, a.opacity, a.angle};
-        std::copy(row, row + 6, &d[i * 6]);
+        const float row[kDabFloats] = {a.u, a.v, a.radius, a.pressure, a.opacity, a.angle, a.tilt};
+        std::copy(row, row + kDabFloats, &d[i * kDabFloats]);
     }
     if (packedDabs)
     {
         j["triangles"] = packed::make<uint32_t>(tri, 2);
-        j["dabs"] = packed::make<float>(d, 6);
+        j["dabs"] = packed::make<float>(d, kDabFloats);
     }
     else
     {
@@ -329,7 +331,7 @@ json Stroke::toJson(bool packedDabs) const
         for (size_t i = 0; i < dabs.size(); ++i)
         {
             t.push_back({tri[i * 2], tri[i * 2 + 1]});
-            r.push_back(json(std::vector<double>(&d[i * 6], &d[i * 6] + 6)));
+            r.push_back(json(std::vector<double>(&d[i * kDabFloats], &d[i * kDabFloats] + kDabFloats)));
         }
         j["triangles"] = t;
         j["dabs"] = r;
@@ -392,18 +394,25 @@ Stroke Stroke::fromJson(const json& j)
                 d.opacity = o.value("opacity", 1.0f);
                 d.angle = o.value("angle", 0.0f);
                 d.copy = o.value("copy", 0u);
+                d.tilt = o.value("tilt", 0.0f);
                 s.dabs.push_back(d);
             }
         }
         else
         {
-            const std::vector<double> d = rows(dabs, 6, "dabs");
             const std::vector<double> t = rows(j.value("triangles", json::array()), 2, "triangles");
-            if (t.size() / 2 != d.size() / 6)
+            const size_t count = t.size() / 2;
+            // Rows of 6 are dabs recorded without tilt.
+            const std::vector<double> d = rows(dabs, 1, "dabs");
+            const size_t w = count ? d.size() / count : kDabFloats;
+            if ((w != 6 && w != kDabFloats) || w * count != d.size())
                 throw std::invalid_argument("triangles and dabs differ in length");
-            for (size_t i = 0; i < d.size() / 6; ++i)
-                s.dabs.push_back({uint32_t(t[i * 2]), f32(d[i * 6]), f32(d[i * 6 + 1]), f32(d[i * 6 + 2]), f32(d[i * 6 + 3]), f32(d[i * 6 + 4]),
-                                  f32(d[i * 6 + 5]), uint32_t(t[i * 2 + 1])});
+            for (size_t i = 0; i < count; ++i)
+            {
+                const double* r = &d[i * w];
+                s.dabs.push_back({uint32_t(t[i * 2]), f32(r[0]), f32(r[1]), f32(r[2]), f32(r[3]), f32(r[4]), f32(r[5]), uint32_t(t[i * 2 + 1]),
+                                  w > 6 ? f32(r[6]) : 0.0f});
+            }
         }
         for (const Dab& d : s.dabs)
             if (!(d.radius > 0.0f) || !std::isfinite(d.u) || !std::isfinite(d.v))

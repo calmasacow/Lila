@@ -1,5 +1,6 @@
 add_executable(lila_tex_tests
     main.cpp
+    test_brush_tilt.cpp
     test_tex_commands.cpp
     test_tex_eval.cpp
     test_tex_files.cpp
@@ -31,6 +32,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_paint_tools.cpp
     test_tex_stencil.cpp
     test_tex_path.cpp
+    test_tex_tilt.cpp
     test_tex_vt.cpp)
 target_link_libraries(lila_tex_gpu_tests PRIVATE LilaUI doctest::doctest)
 add_dependencies(lila_tex_gpu_tests lila_slang_runtime)

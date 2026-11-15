@@ -276,6 +276,7 @@ bool recordDab(const PaintMesh& mesh, const brush::Dab& d, Dab& out)
     out.pressure = float(d.pressure);
     out.opacity = float(std::clamp(d.opacity * d.flow, 0.0, 1.0));
     out.copy = d.copy;
+    out.tilt = float(d.tilt);
     out.angle = 0.0f;
     if (glm::dot(d.tangent, d.tangent) > 0.5)
     {
