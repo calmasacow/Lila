@@ -3427,6 +3427,36 @@ void registerTexturePaintUi()
                          "Hold S and drag to move it, with Shift to rotate, with Ctrl to scale.",
                   .python = "texPaintStencil(\"<image file>\")",
                   .keywords = {"stencil", "mask", "overlay", "paint through"}});
+    actions::add({.id = "tex.materialFromMaps",
+                  .label = "Material from Maps...",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          const QStringList files = ui::fileDialog::getOpenFileNames(mainWindow(), "Material from Maps", {},
+                                                                                     "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.psd *.bmp)");
+                          if (files.isEmpty())
+                              return;
+                          json list = json::array();
+                          for (const QString& f : files)
+                              list.push_back(f.toStdString());
+                          actions::run({{"command", "texMaterialFromMaps"}, {"args", list}});
+                      },
+                  .doc = "Make library materials from texture maps: each file's channel is read from its name (base colour, roughness, "
+                         "normal in either convention, packed ORM and more), and files that differ only by it make one material.",
+                  .python = "texMaterialFromMaps(\"C:/maps/Rock_BaseColor.png\", \"C:/maps/Rock_Normal.png\")",
+                  .keywords = {"import maps", "texture maps", "pbr maps", "create material"}});
+    actions::add({.id = "tex.materialsFromFolder",
+                  .label = "Materials from Maps Folder...",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          const QString dir = ui::fileDialog::getExistingDirectory(mainWindow(), "Materials from Maps Folder");
+                          if (!dir.isEmpty())
+                              actions::run({{"command", "texMaterialFromMaps"}, {"args", {{"folder", dir.toStdString()}}}});
+                      },
+                  .doc = "Make a library material for every set of texture maps in a folder and its subfolders.",
+                  .python = "texMaterialFromMaps(folder=\"C:/maps\")",
+                  .keywords = {"batch import", "texture maps", "pbr folder"}});
     actions::add({.id = "tex.transferSet",
                   .label = "Transfer Texture Set",
                   .category = "Texture",

@@ -1,5 +1,6 @@
 #include "tex/Generators.h"
 #include "tex/Layers.h"
+#include "tex/MaterialFromMaps.h"
 #include "tex/SmartMaterial.h"
 
 #include "bake/Bake.h"
@@ -724,6 +725,7 @@ json exportFlattened(const Args& a)
 
 void registerLayerCommands()
 {
+    maps::registerCommands();
     using T = ArgType;
     ops::registerCommand({
         .name = "texLayerStack",

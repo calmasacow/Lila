@@ -10474,6 +10474,19 @@ def texLayerStack(*objects: Any) -> Any:
         objects: set.
     """
 
+def texMaterialFromMaps(*objects: Any, folder: str | None = None, recursive: bool | None = None, tier: str | None = None, category: str | None = None, path: str | None = None, set: str | None = None) -> Any:
+    """Make materials from texture maps: each file's channel comes from its name (BaseColor, albedo, diff, rough, gloss, metal, nrm or normal with dx or gl, height or disp, ao, emissive, opacity, and packed ORM, ARM, RMA, MRA), files differing only by that token make one material, and a size in the name (200cm, 2m) sets its scale. Packed maps are split, DirectX normals flipped, gloss inverted. Writes a .lilamat per material to the library (tier, category, or path), or with set= adds each as a material layer. Returns one entry per material with its maps and warnings.
+
+    Args:
+        objects: [file...].
+        folder: A folder of maps (searched recursively unless recursive=False).
+        recursive: Search the folder's subfolders too. Default True.
+        tier: user or workspace. One of 'user', 'workspace'. Default 'user'.
+        category: Library category. Default 'Imported'.
+        path: Write the .lilamat files to this folder instead.
+        set: Add them to this texture set as layers instead.
+    """
+
 def texMoveLayer(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
     """Move a layer in a texture set's stack: right above or below another layer, into a folder, or to an index.
 

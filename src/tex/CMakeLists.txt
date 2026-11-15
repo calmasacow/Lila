@@ -12,6 +12,7 @@ lila_module(lila_tex Scene
     Layers.cpp
     Library.cpp
     LibraryCommands.cpp
+    MaterialFromMaps.cpp
     Lint.cpp
     NodeDef.cpp
     PageStore.cpp
