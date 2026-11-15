@@ -8,7 +8,7 @@ namespace qmo = lila::ui::quickMaskOverlay;
 
 namespace
 {
-const json kView = {{"eye", {0.0, 200.0, 0.01}}, {"lookAt", {0.0, 0.0, 0.0}}, {"up", {0.0, 0.0, -1.0}}, {"fov", 40.0}, {"width", 800}, {"height", 600}};
+const json kOverlayView = {{"eye", {0.0, 200.0, 0.01}}, {"lookAt", {0.0, 0.0, 0.0}}, {"up", {0.0, 0.0, -1.0}}, {"fov", 40.0}, {"width", 800}, {"height", 600}};
 
 /** A quick mask stroke along screen y 300 from x0 to x1 (x 300..390 is the left face, 410..500 the right). */
 void maskStroke(double x0, double x1)
@@ -18,7 +18,7 @@ void maskStroke(double x0, double x1)
     json points = json::array();
     for (int i = 0; i <= 6; ++i)
         points.push_back({x0 + (x1 - x0) * i / 6.0, 300.0, 1.0});
-    paintStroke("Panel", qmo::kBuffer, {{"points", points}, {"view", kView}, {"brush", brush}, {"payload", {{"mask", true}}}});
+    paintStroke("Panel", qmo::kBuffer, {{"points", points}, {"view", kOverlayView}, {"brush", brush}, {"payload", {{"mask", true}}}});
     lila::mainq::drain();
     // As a frame would: the first read makes the mask image, which fills on the main queue.
     qmo::tint("Panel");
