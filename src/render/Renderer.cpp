@@ -214,20 +214,65 @@ struct GpuFrame
     glm::vec4 fogExtra;  // anisotropy, up axis (1 Y, 2 Z)
     glm::vec4 shadowing; // one past the light each traced shadow channel is for, 0 for none
     glm::vec4 worldOffset; // xyz: the render origin wrapped by kWorldPatternPeriod, for world-space patterns
-    glm::vec4 pad[6];
+    glm::vec4 reflection;  // x: 1 when the reflection pass ran this frame
+    glm::vec4 pad[5];
 };
 
 /** World-space shading patterns (stylised strokes) repeat every this many cm, so they stay exact far from the origin. */
 constexpr double kWorldPatternPeriod = 65536.0;
 static_assert(sizeof(GpuFrame) == sizeof(GpuLight), "the light buffer's header is one light long");
 
-/** A traced placement's mesh for rtbevel.slang: its buffers' addresses and world matrix rows. */
+/** A traced placement's mesh for rtbevel.slang and rtreflect.slang: its buffers' addresses, world matrix rows and materials. */
 struct TraceInstance
 {
     uint64_t vertices = 0;
     uint64_t indices = 0;
     glm::vec4 rows[3]{};
+    uint64_t sections = 0; // TraceSection per material section
+    uint32_t sectionCount = 0;
+    uint32_t pad = 0;
 };
+
+/** A section's material for reflection hits; matches rtreflect.slang. */
+struct TraceSection
+{
+    uint32_t endTriangle = 0;
+    float roughness = 0.5f;
+    float metallic = 0.0f;
+    float pad = 0.0f;
+    glm::vec4 baseColor{0.5f, 0.5f, 0.5f, 1.0f};
+    glm::vec4 emissive{0.0f};
+};
+
+/** The frame's reflection settings; matches reflect_common.slang's ReflectParams. */
+struct ReflectParams
+{
+    glm::mat4 invViewProj;
+    glm::mat4 prevViewProj;
+    glm::mat4 viewProj;
+    glm::vec4 size;   // half extent, full extent
+    glm::vec4 params; // frame seed, roughness cutoff, temporal weight, clip the history
+    glm::vec4 env;    // rotation cos/sin, intensity, Z-up
+    glm::vec4 extra;  // light saturation, inverse of last frame's exposure, reach (cm), hi-Z levels
+    uint64_t instances = 0;
+    uint64_t lights = 0;
+    uint32_t lightCount = 0;
+    uint32_t traceShadows = 0;
+    uint32_t pad[2]{};
+};
+
+struct ReflectPush
+{
+    uint64_t params = 0;
+    uint32_t level = 0;
+    uint32_t pad = 0;
+};
+
+constexpr uint32_t kMaxHizLevels = 12;
+constexpr VkFormat kReflectFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+/** GPU timestamps per frame: start, before and after the prepass and AO, end, then a pair per optional pass. */
+constexpr uint32_t kTimestamps = 12;
+constexpr uint32_t kTimeReflect = 4, kTimeFlare = 6, kTimeDof = 8, kTimeMotionBlur = 10;
 
 /** Shadow maps share one atlas of 2 by 2 tiles; lights past four cast none. */
 constexpr uint32_t kShadowAtlas = 4096;
@@ -542,12 +587,13 @@ struct Frame
     compute::Buffer lights;      // GpuLight per light
     compute::Buffer cloudClips;  // the frame's point cloud clip boxes, eye-relative world to box (mat4 each)
     compute::Buffer tlasInstances; // the scene's placements for its top-level acceleration structure
-    compute::Buffer traceTable;    // TraceInstance per placement, by its custom index
+    compute::Buffer traceTable;    // TraceInstance per placement, by its custom index, then their TraceSections
+    compute::Buffer reflectParams; // ReflectParams for this frame's reflection passes
     std::vector<compute::Buffer> scratch; // acceleration structure builds' scratch, freed with the staging
     vt::Feedback feedback;       // virtual texture page requests, read once the fence signals
     // GPU timestamps: frame start, before and after ambient occlusion, frame end.
     VkQueryPool timestamps = VK_NULL_HANDLE;
-    bool timed = false, aoTimed = false;
+    bool timed = false, aoTimed = false, reflectTimed = false, flareTimed = false, dofTimed = false, motionBlurTimed = false;
     /** Dense component dots thinned to one per screen cell (points_cull.slang): cell grids, kept points, draw counts. */
     compute::Buffer pointCells, pointOut, pointArgs;
     /** Secondary command buffers the section draws record into on worker threads; a pool each, so no two threads share one. */
@@ -615,7 +661,22 @@ struct Viewport
     VkDescriptorSet rtaoSet = VK_NULL_HANDLE, bevelSet = VK_NULL_HANDLE, shadowSet = VK_NULL_HANDLE;
     uint64_t rtaoGeneration = 0, bevelGeneration = 0, shadowGeneration = 0; // Impl::tlasGeneration the sets point at
     Image bevel;    // rounded normals from the bevel pass
-    Image rtShadow; // traced visibility, a channel per light                  // still accumulating: draw again without a new state
+    Image rtShadow; // traced visibility, a channel per light
+    /** Reflections: nearest depth per cell (hiZ), this frame's trace, the temporal history and the filtered result (half resolution). */
+    Image hiz, reflectRaw, reflectOut;
+    std::array<Image, 2> reflectHistory;
+    std::vector<VkImageView> hizViews;
+    uint32_t hizLevels = 0;
+    VkDescriptorSet hizSets[kMaxHizLevels]{};
+    VkDescriptorSet reflectTraceSets[3]{};    // last frame's colour from scene, history[0], history[1]
+    VkDescriptorSet reflectTemporalSets[2]{}; // writes reflectHistory[i] from reflectHistory[1 - i]
+    VkDescriptorSet reflectSpatialSets[2]{};  // filters reflectHistory[i] into reflectOut
+    int reflectHistoryIndex = 0;
+    bool reflectHistoryValid = false, reflectImagesReady = false;
+    uint32_t reflectAccumulated = 0;
+    uint64_t reflectTlasGeneration = 0, reflectEnvEpoch = ~uint64_t(0);
+    int lastComposeInput = -1; // the scene image the last frame composed from, which SSR reads: 0 scene, 1 + i history[i]
+    float prevExposure = 1.0f; // the exposure last frame's scene image carries
     std::array<Frame, kFramesInFlight> frames;
     int frameIndex = 0;
 
@@ -994,9 +1055,10 @@ struct Renderer::Impl
         destroyImage(v.color);
         destroyImage(v.depth);
         for (Image* img : {&v.aoDepth, &v.aoNormal, &v.aoRaw, &v.aoFinal, &v.bevel, &v.rtShadow, &v.postColor, &v.cloudColor, &v.cloudDepth, &v.sceneMs, &v.scene, &v.sceneDepth, &v.history[0], &v.history[1],
-                           &v.bloomDown, &v.bloomUp, &v.histogram, &v.exposureState})
+                           &v.bloomDown, &v.bloomUp, &v.histogram, &v.exposureState, &v.hiz, &v.reflectRaw, &v.reflectOut, &v.reflectHistory[0],
+                           &v.reflectHistory[1]})
             destroyImage(*img);
-        for (std::vector<VkImageView>* views : {&v.bloomDownViews, &v.bloomUpViews})
+        for (std::vector<VkImageView>* views : {&v.bloomDownViews, &v.bloomUpViews, &v.hizViews})
         {
             for (VkImageView view : *views)
                 vkDestroyImageView(vk.device, view, nullptr);
@@ -1005,6 +1067,9 @@ struct Renderer::Impl
         v.historyValid = false;
         v.postImagesReady = false;
         v.exposureValid = false;
+        v.reflectHistoryValid = false;
+        v.reflectImagesReady = false;
+        v.lastComposeInput = -1;
     }
 
     bool createOffscreenTargets(Viewport& v)
@@ -1181,7 +1246,7 @@ struct Renderer::Impl
             {
                 VkQueryPoolCreateInfo qci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
                 qci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-                qci.queryCount = 4;
+                qci.queryCount = kTimestamps;
                 vkCreateQueryPool(vk.device, &qci, nullptr, &f.timestamps);
             }
         }
@@ -1206,6 +1271,21 @@ struct Renderer::Impl
             v.shadowSet = allocateSet(aoPool, rtaoSetLayout);
         }
         v.rtaoGeneration = v.bevelGeneration = v.shadowGeneration = 0;
+        if (reflectSetLayout)
+        {
+            for (VkDescriptorSet& set : v.hizSets)
+                set = allocateSet(reflectPool, reflectSetLayout);
+            for (VkDescriptorSet& set : v.reflectTraceSets)
+                set = allocateSet(reflectPool, reflectSetLayout);
+            for (VkDescriptorSet& set : v.reflectTemporalSets)
+                set = allocateSet(reflectPool, reflectSetLayout);
+            for (VkDescriptorSet& set : v.reflectSpatialSets)
+                set = allocateSet(reflectPool, reflectSetLayout);
+        }
+        v.reflectTlasGeneration = 0;
+        v.reflectEnvEpoch = ~uint64_t(0);
+        for (VkDescriptorSet set : {v.aoSampleSet, v.postSet, v.edlSet})
+            writeImage(set, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, blackBevel.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
     }
 
     void destroyViewport(Viewport& v)
@@ -1223,6 +1303,7 @@ struct Renderer::Impl
             compute::destroy(vk, f.pointArgs);
             compute::destroy(vk, f.tlasInstances);
             compute::destroy(vk, f.traceTable);
+            compute::destroy(vk, f.reflectParams);
             if (f.lines)
             {
                 vmaUnmapMemory(vk.allocator, f.linesAlloc);
@@ -1251,6 +1332,15 @@ struct Renderer::Impl
         for (VkDescriptorSet set : {v.rtaoSet, v.bevelSet, v.shadowSet})
             if (set)
                 vkFreeDescriptorSets(vk.device, aoPool, 1, &set);
+        auto freeReflect = [&](VkDescriptorSet& set) {
+            if (set)
+                vkFreeDescriptorSets(vk.device, reflectPool, 1, &set);
+            set = VK_NULL_HANDLE;
+        };
+        std::ranges::for_each(v.hizSets, freeReflect);
+        std::ranges::for_each(v.reflectTraceSets, freeReflect);
+        std::ranges::for_each(v.reflectTemporalSets, freeReflect);
+        std::ranges::for_each(v.reflectSpatialSets, freeReflect);
         if (v.swapchain)
             vkDestroySwapchainKHR(vk.device, v.swapchain, nullptr);
         if (v.surface)
@@ -3092,11 +3182,11 @@ struct Renderer::Impl
     {
         LILA_ZONE();
 
-        VkDescriptorSetLayoutBinding sb[5];
-        for (uint32_t i = 0; i < 5; ++i)
+        VkDescriptorSetLayoutBinding sb[6];
+        for (uint32_t i = 0; i < 6; ++i)
             sb[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        lci.bindingCount = 5;
+        lci.bindingCount = 6;
         lci.pBindings = sb;
         vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &aoSampleLayout);
 
@@ -3107,11 +3197,14 @@ struct Renderer::Impl
         lci.pBindings = cb;
         vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &aoComputeLayout);
 
-        for (uint32_t i = 0; i < 4; ++i)
-            cb[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutBinding composeBindings[5];
+        for (uint32_t i = 0; i < 5; ++i)
+            composeBindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        lci.bindingCount = 5;
+        lci.pBindings = composeBindings;
+        vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &composeSetLayout);
         lci.bindingCount = 4;
         lci.pBindings = cb;
-        vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &composeSetLayout);
         for (uint32_t i = 0; i < 4; ++i)
             cb[i] = {i, i < 2 ? VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER : VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &postComputeLayout);
@@ -3129,7 +3222,7 @@ struct Renderer::Impl
             vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &rtaoSetLayout);
         }
 
-        VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxAoSets * 4}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxAoSets * 2},
+        VkDescriptorPoolSize sizes[3] = {{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxAoSets * 6}, {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxAoSets * 2},
                                          {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 64}};
         VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -3160,10 +3253,13 @@ struct Renderer::Impl
         uploadImage(blackBevel.image, {1, 1}, 1, 1, sizeof(zero), {zero});
         writeImage(whiteAoSet, 3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, blackBevel.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         writeImage(whiteAoSet, 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, whiteAo.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        writeImage(whiteAoSet, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, blackBevel.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        initReflections();
     }
 
     void destroyAo()
     {
+        destroyReflections();
         destroyImage(whiteAo);
         if (pointSampler)
             vkDestroySampler(vk.device, pointSampler, nullptr);
@@ -3279,6 +3375,7 @@ struct Renderer::Impl
                 writeImage(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, v.history[i].view, general);
             }
         createPostTargets(v, extent);
+        createReflectTargets(v, extent);
     }
 
     /** A 2D image of `mips` levels with a view of each besides the whole one, for compute passes writing level by level. */
@@ -3655,6 +3752,7 @@ struct Renderer::Impl
 
         std::vector<VkAccelerationStructureInstanceKHR> instances;
         std::vector<TraceInstance> table;
+        std::vector<TraceSection> sections;
         bool built = false;
         for (const DrawBatch& b : frameBatches.shaded)
         {
@@ -3676,6 +3774,9 @@ struct Renderer::Impl
                     continue;
                 built = true;
             }
+            const uint32_t firstSection = uint32_t(sections.size());
+            appendTraceSections(d, sections);
+            const uint32_t sectionCount = uint32_t(sections.size()) - firstSection;
             for (uint32_t i = 0; i < b.count; ++i)
             {
                 const glm::mat4& w = frameBatches.instances[b.first + i].world;
@@ -3693,6 +3794,8 @@ struct Renderer::Impl
                 ti.indices = bufferAddress(g->indices.buffer);
                 for (int r = 0; r < 3; ++r)
                     ti.rows[r] = glm::vec4(w[0][r], w[1][r], w[2][r], w[3][r]);
+                ti.sections = firstSection; // an index until the buffer's address is known
+                ti.sectionCount = sectionCount;
                 table.push_back(ti);
             }
         }
@@ -3722,12 +3825,17 @@ struct Renderer::Impl
         try
         {
             const size_t tableBytes = table.size() * sizeof(TraceInstance);
-            if (f.traceTable.size < tableBytes)
+            const size_t totalBytes = tableBytes + sections.size() * sizeof(TraceSection);
+            if (f.traceTable.size < totalBytes)
             {
                 compute::destroy(vk, f.traceTable);
-                f.traceTable = compute::makeBuffer(vk, tableBytes * 2, 0, compute::Host::Write);
+                f.traceTable = compute::makeBuffer(vk, totalBytes * 2, 0, compute::Host::Write);
             }
+            for (TraceInstance& ti : table)
+                ti.sections = f.traceTable.address + tableBytes + ti.sections * sizeof(TraceSection);
             std::memcpy(f.traceTable.mapped, table.data(), tableBytes);
+            if (!sections.empty())
+                std::memcpy(static_cast<char*>(f.traceTable.mapped) + tableBytes, sections.data(), sections.size() * sizeof(TraceSection));
             vmaFlushAllocation(vk.allocator, f.traceTable.alloc, 0, VK_WHOLE_SIZE);
             frameTraceTable = f.traceTable.address;
         }
@@ -3790,6 +3898,44 @@ struct Renderer::Impl
         vkCmdBuildAccelerationStructuresKHR(cmd, 1, &info, &ranges);
         compute::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR);
         return true;
+    }
+
+    /** A draw's material sections in triangle order, as reflection hits shade them. */
+    static void appendTraceSections(const MeshDraw& d, std::vector<TraceSection>& out)
+    {
+        auto material = [&](uint32_t slot) {
+            TraceSection t;
+            if (slot < d.materials.size())
+            {
+                const Material& m = d.materials[slot];
+                t.baseColor = glm::vec4(m.baseColor, m.opacity);
+                t.emissive = glm::vec4(m.emissive, 0.0f);
+                t.roughness = m.roughness;
+                t.metallic = m.metallic;
+            }
+            else
+            {
+                t.baseColor = glm::vec4(d.baseColor, 1.0f);
+                t.roughness = d.roughness;
+            }
+            return t;
+        };
+        const RenderMesh& mesh = *d.mesh;
+        if (mesh.sections.empty())
+        {
+            TraceSection t = material(0);
+            t.endTriangle = uint32_t(mesh.indices.size() / 3);
+            out.push_back(t);
+            return;
+        }
+        const size_t first = out.size();
+        for (const MeshSection& sec : mesh.sections)
+        {
+            TraceSection t = material(sec.material);
+            t.endTriangle = (sec.firstIndex + sec.indexCount) / 3;
+            out.push_back(t);
+        }
+        std::sort(out.begin() + first, out.end(), [](const TraceSection& a, const TraceSection& b) { return a.endTriangle < b.endTriangle; });
     }
 
     static bool anyBevel(const FrameState& s)
@@ -3878,6 +4024,298 @@ struct Renderer::Impl
         barrier(cmd, v.rtShadow.image, general, general, compute, VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, fragment, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
                 color);
         return true;
+    }
+
+    // ---------------------------------------------------------------- reflections
+
+    VkDescriptorSetLayout reflectSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool reflectPool = VK_NULL_HANDLE;
+    VkPipelineLayout reflectLayout = VK_NULL_HANDLE;
+    VkPipeline hizPipeline = VK_NULL_HANDLE, ssrPipeline = VK_NULL_HANDLE, reflectTemporalPipeline = VK_NULL_HANDLE;
+    VkPipeline reflectSpatialPipeline = VK_NULL_HANDLE, rtReflectPipeline = VK_NULL_HANDLE;
+    bool frameReflect = false;
+
+    void initReflections()
+    {
+        LILA_ZONE();
+        constexpr auto image = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        constexpr auto storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        constexpr auto stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        std::vector<VkDescriptorSetLayoutBinding> b = {
+            {0, image, 1, stage, nullptr}, {1, image, 1, stage, nullptr},   {2, image, 1, stage, nullptr}, {3, image, 1, stage, nullptr},
+            {4, storage, 1, stage, nullptr}, {5, image, 1, stage, nullptr}, {6, image, 1, stage, nullptr}, {7, storage, 1, stage, nullptr},
+        };
+        if (vk.rayQuery)
+        {
+            b.push_back({8, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, 1, stage, nullptr});
+            b.push_back({9, image, 1, stage, nullptr});
+            b.push_back({10, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, stage, nullptr});
+        }
+        VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        lci.bindingCount = uint32_t(b.size());
+        lci.pBindings = b.data();
+        if (vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &reflectSetLayout) != VK_SUCCESS)
+            return;
+        constexpr uint32_t kSets = 64 * (kMaxHizLevels + 7);
+        const VkDescriptorPoolSize sizes[4] = {{image, kSets * 6}, {storage, kSets * 2}, {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSets},
+                                               {VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, kSets}};
+        VkDescriptorPoolCreateInfo pci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        pci.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        pci.maxSets = kSets;
+        pci.poolSizeCount = vk.rayQuery ? 4 : 2;
+        pci.pPoolSizes = sizes;
+        vkCreateDescriptorPool(vk.device, &pci, nullptr, &reflectPool);
+        reflectLayout = compute::pipelineLayout(vk, sizeof(ReflectPush), stage, std::span(&reflectSetLayout, 1));
+        if (VkShaderModule m = module(loadSpirv("reflect.spv")))
+        {
+            hizPipeline = buildCompute(reflectLayout, m, "hizCS");
+            ssrPipeline = buildCompute(reflectLayout, m, "ssrCS");
+            reflectTemporalPipeline = buildCompute(reflectLayout, m, "temporalCS");
+            reflectSpatialPipeline = buildCompute(reflectLayout, m, "spatialCS");
+            vkDestroyShaderModule(vk.device, m, nullptr);
+        }
+        if (vk.rayQuery)
+            if (VkShaderModule m = module(loadSpirv("rtreflect.spv")))
+            {
+                rtReflectPipeline = buildCompute(reflectLayout, m, "rtReflectCS");
+                vkDestroyShaderModule(vk.device, m, nullptr);
+            }
+    }
+
+    void destroyReflections()
+    {
+        for (VkPipeline* p : {&hizPipeline, &ssrPipeline, &reflectTemporalPipeline, &reflectSpatialPipeline, &rtReflectPipeline})
+        {
+            if (*p)
+                vkDestroyPipeline(vk.device, *p, nullptr);
+            *p = VK_NULL_HANDLE;
+        }
+        if (reflectLayout)
+            vkDestroyPipelineLayout(vk.device, reflectLayout, nullptr);
+        if (reflectPool)
+            vkDestroyDescriptorPool(vk.device, reflectPool, nullptr);
+        if (reflectSetLayout)
+            vkDestroyDescriptorSetLayout(vk.device, reflectSetLayout, nullptr);
+        reflectLayout = VK_NULL_HANDLE;
+        reflectPool = VK_NULL_HANDLE;
+        reflectSetLayout = VK_NULL_HANDLE;
+    }
+
+    /** The hierarchical depth, the half-resolution reflection images and the sets the reflection passes read them through. */
+    void createReflectTargets(Viewport& v, VkExtent2D extent)
+    {
+        if (!reflectSetLayout || !v.reflectTraceSets[0])
+            return;
+        LILA_ZONE();
+        constexpr auto usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        const VkExtent2D half{std::max((extent.width + 1) / 2, 1u), std::max((extent.height + 1) / 2, 1u)};
+        v.hizLevels = std::min(kMaxHizLevels, uint32_t(std::floor(std::log2(double(std::max(extent.width, extent.height))))) + 1);
+        v.hiz = createLevels(VK_FORMAT_R32_SFLOAT, usage, extent, v.hizLevels, v.hizViews);
+        v.reflectRaw = createImage(kReflectFormat, usage, half, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        v.reflectOut = createImage(kReflectFormat, usage, half, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        for (Image& h : v.reflectHistory)
+            h = createImage(kReflectFormat, usage, half, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        v.reflectHistoryValid = false;
+        v.reflectImagesReady = false;
+        v.reflectTlasGeneration = 0;
+        v.reflectEnvEpoch = ~uint64_t(0);
+        if (!v.hiz.image)
+            return;
+
+        constexpr auto sampler = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        constexpr auto storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        constexpr auto general = VK_IMAGE_LAYOUT_GENERAL;
+        constexpr auto depthRead = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        constexpr auto shaderRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        auto prepass = [&](VkDescriptorSet set) {
+            writeImage(set, 0, sampler, v.aoDepth.view, depthRead);
+            writeImage(set, 1, sampler, v.aoNormal.view, shaderRead);
+        };
+        for (uint32_t l = 0; l < v.hizLevels; ++l)
+        {
+            prepass(v.hizSets[l]);
+            writeImage(v.hizSets[l], 3, sampler, v.hiz.view, general);
+            writeImage(v.hizSets[l], 7, storage, v.hizViews[l], general);
+        }
+        const std::pair<VkImageView, VkImageLayout> colors[3] = {
+            {v.scene.view, shaderRead}, {v.history[0].view, general}, {v.history[1].view, general}};
+        for (int k = 0; k < 3; ++k)
+        {
+            VkDescriptorSet set = v.reflectTraceSets[k];
+            prepass(set);
+            writeImage(set, 2, sampler, colors[k].first, colors[k].second, linearSampler);
+            writeImage(set, 3, sampler, v.hiz.view, general);
+            writeImage(set, 4, storage, v.reflectRaw.view, general);
+        }
+        for (int i = 0; i < 2; ++i)
+        {
+            prepass(v.reflectTemporalSets[i]);
+            writeImage(v.reflectTemporalSets[i], 4, storage, v.reflectHistory[i].view, general);
+            writeImage(v.reflectTemporalSets[i], 5, sampler, v.reflectRaw.view, general);
+            writeImage(v.reflectTemporalSets[i], 6, sampler, v.reflectHistory[1 - i].view, general, linearSampler);
+            prepass(v.reflectSpatialSets[i]);
+            writeImage(v.reflectSpatialSets[i], 4, storage, v.reflectOut.view, general);
+            writeImage(v.reflectSpatialSets[i], 5, sampler, v.reflectHistory[i].view, general);
+        }
+        writeImage(v.aoSampleSet, 5, sampler, v.reflectOut.view, general);
+    }
+
+    /** Points the trace sets at the current acceleration structure and environment, waiting for the frame that may still read them. */
+    void updateReflectSets(Viewport& v, bool traced)
+    {
+        const bool tlasChanged = traced && v.reflectTlasGeneration != tlasGeneration;
+        const bool envChanged = traced && v.reflectEnvEpoch != uploadEpoch;
+        if (!tlasChanged && !envChanged)
+            return;
+        Frame& other = v.frames[(v.frameIndex + 1) % kFramesInFlight];
+        vkWaitForFences(vk.device, 1, &other.fence, VK_TRUE, UINT64_MAX);
+        for (VkDescriptorSet set : v.reflectTraceSets)
+        {
+            if (tlasChanged)
+            {
+                VkWriteDescriptorSetAccelerationStructureKHR as{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR};
+                as.accelerationStructureCount = 1;
+                as.pAccelerationStructures = &tlas;
+                VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                w.pNext = &as;
+                w.dstSet = set;
+                w.dstBinding = 8;
+                w.descriptorCount = 1;
+                w.descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
+                vkUpdateDescriptorSets(vk.device, 1, &w, 0, nullptr);
+            }
+            if (envChanged)
+            {
+                writeImage(set, 9, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, envCube.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, envSampler);
+                VkDescriptorBufferInfo ubo{envUniforms.buffer, 0, VK_WHOLE_SIZE};
+                VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                w.dstSet = set;
+                w.dstBinding = 10;
+                w.descriptorCount = 1;
+                w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+                w.pBufferInfo = &ubo;
+                vkUpdateDescriptorSets(vk.device, 1, &w, 0, nullptr);
+            }
+        }
+        if (tlasChanged)
+            v.reflectTlasGeneration = tlasGeneration;
+        if (envChanged)
+            v.reflectEnvEpoch = uploadEpoch;
+    }
+
+    /**
+     * Reflections from the prepass into v.reflectOut: ray traced when asked for and the GPU can, else screen space from
+     * last frame's picture. 0 when neither ran (the environment alone reflects), 1 screen space, 2 ray traced; note says
+     * why it isn't what was asked for.
+     */
+    int recordReflections(VkCommandBuffer cmd, Frame& f, Viewport& v, const FrameState& s, const glm::mat4& viewProj, float weight, bool clip,
+                          std::string& note)
+    {
+        if (!v.reflectRaw.image || !reflectTemporalPipeline || !reflectSpatialPipeline)
+        {
+            note = "Reflections are unavailable on this GPU: environment only";
+            return 0;
+        }
+        int mode = 0;
+        if (s.reflections == FrameState::Reflections::RayTraced)
+        {
+            if (!vk.rayQuery || !rtReflectPipeline)
+                note = "No ray tracing on this GPU: screen space";
+            else if (!buildSceneTlas(cmd, f) || !frameTraceTable)
+                note = "Nothing to trace: screen space";
+            else
+                mode = 2;
+        }
+        if (mode == 0)
+        {
+            if (ssrPipeline && hizPipeline && v.lastComposeInput >= 0)
+                mode = 1;
+            else
+            {
+                note = "Screen space reflections start with the next frame: environment only";
+                return 0;
+            }
+        }
+        LILA_ZONE();
+        try
+        {
+            if (f.reflectParams.size < sizeof(ReflectParams))
+                f.reflectParams = compute::makeBuffer(vk, sizeof(ReflectParams), 0, compute::Host::Write);
+        }
+        catch (const std::exception& e)
+        {
+            log::error("render: {}", e.what());
+            note = "Out of memory for reflections: environment only";
+            return 0;
+        }
+        updateReflectSets(v, mode == 2);
+
+        const glm::uvec2 half((v.extent.width + 1) / 2, (v.extent.height + 1) / 2);
+        ReflectParams p;
+        p.invViewProj = glm::inverse(viewProj);
+        p.prevViewProj = glm::mat4(v.prevViewProj * glm::translate(glm::dmat4(1.0), s.renderOrigin - v.prevOrigin));
+        p.viewProj = viewProj;
+        p.size = glm::vec4(float(half.x), float(half.y), float(v.extent.width), float(v.extent.height));
+        const bool reset = !v.reflectHistoryValid;
+        p.params = glm::vec4(float(frameCounter % 65536), std::clamp(s.reflectionCutoff, 0.05f, 1.0f), reset ? 1.0f : std::clamp(weight, 0.0f, 1.0f),
+                             clip ? 1.0f : 0.0f);
+        const glm::vec4 env = envParams(s);
+        p.env = glm::vec4(env.x, env.y, env.z, s.zUp ? 1.0f : 0.0f);
+        p.extra = glm::vec4(s.envLightSaturation, 1.0f / std::max(v.prevExposure, 1e-6f), std::max(s.reflectionDistance, 1.0f), float(v.hizLevels));
+        p.instances = frameTraceTable;
+        p.lights = frameLightAddress;
+        p.lightCount = frameLightCount;
+        p.traceShadows = s.rtShadows ? 1u : 0u;
+        std::memcpy(f.reflectParams.mapped, &p, sizeof(p));
+        vmaFlushAllocation(vk.allocator, f.reflectParams.alloc, 0, VK_WHOLE_SIZE);
+
+        constexpr auto compute = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        constexpr auto fragment = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        constexpr auto read = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT;
+        constexpr auto write = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        constexpr auto general = VK_IMAGE_LAYOUT_GENERAL;
+        constexpr auto color = VK_IMAGE_ASPECT_COLOR_BIT;
+        if (!v.reflectImagesReady)
+        {
+            barrier(cmd, v.hiz.image, VK_IMAGE_LAYOUT_UNDEFINED, general, compute, 0, compute, read | write, color, v.hizLevels);
+            for (Image* img : {&v.reflectRaw, &v.reflectOut, &v.reflectHistory[0], &v.reflectHistory[1]})
+                barrier(cmd, img->image, VK_IMAGE_LAYOUT_UNDEFINED, general, compute | fragment, 0, compute, read | write, color);
+            v.reflectImagesReady = true;
+        }
+        ReflectPush push;
+        push.params = f.reflectParams.address;
+        auto dispatch = [&](VkPipeline pipeline, VkDescriptorSet set, glm::uvec2 size) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, reflectLayout, 0, 1, &set, 0, nullptr);
+            vkCmdPushConstants(cmd, reflectLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(cmd, (size.x + 7) / 8, (size.y + 7) / 8, 1);
+        };
+        barrier(cmd, v.reflectRaw.image, general, general, compute | fragment, read, compute, write, color);
+        if (mode == 1)
+        {
+            barrier(cmd, v.hiz.image, general, general, compute, read, compute, write, color, v.hizLevels);
+            for (uint32_t l = 0; l < v.hizLevels; ++l)
+            {
+                push.level = l;
+                dispatch(hizPipeline, v.hizSets[l], glm::uvec2(std::max(v.extent.width >> l, 1u), std::max(v.extent.height >> l, 1u)));
+                barrier(cmd, v.hiz.image, general, general, compute, write, compute, read | write, color, v.hizLevels);
+            }
+            push.level = 0;
+            dispatch(ssrPipeline, v.reflectTraceSets[std::clamp(v.lastComposeInput, 0, 2)], half);
+        }
+        else
+            dispatch(rtReflectPipeline, v.reflectTraceSets[0], half);
+        barrier(cmd, v.reflectRaw.image, general, general, compute, write, compute, read, color);
+        const int out = v.reflectHistoryIndex ^ 1;
+        barrier(cmd, v.reflectHistory[out].image, general, general, compute | fragment, read, compute, write, color);
+        dispatch(reflectTemporalPipeline, v.reflectTemporalSets[out], half);
+        barrier(cmd, v.reflectHistory[out].image, general, general, compute, write, compute, read, color);
+        barrier(cmd, v.reflectOut.image, general, general, fragment, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, compute, write, color);
+        dispatch(reflectSpatialPipeline, v.reflectSpatialSets[out], half);
+        barrier(cmd, v.reflectOut.image, general, general, compute, write, fragment, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, color);
+        v.reflectHistoryIndex = out;
+        v.reflectHistoryValid = true;
+        return mode;
     }
 
     /** The live bevel's rounded normals from the prepass into v.bevel. */
@@ -4555,12 +4993,17 @@ struct Renderer::Impl
         if (!f.timestamps || !f.timed)
             return;
         f.timed = false;
-        uint64_t t[4] = {};
-        if (vkGetQueryPoolResults(vk.device, f.timestamps, 0, 4, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
+        uint64_t t[kTimestamps] = {};
+        if (vkGetQueryPoolResults(vk.device, f.timestamps, 0, kTimestamps, sizeof(t), t, sizeof(uint64_t), VK_QUERY_RESULT_64_BIT) != VK_SUCCESS)
             return;
         double toMs = double(vk.properties.limits.timestampPeriod) * 1e-6;
         v.timing.gpuMs = double(t[3] - t[0]) * toMs;
         v.timing.aoMs = f.aoTimed ? double(t[2] - t[1]) * toMs : 0.0;
+        auto span = [&](bool ran, uint32_t first) { return ran ? double(t[first + 1] - t[first]) * toMs : 0.0; };
+        v.timing.reflectionMs = span(f.reflectTimed, kTimeReflect);
+        v.timing.flareMs = span(f.flareTimed, kTimeFlare);
+        v.timing.dofMs = span(f.dofTimed, kTimeDof);
+        v.timing.motionBlurMs = span(f.motionBlurTimed, kTimeMotionBlur);
     }
 
     void timestamp(VkCommandBuffer cmd, Frame& f, uint32_t query)
@@ -4693,7 +5136,7 @@ struct Renderer::Impl
         const auto cpuStart = std::chrono::steady_clock::now();
         if (f.timestamps)
         {
-            vkCmdResetQueryPool(cmd, f.timestamps, 0, 4);
+            vkCmdResetQueryPool(cmd, f.timestamps, 0, kTimestamps);
             timestamp(cmd, f, 0);
             f.timed = true;
         }
@@ -4794,13 +5237,22 @@ struct Renderer::Impl
         f.aoTimed = ao && !aoFast;
         const bool bevel = vk.rayQuery && bevelPipeline && rtaoSetLayout && !s.xray && !s.externalScene && anyBevel(s);
         const bool rtShadow = !frameRtLights.empty() && rtaoSetLayout && !s.xray && !s.externalScene && anyShaded(s);
-        const bool prepass = (ao && !aoFast) || (post && s.outline && prepassPipeline && anyShaded(s) && !s.xray) || bevel || rtShadow;
+        // Reflections stand in for the environment's, so they only have a surface to land on under environment light.
+        const bool reflectWanted = s.reflections != FrameState::Reflections::Off;
+        const bool envLit = s.lighting == FrameState::Lighting::Environment && envLoaded;
+        const bool reflect = reflectWanted && envLit && reflectSetLayout && prepassPipeline && !s.xray && !s.externalScene && anyShaded(s);
+        const bool prepass = (ao && !aoFast) || (post && s.outline && prepassPipeline && anyShaded(s) && !s.xray) || bevel || rtShadow || reflect;
         timestamp(cmd, f, 1);
         LILA_GPU_SECTION(gpuPass, "Shadow maps");
         recordShadows(cmd, s);
         const auto aoStart = std::chrono::steady_clock::now();
         frameBevel = false;
         frameRtShadow = false;
+        frameReflect = false;
+        int reflectMode = 0;
+        std::string reflectNote;
+        if (reflectWanted && !envLit)
+            reflectNote = "Reflections need environment lighting";
         if (prepass)
         {
             LILA_GPU_SECTION(gpuPass, "Prepass and AO");
@@ -4809,9 +5261,35 @@ struct Renderer::Impl
                 frameBevel = recordBevel(cmd, f, v, s, vpScene);
             if (rtShadow)
                 frameRtShadow = recordRtShadow(cmd, f, v, s, vpScene);
+            timestamp(cmd, f, kTimeReflect);
+            if (reflect)
+            {
+                LILA_GPU_SECTION(gpuPass, "Reflections");
+                const float reflectWeight = !taa ? 0.3f : taaReset ? 1.0f : std::max(taaWeight, taaClip ? 0.2f : 1.0f / 64.0f);
+                reflectMode = recordReflections(cmd, f, v, s, vpScene, reflectWeight, !taa || taaClip, reflectNote);
+                frameReflect = reflectMode > 0;
+                f.reflectTimed = frameReflect;
+            }
+            timestamp(cmd, f, kTimeReflect + 1);
             // The traced passes come with the AO set: unoccluded when AO itself is off.
-            if ((frameBevel || frameRtShadow) && !(ao && !aoFast))
+            if ((frameBevel || frameRtShadow || frameReflect) && !(ao && !aoFast))
                 clearAo(cmd, v);
+        }
+        else
+        {
+            timestamp(cmd, f, kTimeReflect);
+            timestamp(cmd, f, kTimeReflect + 1);
+            f.reflectTimed = false;
+        }
+        if (!frameReflect)
+            v.reflectHistoryValid = false;
+        v.timing.reflections = reflectMode;
+        v.timing.reflectionNote = std::move(reflectNote);
+        if (frameLightAddress)
+        {
+            auto* header = static_cast<GpuFrame*>(f.lights.mapped);
+            header->reflection = glm::vec4(frameReflect ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+            vmaFlushAllocation(vk.allocator, f.lights.alloc, 0, sizeof(GpuFrame));
         }
         // The mesh shader reads the traced shadow only when the pass ran; otherwise that light keeps no shadow this frame.
         if (frameLightAddress && !frameRtLights.empty())
@@ -4968,8 +5446,9 @@ struct Renderer::Impl
         }
 
         drawContactShadows(cmd, s, vpScene, v.offscreen ? nullptr : &v);
-        drawHeightfields(cmd, s, vpScene, (ao && !aoFast) || frameBevel || frameRtShadow ? v.aoSampleSet : whiteAoSet);
-        drawMeshes(cmd, s, vpScene, (ao && !aoFast) || frameBevel || frameRtShadow ? v.aoSampleSet : whiteAoSet, v.extent.height,
+        const bool aoSet = (ao && !aoFast) || frameBevel || frameRtShadow || frameReflect;
+        drawHeightfields(cmd, s, vpScene, aoSet ? v.aoSampleSet : whiteAoSet);
+        drawMeshes(cmd, s, vpScene, aoSet ? v.aoSampleSet : whiteAoSet, v.extent.height,
                    sceneChunks ? &f : nullptr, &ri);
         drawStrands(cmd, s, vpScene, v.extent.height);
         if (edl)
@@ -5041,6 +5520,9 @@ struct Renderer::Impl
         v.prevView = s.view;
         v.prevProj = s.proj;
         v.prevOrigin = s.renderOrigin;
+        // Next frame's screen space reflections read this frame's picture from where the compose pass does.
+        v.lastComposeInput = s.externalScene ? -1 : composeInput;
+        v.prevExposure = s.exposure;
         const PostResult postResult = recordPostStack(cmd, f, v, s, composeInput);
 
         // The frame: the composed scene, then lines and overlays depth tested against the scene's depth.
@@ -5209,6 +5691,11 @@ struct Renderer::Impl
             f.feedback.end(vk, cmd);
         gpuPass.end();
         gpuFrame.end();
+        for (uint32_t q : {kTimeFlare, kTimeDof, kTimeMotionBlur})
+        {
+            timestamp(cmd, f, q);
+            timestamp(cmd, f, q + 1);
+        }
         timestamp(cmd, f, 3);
         v.timing.cpuMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - cpuStart).count();
         v.timing.meshDrawCalls = frameMeshDraws;

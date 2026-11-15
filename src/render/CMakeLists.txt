@@ -64,9 +64,11 @@ lila_add_shaders(lila_render FILES
     shaders/paint_gather.slang
     shaders/paint_screen.slang
     shaders/post.slang
+    shaders/reflect.slang
     shaders/rtao.slang
     shaders/rtbevel.slang
     shaders/rtshadow.slang
+    shaders/rtreflect.slang
     shaders/points.slang
     shaders/strands.slang
     shaders/pointcloud.slang
@@ -88,6 +90,7 @@ lila_add_shaders(lila_render FILES
     shaders/heightfield.slang
     shaders/mesh.slang
     shaders/scene_color.slang
+    shaders/reflect_common.slang
     shaders/stylised.slang
     shaders/bake_common.slang
     shaders/bake_maps.slang

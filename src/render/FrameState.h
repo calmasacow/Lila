@@ -396,6 +396,19 @@ struct FrameState
     std::vector<LightDraw> lights;
     /** Up to four shadowed lights trace their shadows against the scene (GPUs with ray queries) instead of shadow maps. */
     bool rtShadows = false;
+    /**
+     * Reflections of the scene on glossy surfaces under environment light, in place of the environment alone: traced
+     * against the scene on GPUs with ray queries, else from the screen. Rougher than the cutoff reflects the environment.
+     */
+    enum class Reflections
+    {
+        Off,
+        ScreenSpace,
+        RayTraced,
+    };
+    Reflections reflections = Reflections::Off;
+    float reflectionCutoff = 0.6f;
+    float reflectionDistance = 10000.0f; // cm a reflected ray reaches
     /** Exponential height fog, lit by the first directional light as well as its own colour. Lengths cm. */
     struct Fog
     {

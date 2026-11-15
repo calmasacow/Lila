@@ -32,7 +32,8 @@ struct GpuFrame
     float4 fogExtra;  // anisotropy, up axis (1 Y, 2 Z)
     float4 shadowing; // one past the light each rtShadowTex channel traces, 0 for none
     float4 worldOffset; // xyz: the render origin wrapped by a large period, for world-space patterns
-    float4 pad[6];
+    float4 reflection;  // x: 1 when reflectTex holds this frame's traced reflections
+    float4 pad[5];
 };
 
 struct MeshPush
@@ -76,6 +77,7 @@ struct EnvUniforms
 [[vk::binding(3, 0)]] Sampler2D shadowAtlas; // reversed-Z depth, a tile per shadowed light
 [[vk::binding(3, 2)]] Sampler2D bevelTex;    // rtbevel.slang's rounded normals, w 1 where rounded
 [[vk::binding(4, 2)]] Sampler2D rtShadowTex; // rtshadow.slang's visibility, a channel per light GpuFrame::shadowing names
+[[vk::binding(5, 2)]] Sampler2D reflectTex;  // reflect.slang's filtered reflections at half resolution, premultiplied
 
 static const uint kBaseColorSlot = 0;
 static const uint kNormalSlot = 1;
@@ -335,7 +337,7 @@ float aoMismatch(int2 q, float depth, float3 n)
 {
     float err = abs(aoDepthTex.Load(int3(q, 0)).r - depth) / max(depth, 1e-9);
     float3 nq = aoNormalTex.Load(int3(q, 0)).xyz;
-    return err + (dot(nq, n) < 0.9 ? 1.0 : 0.0);
+    return err + (dot(nq, n) < 0.9 * length(nq) ? 1.0 : 0.0);
 }
 
 /**
@@ -656,6 +658,37 @@ float reflectionLod(float rough)
     return clamp(max(rough, sqrt(gReflectionSweep)) * pc.env.w, 0.0, pc.env.w);
 }
 
+/** The pixel's reversed-Z depth, for tracedReflection's upsampling. */
+static float gPixelDepth = 0.0;
+
+/**
+ * The traced reflection at this pixel (premultiplied radiance, confidence in alpha), upsampled from half resolution by
+ * the prepass depths of its four nearest texels so it doesn't bleed across edges. Zero when no pass ran.
+ */
+float4 tracedReflection()
+{
+    if (((GpuFrame*)pc.lights)->reflection.x < 0.5)
+        return float4(0, 0, 0, 0);
+    uint w, h;
+    reflectTex.GetDimensions(w, h);
+    float2 pos = (float2(gVtPixel) + 0.5) * 0.5 - 0.5;
+    int2 base = int2(floor(pos));
+    float2 f = pos - float2(base);
+    float4 sum = float4(0, 0, 0, 0);
+    float total = 0.0;
+    for (int k = 0; k < 4; ++k)
+    {
+        int2 o = int2(k & 1, k >> 1);
+        int2 q = clamp(base + o, int2(0), int2(w, h) - 1);
+        float bw = (o.x == 1 ? f.x : 1.0 - f.x) * (o.y == 1 ? f.y : 1.0 - f.y);
+        float dq = aoDepthTex.Load(int3(q * 2, 0)).r;
+        bw *= exp(-abs(dq - gPixelDepth) / max(gPixelDepth, 1e-9) * 100.0) + 1e-4;
+        sum += reflectTex.Load(int3(q, 0)) * bw;
+        total += bw;
+    }
+    return total > 0.0 ? sum / total : float4(0, 0, 0, 0);
+}
+
 float3 imageBased(float3 n, float3 v, Surface s)
 {
     float nv = max(dot(n, v), 1e-4);
@@ -679,7 +712,10 @@ float3 imageBased(float3 n, float3 v, Surface s)
         irr = lerp(irr, irradiance(toEnv(normalize(lerp(n, gCoatNormal, 0.7)))), p.rgb * p.w);
     }
     float3 diffuse = irr * s.diffuse * (1.0 - specular * energy) * multiBounce(s.ssao, s.diffuse);
-    float3 reflected = prefiltered * specular * energy * specularOcclusion(nv, s.ssao, s.rough);
+    // Traced reflections stand in for the environment by their confidence; they carry their own occlusion.
+    const float4 traced = gModel == kHair || gModel == kCloth ? float4(0, 0, 0, 0) : tracedReflection();
+    float3 reflected = prefiltered * specular * energy * specularOcclusion(nv, s.ssao, s.rough) * (1.0 - traced.a);
+    const float3 tracedLight = traced.rgb * specular * energy;
     if (gModel == kCloth)
     {
         float4 p = styleVec(2);
@@ -696,7 +732,7 @@ float3 imageBased(float3 n, float3 v, Surface s)
         reflected = reflected * (1.0 - Fc) + coatRefl * Fc * specularOcclusion(nvc, s.ssao, coat.y);
     }
     // Material AO darkens indirect light only, as in Unreal; image-based light is all indirect.
-    return (diffuse + reflected) * s.ao * pc.env.z;
+    return ((diffuse + reflected) * pc.env.z + tracedLight) * s.ao;
 }
 
 /** Rotated per pixel and averaged over frames by the temporal antialiasing into a smooth penumbra. */
@@ -982,6 +1018,7 @@ struct Centers
 float4 shadeMesh(VSOut i, bool front, Centers center)
 {
     gVtPixel = uint2(i.pos.xy);
+    gPixelDepth = i.pos.z;
     gUvDx = ddx(center.uv);
     gUvDy = ddy(center.uv);
     uint flags = pc.flags;
@@ -1185,7 +1222,8 @@ float4 meshWirePS(VSOut i, bool front : SV_IsFrontFace, float3 bary : SV_Barycen
 }
 #endif
 
-// Single-sample depth and world normal for the ambient occlusion pass. Masked materials cut out as in meshPS.
+// Single-sample depth and world normal for the ambient occlusion and reflection passes, roughness packed into the
+// normal's length (reflect_common.slang's decodeRoughness). Masked materials cut out as in meshPS.
 [shader("fragment")]
 float4 prepassPS(VSOut i, bool front : SV_IsFrontFace) : SV_Target
 {
@@ -1203,8 +1241,12 @@ float4 prepassPS(VSOut i, bool front : SV_IsFrontFace) : SV_Target
             discard;
     }
     float3 n = normalize(i.normal);
+    float rough = pc.base.a;
+    if ((pc.flags & kRoughnessMap) != 0)
+        rough = sampleMap(kOrmSlot, i.uv).g;
+    rough = (pc.flags & kTranslucent) != 0 ? 1.0 : saturate(rough);
     // The live bevel's radius rides along for the bevel pass.
-    return float4(front ? n : -n, pc.extra.x);
+    return float4((front ? n : -n) * (2.0 - rough), pc.extra.x);
 }
 
 struct BgOut

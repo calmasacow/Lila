@@ -66,6 +66,11 @@ void apply(render::FrameState& s)
     applyPostProcess(s, p.value<bool>("general", kPostEffects, true));
     applyLights(s);
     s.rtShadows = p.value<bool>("general", kRtShadows, true);
+    const std::string reflections = p.value<std::string>("general", kReflections, "off");
+    s.reflections = reflections == "rayTraced"     ? render::FrameState::Reflections::RayTraced
+                    : reflections == "screenSpace" ? render::FrameState::Reflections::ScreenSpace
+                                                   : render::FrameState::Reflections::Off;
+    s.reflectionCutoff = std::clamp(p.value<float>("general", kReflectionCutoff, 0.6f), 0.05f, 1.0f);
 }
 
 int frameCap()

@@ -898,6 +898,22 @@ void registerBuiltins()
                       .doc = doc,
                       .python = "lila.prefs.set(\"general\", \"/viewport/lighting\", \"" + m + "\")"});
     }
+    for (auto [mode, label, doc] :
+         {std::tuple{"off", "No Reflections", "Glossy surfaces reflect the environment only."},
+          {"screenSpace", "Screen Space Reflections",
+           "Glossy surfaces reflect what the view shows, traced through its depth; off-screen things reflect the environment."},
+          {"rayTraced", "Ray-Traced Reflections",
+           "Glossy surfaces reflect the scene traced against its geometry, off-screen things included. Screen space on GPUs without "
+           "ray tracing; the view says when it falls back."}})
+    {
+        std::string m = mode;
+        actions::add({.id = "viewport.reflections." + m, .label = label, .category = "Display",
+                      .run = [m] { PrefStore::get().set("general", vd::kReflections, m); },
+                      .doc = doc,
+                      .python = "lila.prefs.set(\"general\", \"" + std::string(vd::kReflections) + "\", \"" + m + "\")",
+                      .checked = [m] { return PrefStore::get().value<std::string>("general", vd::kReflections, "off") == m; },
+                      .keywords = {"reflections", "ssr", "raytraced", "rtx", "mirror", "lumen", "eevee", "screen space"}});
+    }
     actions::add({.id = "viewport.resetLight", .label = "Reset Light", .category = "Display", .run = [] { vd::resetLight(); },
                   .doc = "Puts the light back where it starts for the lighting mode in use: the HDRI unturned, or the studio or sculpt rig "
                          "at its default rotation and angle. Shift+Alt+right-click in the viewport does the same.",

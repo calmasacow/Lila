@@ -42,6 +42,11 @@ public:
         uint64_t meshDrawCalls = 0; // shaded mesh draw calls, prepass included; each draws one batch's placements
         uint64_t meshInstances = 0; // placements those calls drew
         uint64_t meshUploads = 0;   // GPU mesh copies made so far, every view counted
+        /** The reflections the last frame drew: 0 environment only, 1 screen space, 2 ray traced; and why, when not as asked. */
+        int reflections = 0;
+        std::string reflectionNote;
+        double reflectionMs = 0.0; // GPU time of the reflection passes; 0 when they did not run
+        double flareMs = 0.0, dofMs = 0.0, motionBlurMs = 0.0; // the same for lens flares, depth of field and motion blur
     };
 
     bool start();

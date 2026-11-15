@@ -36,6 +36,10 @@ inline constexpr const char* kVsync = "/viewport/vsync";
 inline constexpr const char* kSafeFrames = "/viewport/safeFrames";
 /** Shadows traced against the scene for up to four lights: exact contacts, soft by each light's size, on GPUs with ray tracing. */
 inline constexpr const char* kRtShadows = "/viewport/rtShadows";
+/** Reflections of the scene on glossy surfaces: "off", "screenSpace" or "rayTraced" (falls back to screen space without ray tracing). */
+inline constexpr const char* kReflections = "/viewport/post/reflections";
+/** Roughness above which surfaces reflect the environment alone. */
+inline constexpr const char* kReflectionCutoff = "/viewport/post/reflectionCutoff";
 inline constexpr const char* kThirds = "/viewport/thirds";
 /** The scene's post process grading, bloom and lens effects in viewports (its tonemapper and exposure always apply). */
 inline constexpr const char* kPostEffects = "/viewport/post/effects";
