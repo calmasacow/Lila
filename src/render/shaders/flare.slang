@@ -53,7 +53,7 @@ void brightCS(uint3 id: SV_DispatchThreadID)
     float3 c = 0.0;
     // Four bilinear taps cover the 4x4 block of full-resolution pixels.
     for (int k = 0; k < 4; ++k)
-        c += sceneExpand(sceneTex.SampleLevel(uv + texel * float2(k & 1 ? 1.0 : -1.0, k & 2 ? 1.0 : -1.0), 0).rgb);
+        c += sceneExpand(sceneTex.SampleLevel(uv + texel * float2((k & 1) != 0 ? 1.0 : -1.0, (k & 2) != 0 ? 1.0 : -1.0), 0).rgb);
     c *= 0.25;
     float lum = dot(c, float3(0.2126, 0.7152, 0.0722));
     float thr = fp.a.x;
