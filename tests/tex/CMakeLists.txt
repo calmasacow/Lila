@@ -19,6 +19,7 @@ add_executable(lila_tex_tests
     test_tex_decal_layers.cpp
     test_tex_layer_clipboard.cpp
     test_tex_material_from_maps.cpp
+    test_tex_more_nodes.cpp
     test_tex_export_presets.cpp
     test_tex_routing.cpp
     test_tex_ties.cpp)

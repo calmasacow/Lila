@@ -1,0 +1,52 @@
+{
+  "format": "lilatexnode",
+  "version": 1,
+  "type": "remap",
+  "label": "Remap",
+  "category": "Utility",
+  "doc": "Maps a value from one range to another: fromLow to toLow, fromHigh to toHigh, clamped to the new range when clamp is on.",
+  "inputs": [
+    {
+      "id": "input",
+      "type": "float",
+      "default": 0.0
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "float"
+    }
+  ],
+  "params": [
+    {
+      "id": "fromLow",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "fromHigh",
+      "type": "float",
+      "default": 1.0
+    },
+    {
+      "id": "toLow",
+      "type": "float",
+      "default": 0.0
+    },
+    {
+      "id": "toHigh",
+      "type": "float",
+      "default": 1.0
+    },
+    {
+      "id": "clamp",
+      "type": "bool",
+      "default": true
+    }
+  ],
+  "cost": 1,
+  "body": {
+    "out": "float span = abs(p.fromHigh - p.fromLow) < 1e-9 ? 1e-9 : p.fromHigh - p.fromLow;\nfloat x = (input.sample(uv) - p.fromLow) / span;\nif (p.clamp)\n    x = saturate(x);\nreturn p.toLow + x * (p.toHigh - p.toLow);"
+  }
+}
