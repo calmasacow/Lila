@@ -2372,14 +2372,17 @@ struct TextureSetPanel::Impl
 
     void refreshVariants()
     {
+        if (!variants)
+            return;
         variants->blockSignals(true);
         variants->clear();
         variants->addItem("Base", QString());
-        for (const json& v : view.value("variants", json::array()))
+        const json names = view.is_object() ? view.value("variants", json::array()) : json::array();
+        for (const json& v : names)
             variants->addItem(qs(v.get<std::string>()), qs(v.get<std::string>()));
         variants->insertSeparator(variants->count());
         variants->addItem("New Variant...", QString("\x01new"));
-        const std::string active = view.value("variant", std::string());
+        const std::string active = view.is_object() ? view.value("variant", std::string()) : std::string();
         if (!active.empty())
             variants->addItem("Remove " + qs(active), QString("\x01remove"));
         variants->setCurrentIndex(std::max(0, variants->findData(qs(active))));
@@ -2952,7 +2955,7 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
                 call = {{"command", "texAddVariant"}, {"args", {set, name.toStdString()}}};
         }
         else if (data == QString("\x01remove"))
-            call = {{"command", "texRemoveVariant"}, {"args", {set, d->view.value("variant", std::string())}}};
+            call = {{"command", "texRemoveVariant"}, {"args", {set, d->view.is_object() ? d->view.value("variant", std::string()) : std::string()}}};
         else
             call = {{"command", "texSwitchVariant"}, {"args", {set, data.toStdString()}}};
         if (!call.is_null())
