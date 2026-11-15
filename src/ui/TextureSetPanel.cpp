@@ -17,6 +17,9 @@
 #include "core/PrefStore.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
+#include "geo/Attribute.h"
+#include "scene/MeshNodes.h"
+#include "ui/ViewportHooks.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "scene/Node.h"
@@ -26,7 +29,6 @@
 #include "ui/GraphBackend.h"
 #include "ui/Icons.h"
 #include "ui/MaterialBrowser.h"
-#include "ui/MaterialThumbnails.h"
 #include "ui/MaterialThumbnails.h"
 #include "ui/Menus.h"
 #include "ui/NodeEditor.h"
@@ -377,6 +379,15 @@ protected:
     }
 };
 
+/** A smart material or mask dragged from the shelf: its name and kind on two lines. */
+constexpr const char* kSmartMime = "application/x-lila-smart-material";
+
+std::pair<std::string, std::string> smartFromMime(const QMimeData& mime)
+{
+    const QStringList parts = QString::fromUtf8(mime.data(kSmartMime)).split(QChar('\n'));
+    return {parts.value(0).toStdString(), parts.value(1, "material").toStdString()};
+}
+
 /** The stack's rows: drags reorder and drop into folders through the panel, library materials drop in as layers. */
 class LayerTree final : public QTreeWidget
 {
@@ -400,6 +411,7 @@ public:
 
     std::function<void(QTreeWidgetItem* dragged, QTreeWidgetItem* target, TextureSetPanel::Drop where)> onMove;
     std::function<void(const std::string& material, QTreeWidgetItem* target, TextureSetPanel::Drop where)> onMaterial;
+    std::function<void(const std::string& name, const std::string& kind, QTreeWidgetItem* target, TextureSetPanel::Drop where)> onSmart;
 
     /** Where a drop at pos lands: above or below a row, or into a folder's middle. */
     TextureSetPanel::Drop dropAt(QTreeWidgetItem* target, QPoint pos) const
@@ -417,13 +429,13 @@ protected:
     QStringList mimeTypes() const override
     {
         QStringList t = QTreeWidget::mimeTypes();
-        t << kMaterialMime;
+        t << kMaterialMime << kSmartMime;
         return t;
     }
 
     void dragEnterEvent(QDragEnterEvent* e) override
     {
-        if (e->mimeData()->hasFormat(kMaterialMime))
+        if (e->mimeData()->hasFormat(kMaterialMime) || e->mimeData()->hasFormat(kSmartMime))
         {
             e->acceptProposedAction();
             return;
@@ -434,7 +446,7 @@ protected:
     void dragMoveEvent(QDragMoveEvent* e) override
     {
         QTreeWidget::dragMoveEvent(e);
-        if (e->mimeData()->hasFormat(kMaterialMime))
+        if (e->mimeData()->hasFormat(kMaterialMime) || e->mimeData()->hasFormat(kSmartMime))
             e->acceptProposedAction();
     }
 
@@ -448,11 +460,38 @@ protected:
             if (onMaterial)
                 onMaterial(e->mimeData()->data(kMaterialMime).toStdString(), target, where);
         }
+        else if (e->mimeData()->hasFormat(kSmartMime))
+        {
+            if (onSmart)
+            {
+                auto [name, kind] = smartFromMime(*e->mimeData());
+                onSmart(name, kind, target, where);
+            }
+        }
         else if (e->source() == this && currentItem() && onMove)
             onMove(currentItem(), target, where);
         // The panel rebuilds the rows from the stack; Qt must not move them itself.
         e->setDropAction(Qt::IgnoreAction);
         e->accept();
+    }
+};
+
+/** The smart material shelf: items drag onto meshes in a viewport and onto the layer stack. */
+class SmartShelf final : public QListWidget
+{
+public:
+    using QListWidget::QListWidget;
+
+protected:
+    QStringList mimeTypes() const override { return {kSmartMime}; }
+
+    QMimeData* mimeData(const QList<QListWidgetItem*>& items) const override
+    {
+        if (items.isEmpty())
+            return nullptr;
+        auto* m = new QMimeData();
+        m->setData(kSmartMime, (items.front()->data(Qt::UserRole).toString() + QChar('\n') + items.front()->data(Qt::UserRole + 1).toString()).toUtf8());
+        return m;
     }
 };
 
@@ -521,6 +560,9 @@ struct TextureSetPanel::Impl
     QWidget* props = nullptr;
     QListWidget* shelf = nullptr;
     QWidget* shelfBox = nullptr;
+    controls::Segmented* shelfKind = nullptr;
+    QPushButton* shelfApply = nullptr;
+    QLabel* shelfHint = nullptr;
     QBoxLayout* columns = nullptr;
     QWidget* side = nullptr;
     QVBoxLayout* sideLayout = nullptr;
@@ -708,9 +750,9 @@ struct TextureSetPanel::Impl
             if (kind == "paint")
                 textureSets::setActiveLayer(set, id);
         }
+        self->refresh();
         if (!id.empty() && kind == "paint")
             actions::run(json("tex.paint"));
-        self->refresh();
         return id;
     }
 
@@ -1365,6 +1407,7 @@ struct TextureSetPanel::Impl
         {
             side->setFixedWidth(kSideWidth);
             sideLayout->addWidget(shelfBox, 1);
+            split->setSizes({580, 420});
         }
         else
         {
@@ -1372,6 +1415,7 @@ struct TextureSetPanel::Impl
             side->setMaximumWidth(QWIDGETSIZE_MAX);
             split->addWidget(shelfBox);
             split->setStretchFactor(2, 1);
+            split->setSizes({450, 350, 200});
         }
         shelfBox->show();
     }
@@ -1427,18 +1471,6 @@ struct TextureSetPanel::Impl
             it->setData(Qt::UserRole, qs(m.name));
             it->setData(Qt::UserRole + 1, qs(m.kind));
             it->setToolTip(qs(m.description.empty() ? m.name : m.description) + "\n" + (m.kind == "mask" ? "Smart mask" : "Smart material") + ", " +
-            materialThumbs::Options o;
-            o.size = 128;
-            QPointer<QListWidget> shelfView(shelf);
-            const QString name = qs(m.name);
-            materialThumbs::renderAsync("smart:" + m.name, o, [shelfView, name](const materialThumbs::Result& r, const std::string& err) {
-                if (!shelfView || !err.empty())
-                    return;
-                QPixmap pm(QString::fromStdWString(r.file.wstring()));
-                for (int i = 0; i < shelfView->count() && !pm.isNull(); ++i)
-                    if (shelfView->item(i)->data(Qt::UserRole).toString() == name)
-                        shelfView->item(i)->setIcon(QIcon(pm));
-            });
                            qs(m.tier) + ". Double-click to apply.");
             materialThumbs::Options o;
             o.size = 128;
@@ -1453,6 +1485,23 @@ struct TextureSetPanel::Impl
                         shelfView->item(i)->setIcon(QIcon(pm));
             });
         }
+        filterShelf();
+    }
+
+    bool shelfShowsMasks() const { return shelfKind && shelfKind->current() == 1; }
+
+    /** Shows the kind the switch picks; masks need a layer to go on, so without one the shelf says so. */
+    void filterShelf()
+    {
+        const bool masks = shelfShowsMasks();
+        for (int i = 0; i < shelf->count(); ++i)
+            shelf->item(i)->setHidden((shelf->item(i)->data(Qt::UserRole + 1).toString() == "mask") != masks);
+        if (QListWidgetItem* cur = shelf->currentItem(); cur && cur->isHidden())
+            shelf->setCurrentItem(nullptr);
+        const bool haveLayer = layer(selLayer) != nullptr;
+        shelfApply->setText(masks ? "Add Mask to Layer" : "Apply");
+        shelfApply->setEnabled(!masks || haveLayer);
+        shelfHint->setVisible(masks && !haveLayer);
     }
 
     // Properties ---------------------------------------------------------------------------------------------------------
@@ -1479,16 +1528,7 @@ struct TextureSetPanel::Impl
 
         if (kind == "fill" || kind == "paint")
         {
-            {
-                auto* paint = new QPushButton(icon("brush"), "Paint", w);
-                paint->setToolTip("Paint: the texture paint tool, painting into this layer (Texture > Texture Paint)");
-                const std::string layerId = id;
-                connect(paint, &QPushButton::clicked, w, [this, layerId] {
-                    textureSets::setActiveLayer(set, layerId);
-                    actions::run(json("tex.paint"));
-                });
-                v->addWidget(paint);
-            }
+            json node = {{"name", id}, {"label", kind == "paint" ? "Brush Material" : "Material"}, {"params", json::array()}};
             json inputs = json::array();
             const json material = l.value("material", json::object());
             const json resolved = l.value("resolved", json::object());
@@ -1501,7 +1541,16 @@ struct TextureSetPanel::Impl
             }
             node["inputs"] = inputs;
             if (kind == "paint")
-                v->addWidget(dim(w, "The values the brushes paint. Paint with Texture > Paint; strokes go to this layer while it is the active one."));
+            {
+                auto* paint = new QPushButton(icon("brush"), "Paint", w);
+                paint->setToolTip("Paint: the texture paint tool, painting into this layer (Texture > Texture Paint)");
+                const std::string layerId = id;
+                connect(paint, &QPushButton::clicked, w, [this, layerId] {
+                    textureSets::setActiveLayer(set, layerId);
+                    actions::run(json("tex.paint"));
+                });
+                v->addWidget(paint);
+            }
             v->addWidget(texParams::nodePanel(w, node, [this](const std::string& c, const json& value) { propsLayer({{"material", {{c, value}}}}); }));
         }
         else if (kind == "procedural")
@@ -1797,6 +1846,7 @@ struct TextureSetPanel::Impl
             updateThumbs();
         rebuildBanner();
         rebuildShelf();
+        filterShelf();
         if (!std::exchange(keepProps, false))
             rebuildProps();
     }
@@ -1830,6 +1880,7 @@ struct TextureSetPanel::Impl
             textureSets::setActiveLayer(set, selLayer);
         keepProps = false;
         rebuildProps();
+        filterShelf();
     }
 
     // Menus --------------------------------------------------------------------------------------------------------------
@@ -2077,18 +2128,24 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     sv->setContentsMargins(0, 2, 0, 0);
     sv->setSpacing(2);
     auto* shelfHead = new QHBoxLayout();
-    shelfHead->addWidget(boldHeading(shelfBox, "Smart Materials"));
+    d->shelfKind = new controls::Segmented(shelfBox);
+    d->shelfKind->add("Smart Materials", {}, "Smart materials: saved layers, applied above the selected layer", 0);
+    d->shelfKind->add("Smart Masks", {}, "Smart masks: saved mask stacks, added to the selected layer", 1);
+    d->shelfKind->setCurrent(0);
+    connect(d->shelfKind, &controls::Segmented::picked, this, [this](int) { d->filterShelf(); });
+    shelfHead->addWidget(d->shelfKind);
     shelfHead->addStretch(1);
-    d->shelf->setIconSize(QSize(64, 64));
-    d->shelf->setGridSize(QSize(92, 88));
-    d->shelf->setWordWrap(false);
-    d->shelf->setTextElideMode(Qt::ElideRight);
+    auto* reload = toolButton(shelfBox, "refresh", "Reload: reread the smart material libraries");
+    connect(reload, &QToolButton::clicked, this, [this] {
+        d->shelfKey.clear();
         d->rebuildShelf();
     });
     shelfHead->addWidget(reload);
     sv->addLayout(shelfHead);
-    d->shelf = new QListWidget(shelfBox);
+    d->shelf = new SmartShelf(shelfBox);
     d->shelf->setObjectName("smartShelf");
+    d->shelf->setDragEnabled(true);
+    d->shelf->setDragDropMode(QAbstractItemView::DragOnly);
     d->shelf->setViewMode(QListView::IconMode);
     d->shelf->setFlow(QListView::LeftToRight);
     d->shelf->setWrapping(true);
@@ -2102,8 +2159,13 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
             [this](QListWidgetItem* it) { applySmartMaterial(it->data(Qt::UserRole).toString().toStdString()); });
     sv->addWidget(d->shelf, 1);
     deletion::claim(d->shelf, nullptr);
-    auto* apply = new QPushButton("Apply", shelfBox);
-    apply->setToolTip("Apply: the chosen smart material above the selected layer, or the smart mask to it");
+    d->shelfHint = new QLabel("Select a layer to add a mask to.", shelfBox);
+    d->shelfHint->setStyleSheet(themedStyleSheet("color: #969696;"));
+    d->shelfHint->hide();
+    sv->addWidget(d->shelfHint);
+    auto* apply = d->shelfApply = new QPushButton("Apply", shelfBox);
+    apply->setToolTip("Apply the chosen smart material above the selected layer, or add the chosen smart mask to it. Or drag one onto a mesh "
+                      "or into the layers.");
     connect(apply, &QPushButton::clicked, this, [this] {
         if (QListWidgetItem* it = d->shelf->currentItem())
             applySmartMaterial(it->data(Qt::UserRole).toString().toStdString());
@@ -2115,6 +2177,8 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     split->setStretchFactor(0, 3);
     split->setStretchFactor(1, 2);
     split->setStretchFactor(2, 1);
+    // Proportions, scaled to the panel's height: the properties get about 40% beside the layers.
+    split->setSizes({450, 350, 200});
     v->addWidget(split, 1);
 
     d->tree->onMove = [this](QTreeWidgetItem* dragged, QTreeWidgetItem* target, Drop where) {
@@ -2132,6 +2196,32 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
         // Dropped on a mask row: the mask's layer is the target.
         std::string targetId = target ? target->data(0, kRoleLayer).toString().toStdString() : std::string();
         moveLayer(id, targetId, where);
+    };
+    d->tree->onSmart = [this](const std::string& name, const std::string& kind, QTreeWidgetItem* target, Drop where) {
+        const std::string layerId = target ? target->data(0, kRoleLayer).toString().toStdString() : std::string();
+        if (kind == "mask")
+        {
+            if (layerId.empty())
+            {
+                log::warn("Smart mask {}: drop it onto a layer; the mask goes on that layer", name);
+                return;
+            }
+            d->selLayer = layerId;
+            d->selMask.clear();
+            applySmartMaterial(name);
+            return;
+        }
+        applySmartMaterial(name);
+        if (!layerId.empty() && !d->selLayer.empty() && d->selLayer != layerId)
+        {
+            json move = d->args({d->selLayer});
+            if (where == Drop::Into)
+                move["parent"] = layerId;
+            else
+                move[where == Drop::Above ? "above" : "below"] = layerId;
+            runUi("texMoveLayer", move);
+            refresh();
+        }
     };
     d->tree->onMaterial = [this](const std::string& material, QTreeWidgetItem* target, Drop where) {
         dropMaterial(material, target ? target->data(0, kRoleLayer).toString().toStdString() : std::string(), where);
@@ -2438,7 +2528,7 @@ void TextureSetPanel::applySmartMaterial(const std::string& name)
     {
         if (!d->layer(d->selLayer))
         {
-            log::warn("Select the layer the smart mask goes on");
+            log::warn("Smart mask {}: select a layer first; the mask goes on the selected layer", name);
             return;
         }
         call["layer"] = d->selLayer;
@@ -2515,8 +2605,78 @@ void removeActiveLayerListener(int id) { activeState().listeners.erase(id); }
 
 // Registration -----------------------------------------------------------------------------------------------------------
 
+namespace
+{
+/** The material slot of the face under a drop, else the mesh's first. */
+std::string slotUnder(const geo::Mesh& mesh, uint32_t face)
+{
+    std::span<const int32_t> slots = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
+    return scene::materials::slotName(mesh, face < slots.size() ? slots[face] : 0);
+}
+
+/** The texture set driving the slot; a new one when there is none, with a material of its own for a mesh on Default. */
+std::string setForDrop(scene::Node& meshNode, std::string slot)
+{
+    scene::Graph& g = scene::Graph::current();
+    if (std::string set = textureSetForSlot(g, slot); !set.empty())
+        return set;
+    if (slot == scene::materials::kDefaultSlot)
+    {
+        json made = runUi("createMaterial", {{"args", {"M_" + meshNode.name()}}});
+        if (!made.is_string())
+            return {};
+        slot = made.get<std::string>();
+        runUi("assignMaterial", {{"args", {slot, meshNode.path()}}});
+    }
+    std::string name = tex::defaultSetName(slot);
+    for (int i = 1; !g.findAll(name).empty(); ++i)
+        name = tex::defaultSetName(slot) + std::to_string(i);
+    json r = runUi("texCreateSet", {{"args", {name}}, {"settings", {{"material", slot}}}});
+    if (!r.is_string())
+        return {};
+    log::info("{}: new texture set {} for material {}", meshNode.name(), r.get<std::string>(), slot);
+    return r.get<std::string>();
+}
+
+/** A smart material dropped on a mesh lands on top of the texture set of the material under the cursor. */
+bool dropSmartOnViewport(const QMimeData& mime, const viewportHooks::DropTarget& target, bool commit)
+{
+    if (!mime.hasFormat(kSmartMime))
+        return false;
+    scene::Graph& g = scene::Graph::current();
+    scene::Node* n = target.node == scene::kNoNode ? nullptr : g.node(target.node);
+    if (!n || !n->type().isA("mesh"))
+        return false;
+    if (!commit)
+        return true;
+    g.evaluate();
+    scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    if (!mesh)
+        return false;
+    auto [name, kind] = smartFromMime(mime);
+    UndoChunk chunk("Apply Smart Material");
+    const std::string set = setForDrop(*n, slotUnder(*mesh, target.face));
+    if (set.empty())
+        return true;
+    TextureSetPanel* panel = TextureSetPanel::active();
+    if (panel)
+        panel->setTextureSet(set);
+    if (kind == "mask")
+    {
+        log::warn("Smart mask {}: drop it onto a layer in the Texture Set panel; masks go on a layer, not a mesh", name);
+        return true;
+    }
+    if (panel)
+        panel->applySmartMaterial(name);
+    else
+        runUi("texApplySmartMaterial", {{"args", {set, name}}});
+    return true;
+}
+} // namespace
+
 void registerTextureSetPanel()
 {
+    viewportHooks::setDropHandler("textureSets.smart", dropSmartOnViewport);
     static bool done = false;
     if (std::exchange(done, true))
         return;

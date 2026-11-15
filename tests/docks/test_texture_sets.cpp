@@ -20,10 +20,12 @@
 #include "ui/NodeEditor.h"
 #include "ui/TextureGraphUi.h"
 #include "ui/TextureSetPanel.h"
+#include "ui/ViewportHooks.h"
 
 #include <QApplication>
 #include <QComboBox>
 #include <QListWidget>
+#include <QMimeData>
 #include <QMainWindow>
 #include <QPushButton>
 #include <QDoubleSpinBox>
@@ -238,4 +240,41 @@ TEST_CASE("texture set panel applies smart materials from its shelf and shows th
     CHECK(panel->banner()->isHidden());
 
     ops::removeExecuteListener(listener);
+}
+
+TEST_CASE("smart materials and masks sit apart on the shelf, and a smart material dropped on a mesh lands in its texture set")
+{
+    registerTexGraphUi();
+    ui::registerTextureSetPanel();
+    run("newScene");
+    const std::string cube = run("polyCube")[0].get<std::string>();
+
+    QMainWindow win;
+    auto* panel = new ui::TextureSetPanel(&win);
+    win.setCentralWidget(panel);
+    win.resize(420, 900);
+    win.show();
+    pumpWithDeletes();
+
+    // The shelf shows one kind at a time: materials first.
+    QListWidget* shelf = panel->smartShelf();
+    REQUIRE(shelf->count() > 0);
+    for (int i = 0; i < shelf->count(); ++i)
+        CHECK(shelf->item(i)->isHidden() == (shelf->item(i)->data(Qt::UserRole + 1).toString() == "mask"));
+
+    // A drop on a mesh with only Default gives it a material and a texture set, with the smart material's layer on top.
+    QMimeData mime;
+    mime.setData("application/x-lila-smart-material", QByteArray("Rusty Iron\nmaterial"));
+    ui::viewportHooks::DropTarget target;
+    target.node = scene::Graph::current().find(cube)->id();
+    target.face = 0;
+    CHECK(ui::viewportHooks::handleDrop(mime, target, false));
+    CHECK(ui::viewportHooks::handleDrop(mime, target, true));
+    pumpWithDeletes();
+    const json sets = run("texSets");
+    REQUIRE(sets.size() == 1);
+    const std::string set = sets[0].is_string() ? sets[0].get<std::string>() : sets[0].value("name", std::string());
+    const json view = run("texLayerStack", {{"args", {set}}});
+    REQUIRE(view["layers"].size() == 1);
+    CHECK(view["layers"][0]["name"] == "Rusty Iron");
 }
