@@ -1290,6 +1290,7 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
 
     m->addSection("Renderer");
     hdrSubmenu(m, "Renderer", [this](QMenu* s) { fillRendererMenu(s); });
+    row("viewport.pathTraced", lilaDraws);
     row("viewport.toggleAA", lilaDraws);
     QMenu* samples = hdrSubmenu(m, "Antialiasing Samples", [this](QMenu* s) {
         hdrRadioRows(s, {"viewport.aaSamples2", "viewport.aaSamples4", "viewport.aaSamples8", "viewport.aaTemporal"}, mView, {});

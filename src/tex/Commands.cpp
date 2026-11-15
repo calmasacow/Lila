@@ -11,6 +11,8 @@
 #include "tex/Interop.h"
 #include "tex/Layers.h"
 #include "tex/PainterImport.h"
+#include "tex/ShadingChannels.h"
+#include "tex/Snapshots.h"
 #include "tex/SlangRt.h"
 
 #include <algorithm>
@@ -449,6 +451,8 @@ Graph graphFromSpec(const json& spec, const std::string& setName, const SetSetti
 
 void registerCommands()
 {
+    shading::registerCommands();
+    snapshots::registerCommands();
     using T = ArgType;
     ops::registerCommand({
         .name = "texCreateSet",

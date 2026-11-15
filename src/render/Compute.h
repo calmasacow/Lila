@@ -50,6 +50,8 @@ LILA_UI_API Buffer makeBuffer(VulkanContext& vk, VkDeviceSize size, VkBufferUsag
 LILA_UI_API Buffer hostBuffer(VulkanContext& vk, const void* data, size_t size, VkBufferUsageFlags usage = 0);
 LILA_UI_API void destroy(VulkanContext& vk, Buffer& b);
 LILA_UI_API void copy(VkCommandBuffer cmd, const Buffer& from, const Buffer& to, VkDeviceSize size);
+/** Makes what the GPU wrote to a Host::Read buffer visible to the host, after its work finished. */
+LILA_UI_API void invalidate(VulkanContext& vk, const Buffer& b);
 /** Makes every earlier write visible to what follows in dstStage. */
 LILA_UI_API void memoryBarrier(VkCommandBuffer cmd, VkPipelineStageFlags2 dstStage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
                                VkAccessFlags2 dstAccess = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT);

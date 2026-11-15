@@ -520,6 +520,12 @@ struct Surface
 static uint gModel = 0;
 static float3 gStrand = float3(0, 1, 0);     // hair: along the strand
 static float3 gCoatNormal = float3(0, 0, 1); // clearcoat and eye: the smooth surface under the normal map
+// Extended materials (render::ExtendedShading), read once per pixel by extendedInputs.
+static float2 gCoat = float2(0, 0.05);       // weight, roughness
+static float4 gSheen = float4(0, 0, 0, 0.5); // colour, roughness
+static float3 gSubsurface = float3(0, 0, 0);
+static float gAnisotropy = 0.0;
+static float3 gAnisoT = float3(1, 0, 0);     // where the highlight stretches
 
 // Charlie sheen (Estevez and Kulla) and Neubelt's visibility, for cloth.
 float D_Charlie(float nh, float a)
@@ -578,9 +584,11 @@ float3 light(float3 n, float3 v, float3 l, float3 radiance, Surface s)
         spec = lerp(spec, kk, saturate(p0.z));
         diff = s.diffuse / PI * saturate(0.75 * dot(n, l) + 0.25);
     }
-    if (gModel == kClearcoat || gModel == kEye)
+    if (gModel == kExtended)
+        extendedLight(n, v, l, h, nl, nv, nh, vh, a, F, s, spec, diff);
+    if (gModel == kClearcoat || gModel == kEye || (gModel == kExtended && gCoat.x > 0.0))
     {
-        float2 coat = gModel == kEye ? styleVec(1).yz : styleVec(0).zw;
+        float2 coat = gModel == kEye ? styleVec(1).yz : gModel == kExtended ? gCoat : styleVec(0).zw;
         float ac = max(coat.y * coat.y, 0.002);
         float3 hc = h;
         float nlc = saturate(dot(gCoatNormal, l));
@@ -664,6 +672,13 @@ float3 imageBased(float3 n, float3 v, Surface s)
     // Multiple-scattering compensation (Fdez-Aguera): rough surfaces would otherwise lose energy.
     float3 energy = 1.0 + s.f0 * (1.0 / max(ab.x + ab.y, 1e-4) - 1.0);
     float3 rn = n;
+    if (gModel == kExtended && abs(gAnisotropy) > 1e-3)
+    {
+        // Reflections stretch along the anisotropy direction: a normal bent toward the view across it (Filament).
+        float3 b = cross(n, gAnisoT);
+        float3 across = cross(b, v);
+        rn = normalize(lerp(n, normalize(cross(across, b) + 1e-6), saturate(abs(gAnisotropy) * (1.0 - 0.5 * s.rough))));
+    }
     if (gModel == kHair)
     {
         // Reflections stretch across the strand: reflect around a normal bent toward the view across it.
@@ -686,9 +701,14 @@ float3 imageBased(float3 n, float3 v, Surface s)
         float3 sheen = envSample(reflect(-v, n), clamp(p.w * pc.env.w, 0.0, pc.env.w));
         reflected = sheen * p.rgb * (0.25 + 0.75 * pow(1.0 - nv, 3.0)) * s.ssao;
     }
-    if (gModel == kClearcoat || gModel == kEye)
+    if (gModel == kExtended && any(gSheen.rgb > 0.0))
     {
-        float2 coat = gModel == kEye ? styleVec(1).yz : styleVec(0).zw;
+        float3 sheen = envSample(reflect(-v, n), clamp(gSheen.w * pc.env.w, 0.0, pc.env.w));
+        reflected += sheen * gSheen.rgb * (0.25 + 0.75 * pow(1.0 - nv, 3.0)) * s.ssao;
+    }
+    if (gModel == kClearcoat || gModel == kEye || (gModel == kExtended && gCoat.x > 0.0))
+    {
+        float2 coat = gModel == kEye ? styleVec(1).yz : gModel == kExtended ? gCoat : styleVec(0).zw;
         float nvc = max(dot(gCoatNormal, v), 1e-4);
         float Fc = F_Schlick(float3(0.04), nvc).x * saturate(coat.x);
         float3 coatRefl = envSample(reflect(-v, gCoatNormal), clamp(max(coat.y, sqrt(gReflectionSweep)) * pc.env.w, 0.0, pc.env.w));
@@ -959,6 +979,7 @@ float3 vertexColor(float4 c, uint flags)
 }
 
 #include "stylised.slang"
+#include "extended.slang"
 
 /** The back-face tint over a display-encoded colour. */
 float3 tintBack(float3 c, bool front)
@@ -1070,6 +1091,10 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
     if (!front && (flags & kOneSidedLighting) == 0)
         n = -n;
     gCoatNormal = front || (flags & kOneSidedLighting) != 0 ? ng : -ng;
+    float4 extSpecular = float4(1, 1, 1, 1); // colour times weight, ior
+    float extTransmission = 0.0;
+    if (model == kExtended)
+        extendedInputs(uv, n, tangentU, tangentV, extSpecular, extTransmission);
     if (pc.extra.x > 0.0 && pc.extra.y > 0.5)
     {
         // The live bevel: the rounded normal replaces the surface's own under any normal map detail.
@@ -1104,6 +1129,13 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
     metallic = saturate(metallic);
     s.diffuse = baseColor * (1.0 - metallic);
     s.f0 = lerp(float3(0.08 * pc.surface.y), baseColor, metallic);
+    if (model == kExtended)
+    {
+        // Specular 0.5 at IOR 1.5 is the default 4%; transmitted light leaves the diffuse.
+        float r = (extSpecular.w - 1.0) / (extSpecular.w + 1.0);
+        s.f0 = lerp(r * r * 2.0 * pc.surface.y * extSpecular.rgb, baseColor, metallic);
+        s.diffuse *= 1.0 - extTransmission;
+    }
 
     float3 v = normalize(pc.eye.xyz - i.worldPos);
     float3 c;

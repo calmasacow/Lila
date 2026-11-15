@@ -30,6 +30,8 @@ lila_module(lila_tex Scene
     Plan.cpp
     Ports.cpp
     SetOps.cpp
+    ShadingChannels.cpp
+    Snapshots.cpp
     SlangRt.cpp
     SmartMaterial.cpp
     TextImage.cpp

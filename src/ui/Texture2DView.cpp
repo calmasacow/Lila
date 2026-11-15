@@ -16,6 +16,7 @@
 #include "ui/FlowLayout.h"
 #include "ui/Icons.h"
 #include "ui/MaterialDraw.h"
+#include "ui/TexCompare.h"
 #include "ui/TexPreview.h"
 #include "ui/Theme.h"
 #include "ui/UiCommon.h"
@@ -309,6 +310,7 @@ protected:
         for (int ty = -reach; ty <= reach; ++ty)
             for (int tx = -reach; tx <= reach; ++tx)
                 p.drawImage(QRectF(topLeft + QPointF(tx * sz.width(), ty * sz.height()), sz), image);
+        texCompare::paint2D(p, QRectF(topLeft, sz));
         if (tiled)
         {
             p.setPen(QPen(gray(200, 120), 1.0, Qt::DashLine));

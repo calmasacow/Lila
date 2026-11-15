@@ -16,6 +16,7 @@
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
 #include "tex/Generators.h"
+#include "tex/ShadingChannels.h"
 
 #include <algorithm>
 #include <bit>
@@ -396,6 +397,7 @@ json exportSet(scene::Node& set, const ExportOptions& options)
             if (r.name == "height")
                 r = {"height", "StackRebuildHeight", "out", PortType::Gray, {}};
     std::vector<bake::TargetMap> targetMaps = target->maps;
+    shading::addExportMaps(targetMaps, *target);
     if (fromHeight && std::ranges::none_of(targetMaps, [](const bake::TargetMap& tm) { return tm.settings.map == "height"; }))
     {
         bake::TargetMap tm;

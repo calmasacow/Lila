@@ -12,6 +12,7 @@
 #include "scene/SceneCommands.h"
 #include "sculpt/SculptSession.h"
 #include "tex/TextureSet.h"
+#include "ui/PreviewQuality.h"
 #include "ui/TexLive.h"
 #include "vcs/Process.h"
 #include "vcs/SourceControl.h"
@@ -49,6 +50,7 @@ int main(int argc, char** argv)
     lila::render::texgpu::registerTexGpu();
     lila::render::paint::registerCommands();
     lila::sculpt::registerCommands();
+    lila::ui::previewQuality::registerCommands();
 
     doctest::Context ctx(argc, argv);
     const int rc = ctx.run();

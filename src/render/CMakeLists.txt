@@ -9,6 +9,7 @@ lila_module(lila_render UI
     CubeLut.cpp
     ClayGpu.cpp
     DeformGpu.cpp
+    Displacement.cpp
     CameraRelative.cpp
     DrawBatches.cpp
     Environment.cpp
@@ -17,6 +18,7 @@ lila_module(lila_render UI
     HdrImage.cpp
     HeightfieldRenderer.cpp
     MeshMaps.cpp
+    PathTracer.cpp
     PaintCommands.cpp
     PaintPathCommands.cpp
     PaintPickCommands.cpp
@@ -55,6 +57,8 @@ lila_add_shaders(lila_render FILES
     shaders/clay.slang
     shaders/contact.slang
     shaders/deform.slang
+    shaders/displace.slang
+    shaders/pathtrace.slang
     shaders/exposure.slang
     shaders/external.slang
     shaders/grid.slang
@@ -92,6 +96,9 @@ lila_add_shaders(lila_render FILES
     shaders/heightfield.slang
     shaders/mesh.slang
     shaders/scene_color.slang
+    shaders/tonemap.slang
+    shaders/extended.slang
+    shaders/pathtrace_channels.slang
     shaders/stylised.slang
     shaders/bake_common.slang
     shaders/bake_maps.slang

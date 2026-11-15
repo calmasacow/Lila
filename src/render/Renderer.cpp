@@ -6,6 +6,8 @@
 #include "render/Backdrop.h"
 #include "render/CameraRelative.h"
 #include "render/Compute.h"
+#include "render/Displacement.h"
+#include "render/PathTracer.h"
 #include "render/DrawBatches.h"
 #include "render/Environment.h"
 #include "render/GpuImage.h"
@@ -656,6 +658,9 @@ struct Viewport
     bool hdrWanted = false;
     AllocatedBuffer hdrReadback;
     void* hdrMapped = nullptr;
+    /** The path-traced view's sums and image, made when it is first shown; pathTraced when the last frame showed it. */
+    std::shared_ptr<PathTracer::View> pathTrace;
+    bool pathTraced = false;
 };
 
 struct OffscreenJob
@@ -893,6 +898,12 @@ struct Renderer::Impl
     /** The frame's shaded sections, ready to record; the viewport's kept list. */
     std::vector<SectionRecord> offscreenRecords;
     std::vector<SectionRecord>* frameRecords = &offscreenRecords;
+    PathTracer pathTracer;
+    /** Per instance of the scene's top-level structure, the shaded batch it places and its trace table entry. */
+    std::vector<uint32_t> frameTlasBatches;
+    std::vector<TraceInstance> frameTraceInstances;
+    /** Bumped whenever a bottom-level structure is built or refit: traced geometry changed. */
+    uint64_t blasEpoch = 0;
     uint64_t meshEvictions = 0, meshUploads = 0;
     /** The cull mode emitSection last set and on which command buffer; reset whenever a pipeline is bound, which may fix it. */
     VkCommandBuffer cullCmd = VK_NULL_HANDLE;
@@ -1211,6 +1222,9 @@ struct Renderer::Impl
     void destroyViewport(Viewport& v)
     {
         vkDeviceWaitIdle(vk.device);
+        if (v.pathTrace)
+            pathTracer.releaseView(vk, *v.pathTrace);
+        v.pathTrace.reset();
         for (Frame& f : v.frames)
         {
             freeStaging(f);
@@ -1532,6 +1546,7 @@ struct Renderer::Impl
         envUniforms = createBuffer(env.sh.data(), sizeof(env.sh), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
         envMaxLod = float(mips - 1);
         envLoaded = true;
+        pathTracer.setEnvironment(vk, env);
 
         VkDescriptorImageInfo cube{envSampler, envCube.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
         VkDescriptorImageInfo lut{linearSampler, brdfLut.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
@@ -1714,7 +1729,14 @@ struct Renderer::Impl
                 dv.allDirty = false;
             }
             else
-                g.vertices = upload(mesh->vertices.data(), mesh->vertices.size() * sizeof(MeshVertex), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | traceable);
+            {
+                // A displaced mesh's vertices are rewritten by the displacement kernel.
+                const VkBufferUsageFlags displaced = mesh->displaceDirs.empty() ? 0
+                                                         : VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                                               VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                g.vertices = upload(mesh->vertices.data(), mesh->vertices.size() * sizeof(MeshVertex),
+                                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | traceable | displaced);
+            }
             g.indices = upload(mesh->indices.data(), mesh->indices.size() * sizeof(uint32_t), VK_BUFFER_USAGE_INDEX_BUFFER_BIT | traceable);
             g.edges = upload(mesh->edgePoints.data(), mesh->edgePoints.size() * sizeof(glm::vec3),
                              VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | (mesh->dynamic ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0));
@@ -1793,6 +1815,7 @@ struct Renderer::Impl
             destroyBuffer(g.edges);
             destroyBuffer(g.edgeIndices);
             compute::destroy(vk, g.edgeMask);
+            dropDisplacement(key);
             meshCache.erase(key);
             ++meshEvictions;
         }
@@ -1874,8 +1897,14 @@ struct Renderer::Impl
             destroyBuffer(g.edges);
             destroyBuffer(g.edgeIndices);
             compute::destroy(vk, g.edgeMask);
+            dropDisplacement(key);
         }
         meshCache.clear();
+        for (auto& [key, h] : heightTexels)
+            compute::destroy(vk, h.texels);
+        heightTexels.clear();
+        displaceKernel.destroy(vk);
+        pathTracer.destroy(vk);
         if (tlas)
             vkDestroyAccelerationStructureKHR(vk.device, tlas, nullptr);
         tlas = VK_NULL_HANDLE;
@@ -1964,7 +1993,8 @@ struct Renderer::Impl
         VkDescriptorSetLayoutBindingFlagsCreateInfo bfi{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO};
         bfi.bindingCount = 1;
         bfi.pBindingFlags = &flags;
-        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, bindlessCapacity, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
+        VkDescriptorSetLayoutBinding b{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, bindlessCapacity,
+                                       VK_SHADER_STAGE_FRAGMENT_BIT | VK_SHADER_STAGE_COMPUTE_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
         lci.pNext = &bfi;
         lci.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
@@ -2331,6 +2361,13 @@ struct Renderer::Impl
             {
                 for (const TexturePtr* t : {&mat.baseColorMap, &mat.normalMap, &mat.ormMap, &mat.emissiveMap, &mat.style.strokeMap})
                     addTexture(*t);
+                if (mat.style.model == ShadingModel::Extended)
+                    for (const TexturePtr& t : mat.ext.maps)
+                        if (t)
+                        {
+                            addTexture(t);
+                            addMap(t, kWhiteLinearKey);
+                        }
                 addMap(mat.baseColorMap, kWhiteSrgbKey);
                 addMap(mat.normalMap, kFlatNormalKey);
                 addMap(mat.ormMap, kWhiteLinearKey);
@@ -2684,7 +2721,20 @@ struct Renderer::Impl
     }
 
     /** Appends a style block per shaded draw section whose material uses a stylised shading model. */
-    void writeStyle(const void* draw, uint32_t slot, const MaterialStyle& style, const glm::vec3& boundsMin, const glm::vec3& boundsMax, bool zUp)
+    /** The table handles of an Extended material's maps, 0xffff where it has none. */
+    std::array<uint32_t, kExtendedMaps> extendedHandles(const Material& m)
+    {
+        std::array<uint32_t, kExtendedMaps> h;
+        for (uint32_t k = 0; k < kExtendedMaps; ++k)
+        {
+            const uint32_t handle = bindless ? mapHandle(m.ext.maps[k], kWhiteLinearKey) : kNoHandle;
+            h[k] = handle == kNoHandle ? 0xffffu : handle;
+        }
+        return h;
+    }
+
+    void writeStyle(const void* draw, uint32_t slot, const MaterialStyle& style, const glm::vec3& boundsMin, const glm::vec3& boundsMax, bool zUp,
+                    const void* extended = nullptr)
     {
         uint32_t stroke = 0xffffffffu;
         if (style.strokeMap && !style.strokeMap->isUdimSet() && textureKey(style.strokeMap, 0) != 0)
@@ -2696,7 +2746,8 @@ struct Renderer::Impl
             else if (it != frameHandles.end() && it->second != kNoHandle)
                 stroke = it->second;
         }
-        const auto block = packStyle(style, stroke, boundsMin, boundsMax, zUp);
+        const auto block = style.model == ShadingModel::Extended && extended ? packExtended(static_cast<const Material*>(extended)->ext, extendedHandles(*static_cast<const Material*>(extended)))
+                                                                 : packStyle(style, stroke, boundsMin, boundsMax, zUp);
         frameStyles[{draw, slot}] = uint32_t(frameTable.size());
         frameTable.insert(frameTable.end(), block.begin(), block.end());
     }
@@ -2709,7 +2760,7 @@ struct Renderer::Impl
                 continue;
             for (uint32_t slot = 0; slot < d.materials.size(); ++slot)
                 if (d.materials[slot].style.model != ShadingModel::DefaultLit)
-                    writeStyle(&d, slot, d.materials[slot].style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp);
+                    writeStyle(&d, slot, d.materials[slot].style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp, &d.materials[slot]);
         }
         // A heightfield shades with slot 0, over bounds in its own space as its mesh's would be.
         for (const HeightfieldDraw& d : s.heightfields)
@@ -2755,6 +2806,422 @@ struct Renderer::Impl
                           VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
                               VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                           VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
+    }
+
+    // ---------------------------------------------------------------- path-traced view
+
+    /** The versions of every GPU image the frame's materials sample, so painting starts the path tracer over. */
+    uint64_t textureVersions(const FrameState& s) const
+    {
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&](uint64_t x) { h = (h ^ x) * 1099511628211ull; };
+        auto add = [&](const TexturePtr& t) {
+            if (!t)
+                return;
+            if (t->gpu)
+                mix(t->gpu->version());
+            for (const UdimTile& tile : t->tiles)
+                if (tile.image && tile.image->gpu)
+                    mix(tile.image->gpu->version());
+            if (t->vt)
+                mix(t->vt->contentVersion());
+        };
+        for (const MeshDraw& d : s.meshes)
+            for (const Material& mat : d.materials)
+                for (const TexturePtr* t : {&mat.baseColorMap, &mat.normalMap, &mat.ormMap, &mat.emissiveMap, &mat.heightMap})
+                    add(*t);
+        return h;
+    }
+
+    /**
+     * The path-traced view, when the frame asks for one and the GPU can trace rays: traces into the view's sums and makes
+     * s an external renderer's frame showing the result. more is set while it hasn't converged.
+     */
+    bool recordPathTrace(VkCommandBuffer cmd, Frame& f, Viewport& v, FrameState& s, bool& more)
+    {
+        more = false;
+        if (!s.pathTrace.on || s.externalScene || s.xray || !vk.rayQuery || !bindless || !envLoaded || !frameTableAddress || !frameRecords)
+            return false;
+        if (!pathTracer.ready() && !pathTracer.init(vk, bindlessLayout))
+            return false;
+        LILA_ZONE();
+        if (!buildSceneTlas(cmd, f) || frameTlasBatches.size() != frameTraceInstances.size())
+            return false;
+        std::vector<PtSection> sections;
+        std::vector<glm::uvec2> batchSections(frameBatches.shaded.size(), glm::uvec2(0));
+        for (const SectionRecord& r : *frameRecords)
+        {
+            if (r.batch >= batchSections.size())
+                continue;
+            glm::uvec2& range = batchSections[r.batch];
+            if (range.y == 0)
+                range.x = uint32_t(sections.size());
+            ++range.y;
+            const MeshPush& p = r.push;
+            PtSection ps;
+            ps.firstTriangle = r.section.firstIndex / 3;
+            ps.triangleCount = r.section.indexCount / 3;
+            ps.flags = p.flags;
+            ps.sampling = p.sampling;
+            ps.base = p.base;
+            ps.surface = p.surface;
+            const MeshDraw& d = *frameBatches.shaded[r.batch].draw;
+            const Material* mat = r.section.material < d.materials.size() ? &d.materials[r.section.material] : nullptr;
+            ps.emissive = glm::vec4(p.emissive, mat ? float(uint32_t(mat->style.model)) : 0.0f);
+            ps.maps = glm::uvec4(p.maps[0], p.maps[1], 0xffffffffu, 0xffffffffu);
+            if (mat)
+                extendedSection(*mat, ps);
+            sections.push_back(ps);
+        }
+        std::vector<PtInstance> instances(frameTraceInstances.size());
+        for (size_t i = 0; i < instances.size(); ++i)
+        {
+            const TraceInstance& t = frameTraceInstances[i];
+            PtInstance& pi = instances[i];
+            pi.vertices = t.vertices;
+            pi.indices = t.indices;
+            for (int r = 0; r < 3; ++r)
+                pi.rows[r] = t.rows[r];
+            const glm::uvec2 range = frameTlasBatches[i] < batchSections.size() ? batchSections[frameTlasBatches[i]] : glm::uvec2(0);
+            pi.firstSection = range.x;
+            pi.sectionCount = range.y;
+        }
+
+        PathTracer::Inputs in;
+        in.tlas = tlas;
+        in.instances = instances;
+        in.sections = sections;
+        in.textureTable = frameTableAddress;
+        in.lights = frameLightAddress;
+        in.lightCount = frameLightCount;
+        in.bindlessSet = bindlessSet;
+        in.envView = envCube.view;
+        in.envSampler = envSampler;
+        in.extent = v.extent;
+        in.settings = s.pathTrace;
+        const glm::dmat4 viewProj = s.proj * s.view;
+        PtParams& p = in.params;
+        p.invViewProj = glm::mat4(glm::inverse(viewProj));
+        p.eye = glm::vec4(glm::vec3(s.eye), s.proj[3][3] == 1.0 ? 1.0f : 0.0f);
+        const glm::vec3 right(float(s.view[0][0]), float(s.view[1][0]), float(s.view[2][0]));
+        const glm::vec3 up(float(s.view[0][1]), float(s.view[1][1]), float(s.view[2][1]));
+        const glm::vec3 forward(-float(s.view[0][2]), -float(s.view[1][2]), -float(s.view[2][2]));
+        p.camRight = glm::vec4(right, std::max(s.lensRadius, 0.0f));
+        p.camUp = glm::vec4(up, std::max(s.focusDistance, 1e-3f));
+        p.camForward = glm::vec4(forward, s.exposure);
+        const glm::vec4 env = envParams(s);
+        p.env = glm::vec4(env.x, env.y, env.z, std::clamp(s.envLightSaturation, 0.0f, 1.0f));
+        p.envExtra = glm::vec4(s.zUp ? 1.0f : 0.0f, s.envBackgroundExposure, s.envBackground ? 1.0f : 0.0f, envMaxLod);
+        p.flags.y = uint32_t(s.post.tonemapper);
+        p.flags.z = uint32_t(std::max(s.post.agxLook, 0));
+        p.misc.x = s.gamma;
+        p.misc.z = s.transparentBackground ? 1.0f : 0.0f;
+        uint64_t sig = 1469598103934665603ull;
+        auto mix = [&](const void* data, size_t bytes) {
+            const auto* b = static_cast<const uint8_t*>(data);
+            for (size_t i = 0; i < bytes; ++i)
+                sig = (sig ^ b[i]) * 1099511628211ull;
+        };
+        mix(instances.data(), instances.size() * sizeof(PtInstance));
+        mix(sections.data(), sections.size() * sizeof(PtSection));
+        mix(&blasEpoch, sizeof(blasEpoch));
+        const uint64_t versions = textureVersions(s);
+        mix(&versions, sizeof(versions));
+        if (frameLightAddress && f.lights.mapped)
+            mix(f.lights.mapped, sizeof(GpuLight) * (size_t(frameLightCount) + 1));
+        in.signature = sig;
+
+        if (!v.pathTrace)
+            v.pathTrace = PathTracer::makeView();
+        std::vector<compute::Buffer> garbage;
+        PathTracer::Result result;
+        const bool ok = pathTracer.record(vk, cmd, *v.pathTrace, in, garbage, result);
+        for (compute::Buffer& b : garbage)
+            f.staging.push_back({b.buffer, b.alloc});
+        if (!ok || !result.color)
+            return false;
+        more = !result.converged;
+        v.timing.pathSamples = result.samples;
+
+        s.externalScene = true;
+        s.externalColor = result.color;
+        s.externalDepth = result.depth;
+        s.externalBottomUp = false;
+        s.externalPremultiplied = false;
+        s.externalExposure = 1.0f;
+        s.externalDepthUnproject.reset();
+        handOverScene(s);
+        prepareTexture(cmd, f, s.externalColor, "path traced view");
+        prepareTexture(cmd, f, s.externalDepth, "path traced depth");
+        // The meshes now draw only their wires: batch and record them again, and have the next frame start from scratch.
+        writeInstances(f, s, nullptr, false);
+        v.keptRecordsValid = false;
+        prepareRecords(v, s, false);
+        v.keptRecordsValid = false;
+        v.keptMeshes = {};
+        return true;
+    }
+
+    /** The extended shading channels of a material into a path tracer section. */
+    void extendedSection(const Material& m, PtSection& ps)
+    {
+        if (m.style.model != ShadingModel::Extended)
+            return;
+        const ExtendedShading& e = m.ext;
+        ps.ext0 = glm::vec4(e.sheenColor, e.sheenRoughness);
+        ps.ext1 = glm::vec4(e.coat, e.coatRoughness, e.anisotropy, e.anisotropyRotation);
+        ps.ext2 = glm::vec4(e.subsurfaceColor, e.transmission);
+        ps.ext3 = glm::vec4(e.specularColor * e.specularWeight, e.ior);
+        const std::array<uint32_t, kExtendedMaps> h = extendedHandles(m);
+        uint32_t words[8];
+        std::fill(std::begin(words), std::end(words), 0xffffffffu);
+        for (uint32_t k = 0; k < kExtendedMaps; ++k)
+        {
+            const uint32_t shift = (k & 1) * 16;
+            words[k / 2] = (words[k / 2] & ~(0xffffu << shift)) | (h[k] << shift);
+        }
+        ps.extMaps0 = glm::uvec4(words[0], words[1], words[2], words[3]);
+        ps.extMaps1 = glm::uvec4(words[4], words[5], words[6], words[7]);
+        ps.subsurfaceRadius = e.subsurfaceRadius;
+    }
+
+    // ---------------------------------------------------------------- displacement preview
+
+    /** A displaced mesh's undisplaced vertices, its directions, and what it was last displaced with. */
+    struct DisplaceState
+    {
+        compute::Buffer base, dirs;
+        uint64_t signature = 0;
+    };
+    std::unordered_map<uint64_t, DisplaceState> displaceStates; // by RenderMesh key
+    /** Height images' texels copied into buffers for the displacement kernel, by GpuImage key. */
+    struct HeightTexels
+    {
+        compute::Buffer texels;
+        uint64_t version = 0;
+        uint64_t lastUsed = 0;
+    };
+    std::unordered_map<uint64_t, HeightTexels> heightTexels;
+    displacement::Kernel displaceKernel;
+    bool displaceUnavailable = false;
+
+    void dropDisplacement(uint64_t meshKey)
+    {
+        auto it = displaceStates.find(meshKey);
+        if (it == displaceStates.end())
+            return;
+        compute::destroy(vk, it->second.base);
+        compute::destroy(vk, it->second.dirs);
+        displaceStates.erase(it);
+    }
+
+    /** The GPU images a height map samples, with the UDIM tile each covers ({-1, -1} for a plain map). */
+    static std::vector<std::pair<std::shared_ptr<GpuImage>, glm::ivec2>> heightImages(const TexturePtr& t)
+    {
+        std::vector<std::pair<std::shared_ptr<GpuImage>, glm::ivec2>> out;
+        if (!t)
+            return out;
+        if (t->isUdimSet())
+        {
+            for (const UdimTile& tile : t->tiles)
+                if (tile.image && tile.image->gpu)
+                    out.push_back({tile.image->gpu, glm::ivec2((tile.udim - 1001) % 10, (tile.udim - 1001) / 10)});
+        }
+        else if (t->gpu)
+            out.push_back({t->gpu, glm::ivec2(-1)});
+        return out;
+    }
+
+    static const Material* displacedMaterial(const MeshDraw& d, size_t section)
+    {
+        const uint32_t slot = d.mesh->sections.empty() ? 0 : d.mesh->sections[section].material;
+        const Material* m = slot < d.materials.size() ? &d.materials[slot] : nullptr;
+        return m && m->heightMap && m->displacementDepth != 0.0f ? m : nullptr;
+    }
+
+    /**
+     * Moves the vertices of displaced draws (tessellated meshes whose materials carry a height map) whenever their height
+     * images or settings change: the undisplaced copy back into the vertex buffer, then the kernel per section and tile.
+     */
+    void prepareDisplacement(VkCommandBuffer cmd, Frame& f, const FrameState& s)
+    {
+        auto displaced = [](const MeshDraw& d) { return d.mesh && !d.mesh->displaceDirs.empty() && !d.mesh->dynamic && !d.mesh->shareVertices; };
+        if (displaceUnavailable || std::ranges::none_of(s.meshes, displaced))
+            return;
+        LILA_ZONE();
+        if (!displaceKernel.valid() && !displaceKernel.init(vk))
+        {
+            displaceUnavailable = true;
+            log::warn("render: the displacement kernel is unavailable; displaced meshes draw undisplaced");
+            return;
+        }
+        bool wrote = false;
+        std::unordered_set<uint64_t> done;
+        for (const MeshDraw& d : s.meshes)
+        {
+            if (!displaced(d) || !done.insert(d.mesh->key).second)
+                continue;
+            const RenderMesh& mesh = *d.mesh;
+            GpuMesh* g = gpuMesh(d.mesh);
+            if (!g || !g->vertices.buffer || mesh.vertices.size() != mesh.displaceDirs.size())
+                continue;
+            const size_t sections = std::min(mesh.displaceRanges.size(), mesh.sections.empty() ? size_t(1) : mesh.sections.size());
+            // What the displacement depends on: each section's height images and their versions, depth, mid and uv set.
+            uint64_t sig = 1469598103934665603ull;
+            auto mix = [&](uint64_t x) { sig = (sig ^ x) * 1099511628211ull; };
+            for (size_t si = 0; si < sections; ++si)
+            {
+                const Material* mat = displacedMaterial(d, si);
+                if (!mat)
+                {
+                    mix(0);
+                    continue;
+                }
+                for (const auto& [img, tile] : heightImages(mat->heightMap))
+                {
+                    mix(img->key());
+                    mix(img->version());
+                }
+                uint32_t bits[2];
+                std::memcpy(&bits[0], &mat->displacementDepth, 4);
+                std::memcpy(&bits[1], &mat->displacementMid, 4);
+                mix(bits[0] | uint64_t(bits[1]) << 32);
+                mix(mat->flags & MatUv1);
+            }
+            auto [it, added] = displaceStates.try_emplace(mesh.key);
+            DisplaceState& st = it->second;
+            if (!added && st.signature == sig)
+                continue;
+            const VkDeviceSize bytes = mesh.vertices.size() * sizeof(MeshVertex);
+            const VkDeviceSize dirBytes = mesh.displaceDirs.size() * sizeof(glm::vec4);
+            if (!st.base.buffer)
+                try
+                {
+                    st.base = compute::makeBuffer(vk, bytes, 0, compute::Host::None);
+                    st.dirs = compute::makeBuffer(vk, dirBytes, 0, compute::Host::None);
+                    AllocatedBuffer dirStaging = createBuffer(mesh.displaceDirs.data(), dirBytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+                    AllocatedBuffer baseStaging = createBuffer(mesh.vertices.data(), bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+                    f.staging.push_back(dirStaging);
+                    f.staging.push_back(baseStaging);
+                    const VkBufferCopy dirRegion{0, 0, dirBytes}, baseRegion{0, 0, bytes};
+                    vkCmdCopyBuffer(cmd, dirStaging.buffer, st.dirs.buffer, 1, &dirRegion);
+                    vkCmdCopyBuffer(cmd, baseStaging.buffer, st.base.buffer, 1, &baseRegion);
+                }
+                catch (const std::exception& e)
+                {
+                    log::error("render: {}", e.what());
+                    dropDisplacement(mesh.key);
+                    continue;
+                }
+            st.signature = sig;
+            if (!wrote)
+                // Earlier frames may still draw or trace these vertices.
+                memoryBarrier(cmd, VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                              VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT,
+                              VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                              VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+            wrote = true;
+            for (size_t si = 0; si < sections; ++si)
+                if (const Material* mat = displacedMaterial(d, si))
+                    for (const auto& [img, tile] : heightImages(mat->heightMap))
+                        copyHeightTexels(cmd, f, *img);
+            memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+            const VkBufferCopy whole{0, 0, bytes};
+            vkCmdCopyBuffer(cmd, st.base.buffer, g->vertices.buffer, 1, &whole);
+            memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT);
+            const VkDeviceAddress vertexAddress = bufferAddress(g->vertices.buffer);
+            for (size_t si = 0; si < sections; ++si)
+            {
+                const Material* mat = displacedMaterial(d, si);
+                if (!mat)
+                    continue;
+                for (const auto& [img, tile] : heightImages(mat->heightMap))
+                {
+                    auto h = heightTexels.find(img->key());
+                    if (h == heightTexels.end() || !h->second.texels.buffer)
+                        continue;
+                    displacement::Push p;
+                    p.vertices = vertexAddress;
+                    p.base = st.base.address;
+                    p.dirs = st.dirs.address;
+                    p.height = h->second.texels.address;
+                    p.firstVertex = mesh.displaceRanges[si].x;
+                    p.count = mesh.displaceRanges[si].y;
+                    p.width = uint32_t(img->width());
+                    p.heightPx = uint32_t(img->height());
+                    p.format = uint32_t(img->format());
+                    p.uv1 = (mat->flags & MatUv1) ? 1u : 0u;
+                    p.tileU = tile.x;
+                    p.tileV = tile.y;
+                    p.depth = mat->displacementDepth;
+                    p.mid = mat->displacementMid;
+                    displacement::record(cmd, displaceKernel, p);
+                }
+            }
+            g->blasStale = g->blas != VK_NULL_HANDLE;
+        }
+        if (wrote)
+            memoryBarrier(cmd, VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                          VK_ACCESS_2_SHADER_WRITE_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT,
+                          VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
+                              VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                          VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_2_SHADER_READ_BIT);
+        evictHeightTexels();
+    }
+
+    /** img's texels into its buffer for the kernel, when they changed since the last copy. */
+    void copyHeightTexels(VkCommandBuffer cmd, Frame& f, GpuImage& img)
+    {
+        std::vector<compute::Buffer> staging;
+        const bool ready = img.prepare(vk, cmd, staging);
+        for (compute::Buffer& b : staging)
+            f.staging.push_back({b.buffer, b.alloc});
+        if (!ready)
+            return;
+        HeightTexels& h = heightTexels[img.key()];
+        h.lastUsed = frameCounter;
+        const VkDeviceSize need = VkDeviceSize(img.width()) * VkDeviceSize(img.height()) * VkDeviceSize(texelBytes(img.format()));
+        if (h.texels.size < need)
+        {
+            compute::destroy(vk, h.texels);
+            try
+            {
+                h.texels = compute::makeBuffer(vk, need, 0, compute::Host::None);
+            }
+            catch (const std::exception& e)
+            {
+                log::error("render: {}", e.what());
+                return;
+            }
+            h.version = 0;
+        }
+        if (h.version != img.version())
+        {
+            img.recordRead(cmd, h.texels);
+            h.version = img.version();
+        }
+    }
+
+    void evictHeightTexels()
+    {
+        if (frameCounter % 240 != 0)
+            return;
+        std::vector<uint64_t> stale;
+        for (auto& [key, h] : heightTexels)
+            if (h.lastUsed + 480 < frameCounter)
+                stale.push_back(key);
+        if (stale.empty())
+            return;
+        vkDeviceWaitIdle(vk.device);
+        for (uint64_t key : stale)
+        {
+            compute::destroy(vk, heightTexels[key].texels);
+            heightTexels.erase(key);
+        }
     }
 
     // ---------------------------------------------------------------- heightfield draw path
@@ -3655,6 +4122,7 @@ struct Renderer::Impl
 
         std::vector<VkAccelerationStructureInstanceKHR> instances;
         std::vector<TraceInstance> table;
+        frameTlasBatches.clear();
         bool built = false;
         for (const DrawBatch& b : frameBatches.shaded)
         {
@@ -3672,12 +4140,16 @@ struct Renderer::Impl
                     memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_TRANSFER_WRITE_BIT,
                                            VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                                            VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR | VK_ACCESS_2_SHADER_READ_BIT);
-                if (!buildBlas(cmd, f, *g, uint32_t(source.vertices.size()), liveSource(d) != nullptr, g->blas != VK_NULL_HANDLE))
+                // Displaced vertices move like a live mesh's, so their structure refits too.
+                const bool refittable = liveSource(d) != nullptr || !d.mesh->displaceDirs.empty();
+                if (!buildBlas(cmd, f, *g, uint32_t(source.vertices.size()), refittable, g->blas != VK_NULL_HANDLE))
                     continue;
                 built = true;
+                ++blasEpoch;
             }
             for (uint32_t i = 0; i < b.count; ++i)
             {
+                frameTlasBatches.push_back(uint32_t(&b - frameBatches.shaded.data()));
                 const glm::mat4& w = frameBatches.instances[b.first + i].world;
                 VkAccelerationStructureInstanceKHR inst{};
                 for (int r = 0; r < 3; ++r)
@@ -3730,6 +4202,7 @@ struct Renderer::Impl
             std::memcpy(f.traceTable.mapped, table.data(), tableBytes);
             vmaFlushAllocation(vk.allocator, f.traceTable.alloc, 0, VK_WHOLE_SIZE);
             frameTraceTable = f.traceTable.address;
+            frameTraceInstances = std::move(table);
         }
         catch (const std::exception& e)
         {
@@ -4725,11 +5198,15 @@ struct Renderer::Impl
         else if (f.feedback.active())
             f.feedback.destroy(vk);
         prepareMeshes(cmd, f, s, sameMeshes);
+        prepareDisplacement(cmd, f, s);
         prepareDynamicMeshes(cmd, f, s, sameMeshes ? &v.keptDynamic : nullptr);
         writeInstances(f, s, v.offscreen ? nullptr : &v.keptBatches, sameMeshes);
         writeLights(f, s);
         prepareHeightfields(cmd, f, s, v.extent.height);
         prepareRecords(v, s, sameMeshes);
+        bool pathTraceMore = false;
+        v.timing.pathSamples = 0;
+        v.pathTraced = recordPathTrace(cmd, f, v, s, pathTraceMore);
         frameMeshDraws = frameMeshInstances = 0;
 
         glm::dmat4 viewProj = s.proj * s.view;
@@ -4762,7 +5239,7 @@ struct Renderer::Impl
             v.accumulated = 2;
         }
         v.uploadEpoch = uploadEpoch;
-        v.wantsMore = taa && v.accumulated < uint32_t(std::max(s.accumulate, 1));
+        v.wantsMore = (taa && v.accumulated < uint32_t(std::max(s.accumulate, 1))) || pathTraceMore;
         glm::dmat4 sceneViewProj = viewProj;
         if (taa)
         {
@@ -5493,7 +5970,9 @@ struct Renderer::Impl
             v.frameIndex = (v.frameIndex + 1) % kFramesInFlight;
             return false;
         }
-        if (v.hdrWanted && v.hdrReadback.buffer)
+        if (v.hdrWanted && v.pathTraced && v.pathTrace)
+            pathTracer.recordReadback(vk, cmd, *v.pathTrace);
+        else if (v.hdrWanted && v.hdrReadback.buffer)
         {
             // The light before tonemapping: the temporal history when it ran, else the resolved scene.
             const bool history = v.historyValid;
@@ -5564,7 +6043,9 @@ struct Renderer::Impl
                 render(v, s);
                 runs.push_back(v.timing);
             }
-        if (v.hdrMapped)
+        if (job.hdr && v.pathTraced && v.pathTrace)
+            job.hdrPixels = pathTracer.readback(vk, *v.pathTrace);
+        else if (v.hdrMapped)
         {
             const size_t count = size_t(v.extent.width) * v.extent.height;
             job.hdrPixels.resize(count * 4);
@@ -7089,6 +7570,7 @@ Renderer::GpuInfo Renderer::gpuInfo() const
         return info;
     info.name = m->vk.deviceName;
     info.discrete = m->vk.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    info.rayTracing = m->vk.rayQuery;
     VkPhysicalDeviceMemoryProperties mem;
     vkGetPhysicalDeviceMemoryProperties(m->vk.physical, &mem);
     for (uint32_t i = 0; i < mem.memoryHeapCount; ++i)
