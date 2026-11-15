@@ -1,5 +1,7 @@
 #include "ui/RenderOutput.h"
 
+#include <mutex>
+
 #include "core/PrefStore.h"
 #include "core/ImageIO.h"
 #include "core/Log.h"
@@ -307,8 +309,24 @@ Frame render(const Options& o, double seconds)
     return f;
 }
 
+namespace
+{
+std::mutex gLastMutex;
+QImage gLast;
+} // namespace
+
+QImage lastImage()
+{
+    std::lock_guard lock(gLastMutex);
+    return gLast;
+}
+
 void write(const Frame& f, const std::string& path, bool transparent)
 {
+    {
+        std::lock_guard lock(gLastMutex);
+        gLast = QImage(f.bgra.data(), f.width, f.height, f.width * 4, QImage::Format_ARGB32).copy();
+    }
     const std::string ext = lower(paths::fromUtf8(path).extension().string());
     std::error_code ec;
     if (auto parent = paths::fromUtf8(path).parent_path(); !parent.empty())

@@ -4,11 +4,13 @@
 #include "core/PrefStore.h"
 #include "ops/Command.h"
 #include "render/FrameState.h"
+#include "render/Grade.h"
 #include "render/Ocio.h"
 #include "scene/ColorManagement.h"
 #include "scene/Graph.h"
 #include "ui/ViewportDisplay.h"
 
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -121,4 +123,62 @@ TEST_CASE("multichannel EXRs write sorted layers with chromaticities and read ba
     CHECK(bytes.find("depth.Z") != std::string::npos);
     CHECK(bytes.find("chromaticities") != std::string::npos);
     CHECK(bytes.find("lila/test") != std::string::npos);
+}
+
+TEST_CASE("a neutral grade leaves display values alone")
+{
+    render::PostSettings p;
+    for (float v : {0.0f, 0.18f, 0.5f, 1.0f})
+    {
+        const glm::vec3 out = render::grade::applyDisplay(glm::vec3(v, v * 0.5f, 1.0f - v), p);
+        CHECK(out.r == doctest::Approx(v).epsilon(1e-4));
+        CHECK(out.g == doctest::Approx(v * 0.5f).epsilon(1e-4));
+    }
+    std::array<std::string, render::grade::kCurveCount> neutral;
+    neutral[0] = "0 0, 1 1";
+    neutral[4] = "0 0.5, 0.5 0.5";
+    CHECK(!render::grade::curves(neutral));
+}
+
+TEST_CASE("grade curves pass through their points without overshoot and hue curves wrap")
+{
+    using namespace render::grade;
+    const std::vector<glm::vec2> pts = parseCurve("1 1, 0 0, 0.5 0.3");
+    REQUIRE(pts.size() == 3);
+    CHECK(pts[0].x == 0.0f);
+    CHECK(evaluate(kMaster, pts, 0.5f) == doctest::Approx(0.3f));
+    float last = -1.0f;
+    for (int i = 0; i <= 50; ++i)
+    {
+        const float y = evaluate(kMaster, pts, i / 50.0f);
+        CHECK(y >= last - 1e-5f);
+        CHECK(y <= 1.0f + 1e-5f);
+        last = y;
+    }
+    const std::vector<glm::vec2> hue = parseCurve("0.1 0.8, 0.6 0.2");
+    CHECK(evaluate(kHueVsSat, hue, 0.0f) == doctest::Approx(evaluate(kHueVsSat, hue, 1.0f)).epsilon(1e-4));
+    CHECK(formatCurve(parseCurve("0 0, 0.5 0.25")) == "0.000 0.000, 0.500 0.250");
+}
+
+TEST_CASE("wheels, tonal balance and curves move the display picture as their names say")
+{
+    render::PostSettings p;
+    p.gainMaster = 1.5f;
+    CHECK(render::grade::applyDisplay(glm::vec3(0.4f), p).g == doctest::Approx(0.6f).epsilon(1e-3));
+    p = {};
+    p.liftMaster = 0.2f;
+    CHECK(render::grade::applyDisplay(glm::vec3(0.0f), p).r == doctest::Approx(0.2f).epsilon(1e-3));
+    p = {};
+    p.shadows = glm::vec3(1.0f, 1.0f, 2.0f);
+    const glm::vec3 dark = render::grade::applyDisplay(glm::vec3(0.05f), p);
+    CHECK(dark.b > dark.r);
+    const glm::vec3 bright = render::grade::applyDisplay(glm::vec3(0.95f), p);
+    CHECK(bright.b == doctest::Approx(bright.r).epsilon(1e-3));
+    p = {};
+    std::array<std::string, render::grade::kCurveCount> texts;
+    texts[render::grade::kHueVsSat] = "0 0, 0.5 0, 1 0";
+    p.curves = render::grade::curves(texts);
+    REQUIRE(p.curves);
+    const glm::vec3 grey = render::grade::applyDisplay(glm::vec3(0.8f, 0.2f, 0.1f), p);
+    CHECK(grey.r == doctest::Approx(grey.b).epsilon(1e-3));
 }

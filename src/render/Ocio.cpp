@@ -36,7 +36,7 @@ std::filesystem::file_time_type stampOf(const std::string& path)
     std::error_code ec;
     if (path.rfind("ocio://", 0) == 0)
         return {};
-    const auto t = std::filesystem::last_write_time(std::filesystem::u8path(path), ec);
+    const auto t = std::filesystem::last_write_time(std::filesystem::path(std::u8string(path.begin(), path.end())), ec);
     return ec ? std::filesystem::file_time_type{} : t;
 }
 

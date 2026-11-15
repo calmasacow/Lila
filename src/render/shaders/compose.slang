@@ -14,6 +14,11 @@ struct ComposePush
     float4 lens;   // x: chromatic aberration (pixels at the corner), y: lens distortion, z: sharpen, w: bloom intensity
     float4 size;   // extent, then its inverse
     float4 misc;   // x: 1 to apply the auto exposure, y: bloom scale (one over its levels), zw: the view LUT's log2 shaper range
+    float4 offset;     // rgb, w: offset master
+    float4 masters;    // lift, gamma, gain masters, w: 1 when curvesTex holds curves
+    float4 shadows;    // rgb gains, w: the shadows' upper luminance
+    float4 midtones;   // rgb gains
+    float4 highlights; // rgb gains, w: the highlights' lower luminance
 };
 
 [[vk::push_constant]] ComposePush cp;
@@ -22,6 +27,7 @@ struct ComposePush
 [[vk::binding(2, 0)]] Sampler3D lutTex;     // display-encoded in and out
 [[vk::binding(3, 0)]] Sampler2D exposureTex; // exposure.slang's state: texel 0 is the multiplier
 [[vk::binding(4, 0)]] Sampler3D viewLutTex;  // tonemapper 4: an OCIO view over a log2 shaper, display code values out
+[[vk::binding(5, 0)]] Sampler2D curvesTex;   // grading curves, a row each (render::grade::Curve order)
 
 struct ComposeOut
 {
@@ -122,6 +128,61 @@ float3 sceneAt(float2 uv)
     return sceneExpand(composeTex.SampleLevel(uv, 0).rgb);
 }
 
+/** A curve row at x (0..1), between texel centres; hue rows wrap. */
+float curveAt(int row, float x, bool wrap)
+{
+    float2 dims;
+    curvesTex.GetDimensions(dims.x, dims.y);
+    x = wrap ? frac(x) : saturate(x);
+    return curvesTex.SampleLevel(float2((x * (dims.x - 1.0) + 0.5) / dims.x, (float(row) + 0.5) / dims.y), 0).r;
+}
+
+float3 rgbToHsv(float3 c)
+{
+    float mx = max(c.r, max(c.g, c.b)), mn = min(c.r, min(c.g, c.b));
+    float d = mx - mn;
+    float h = 0.0;
+    if (d > 1e-6)
+    {
+        if (mx == c.r)
+            h = fmod((c.g - c.b) / d + 6.0, 6.0);
+        else if (mx == c.g)
+            h = (c.b - c.r) / d + 2.0;
+        else
+            h = (c.r - c.g) / d + 4.0;
+        h /= 6.0;
+    }
+    return float3(h, mx > 1e-6 ? d / mx : 0.0, mx);
+}
+
+float3 hsvToRgb(float3 hsv)
+{
+    float3 p = abs(frac(hsv.xxx + float3(1.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0);
+    return hsv.z * lerp(float3(1, 1, 1), saturate(p - 1.0), hsv.y);
+}
+
+/** Wheels, tonal balance and curves on the display-encoded picture; matches render::grade::applyDisplay. */
+float3 gradeDisplay(float3 s)
+{
+    s += cp.offset.rgb + cp.offset.w;
+    s = saturate(s * cp.gain.rgb * cp.masters.z + (cp.lift.rgb + cp.masters.x) * (1.0 - s));
+    s = pow(s, 1.0 / max(cp.gammaC.rgb * cp.masters.y, 0.01));
+    float luma = dot(s, float3(0.2126, 0.7152, 0.0722));
+    float ws = 1.0 - smoothstep(0.0, max(cp.shadows.w, 1e-3), luma), wh = smoothstep(min(cp.highlights.w, 0.999), 1.0, luma);
+    float wm = saturate(1.0 - ws - wh);
+    s = saturate(s * (ws * cp.shadows.rgb + wm * cp.midtones.rgb + wh * cp.highlights.rgb));
+    if (cp.masters.w > 0.5)
+    {
+        s = float3(curveAt(1, curveAt(0, s.r, false), false), curveAt(2, curveAt(0, s.g, false), false), curveAt(3, curveAt(0, s.b, false), false));
+        float3 hsv = rgbToHsv(s);
+        luma = dot(s, float3(0.2126, 0.7152, 0.0722));
+        hsv.y = saturate(hsv.y * 2.0 * curveAt(4, hsv.x, true) * 2.0 * curveAt(6, luma, false));
+        hsv.x = frac(hsv.x + curveAt(5, hsv.x, true) - 0.5);
+        s = hsvToRgb(hsv);
+    }
+    return s;
+}
+
 float hash(float2 p)
 {
     float3 p3 = frac(float3(p.xyx) * 0.1031);
@@ -198,9 +259,7 @@ float4 composePS(ComposeOut i) : SV_Target
     if (stack)
     {
         // Lift, gamma, gain on the display-encoded picture, as in a grading suite.
-        float3 s = toSrgb(saturate(c));
-        s = saturate(s * cp.gain.rgb + cp.lift.rgb * (1.0 - s));
-        s = pow(s, 1.0 / max(cp.gammaC.rgb, 0.01));
+        float3 s = gradeDisplay(toSrgb(saturate(c)));
         if (cp.white.w > 0.0)
         {
             float3 dims;

@@ -58,6 +58,29 @@ std::vector<AttrDef> attrs()
     a[kLift].minValue = -1.0;
     a[kGamma] = color("gamma", "gm", 1.0, "Brightens (above 1) or darkens the mid-tones, per channel.");
     a[kGain] = color("gain", "gn", 1.0, "Scales the highlights, per channel.");
+    a[kOffset] = color("offset", "ofs", 0.0, "Adds to every level of the graded picture, per channel.");
+    a[kOffset].minValue = -1.0;
+    a[kLiftMaster] = number("liftMaster", "lfm", 0.0, "Raises (or lowers) the shadows of every channel together.", -1.0, 1.0);
+    a[kGammaMaster] = number("gammaMaster", "gmm", 1.0, "Brightens (above 1) or darkens the mid-tones of every channel together.", 0.1, 4.0);
+    a[kGainMaster] = number("gainMaster", "gnm", 1.0, "Scales the highlights of every channel together.", 0.0, 4.0);
+    a[kOffsetMaster] = number("offsetMaster", "ofm", 0.0, "Adds to every level of every channel together.", -1.0, 1.0);
+    a[kShadows] = color("shadows", "shd", 1.0, "Tonal balance: a colour gain on the shadows, below shadowsRange.");
+    a[kMidtones] = color("midtones", "mid", 1.0, "Tonal balance: a colour gain on the mid-tones, between the ranges.");
+    a[kHighlights] = color("highlights", "hil", 1.0, "Tonal balance: a colour gain on the highlights, above highlightsRange.");
+    a[kShadowsRange] = number("shadowsRange", "shr", 0.33, "Tonal balance: luminance where shadows end and mid-tones take over, 0 to 1.", 0.0, 1.0);
+    a[kHighlightsRange] = number("highlightsRange", "hir", 0.66, "Tonal balance: luminance where highlights begin, 0 to 1.", 0.0, 1.0);
+    const char* curves[][3] = {
+        {"curveMaster", "cvm", "Tone curve on every channel: points x y from 0 to 1."},
+        {"curveRed", "cvr", "Tone curve on red, after the master curve."},
+        {"curveGreen", "cvg", "Tone curve on green, after the master curve."},
+        {"curveBlue", "cvb", "Tone curve on blue, after the master curve."},
+        {"curveHueVsSat", "chs", "Saturation by hue: 0.5 leaves it, 0 greys, 1 doubles."},
+        {"curveHueVsHue", "chh", "Hue shift by hue: 0.5 leaves it, 0 and 1 turn half way round."},
+        {"curveLumVsSat", "cls", "Saturation by luminance: 0.5 leaves it, 0 greys, 1 doubles."},
+    };
+    for (int i = 0; i < 7; ++i)
+        a[kCurveMaster + i] = {.name = curves[i][0], .shortName = curves[i][1], .type = PlugType::String, .defaultValue = std::string(),
+                               .flags = kStored | AttrCurve, .doc = curves[i][2]};
     a[kBloom] = number("bloom", "bl", 0.0, "Glow around bright light, 0 to 1. A few hundredths is subtle.", 0.0, 1.0);
     a[kBloomRadius] = number("bloomRadius", "blr", 1.0, "Spread of the glow.", 0.1, 4.0);
     a[kVignette] = number("vignette", "vg", 0.0, "Darkens toward the corners, 0 to 1.", 0.0, 1.0);

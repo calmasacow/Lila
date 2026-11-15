@@ -273,6 +273,15 @@ struct Lut3D
     uint64_t key = nextResourceKey();
 };
 
+/** Grading curves sampled into rows of kSize values (render::grade::Curve order): tone curves map 0..1, hue and saturation ones centre on 0.5. */
+struct GradeCurves
+{
+    static constexpr int kSize = 256;
+    static constexpr int kRows = 7;
+    std::vector<float> values; // kRows * kSize
+    uint64_t key = nextResourceKey();
+};
+
 /** An OpenColorIO display and view baked to a 3D LUT over a log2 shaper of scene-linear light; outputs display code values. */
 struct ViewTransform
 {
@@ -302,6 +311,14 @@ struct PostSettings
     float contrast = 1.0f, saturation = 1.0f;
     glm::vec3 whiteBalance{1.0f};            // per channel gains (from temperature and tint)
     glm::vec3 lift{0.0f}, gamma{1.0f}, gain{1.0f};
+    /** Colour wheels: offset adds to every level; masters move luminance (lift and offset add, gamma and gain scale). */
+    glm::vec3 offset{0.0f};
+    float liftMaster = 0.0f, gammaMaster = 1.0f, gainMaster = 1.0f, offsetMaster = 0.0f;
+    /** Tonal balance: gains for shadows, midtones and highlights, split by luminance at the two range boundaries. */
+    glm::vec3 shadows{1.0f}, midtones{1.0f}, highlights{1.0f};
+    float shadowsRange = 0.33f, highlightsRange = 0.66f;
+    /** Tone, hue and saturation curves; null when every one is neutral. */
+    std::shared_ptr<const GradeCurves> curves;
     float bloom = 0.0f;                      // blend toward the bloom, 0..1
     float bloomRadius = 1.0f;                // tent filter radius in texels per level
     float vignette = 0.0f, grain = 0.0f;

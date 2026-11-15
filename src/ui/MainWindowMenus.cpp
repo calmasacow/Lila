@@ -364,7 +364,7 @@ void MainWindow::buildMenus()
 
     menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Level", "Animate", "Effects"});
     menus::addActions("Render", {"#Render", "render.frame", "render.sequence", "render.turntable", "window.renderOutput", "window.renderSettings", "#Look",
-                                 "render.postProcess", "render.colorManagement", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA"});
+                                 "render.postProcess", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA"});
     addSubmenu("Render", "Reflections", syncChecks);
     menus::addActions("Render/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
     menus::addActions("Render", {"#Framing", "viewport.toggleResolutionGate",

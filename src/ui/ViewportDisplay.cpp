@@ -4,6 +4,7 @@
 #include "core/Profile.h"
 #include "core/PrefStore.h"
 #include "render/CubeLut.h"
+#include "render/Grade.h"
 #include "render/Ocio.h"
 #include "render/DisplayOptions.h"
 #include "render/Renderer.h"
@@ -298,6 +299,20 @@ void applyPostProcess(render::FrameState& s, bool effects)
     p.lift = vec(pp::kLift);
     p.gamma = vec(pp::kGamma);
     p.gain = vec(pp::kGain);
+    p.offset = vec(pp::kOffset);
+    p.liftMaster = num(pp::kLiftMaster);
+    p.gammaMaster = num(pp::kGammaMaster);
+    p.gainMaster = num(pp::kGainMaster);
+    p.offsetMaster = num(pp::kOffsetMaster);
+    p.shadows = vec(pp::kShadows);
+    p.midtones = vec(pp::kMidtones);
+    p.highlights = vec(pp::kHighlights);
+    p.shadowsRange = num(pp::kShadowsRange);
+    p.highlightsRange = std::max(num(pp::kHighlightsRange), p.shadowsRange);
+    std::array<std::string, render::grade::kCurveCount> curves;
+    for (int i = 0; i < render::grade::kCurveCount; ++i)
+        curves[size_t(i)] = n.as<std::string>(a + pp::kCurveMaster + i);
+    p.curves = render::grade::curves(curves);
     p.bloom = num(pp::kBloom);
     p.bloomRadius = num(pp::kBloomRadius);
     p.vignette = num(pp::kVignette);

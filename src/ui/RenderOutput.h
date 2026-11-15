@@ -14,6 +14,8 @@ namespace lila::render
 struct FrameState;
 }
 
+class QImage;
+
 namespace lila::ui::renderOutput
 {
 /** One rendered picture's settings. Sizes of 0 take the scene's render resolution. */
@@ -51,6 +53,9 @@ LILA_UI_API Frame render(const Options& o, double seconds);
 
 /** Writes a frame by the path's extension: png, jpg, tga, tif, exr (linear light) or psd. Throws std::runtime_error. */
 LILA_UI_API void write(const Frame& f, const std::string& path, bool transparent);
+
+/** The last frame write() wrote, display-encoded; null before any. */
+LILA_UI_API QImage lastImage();
 
 /** Where renders go when nothing says: renders/<scene>.####.png beside the scene, or a Lila Renders folder at home. */
 LILA_UI_API std::string defaultPattern();

@@ -176,7 +176,12 @@ struct ComposePush
     glm::vec4 gain;   // rgb, grain seed
     glm::vec4 lens;   // chromatic aberration, distortion, sharpen, bloom
     glm::vec4 size;
-    glm::vec4 misc;   // auto exposure on, bloom scale
+    glm::vec4 misc;   // auto exposure on, bloom scale, view LUT shaper range
+    glm::vec4 offset;     // rgb, offset master
+    glm::vec4 masters;    // lift, gamma, gain masters, curves on
+    glm::vec4 shadows;    // rgb, shadows range
+    glm::vec4 midtones;   // rgb
+    glm::vec4 highlights; // rgb, highlights range
 };
 
 struct BloomPush
@@ -649,6 +654,8 @@ struct Viewport
     bool exposureValid = false;
     uint64_t lutKey = 0;               // the LUT the compose sets point at
     uint64_t viewLutKey = 0;           // the OCIO view LUT the compose sets point at
+    Image curves;                      // grading curves, GradeCurves::kSize by kRows, read by the compose sets
+    uint64_t curvesKey = 0;            // GradeCurves::key of what curves holds; 0 before its first upload
     std::chrono::steady_clock::time_point lastExposure{};
     bool wantsMore = false;
     /** Still accumulating with no new state: the next of those frames draws at convergeAt, one per display refresh. */
@@ -1057,7 +1064,7 @@ struct Renderer::Impl
         destroyImage(v.depth);
         for (Image* img : {&v.aoDepth, &v.aoNormal, &v.aoRaw, &v.aoFinal, &v.bevel, &v.rtShadow, &v.postColor, &v.cloudColor, &v.cloudDepth, &v.sceneMs, &v.scene, &v.sceneDepth, &v.history[0], &v.history[1],
                            &v.bloomDown, &v.bloomUp, &v.histogram, &v.exposureState, &v.hiz, &v.reflectRaw, &v.reflectOut, &v.reflectHistory[0],
-                           &v.reflectHistory[1]})
+                           &v.reflectHistory[1], &v.curves})
             destroyImage(*img);
         for (std::vector<VkImageView>* views : {&v.bloomDownViews, &v.bloomUpViews, &v.hizViews})
         {
@@ -3198,10 +3205,10 @@ struct Renderer::Impl
         lci.pBindings = cb;
         vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &aoComputeLayout);
 
-        VkDescriptorSetLayoutBinding composeBindings[5];
-        for (uint32_t i = 0; i < 5; ++i)
+        VkDescriptorSetLayoutBinding composeBindings[6];
+        for (uint32_t i = 0; i < 6; ++i)
             composeBindings[i] = {i, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
-        lci.bindingCount = 5;
+        lci.bindingCount = 6;
         lci.pBindings = composeBindings;
         vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &composeSetLayout);
         lci.bindingCount = 4;
@@ -3432,6 +3439,11 @@ struct Renderer::Impl
         v.exposureValid = false;
         v.lutKey = 0;
         v.viewLutKey = 0;
+        v.curvesKey = 0;
+        v.curves = createImage(VK_FORMAT_R16_SFLOAT, VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                               {uint32_t(GradeCurves::kSize), uint32_t(GradeCurves::kRows)}, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        for (VkDescriptorSet set : v.composeSets)
+            writeImage(set, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, v.curves.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, linearSampler);
         if (!v.bloomDown.image || !v.bloomUp.image)
             return;
 
@@ -4068,19 +4080,19 @@ struct Renderer::Impl
         pci.pPoolSizes = sizes;
         vkCreateDescriptorPool(vk.device, &pci, nullptr, &reflectPool);
         reflectLayout = compute::pipelineLayout(vk, sizeof(ReflectPush), stage, std::span(&reflectSetLayout, 1));
-        if (VkShaderModule m = module(loadSpirv("reflect.spv")))
+        if (VkShaderModule mod = module(loadSpirv("reflect.spv")))
         {
-            hizPipeline = buildCompute(reflectLayout, m, "hizCS");
-            ssrPipeline = buildCompute(reflectLayout, m, "ssrCS");
-            reflectTemporalPipeline = buildCompute(reflectLayout, m, "temporalCS");
-            reflectSpatialPipeline = buildCompute(reflectLayout, m, "spatialCS");
-            vkDestroyShaderModule(vk.device, m, nullptr);
+            hizPipeline = buildCompute(reflectLayout, mod, "hizCS");
+            ssrPipeline = buildCompute(reflectLayout, mod, "ssrCS");
+            reflectTemporalPipeline = buildCompute(reflectLayout, mod, "temporalCS");
+            reflectSpatialPipeline = buildCompute(reflectLayout, mod, "spatialCS");
+            vkDestroyShaderModule(vk.device, mod, nullptr);
         }
         if (vk.rayQuery)
-            if (VkShaderModule m = module(loadSpirv("rtreflect.spv")))
+            if (VkShaderModule mod = module(loadSpirv("rtreflect.spv")))
             {
-                rtReflectPipeline = buildCompute(reflectLayout, m, "rtReflectCS");
-                vkDestroyShaderModule(vk.device, m, nullptr);
+                rtReflectPipeline = buildCompute(reflectLayout, mod, "rtReflectCS");
+                vkDestroyShaderModule(vk.device, mod, nullptr);
             }
     }
 
@@ -5815,12 +5827,41 @@ struct Renderer::Impl
         return it->second.view ? it->second.view : identityLut.view;
     }
 
+    /**
+     * Copies the grading curves into the viewport's curves image when they changed (the compose sets read it at binding 5).
+     * False when the image is missing.
+     */
+    bool updateCurves(VkCommandBuffer cmd, Frame& f, Viewport& v, const std::shared_ptr<const GradeCurves>& curves)
+    {
+        if (!v.curves.image || curves->values.size() < size_t(GradeCurves::kRows) * GradeCurves::kSize)
+            return false;
+        if (v.curvesKey == curves->key)
+            return true;
+        std::vector<uint16_t> half(curves->values.size());
+        for (size_t i = 0; i < half.size(); ++i)
+            half[i] = glm::packHalf1x16(curves->values[i]);
+        AllocatedBuffer staging = createBuffer(half.data(), half.size() * sizeof(uint16_t), VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+        f.staging.push_back(staging);
+        barrier(cmd, v.curves.image, v.curvesKey ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {uint32_t(GradeCurves::kSize), uint32_t(GradeCurves::kRows), 1};
+        vkCmdCopyBufferToImage(cmd, staging.buffer, v.curves.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        barrier(cmd, v.curves.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT,
+                VK_ACCESS_2_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+        v.curvesKey = curves->key;
+        return true;
+    }
+
     struct PostResult
     {
         bool bloom = false;
         bool autoExposure = false;
         bool lut = false;
-        bool view = false; // the OCIO view LUT is bound
+        bool view = false;   // the OCIO view LUT is bound
+        bool curves = false; // grading curves are bound
     };
 
     /**
@@ -5868,6 +5909,7 @@ struct Renderer::Impl
             v.viewLutKey = uint64_t(viewLut);
         }
         r.view = s.post.view && viewLut != identityLut.view;
+        r.curves = s.post.effects && s.post.curves && updateCurves(cmd, f, v, s.post.curves);
 
         if (s.post.autoExposure && histogramPipeline && averagePipeline)
         {
@@ -5961,6 +6003,11 @@ struct Renderer::Impl
                            p.view ? p.view->shaperMax : 1.0f);
         if (r.view)
             c.params.w = 4.0f;
+        c.offset = glm::vec4(p.offset, p.offsetMaster);
+        c.masters = glm::vec4(p.liftMaster, p.gammaMaster, p.gainMaster, r.curves ? 1.0f : 0.0f);
+        c.shadows = glm::vec4(p.shadows, p.shadowsRange);
+        c.midtones = glm::vec4(p.midtones, 0.0f);
+        c.highlights = glm::vec4(p.highlights, p.highlightsRange);
         return c;
     }
 
