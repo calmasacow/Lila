@@ -27,6 +27,7 @@
 #include "ui/Icons.h"
 #include "ui/MaterialBrowser.h"
 #include "ui/MaterialThumbnails.h"
+#include "ui/MaterialThumbnails.h"
 #include "ui/Menus.h"
 #include "ui/NodeEditor.h"
 #include "ui/Panels.h"
@@ -707,6 +708,8 @@ struct TextureSetPanel::Impl
             if (kind == "paint")
                 textureSets::setActiveLayer(set, id);
         }
+        if (!id.empty() && kind == "paint")
+            actions::run(json("tex.paint"));
         self->refresh();
         return id;
     }
@@ -1424,6 +1427,18 @@ struct TextureSetPanel::Impl
             it->setData(Qt::UserRole, qs(m.name));
             it->setData(Qt::UserRole + 1, qs(m.kind));
             it->setToolTip(qs(m.description.empty() ? m.name : m.description) + "\n" + (m.kind == "mask" ? "Smart mask" : "Smart material") + ", " +
+            materialThumbs::Options o;
+            o.size = 128;
+            QPointer<QListWidget> shelfView(shelf);
+            const QString name = qs(m.name);
+            materialThumbs::renderAsync("smart:" + m.name, o, [shelfView, name](const materialThumbs::Result& r, const std::string& err) {
+                if (!shelfView || !err.empty())
+                    return;
+                QPixmap pm(QString::fromStdWString(r.file.wstring()));
+                for (int i = 0; i < shelfView->count() && !pm.isNull(); ++i)
+                    if (shelfView->item(i)->data(Qt::UserRole).toString() == name)
+                        shelfView->item(i)->setIcon(QIcon(pm));
+            });
                            qs(m.tier) + ". Double-click to apply.");
             materialThumbs::Options o;
             o.size = 128;
@@ -1464,7 +1479,16 @@ struct TextureSetPanel::Impl
 
         if (kind == "fill" || kind == "paint")
         {
-            json node = {{"name", id}, {"label", kind == "paint" ? "Brush Material" : "Material"}, {"params", json::array()}};
+            {
+                auto* paint = new QPushButton(icon("brush"), "Paint", w);
+                paint->setToolTip("Paint: the texture paint tool, painting into this layer (Texture > Texture Paint)");
+                const std::string layerId = id;
+                connect(paint, &QPushButton::clicked, w, [this, layerId] {
+                    textureSets::setActiveLayer(set, layerId);
+                    actions::run(json("tex.paint"));
+                });
+                v->addWidget(paint);
+            }
             json inputs = json::array();
             const json material = l.value("material", json::object());
             const json resolved = l.value("resolved", json::object());
@@ -2055,9 +2079,10 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     auto* shelfHead = new QHBoxLayout();
     shelfHead->addWidget(boldHeading(shelfBox, "Smart Materials"));
     shelfHead->addStretch(1);
-    auto* reload = toolButton(shelfBox, "refresh", "Reload: reread the smart material libraries");
-    connect(reload, &QToolButton::clicked, this, [this] {
-        d->shelfKey.clear();
+    d->shelf->setIconSize(QSize(64, 64));
+    d->shelf->setGridSize(QSize(92, 88));
+    d->shelf->setWordWrap(false);
+    d->shelf->setTextElideMode(Qt::ElideRight);
         d->rebuildShelf();
     });
     shelfHead->addWidget(reload);

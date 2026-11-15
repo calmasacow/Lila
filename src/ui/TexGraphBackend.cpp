@@ -535,7 +535,7 @@ void registerTextureGraphUi()
                   .python = "lila.ui.run_action(\"texture.clearPreview\")"});
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
-    menus::addActions("Texture", {"texture.newSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.exportMaterial",
+    menus::addActions("Texture", {"texture.newSet", "tex.paint", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.exportMaterial",
                                   "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview", "#View", "viewport.textureView3d",
                                   "viewport.textureViewSplit", "viewport.textureView2d"});
 }

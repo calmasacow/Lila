@@ -362,7 +362,7 @@ uint32_t triangleAt(const PaintMesh& mesh, const json& at, float* u = nullptr, f
     return uint32_t(hit.triangle);
 }
 
-/** A fill's triangles from fillBy (mesh, island, material, selection) and at / triangle / faces / material. */
+/** A fill's triangles from fillBy (mesh, island, material, polygon, triangle, selection) and at / triangle / faces / material. */
 std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const Node& meshNode)
 {
     const std::string by = pay.value("fillBy", std::string("mesh"));
@@ -377,6 +377,16 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
         return pm.allTriangles();
     if (by == "island")
         return pm.islandOf(seed());
+    if (by == "polygon")
+    {
+        const uint32_t face = pm.faces.at(seed());
+        return pm.ofFaces(std::span<const uint32_t>(&face, 1));
+    }
+    if (by == "triangle")
+    {
+        const uint32_t t = seed();
+        return pm.paintable.at(t) ? std::vector<uint32_t>{t} : std::vector<uint32_t>{};
+    }
     if (by == "material")
     {
         if (pay.contains("material"))
@@ -406,7 +416,7 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
             throw CommandError("texPaintStroke: fillBy selection needs selected faces (or faces [...])");
         return pm.ofFaces(faces);
     }
-    throw CommandError("texPaintStroke: fillBy is mesh, island, material or selection, not " + by);
+    throw CommandError("texPaintStroke: fillBy is mesh, island, material, polygon, triangle or selection, not " + by);
 }
 
 /**
@@ -508,7 +518,11 @@ std::vector<uint32_t> symmetricFill(std::vector<uint32_t> tris, const std::strin
                 continue;
             if (std::binary_search(out.begin(), out.end(), c.triangle))
                 continue;
-            std::vector<uint32_t> add = by == "island" ? pm.islandOf(c.triangle) : by == "material" ? pm.materialOf(c.triangle) : std::vector<uint32_t>{c.triangle};
+            const uint32_t face = pm.faces[c.triangle];
+            std::vector<uint32_t> add = by == "island"     ? pm.islandOf(c.triangle)
+                                        : by == "material" ? pm.materialOf(c.triangle)
+                                        : by == "polygon"  ? pm.ofFaces(std::span<const uint32_t>(&face, 1))
+                                                           : std::vector<uint32_t>{c.triangle};
             out.insert(out.end(), add.begin(), add.end());
             std::sort(out.begin(), out.end());
             out.erase(std::unique(out.begin(), out.end()), out.end());
@@ -792,7 +806,7 @@ void registerCommands()
                "radius, pressure, opacity, angle}] or [{position [x, y, z], radius}] (object space), or space=screen with points [[x, y, "
                "pressure]] and view {width, height, camera | view + proj | viewProj + eye | eye + lookAt + fov}. Payload kinds: paint; "
                "direction (tilt, channel: normal, or another channel for a flow map); smudge (amount), blur and sharpen (filterRadius texels, "
-               "amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|selection with at "
+               "amount), clone and heal (sourceOffset [du, dv] or cloneFrom [x, y, z]); fill (fillBy mesh|island|material|polygon|triangle|selection with at "
                "[x, y, z], triangle, material or faces; no dabs); project (image: a file path, {path, rect [x, y, w, h], opacity}, or "
                "{width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, "
                "channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's "

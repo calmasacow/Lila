@@ -22,6 +22,8 @@
 #include "scene/MeshNodes.h"
 #include "ui/Actions.h"
 #include "ui/ColorPopup.h"
+#include "ui/Controls.h"
+#include "ui/Icons.h"
 #include "ui/TexLive.h"
 #include "ui/TextureSetPanel.h"
 #include "ui/UiCommon.h"
@@ -77,18 +79,19 @@ struct ToolKind
     const char* id;
     const char* label;
     const char* tip;
+    const char* icon;
 };
 constexpr ToolKind kTools[] = {
-    {"paint", "Paint", "Paints the checked channels (or a library material's)."},
-    {"direction", "Direction", "Writes the stroke's direction: a normal tilt, or a flow map in another channel."},
-    {"normal", "Normal", "Sculpts the normal with RNM: bumps from the tip, or a normal map stamp."},
-    {"smudge", "Smudge", "Drags the paint along the stroke."},
-    {"blur", "Blur", "Softens the paint."},
-    {"sharpen", "Sharpen", "Crispens the paint."},
-    {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it."},
-    {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source."},
-    {"fill", "Fill", "Click to fill a UV island, a material, the mesh or the selected faces."},
-    {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel."},
+    {"paint", "Paint", "Paints the checked channels (or a library material's).", "brush"},
+    {"direction", "Direction", "Writes the stroke's direction: a normal tilt, or a flow map in another channel.", "direction-sign"},
+    {"normal", "Normal", "Sculpts the normal with RNM: bumps from the tip, or a normal map stamp.", "ripple"},
+    {"smudge", "Smudge", "Drags the paint along the stroke.", "hand-finger"},
+    {"blur", "Blur", "Softens the paint.", "blur"},
+    {"sharpen", "Sharpen", "Crispens the paint.", "focus-2"},
+    {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
+    {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
+    {"fill", "Fill", "Click to fill a polygon, a triangle, a UV island, a material, the mesh or the selected faces.", "bucket-droplet"},
+    {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel.", "photo"},
 };
 
 struct TexturePaintSettings
@@ -261,13 +264,29 @@ public:
         for (const tex::brushes::Preset& p : tex::brushes::all())
             mPreset->addItem(QString::fromStdString((p.category.empty() ? "" : p.category + " / ") + p.name), QString::fromStdString(p.id));
         form->addRow("Preset", mPreset);
-        mTool = new QComboBox(this);
+        std::vector<QWidget*> tiles;
         for (const ToolKind& t : kTools)
         {
-            mTool->addItem(t.label, t.id);
-            mTool->setItemData(mTool->count() - 1, t.tip, Qt::ToolTipRole);
+            auto* b = new QToolButton(this);
+            b->setIcon(icon(t.icon));
+            b->setIconSize(QSize(20, 20));
+            b->setText(t.label);
+            b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            b->setCheckable(true);
+            b->setFocusPolicy(Qt::NoFocus);
+            b->setToolTip(QString("%1: %2").arg(t.label, t.tip));
+            controls::setRole(b, "tile");
+            const std::string id = t.id;
+            connect(b, &QToolButton::clicked, this, [this, id] {
+                texturePaintState().tool = id;
+                syncTools();
+                changed();
+            });
+            mTools.push_back(b);
+            tiles.push_back(b);
         }
-        form->addRow("Tool", mTool);
+        col->addWidget(controls::grid(tiles, 5, this));
         for (size_t i = 0; i < texturePaintState().channels.size(); ++i)
         {
             ChannelValue& c = texturePaintState().channels[i];
@@ -366,6 +385,8 @@ public:
         filterRow->addWidget(mAmount);
         mFilterRow = addRow(form, "Filter", filterRow);
         mFillBy = new QComboBox(this);
+        mFillBy->addItem("Polygon", "polygon");
+        mFillBy->addItem("Triangle", "triangle");
         mFillBy->addItem("UV island", "island");
         mFillBy->addItem("Material", "material");
         mFillBy->addItem("Mesh", "mesh");
@@ -478,10 +499,6 @@ public:
                 changed();
             }
         });
-        connect(mTool, &QComboBox::currentIndexChanged, this, [this](int i) {
-            texturePaintState().tool = mTool->itemData(i).toString().toStdString();
-            changed();
-        });
         connect(mMaterial, &QComboBox::currentIndexChanged, this, [this](int i) {
             texturePaintState().material = mMaterial->itemData(i).toString().toStdString();
             changed();
@@ -564,14 +581,20 @@ public:
 
     void setTarget(const QString& text) { mTarget->setText(text); }
 
+    void syncTools()
+    {
+        for (size_t i = 0; i < mTools.size(); ++i)
+            mTools[i]->setChecked(texturePaintState().tool == kTools[i].id);
+    }
+
     void sync()
     {
         const TexturePaintSettings& s = texturePaintState();
-        const QSignalBlocker b0(mTool), b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion), b7(mMirror);
+        syncTools();
+        const QSignalBlocker b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion), b7(mMirror);
         const QSignalBlocker b8(mMaterial), b9(mMaterialScale), b10(mFlow), b11(mNormalMode), b12(mIntensity), b13(mStamp), b14(mFilterRadius);
         const QSignalBlocker b15(mAmount), b16(mFillBy), b17(mParticles), b18(mBufferBrush), b19(mBufferScale), b20(mTransform), b21(mWarp);
         const QSignalBlocker b22(mAuto), b23(mFacing);
-        mTool->setCurrentIndex(std::max(0, mTool->findData(QString::fromStdString(s.tool))));
         mBlend->setCurrentIndex(int(s.blend));
         mTilt->setValue(s.tilt);
         mFlow->setCurrentText(QString::fromStdString(s.flowChannel));
@@ -716,7 +739,7 @@ private:
 
     QLabel* mTarget = nullptr;
     QComboBox* mPreset = nullptr;
-    QComboBox* mTool = nullptr;
+    std::vector<QToolButton*> mTools;
     std::vector<QCheckBox*> mOn;
     std::vector<QDoubleSpinBox*> mValue;
     std::vector<QPushButton*> mSwatch;
