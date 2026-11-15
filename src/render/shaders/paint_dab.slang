@@ -140,9 +140,69 @@ struct Params
     float facingFade;
     float intensity;
     float valueScale;
-    uint pad0;
-    uint pad1;
+    uint stencilW;
+    uint stencilH;
+    float stencilX;
+    float stencilY;
+    float stencilScale;
+    float stencilAngle;
+    uint stencilFlags;
+    uint viewW;
+    uint viewH;
+    uint stencilColor;
+    float4* stencil;
+    float4x4 stencilToClip;
 };
+
+static const uint kStencilOn = 1;
+static const uint kStencilInvert = 2;
+static const uint kStencilTile = 4;
+static const uint kStencilColor = 8;
+
+float4 stencilTexel(Params* p, int x, int y)
+{
+    int w = int(p.stencilW), h = int(p.stencilH);
+    if ((p.stencilFlags & kStencilTile) != 0)
+    {
+        x = ((x % w) + w) % w;
+        y = ((y % h) + h) % h;
+    }
+    else if (x < 0 || y < 0 || x >= w || y >= h)
+        return float4(0.0);
+    float4 t = p.stencil[y * w + x];
+    return float4(t.rgb * t.a, t.a);
+}
+
+/**
+ * The stencil at a surface point: rgb its straight colour, a the amount it lets through. Pinned to the view: at scale 1
+ * the picture spans the view's height, centred, then moved, scaled and turned by its placement (tex::paint::Stencil).
+ */
+float4 stencilAt(Params* p, float3 pos)
+{
+    bool invert = (p.stencilFlags & kStencilInvert) != 0;
+    float4 clip = mul(p.stencilToClip, float4(pos, 1.0));
+    float4 none = float4(0.0, 0.0, 0.0, invert ? 1.0 : 0.0);
+    if (clip.w <= 1e-9)
+        return none;
+    float2 view = float2(float(p.viewW), float(p.viewH));
+    float2 px = (clip.xy / clip.w * 0.5 + 0.5) * view;
+    float2 center = view * 0.5;
+    float2 d = px - center - float2(p.stencilX, p.stencilY);
+    float c = cos(p.stencilAngle), s = sin(p.stencilAngle);
+    float2 q = float2(d.x * c + d.y * s, -d.x * s + d.y * c) / max(p.stencilScale, 1e-6);
+    float2 size = float2(float(p.stencilW), float(p.stencilH));
+    float2 src = q * (size.y / max(view.y, 1.0)) + size * 0.5;
+    if ((p.stencilFlags & kStencilTile) == 0 && (src.x < 0.0 || src.y < 0.0 || src.x > size.x || src.y > size.y))
+        return none;
+    float2 f = src - 0.5;
+    int x0 = int(floor(f.x)), y0 = int(floor(f.y));
+    float fx = f.x - float(x0), fy = f.y - float(y0);
+    float4 m = lerp(lerp(stencilTexel(p, x0, y0), stencilTexel(p, x0 + 1, y0), fx), lerp(stencilTexel(p, x0, y0 + 1), stencilTexel(p, x0 + 1, y0 + 1), fx), fy);
+    float3 rgb = m.a > 0.0 ? m.rgb / m.a : float3(0.0);
+    float amount = (p.stencilFlags & kStencilColor) != 0 ? m.a : dot(rgb, float3(0.2126, 0.7152, 0.0722)) * m.a;
+    amount = saturate(amount);
+    return float4(rgb, invert ? 1.0 - amount : amount);
+}
 
 struct Push
 {
@@ -536,6 +596,13 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         return;
     item.acc[texel] = float4(value, cov);
     float t = cov * p.strength;
+    float3 stencilRgb = float3(0.0);
+    if ((p.stencilFlags & kStencilOn) != 0)
+    {
+        float4 st = stencilAt(p, pos);
+        t *= st.a;
+        stencilRgb = st.rgb;
+    }
     float2 here = float2(xy) + 0.5;
     for (uint c = 0; c < p.channels; ++c)
     {
@@ -590,7 +657,9 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         else
         {
             float3 v = p.values[c].xyz;
-            if (direction && c == p.directionChannel)
+            if (c == p.stencilColor)
+                v = stencilRgb;
+            else if (direction && c == p.directionChannel)
                 v = value;
             else if (p.mode == kModeProject && c == p.colorChannel)
                 v = projected;

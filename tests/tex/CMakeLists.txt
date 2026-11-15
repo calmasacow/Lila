@@ -29,6 +29,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_paint.cpp
     test_tex_paint_symmetry.cpp
     test_tex_paint_tools.cpp
+    test_tex_stencil.cpp
     test_tex_vt.cpp)
 target_link_libraries(lila_tex_gpu_tests PRIVATE LilaUI doctest::doctest)
 add_dependencies(lila_tex_gpu_tests lila_slang_runtime)

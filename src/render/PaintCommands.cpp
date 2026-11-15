@@ -480,6 +480,40 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
  * A projection's picture: a PaintImage document ({width, height, data}), the key of one the set already has, or an image
  * file ({path, rect [x, y, w, h], opacity, linear} or the path alone) laid onto a buffer the view's size.
  */
+/** A stencil's picture: texels, a key the set or the paint tool holds, or a file (decoded to linear for colour stencils). */
+std::shared_ptr<const PaintImage> stencilPicture(const json& img, const Node& set, bool color)
+{
+    if (img.is_object() && img.contains("data"))
+    {
+        auto p = PaintImage::fromJson(img);
+        if (!p)
+            throw CommandError("texPaintStroke: the stencil image needs width, height and data");
+        return p;
+    }
+    if (!img.is_string())
+        throw CommandError("texPaintStroke: stencil image is a file path, an image key or {width, height, data}");
+    const std::string s = img.get<std::string>();
+    PaintPtr data = readPaint(set);
+    if (auto it = data->images.find(s); it != data->images.end())
+        return it->second;
+    if (auto held = heldImage(s))
+        return held;
+    std::string err;
+    image::Image pic = image::read(paths::fromUtf8(s), &err);
+    if (pic.width <= 0)
+        throw CommandError("texPaintStroke: can't read stencil " + s + ": " + err);
+    std::string ext = paths::fromUtf8(s).extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
+    if (color && ext != ".exr" && ext != ".hdr")
+        for (size_t i = 0; i < pic.rgba.size(); ++i)
+            if (i % 4 != 3)
+            {
+                const float c = std::clamp(pic.rgba[i], 0.0f, 1.0f);
+                pic.rgba[i] = c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+            }
+    return PaintImage::fromRgba(pic.width, pic.height, pic.rgba);
+}
+
 std::shared_ptr<const PaintImage> projectionImage(const json& img, const Node& set, const StrokeView& view)
 {
     if (img.is_object() && img.contains("data"))
@@ -595,9 +629,18 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         j = json::parse(j.get<std::string>());
     if (!j.is_object())
         throw CommandError("texPaintStroke: stroke must be an object");
-    for (const char* k : {"payload", "brush", "points", "view", "space", "mesh", "particles"})
+    for (const char* k : {"payload", "brush", "points", "view", "space", "mesh", "particles", "stencil"})
         if (a.has(k) && !j.contains(k))
             j[k] = a.flags[k];
+    // The stencil's picture comes as a key, a file or texels; the record keeps only its key.
+    json stencilImage;
+    if (j.contains("stencil") && j["stencil"].is_object())
+    {
+        stencilImage = j["stencil"].value("image", json());
+        if (stencilImage.is_null())
+            throw CommandError("texPaintStroke: stencil needs image: a file path, an image key or {width, height, data}");
+        j["stencil"]["image"] = "pending";
+    }
     if (!j.contains("payload"))
         j["payload"] = {{"channels", {{"baseColor", {1.0, 1.0, 1.0}}}}};
     json& pay = j["payload"];
@@ -647,7 +690,9 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
     bool generated = false;
     auto header = [&](json h) {
         h.erase("points");
-        h.erase("view");
+        // A record's own view (objectToClip) stays; a screen view is the command's input, read below.
+        if (!h.contains("view") || !h["view"].is_object() || !h["view"].contains("objectToClip"))
+            h.erase("view");
         h.erase("particles");
         try
         {
@@ -758,6 +803,16 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             s.payload.sourceOffsets.push_back(off);
         }
     }
+    if (s.stencil)
+    {
+        if (!s.view)
+            throw CommandError("texPaintStroke: a stencil is pinned to the view; the stroke needs view (screen points or a recorded view)");
+        std::shared_ptr<const PaintImage> img = stencilPicture(stencilImage, set, s.stencil->mode == "color");
+        s.stencil->image = img->key();
+        holdImage(img);
+        if (s.stencil->mode == "color" && !s.payload.channels.contains(s.stencil->colorChannel))
+            s.payload.channels[s.stencil->colorChannel] = glm::vec3(1.0f);
+    }
     s.brush = bs.toJson();
     if (s.payload.channels.size() > 7)
         throw CommandError("texPaintStroke: a stroke paints at most 7 channels and the mask");
@@ -837,9 +892,17 @@ json paintStroke(const Args& a)
     {
         throw CommandError(std::string("texPaintStroke: ") + e.what());
     }
+    std::shared_ptr<const PaintImage> stencil = s.stencil ? heldImage(s.stencil->image) : nullptr;
     buf.strokes.push_back(std::make_shared<const Stroke>(std::move(s)));
     const uint64_t id = buf.strokes.back()->id;
-    writePaint(graph(), set, withBuffer(*readPaint(set), layer, std::move(buf), true, image));
+    PaintPtr next = withBuffer(*readPaint(set), layer, std::move(buf), true, image);
+    if (stencil && !next->images.contains(stencil->key()))
+    {
+        auto withStencil = std::make_shared<PaintData>(*next);
+        withStencil->images[stencil->key()] = stencil;
+        next = withStencil;
+    }
+    writePaint(graph(), set, next);
     return {{"layer", layer}, {"stroke", id}, {"dabs", r.dabs}, {"pages", r.pages}};
 }
 } // namespace
@@ -878,7 +941,9 @@ void registerCommands()
                "{width, height, data}, through view; facingFade, colorChannel; no dabs); normal (normalMode bump|stamp, stampImage, intensity, "
                "channel). paint and fill take source {library id | graph | node type, values, resolution, scale} to paint a material's "
                "channels, and any kind tip {node | graph, values, resolution} for a texture graph brush tip. particles {kind drips|rain|sparks, "
-               "count, length, size, spread, rate, seed} adds particle dabs. Each stroke is one undo step and is kept, so texRasterize can "
+               "count, length, size, spread, rate, seed} adds particle dabs. stencil {image (file, image key or {width, height, data}), "
+               "offset [x, y] view pixels, scale, rotation radians, invert, tile, mode mask|color, colorChannel} paints through a picture "
+               "pinned to the stroke's view: mask scales the amount by its luminance, color paints its rgb into colorChannel. Each stroke is one undo step and is kept, so texRasterize can "
                "replay it. Returns {layer, stroke, dabs, pages}.",
         .positionalDoc = "set [layer]",
         .flags = {{"stroke", "", T::Any, nullptr, "The stroke record (an object, or its JSON text)."},
@@ -890,6 +955,7 @@ void registerCommands()
                   {"view", "", T::Any, nullptr, "Screen view, when stroke has none."},
                   {"space", "", T::String, nullptr, "surface or screen (default: screen when there are points).", {"surface", "screen"}},
                   {"particles", "", T::Any, nullptr, "Particle brush {kind, count, length, size, spread, rate, seed}, when stroke has none."},
+                  {"stencil", "", T::Any, nullptr, "Stencil {image, offset, scale, rotation, invert, tile, mode, colorChannel}, when stroke has none."},
                   {"id", "", T::Int, nullptr, "The stroke id the paint tool painted live under.", {}, {}, 0.0}},
         .run = paintStroke,
     });

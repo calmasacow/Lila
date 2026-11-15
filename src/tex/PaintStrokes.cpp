@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stdexcept>
 
@@ -294,6 +295,8 @@ json Stroke::toJson(bool packedDabs) const
         j["particles"] = particles;
     if (!symmetry.is_null())
         j["symmetry"] = symmetry;
+    if (stencil)
+        j["stencil"] = stencil->toJson();
     if (view)
     {
         const float* m = &view->objectToClip[0][0];
@@ -351,6 +354,8 @@ Stroke Stroke::fromJson(const json& j)
             s.particles = j["particles"];
         if (j.contains("symmetry") && j["symmetry"].is_object())
             s.symmetry = j["symmetry"];
+        if (j.contains("stencil") && j["stencil"].is_object())
+            s.stencil = StrokeStencil::fromJson(j["stencil"]);
         if (j.contains("view") && j["view"].is_object())
         {
             const json& v = j["view"];
@@ -410,7 +415,81 @@ Stroke Stroke::fromJson(const json& j)
 bool Stroke::operator==(const Stroke& o) const
 {
     return id == o.id && mesh == o.mesh && brush == o.brush && payload == o.payload && seed == o.seed && occlusion == o.occlusion && view == o.view &&
-           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry;
+           dabs == o.dabs && particles == o.particles && symmetry == o.symmetry && stencil == o.stencil;
+}
+
+std::vector<std::string> Stroke::images() const
+{
+    std::vector<std::string> out;
+    if (!payload.image.empty())
+        out.push_back(payload.image);
+    if (stencil && !stencil->image.empty())
+        out.push_back(stencil->image);
+    return out;
+}
+
+json StrokeStencil::toJson() const
+{
+    return {{"image", image}, {"offset", {offset.x, offset.y}}, {"scale", scale}, {"rotation", rotation}, {"invert", invert},
+            {"tile", tile},   {"mode", mode},                    {"colorChannel", colorChannel}};
+}
+
+StrokeStencil StrokeStencil::fromJson(const json& j)
+{
+    StrokeStencil s;
+    try
+    {
+        s.image = j.value("image", std::string());
+        if (j.contains("offset"))
+        {
+            const json& o = j["offset"];
+            if (!o.is_array() || o.size() != 2)
+                throw std::invalid_argument("stencil offset must be [x, y]");
+            s.offset = {o[0].get<float>(), o[1].get<float>()};
+        }
+        s.scale = j.value("scale", 1.0f);
+        s.rotation = j.value("rotation", 0.0f);
+        s.invert = j.value("invert", false);
+        s.tile = j.value("tile", false);
+        s.mode = j.value("mode", std::string("mask"));
+        s.colorChannel = j.value("colorChannel", std::string("baseColor"));
+    }
+    catch (const json::exception& e)
+    {
+        throw std::invalid_argument(std::string("stencil: ") + e.what());
+    }
+    if (s.mode != "mask" && s.mode != "color")
+        throw std::invalid_argument("stencil mode is mask or color");
+    if (!(s.scale > 0.0f) || !std::isfinite(s.rotation))
+        throw std::invalid_argument("stencil scale must be positive");
+    return s;
+}
+
+namespace
+{
+std::mutex gHeldMutex;
+std::vector<std::shared_ptr<const PaintImage>> gHeld;
+} // namespace
+
+void holdImage(std::shared_ptr<const PaintImage> image)
+{
+    if (!image)
+        return;
+    const std::string key = image->key();
+    std::scoped_lock lock(gHeldMutex);
+    std::erase_if(gHeld, [&](const auto& h) { return h->key() == key; });
+    gHeld.push_back(std::move(image));
+    if (gHeld.size() > 8)
+        gHeld.erase(gHeld.begin());
+}
+
+std::shared_ptr<const PaintImage> heldImage(const std::string& key)
+{
+    std::scoped_lock lock(gHeldMutex);
+    for (const auto& h : gHeld)
+        if (h->key() == key)
+            return h;
+    return nullptr;
 }
 
 // ---------------------------------------------------------------------------------------------------- Baseline
@@ -735,8 +814,8 @@ void PaintData::pruneImages()
     std::set<std::string> used;
     for (const auto& [id, buf] : buffers)
         for (const StrokePtr& st : buf.strokes)
-            if (!st->payload.image.empty())
-                used.insert(st->payload.image);
+            for (const std::string& k : st->images())
+                used.insert(k);
     std::erase_if(images, [&](const auto& kv) { return !used.contains(kv.first); });
 }
 

@@ -12,6 +12,7 @@
 #include "brush/BrushUi.h"
 #include "brush/Symmetry.h"
 #include "core/Log.h"
+#include "core/Paths.h"
 #include "core/Profile.h"
 #include "geo/Symmetry.h"
 #include "ops/Command.h"
@@ -160,6 +161,13 @@ struct TexturePaintSettings
     float facingFade = 0.2f;
     bool transform = false;
     bool warp = false;
+    /** The stencil every stroke and the buffer paint through; its placement is in buffer pixels. */
+    tp::Stencil stencil;
+    std::string stencilPath;
+    /** "mask" or "color". */
+    std::string stencilMode = "mask";
+    /** Bumped when the stencil's picture or mode changes, so the tool remakes what it derived from it. */
+    uint64_t stencilVersion = 0;
 };
 
 TexturePaintSettings& texturePaintState()
@@ -173,6 +181,23 @@ TexturePaintSettings& texturePaintState()
 }
 
 void saveTexturePaintSettings() { texturePaintState().stroke.savePrefs(kTexturePaintPrefix); }
+
+/** Sets the stencil from a file; empty clears it. Throws std::runtime_error when the file can't be read. */
+void setStencilFile(const std::string& path)
+{
+    TexturePaintSettings& s = texturePaintState();
+    s.stencil = {};
+    s.stencilPath.clear();
+    ++s.stencilVersion;
+    if (path.empty())
+        return;
+    std::string err;
+    image::Image img = image::read(paths::fromUtf8(path), &err);
+    if (img.width <= 0)
+        throw std::runtime_error("stencil " + path + ": " + err);
+    s.stencil.image = std::move(img);
+    s.stencilPath = path;
+}
 
 bool filterTool(const std::string& t) { return t == "smudge" || t == "blur" || t == "sharpen" || t == "clone" || t == "heal"; }
 
@@ -527,17 +552,54 @@ public:
         auto* clearBuf = new QPushButton("Clear", this);
         auto* image = new QPushButton("Image...", this);
         image->setToolTip("Lay a picture on the buffer to project (decals, photo detail)");
-        auto* stencil = new QPushButton("Stencil...", this);
-        stencil->setToolTip("Pin a greyscale mask to the screen: buffer painting goes through it");
-        auto* noStencil = new QPushButton("No Stencil", this);
-        for (QPushButton* b : {commit, clearBuf, image, stencil, noStencil})
+        for (QPushButton* b : {commit, clearBuf, image})
             bufButtons->addWidget(b);
         mBufferButtons = addRow(form, "", bufButtons);
         connect(commit, &QPushButton::clicked, this, [this] { call(onCommit); });
         connect(clearBuf, &QPushButton::clicked, this, [this] { call(onClearBuffer); });
         connect(image, &QPushButton::clicked, this, [this] { call(onLoadImage); });
-        connect(stencil, &QPushButton::clicked, this, [this] { call(onLoadStencil); });
-        connect(noStencil, &QPushButton::clicked, this, [this] { call(onClearStencil); });
+
+        // Stencil: every tool paints through it.
+        mStencilPick = new QToolButton(this);
+        mStencilPick->setObjectName("stencilPick");
+        controls::setRole(mStencilPick, "row");
+        mStencilPick->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        mStencilPick->setIcon(icon("photo"));
+        mStencilPick->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        mStencilPick->setToolTip("Stencil: a picture pinned to the screen that strokes paint through. Hold S and drag to move it, "
+                                 "with Shift to rotate, with Ctrl to scale");
+        auto* stencilClear = new QToolButton(this);
+        stencilClear->setObjectName("stencilClear");
+        stencilClear->setIcon(icon("x"));
+        stencilClear->setAutoRaise(true);
+        stencilClear->setToolTip("No stencil");
+        auto* stencilRow = new QHBoxLayout;
+        stencilRow->setSpacing(2);
+        stencilRow->addWidget(mStencilPick, 1);
+        stencilRow->addWidget(stencilClear);
+        addRow(form, "Stencil", stencilRow);
+        mStencilMode = new controls::Segmented(this);
+        mStencilMode->setObjectName("stencilMode");
+        mStencilMode->add("Mask", {}, "Mask: the picture's brightness sets how much each stroke paints", 0);
+        mStencilMode->add("Colour", {}, "Colour: strokes paint the picture's colour into Base Color, its alpha as the amount", 1);
+        mStencilInvert = new QCheckBox("Invert", this);
+        mStencilInvert->setToolTip("Paint where the stencil is dark instead");
+        mStencilTile = new QCheckBox("Tile", this);
+        mStencilTile->setToolTip("Repeat the picture past its edges");
+        auto* stencilOpts = new QHBoxLayout;
+        stencilOpts->addWidget(mStencilMode, 1);
+        stencilOpts->addWidget(mStencilInvert);
+        stencilOpts->addWidget(mStencilTile);
+        mStencilOptions = addRow(form, "", stencilOpts);
+        connect(mStencilPick, &QToolButton::clicked, this, [this] { call(onLoadStencil); });
+        connect(stencilClear, &QToolButton::clicked, this, [this] { call(onClearStencil); });
+        connect(mStencilMode, &controls::Segmented::picked, this, [this](int id) {
+            texturePaintState().stencilMode = id == 1 ? "color" : "mask";
+            ++texturePaintState().stencilVersion;
+            changed();
+        });
+        connect(mStencilInvert, &QCheckBox::toggled, this, [this](bool v) { set(texturePaintState().stencil.invert, v); });
+        connect(mStencilTile, &QCheckBox::toggled, this, [this](bool v) { set(texturePaintState().stencil.tile, v); });
 
         mRadius = new QSpinBox(this);
         mRadius->setRange(1, 2000);
@@ -691,6 +753,15 @@ public:
         mMirror->setChecked(s.stroke.mirror);
         mSource->setCurrent(s.source == "material" ? 1 : s.source == "texture" ? 2 : 0);
         mTexture->setText(s.sourceImage.empty() ? QString("None") : QFileInfo(QString::fromStdString(s.sourceImage)).completeBaseName());
+        mStencilPick->setText(!s.stencil.active() ? QString("None")
+                              : s.stencilPath.empty() ? QString("Picture")
+                                                      : QFileInfo(QString::fromStdString(s.stencilPath)).completeBaseName());
+        mStencilMode->setCurrent(s.stencilMode == "color" ? 1 : 0);
+        {
+            const QSignalBlocker bi(mStencilInvert), bt(mStencilTile);
+            mStencilInvert->setChecked(s.stencil.invert);
+            mStencilTile->setChecked(s.stencil.tile);
+        }
         const ToolKind* kind = &kTools[0];
         for (const ToolKind& t : kTools)
             if (s.tool == t.id)
@@ -775,6 +846,7 @@ private:
         showRow(mParticleRow, t == "paint");
         for (QWidget* w : {mBufferRow, mBufferFlags, mFacingRow, mBufferButtons})
             showRow(w, t == "project");
+        showRow(mStencilOptions, texturePaintState().stencil.active());
     }
 
     template <class T> void set(T& field, T v)
@@ -856,6 +928,10 @@ private:
     QDoubleSpinBox* mFacing = nullptr;
     QWidget *mDirRow = nullptr, *mNormalRow = nullptr, *mStampRow = nullptr, *mFilterRow = nullptr, *mFillRow = nullptr, *mParticleRow = nullptr;
     QWidget *mBufferRow = nullptr, *mBufferFlags = nullptr, *mFacingRow = nullptr, *mBufferButtons = nullptr;
+    QToolButton* mStencilPick = nullptr;
+    controls::Segmented* mStencilMode = nullptr;
+    QCheckBox *mStencilInvert = nullptr, *mStencilTile = nullptr;
+    QWidget* mStencilOptions = nullptr;
     std::map<QWidget*, QWidget*> mLabels;
     QSpinBox* mRadius = nullptr;
     QDoubleSpinBox* mStrength = nullptr;
@@ -972,8 +1048,8 @@ public:
         mPanel->onLoadImage = [this] { loadBufferImage(); };
         mPanel->onLoadStencil = [this] { loadStencil(); };
         mPanel->onClearStencil = [this] {
-            mStencil = {};
-            mStencilImage.reset();
+            setStencilFile({});
+            mPanel->sync();
             viewportTools::requestRedraw();
         };
         mPanel->sync();
@@ -984,6 +1060,9 @@ public:
     {
         if (mStroking)
             cancelStroke();
+        mKeyWatch.reset();
+        mStencilKey = false;
+        mStencilDrag = StencilDrag::None;
         mControls.deactivate();
         textureSets::removeActiveLayerListener(mActiveListener);
         mActiveListener = 0;
@@ -1004,6 +1083,8 @@ public:
     {
         mHover = e->position();
         if (mControls.mousePress(e))
+            return true;
+        if (stencilPress(e))
             return true;
         if (e->button() != Qt::LeftButton)
             return false;
@@ -1039,6 +1120,11 @@ public:
         mHover = e->position();
         if (mControls.mouseMove(e))
             return true;
+        if (mStencilDrag != StencilDrag::None)
+        {
+            stencilMove(e, view);
+            return true;
+        }
         if (mBufferDrag != BufferDrag::None)
         {
             bufferMove(e, view);
@@ -1076,6 +1162,12 @@ public:
     {
         if (mControls.mouseRelease(e))
             return true;
+        if (mStencilDrag != StencilDrag::None)
+        {
+            stencilMove(e, view);
+            mStencilDrag = StencilDrag::None;
+            return true;
+        }
         if (mBufferDrag != BufferDrag::None)
         {
             bufferMove(e, view);
@@ -1112,10 +1204,80 @@ public:
         return true;
     }
 
+    bool hotkey(const QKeyEvent& e, std::string_view) override
+    {
+        // S is an app hotkey too; with a stencil it is the stencil's while the tool is active.
+        if (e.key() == Qt::Key_S && !(e.modifiers() & (Qt::ControlModifier | Qt::AltModifier)) && texturePaintState().stencil.active())
+            return holdStencilKey(e);
+        return false;
+    }
+
+    /** S down: drags place the stencil until it comes up (watched app-wide, as tools see no key releases). */
+    bool holdStencilKey(const QKeyEvent& e)
+    {
+        if (e.isAutoRepeat() || mStencilKey)
+            return true;
+        mStencilKey = true;
+        struct Watch final : QObject
+        {
+            std::function<void()> released;
+            bool eventFilter(QObject*, QEvent* ev) override
+            {
+                if (ev->type() == QEvent::KeyRelease)
+                    if (auto* k = static_cast<QKeyEvent*>(ev); k->key() == Qt::Key_S && !k->isAutoRepeat())
+                        released();
+                return false;
+            }
+        };
+        auto watch = std::make_unique<Watch>();
+        watch->released = [this] {
+            mStencilKey = false;
+            QTimer::singleShot(0, [alive = std::weak_ptr<bool>(mAlive), this] {
+                if (alive.lock())
+                    mKeyWatch.reset();
+            });
+        };
+        qApp->installEventFilter(watch.get());
+        mKeyWatch = std::move(watch);
+        return true;
+    }
+
+    bool stencilPress(QMouseEvent* e)
+    {
+        if (!mStencilKey || e->button() != Qt::LeftButton || !texturePaintState().stencil.active())
+            return false;
+        mStencilDrag = (e->modifiers() & Qt::ShiftModifier) ? StencilDrag::Rotate : (e->modifiers() & Qt::ControlModifier) ? StencilDrag::Scale : StencilDrag::Move;
+        mStencilFrom = e->position();
+        mStencilStart = texturePaintState().stencil.place;
+        return true;
+    }
+
+    void stencilMove(QMouseEvent* e, const ViewInfo& view)
+    {
+        TexturePaintSettings& s = texturePaintState();
+        tp::Placement& place = s.stencil.place;
+        place = mStencilStart;
+        const QPointF d = e->position() - mStencilFrom;
+        if (mStencilDrag == StencilDrag::Move)
+            place.offset += glm::vec2(float(d.x()), float(d.y())) * s.bufferScale;
+        else if (mStencilDrag == StencilDrag::Scale)
+            place.scale = std::clamp(mStencilStart.scale * std::exp(float(d.x() - d.y()) / 200.0f), 0.02f, 50.0f);
+        else
+        {
+            // About the stencil's centre on the screen.
+            const glm::vec2 c = glm::vec2(float(view.width), float(view.height)) * 0.5f + mStencilStart.offset / s.bufferScale;
+            const glm::vec2 a(float(mStencilFrom.x()) - c.x, float(mStencilFrom.y()) - c.y), b(float(e->position().x()) - c.x, float(e->position().y()) - c.y);
+            place.rotation = mStencilStart.rotation + (std::atan2(b.y, b.x) - std::atan2(a.y, a.x));
+        }
+        viewportTools::requestRedraw();
+    }
+
     bool keyPress(QKeyEvent* e, const ViewInfo&) override
     {
         if (mControls.keyPress(e))
             return true;
+        if (e->key() == Qt::Key_S && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier)) && texturePaintState().stencil.active())
+            return holdStencilKey(*e);
         if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && texturePaintState().tool == "project")
         {
             commitBuffer();
@@ -1172,6 +1334,10 @@ public:
             if ((st.tool == "clone" || st.tool == "heal") && !mCloneUv)
                 status.keys = {{"Ctrl+Alt+click", "set source"}};
         }
+        if (st.tool != "project")
+            drawStencil(fs, view);
+        if (st.stencil.active())
+            status.keys.insert(status.keys.end(), {{"S+drag", "move stencil"}, {"S+Shift+drag", "rotate"}, {"S+Ctrl+drag", "scale"}});
         drawToolStatus(p, view, status);
         if (st.tool == "fill")
             drawFill(p, view);
@@ -1608,6 +1774,9 @@ private:
         header->occlusion = texturePaintState().occlusion;
         header->seed = texturePaintState().stroke.seed;
         header->view = strokeView(view, t.world);
+        header->stencil = strokeStencil();
+        if (header->stencil && header->stencil->mode == "color" && !header->payload.channels.contains(header->stencil->colorChannel))
+            header->payload.channels[header->stencil->colorChannel] = glm::vec3(1.0f);
         mParticles.reset();
         if (!texturePaintState().particles.empty() && tool == "paint")
             try
@@ -1865,7 +2034,7 @@ private:
             d.radius = float(st.stroke.radius * pressure * s.size) * scale;
             d.opacity = float(st.stroke.strength * st.stroke.flow * st.stroke.pressureOpacity.map(s.pressure) * s.opacity);
             d.previous = mPrevious;
-            const tp::Stencil* stencil = mStencil.active() ? &mStencil : nullptr;
+            const tp::Stencil* stencil = texturePaintState().stencil.active() ? &texturePaintState().stencil : nullptr;
             const std::string& b = mBufferErase ? std::string("erase") : st.bufferBrush;
             if (b == "erase")
                 mBuffer.erase(d, falloff, stencil);
@@ -2017,13 +2186,51 @@ private:
 
     void loadStencil()
     {
-        std::optional<image::Image> img = openImage("Stencil");
-        if (!img)
+        const QString f = ui::fileDialog::getOpenFileName(mainWindow(), "Stencil", {}, "Images (*.png *.jpg *.jpeg *.exr *.tga *.tif *.tiff *.psd)");
+        if (f.isEmpty())
             return;
-        mStencil = {};
-        mStencil.image = std::move(*img);
-        mStencilImage.reset();
+        try
+        {
+            setStencilFile(f.toStdString());
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
+        if (mPanel)
+            mPanel->sync();
         viewportTools::requestRedraw();
+    }
+
+    /** The stencil as a stroke records it, its picture held so the live stroke can read it before the command stores it. */
+    std::optional<tp::StrokeStencil> strokeStencil()
+    {
+        const TexturePaintSettings& s = texturePaintState();
+        if (!s.stencil.active())
+            return std::nullopt;
+        if (!mStencilPicture || mStencilPictureVersion != s.stencilVersion)
+        {
+            std::vector<float> rgba = s.stencil.image.rgba;
+            // A colour stencil paints its colour, which 8-bit files hold as sRGB; a mask reads the file's values as they are.
+            std::string ext = paths::fromUtf8(s.stencilPath).extension().string();
+            std::transform(ext.begin(), ext.end(), ext.begin(), [](char c) { return char(std::tolower(static_cast<unsigned char>(c))); });
+            if (s.stencilMode == "color" && ext != ".exr" && ext != ".hdr")
+                for (size_t i = 0; i < rgba.size(); ++i)
+                    if (i % 4 != 3)
+                        rgba[i] = srgbToLinear(rgba[i]);
+            mStencilPicture = tp::PaintImage::fromRgba(s.stencil.image.width, s.stencil.image.height, rgba);
+            mStencilPictureVersion = s.stencilVersion;
+        }
+        tp::holdImage(mStencilPicture);
+        tp::StrokeStencil out;
+        out.image = mStencilPicture->key();
+        out.offset = s.stencil.place.offset / s.bufferScale;
+        out.scale = s.stencil.place.scale;
+        out.rotation = s.stencil.place.rotation;
+        out.invert = s.stencil.invert;
+        out.tile = s.stencil.tile;
+        out.mode = s.stencilMode;
+        return out;
     }
 
     /** World corners of an NDC rectangle just behind the near plane: top left, top right, bottom right, bottom left. */
@@ -2054,6 +2261,44 @@ private:
         return img;
     }
 
+    void drawStencil(render::FrameState& fs, const ViewInfo& view)
+    {
+        const TexturePaintSettings& s = texturePaintState();
+        if (!s.stencil.active())
+            return;
+        if (!mStencilImage || mStencilImageVersion != s.stencilVersion)
+        {
+            mStencilImage = toGpu(s.stencil.image.rgba, s.stencil.image.width, s.stencil.image.height, nullptr, 1.0f, s.stencilMode != "color");
+            mStencilImageVersion = s.stencilVersion;
+        }
+        // The stencil image spans the view's height at scale 1, centred, placed like the buffer's content.
+        const float aspect = float(s.stencil.image.width) / float(s.stencil.image.height);
+        const glm::vec2 center(float(view.width) * 0.5f, float(view.height) * 0.5f);
+        const float hw = float(view.height) * aspect * 0.5f, hh = float(view.height) * 0.5f;
+        tp::Placement place = s.stencil.place;
+        place.offset /= s.bufferScale;
+        glm::vec2 ndc[4];
+        render::ImagePlaneDraw sd;
+        // A tiled stencil shows three repeats each way around the picture.
+        const int reach = s.stencil.tile ? 1 : 0;
+        for (int ty = -reach; ty <= reach; ++ty)
+            for (int tx = -reach; tx <= reach; ++tx)
+            {
+                const glm::vec2 shift(float(tx) * hw * 2.0f, float(ty) * hh * 2.0f);
+                const glm::vec2 corners[4] = {{-hw, -hh}, {hw, -hh}, {hw, hh}, {-hw, hh}};
+                for (int k = 0; k < 4; ++k)
+                {
+                    const glm::vec2 p = place.apply(center + shift + corners[k], center);
+                    ndc[k] = {p.x / float(view.width) * 2.0f - 1.0f, p.y / float(view.height) * 2.0f - 1.0f};
+                }
+                screenQuad(view, ndc, sd.corners);
+                sd.image = mStencilImage->asTexture();
+                sd.opacity = s.stencil.opacity;
+                sd.depth = render::ImagePlaneDraw::Depth::Front;
+                fs.imagePlanes.push_back(sd);
+            }
+    }
+
     void drawBuffer(render::FrameState& fs, OverlayPainter& p, const ViewInfo& view)
     {
         if (mBuffer.width() <= 0)
@@ -2072,30 +2317,7 @@ private:
         d.image = mBufferImage->asTexture();
         d.depth = render::ImagePlaneDraw::Depth::Front;
         fs.imagePlanes.push_back(std::move(d));
-        if (mStencil.active())
-        {
-            if (!mStencilImage)
-                mStencilImage = toGpu(mStencil.image.rgba, mStencil.image.width, mStencil.image.height, nullptr, 1.0f, true);
-            // The stencil image spans the view's height at scale 1, centred, placed like the buffer's content.
-            const float aspect = float(mStencil.image.width) / float(mStencil.image.height);
-            const glm::vec2 center(float(view.width) * 0.5f, float(view.height) * 0.5f);
-            const float hw = float(view.height) * aspect * 0.5f, hh = float(view.height) * 0.5f;
-            const glm::vec2 corners[4] = {{-hw, -hh}, {hw, -hh}, {hw, hh}, {-hw, hh}};
-            glm::vec2 ndc[4];
-            tp::Placement place = mStencil.place;
-            place.offset /= texturePaintState().bufferScale;
-            for (int k = 0; k < 4; ++k)
-            {
-                const glm::vec2 s = place.apply(center + corners[k], center);
-                ndc[k] = {s.x / float(view.width) * 2.0f - 1.0f, s.y / float(view.height) * 2.0f - 1.0f};
-            }
-            render::ImagePlaneDraw sd;
-            screenQuad(view, ndc, sd.corners);
-            sd.image = mStencilImage->asTexture();
-            sd.opacity = mStencil.opacity;
-            sd.depth = render::ImagePlaneDraw::Depth::Front;
-            fs.imagePlanes.push_back(std::move(sd));
-        }
+        drawStencil(fs, view);
         if (texturePaintState().warp)
         {
             const float sx = float(view.width) / float(mBuffer.width()), sy = float(view.height) / float(mBuffer.height());
@@ -2153,8 +2375,21 @@ private:
 
     tp::ProjectionBuffer mBuffer;
     ViewInfo mBufferView;
-    tp::Stencil mStencil;
     render::GpuImageRef mBufferImage, mStencilImage;
+    uint64_t mStencilImageVersion = ~0ull, mStencilPictureVersion = ~0ull;
+    std::shared_ptr<const tp::PaintImage> mStencilPicture;
+    /** S held: drags place the stencil instead of painting. */
+    bool mStencilKey = false;
+    std::unique_ptr<QObject> mKeyWatch;
+    enum class StencilDrag
+    {
+        None,
+        Move,
+        Rotate,
+        Scale,
+    } mStencilDrag = StencilDrag::None;
+    QPointF mStencilFrom;
+    tp::Placement mStencilStart;
     uint64_t mShownVersion = 0;
     bool mShownTransform = false;
     BufferDrag mBufferDrag = BufferDrag::None;
@@ -2292,5 +2527,76 @@ void registerTexturePaintUi()
     layerAction("tex.rasterizeLayer", "Rasterize Paint Layer", "texRasterize", "Rebuilds the paint layer's pixels from its stroke records.");
     layerAction("tex.flattenLayer", "Flatten Paint Layer", "texFlattenLayer", "Keeps the paint layer's pixels and drops its stroke records.");
     layerAction("tex.clearLayer", "Clear Paint Layer", "texClearLayer", "Drops the paint layer's strokes and pixels.");
+
+    actions::add({.id = "tex.stencil",
+                  .label = "Load Stencil...",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          const QString f = ui::fileDialog::getOpenFileName(mainWindow(), "Stencil", {}, "Images (*.png *.jpg *.jpeg *.exr *.tga *.tif *.tiff *.psd)");
+                          if (!f.isEmpty())
+                              actions::run({{"command", "texPaintStencil"}, {"args", {f.toStdString()}}});
+                      },
+                  .doc = "Pin a picture to the screen for texture painting: every stroke paints through it, as a mask or in its colours. "
+                         "Hold S and drag to move it, with Shift to rotate, with Ctrl to scale.",
+                  .python = "texPaintStencil(\"<image file>\")",
+                  .keywords = {"stencil", "mask", "overlay", "paint through"}});
+    ops::registerCommand({
+        .name = "texPaintStencil",
+        .doc = "The texture paint tool's stencil: a picture pinned to the screen that strokes and the projection buffer paint through. "
+               "A file sets it (an empty one clears it); the flags change it. mode mask scales each stroke by the picture's brightness, "
+               "color paints its colours into Base Color. Returns {file, mode, invert, tile, offset, scale, rotation}.",
+        .positionalDoc = "[file]",
+        .flags = {{"mode", "", ArgType::String, nullptr, "mask or color.", {"mask", "color"}},
+                  {"invert", "", ArgType::Bool, nullptr, "Paint where the picture is dark."},
+                  {"tile", "", ArgType::Bool, nullptr, "Repeat the picture past its edges."},
+                  {"offset", "", ArgType::List, nullptr, "[x, y] screen pixels from the view's centre."},
+                  {"scale", "", ArgType::Float, nullptr, "1 spans the view's height."},
+                  {"rotation", "", ArgType::Float, nullptr, "Degrees."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            TexturePaintSettings& s = texturePaintState();
+            if (!a.positional.empty())
+                try
+                {
+                    setStencilFile(a.positional[0].get<std::string>());
+                }
+                catch (const std::exception& e)
+                {
+                    throw CommandError(std::string("texPaintStencil: ") + e.what());
+                }
+            if (a.has("mode"))
+            {
+                s.stencilMode = a.get<std::string>("mode") == "color" ? "color" : "mask";
+                ++s.stencilVersion;
+            }
+            if (a.has("invert"))
+                s.stencil.invert = a.get<bool>("invert");
+            if (a.has("tile"))
+                s.stencil.tile = a.get<bool>("tile");
+            if (a.has("offset"))
+            {
+                const json o = a.flags["offset"];
+                if (!o.is_array() || o.size() != 2)
+                    throw CommandError("texPaintStencil: offset is [x, y]");
+                s.stencil.place.offset = glm::vec2(o[0].get<float>(), o[1].get<float>()) * s.bufferScale;
+            }
+            if (a.has("scale"))
+                s.stencil.place.scale = std::max(0.01f, float(a.get<double>("scale")));
+            if (a.has("rotation"))
+                s.stencil.place.rotation = float(glm::radians(a.get<double>("rotation")));
+            brushChanged();
+            viewportTools::requestRedraw();
+            const glm::vec2 off = s.stencil.place.offset / s.bufferScale;
+            return {{"file", s.stencilPath},
+                    {"active", s.stencil.active()},
+                    {"mode", s.stencilMode},
+                    {"invert", s.stencil.invert},
+                    {"tile", s.stencil.tile},
+                    {"offset", {off.x, off.y}},
+                    {"scale", s.stencil.place.scale},
+                    {"rotation", glm::degrees(s.stencil.place.rotation)}};
+        },
+    });
 }
 } // namespace lila::ui

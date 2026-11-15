@@ -105,13 +105,21 @@ struct GpuParams
     float strength = 1.0f, tilt = 0.5f, depthBias = 0.0f, filterRadius = 4.0f;
     float amount = 1.0f, sourceU = 0.0f, sourceV = 0.0f, facingFade = 0.0f;
     float intensity = 1.0f, valueScale = 1.0f;
-    uint32_t pad[4]{};
+    /** The stroke's stencil: its picture's size, placement (view pixels), kStencil* flags and the view's size. */
+    uint32_t stencilW = 0, stencilH = 0;
+    float stencilX = 0.0f, stencilY = 0.0f, stencilScale = 1.0f, stencilAngle = 0.0f;
+    uint32_t stencilFlags = 0, viewW = 1, viewH = 1, stencilColor = kNone;
+    VkDeviceAddress stencil = 0;
+    /** The view the stencil is pinned to (a projection's symmetry copies project through other views). */
+    glm::mat4 stencilToClip{1.0f};
 };
 static_assert(offsetof(GpuParams, items) == 288);
 static_assert(offsetof(GpuParams, valueImages) == 376);
 static_assert(offsetof(GpuParams, depthW) == 440);
 static_assert(offsetof(GpuParams, strength) == 520);
-static_assert(sizeof(GpuParams) == 576);
+static_assert(offsetof(GpuParams, stencilW) == 560);
+static_assert(offsetof(GpuParams, stencil) == 600);
+static_assert(sizeof(GpuParams) == 672);
 
 struct DabPush
 {
@@ -130,6 +138,7 @@ struct DepthPush
 static_assert(sizeof(DepthPush) == 96);
 
 constexpr uint32_t kFlagOcclusion = 1, kFlagDirection = 2, kFlagView = 4, kFlagValueImages = 8, kFlagFlow = 16;
+constexpr uint32_t kStencilOn = 1, kStencilInvert = 2, kStencilTile = 4, kStencilColor = 8;
 enum Mode : uint32_t
 {
     kModePaint,
@@ -421,6 +430,10 @@ struct Live
     /** normal stamps: the normal map. */
     std::vector<float> stamp;
     int stampW = 0, stampH = 0;
+    /** The stencil's picture (RGBA floats); empty when the stroke has none. */
+    std::vector<float> stencil;
+    int stencilW = 0, stencilH = 0;
+    VkDeviceAddress stencilAddr = 0;
     /** Channel values from a texture graph, and its tiles per uv unit. */
     std::shared_ptr<const ValueImages> sourceImages;
     float valueScale = 1.0f;
@@ -883,7 +896,8 @@ uint32_t modeOf(const Payload& p, uint32_t& sub)
 }
 
 /** What a stroke needs on the GPU besides its dabs, from its header. image is a project stroke's picture. */
-std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh> mesh, std::shared_ptr<const PaintImage> image = nullptr)
+std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh> mesh, std::shared_ptr<const PaintImage> image = nullptr,
+                               std::shared_ptr<const PaintImage> stencil = nullptr)
 {
     auto live = std::make_unique<Live>();
     live->header = header;
@@ -967,6 +981,19 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
         live->sourceImages = valueImages(p.source, live->channels);
         live->valueScale = float(p.source.value("scale", 1.0));
     }
+    if (header->stencil)
+    {
+        if (!header->view)
+            log::warn("paint stroke {}: its stencil needs the view it was painted in; painted without it", header->id);
+        else if (!stencil)
+            log::warn("paint stroke {}: stencil image {} is missing; painted without it", header->id, header->stencil->image);
+        else
+        {
+            live->stencil = stencil->rgba();
+            live->stencilW = stencil->width;
+            live->stencilH = stencil->height;
+        }
+    }
     return live;
 }
 
@@ -996,6 +1023,8 @@ void ensureUploads(VulkanContext& vk, Gpu& g, Live& live)
         live.imageAddr = upload(live.image.data(), live.image.size() * 4);
     if (!live.stamp.empty())
         live.stampAddr = upload(live.stamp.data(), live.stamp.size() * 4);
+    if (!live.stencil.empty())
+        live.stencilAddr = upload(live.stencil.data(), live.stencil.size() * 4);
     if (live.sourceImages)
         for (size_t c = 0; c < live.channels.size(); ++c)
             if (auto it = live.sourceImages->channels.find(live.channels[c]); it != live.sourceImages->channels.end())
@@ -1230,6 +1259,24 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
         params.valueW = uint32_t(live.sourceImages->width);
         params.valueH = uint32_t(live.sourceImages->height);
     }
+    if (live.stencilAddr && h.stencil && h.view)
+    {
+        const StrokeStencil& st = *h.stencil;
+        params.stencil = live.stencilAddr;
+        params.stencilW = uint32_t(live.stencilW);
+        params.stencilH = uint32_t(live.stencilH);
+        params.stencilX = st.offset.x;
+        params.stencilY = st.offset.y;
+        params.stencilScale = st.scale;
+        params.stencilAngle = st.rotation;
+        params.stencilFlags = kStencilOn | (st.invert ? kStencilInvert : 0) | (st.tile ? kStencilTile : 0) | (st.mode == "color" ? kStencilColor : 0);
+        params.viewW = uint32_t(h.view->width);
+        params.viewH = uint32_t(h.view->height);
+        params.stencilToClip = h.view->objectToClip;
+        for (size_t c = 0; c < live.channels.size(); ++c)
+            if (st.mode == "color" && live.channels[c] == st.colorChannel)
+                params.stencilColor = uint32_t(c);
+    }
 
     // Copy on write for every channel page the batch reaches, and a cleared build-up page per page.
     std::vector<GpuItem> items(b.items.size());
@@ -1452,6 +1499,20 @@ std::shared_ptr<const PaintImage> imageOf(const scene::Node* set, const Stroke& 
     return it == data->images.end() ? nullptr : it->second;
 }
 
+/** The stroke's stencil picture: the set's, else one the paint tool holds for a stroke not yet stored. */
+std::shared_ptr<const PaintImage> stencilOf(const scene::Node* set, const Stroke& s)
+{
+    if (!s.stencil || s.stencil->image.empty())
+        return nullptr;
+    if (set)
+    {
+        PaintPtr data = readPaint(*set);
+        if (auto it = data->images.find(s.stencil->image); it != data->images.end())
+            return it->second;
+    }
+    return heldImage(s.stencil->image);
+}
+
 /** Paints a whole stroke with no undo (rasterising from records). */
 void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& material, const StrokePtr& s)
 {
@@ -1463,7 +1524,7 @@ void replay(const Key& key, Layer& l, scene::Graph& g, const std::string& materi
     }
     try
     {
-        l.live = makeLive(s, mesh, imageOf(g.node(key.set), *s));
+        l.live = makeLive(s, mesh, imageOf(g.node(key.set), *s), stencilOf(g.node(key.set), *s));
     }
     catch (const std::exception& e)
     {
@@ -2080,7 +2141,8 @@ void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, Str
     std::shared_ptr<const PaintMesh> mesh = paintMesh(g, header->mesh, setMaterial(set));
     if (!mesh)
         throw std::runtime_error(header->mesh + " isn't a mesh with faces");
-    l.live = makeLive(std::move(header), std::move(mesh));
+    std::shared_ptr<const PaintImage> stencil = stencilOf(&set, *header);
+    l.live = makeLive(std::move(header), std::move(mesh), nullptr, std::move(stencil));
 }
 
 void liveDabs(NodeId set, const std::string& buffer, std::span<const Dab> dabs)
@@ -2132,7 +2194,7 @@ ApplyResult applyStroke(scene::Graph& g, scene::Node& set, const std::string& bu
         std::shared_ptr<const PaintMesh> mesh = paintMesh(g, stroke.mesh, setMaterial(set));
         if (!mesh)
             throw std::runtime_error(stroke.mesh + " isn't a mesh with faces");
-        l.live = makeLive(header, std::move(mesh), image ? image : imageOf(&set, stroke));
+        l.live = makeLive(header, std::move(mesh), image ? image : imageOf(&set, stroke), stencilOf(&set, stroke));
         paintDabs(key, l, stroke.dabs);
         if (wholeStroke(*l.live))
             paintWhole(key, l);

@@ -163,6 +163,38 @@ struct StrokeView
     bool operator==(const StrokeView&) const = default;
 };
 
+struct PaintImage;
+
+/**
+ * A picture pinned to the screen that a stroke paints through (needs the stroke's view). At scale 1 it spans the view's
+ * height, centred; offset (view pixels), scale and rotation (radians) place it. mask: its luminance times alpha scales
+ * the stroke's amount. color: its rgb is the value painted into colorChannel and its alpha the amount.
+ */
+struct LILA_SCENE_API StrokeStencil
+{
+    /** PaintData::images key. */
+    std::string image;
+    glm::vec2 offset{0.0f};
+    float scale = 1.0f;
+    float rotation = 0.0f;
+    bool invert = false;
+    bool tile = false;
+    std::string mode = "mask";
+    std::string colorChannel = "baseColor";
+
+    json toJson() const;
+    /** Throws std::invalid_argument on a bad value. */
+    static StrokeStencil fromJson(const json& j);
+    bool operator==(const StrokeStencil&) const = default;
+};
+
+/**
+ * Images strokes are about to refer to that no texture set holds yet (a stencil picked in the paint tool), so a live
+ * stroke can read them before its command stores them. Keeps the most recent few. Any thread.
+ */
+LILA_SCENE_API void holdImage(std::shared_ptr<const PaintImage> image);
+LILA_SCENE_API std::shared_ptr<const PaintImage> heldImage(const std::string& key);
+
 struct LILA_SCENE_API Stroke
 {
     /** Unique within the buffer; the tool and the command agree on it. */
@@ -184,7 +216,10 @@ struct LILA_SCENE_API Stroke
      * Dab::copy; replay reads it for mirrored tips and stamps, and a projection projects once per copy.
      */
     json symmetry;
+    std::optional<StrokeStencil> stencil;
 
+    /** The PaintData::images keys the stroke reads (a projection's picture, its stencil). */
+    std::vector<std::string> images() const;
     /** packed stores the dabs as binary arrays (for binary scene files); plain JSON otherwise. */
     json toJson(bool packed = true) const;
     /**
