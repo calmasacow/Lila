@@ -15,6 +15,7 @@
 #include "ui/Actions.h"
 #include "ui/Menus.h"
 #include "ui/Overlay.h"
+#include "ui/TexCompare.h"
 #include "ui/TexLive.h"
 #include "ui/TextureGraphUi.h"
 #include "ui/ViewInfo.h"
@@ -547,6 +548,7 @@ void registerCommands()
     done = true;
     registerDisplacement();
     registerPathTrace();
+    texCompare::registerCommands();
 }
 
 void registerShadingChannelActions()
@@ -576,6 +578,7 @@ void registerUi()
 {
     registerCommands();
     registerShadingChannelActions();
+    texCompare::registerActions();
     registerDisplacementActions();
     menus::addActions("Texture", {"", "texture.addShadingChannels", "texture.displacementPreview", "viewport.pathTraced"});
     registerPathTraceActions();
