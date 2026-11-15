@@ -53,6 +53,7 @@ lila_module(lila_ui UI
     BakeCageView.cpp BakeCageView.h
     BakePaintTool.cpp BakePaintTool.h
     TexturePaintTool.cpp TexturePaintTool.h
+    TexProjectionTool.cpp TexProjectionTool.h
     TexPipelineUi.cpp TexPipelineUi.h
     Editors.cpp Editors.h
     Environments.cpp Environments.h

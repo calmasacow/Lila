@@ -37,6 +37,7 @@
 #include "ui/ShelfTags.h"
 #include "ui/SpinScrub.h"
 #include "ui/TexParams.h"
+#include "ui/TexProjectionTool.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
 #include "ui/TexturePaintTool.h"
@@ -1958,6 +1959,8 @@ struct TextureSetPanel::Impl
                 v->addWidget(paint);
             }
             v->addWidget(texParams::nodePanel(w, node, [this](const std::string& c, const json& value) { propsLayer({{"material", {{c, value}}}}); }));
+            if (kind == "fill")
+                projectionProps(w, v, l.value("projection", json::object()), id, {}, [this](const json& p) { propsLayer({{"projection", p}}); });
         }
         else if (kind == "procedural")
         {
@@ -1976,6 +1979,7 @@ struct TextureSetPanel::Impl
             v->addWidget(texParams::nodePanel(w, tilingNode, [this](const std::string& p, const json& value) {
                 propsLayer({{"tiling", {{p == "tiles" ? std::string("scale") : p, value}}}});
             }));
+            projectionProps(w, v, l.value("projection", json::object()), id, {}, [this](const json& p) { propsLayer({{"projection", p}}); });
         }
         else if (kind == "filter")
         {
@@ -2103,6 +2107,21 @@ struct TextureSetPanel::Impl
         v->addLayout(aForm);
     }
 
+    /** Where the layer's or mask's content lands: layerProjection's fields, and a button to place it on the mesh. */
+    void projectionProps(QWidget* w, QVBoxLayout* v, const json& projection, const std::string& layer, const std::string& mask,
+                         std::function<void(const json&)> patch)
+    {
+        json node = defNodeJson("", "layerProjection", projection);
+        node["label"] = "Projection";
+        v->addWidget(texParams::nodePanel(w, node, [patch](const std::string& p, const json& value) { patch({{p, value}}); }));
+        auto* place = new QPushButton(icon("cube-3d-sphere"), "Place on Mesh", w);
+        place->setObjectName("placeProjection");
+        place->setToolTip("Place on Mesh: click the mesh to put the projection there; drag to move it, Shift turns, Ctrl scales");
+        const std::string setName = set;
+        QObject::connect(place, &QPushButton::clicked, w, [setName, layer, mask] { startProjectionPlacement(setName, layer, mask); });
+        v->addWidget(place);
+    }
+
     void maskProps(QWidget* w, QVBoxLayout* v, const json& m)
     {
         const std::string kind = m.value("kind", "fill");
@@ -2156,7 +2175,9 @@ struct TextureSetPanel::Impl
                     v->addLayout(form);
                 }
         }
-        else if (kind == "anchor")
+        if (kind == "generator" || kind == "paint")
+            projectionProps(w, v, m.value("projection", json::object()), selLayer, id, [this](const json& p) { propsMask({{"projection", p}}); });
+        if (kind == "anchor")
         {
             auto* form = new QFormLayout();
             auto* a = new QComboBox(w);

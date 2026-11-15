@@ -94,6 +94,8 @@ struct LILA_SCENE_API Mask
     /** Anchor: the anchor and the channel read. */
     std::string anchor;
     std::string channel = "height";
+    /** Generator and paint: how the mask lands on the mesh (layerProjection's values); empty or mode uv for none. */
+    json projection = json::object();
 
     json toJson() const;
     /** Throws std::invalid_argument. */
@@ -126,7 +128,7 @@ struct LILA_SCENE_API Layer
     bool enabled = true;
     /** Channel settings given explicitly; channels not listed take the kind's default (see channelOn). */
     std::map<std::string, ChannelBlend> channels;
-    /** Fill and paint: channel values ([r, g, b, a] or a number). */
+    /** Fill and paint: channel values ([r, g, b, a] or a number); for fill also an image file (any string not a #colour), read through the projection. */
     json material = json::object();
     /** Paint: an image per channel (value in rgb, coverage in alpha: unpainted texels and channels show the stack below), and optionally "mask", a painted layer mask. */
     json paint = json::object();
@@ -143,6 +145,11 @@ struct LILA_SCENE_API Layer
     HeightBlend heightBlend;
     /** Procedural: repeats the content. */
     LayerTiling tiling;
+    /**
+     * Fill and procedural: how the content lands on the mesh, layerProjection's values (mode, position, rotation, size,
+     * sharpness, follow, warp corners). Empty or mode uv keeps the uvs.
+     */
+    json projection = json::object();
     std::vector<Mask> masks;
     /** Folder: bottom first. */
     std::vector<Layer> children;
@@ -175,6 +182,9 @@ struct LILA_SCENE_API LayerStack
     /** Throws std::invalid_argument. */
     static LayerStack fromJson(const json& j);
 };
+
+/** Whether a projection (layerProjection's values) moves content off the uvs: a mode other than uv. */
+LILA_SCENE_API bool hasProjection(const json& projection);
 
 /** Whether the layer writes the channel: its explicit setting, else by kind (fill: has a material value; paint: has a painted image; procedural: has the output; others: yes). */
 LILA_SCENE_API bool channelOn(const LayerStack& stack, const Layer& layer, const std::string& channel);

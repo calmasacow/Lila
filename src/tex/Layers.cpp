@@ -14,6 +14,11 @@
 
 namespace lila::tex
 {
+bool hasProjection(const json& projection)
+{
+    return projection.is_object() && projection.contains("mode") && projection["mode"].is_string() && projection["mode"].get<std::string>() != "uv";
+}
+
 namespace
 {
 constexpr const char* kStackKey = "layerStack";
@@ -136,6 +141,7 @@ private:
     const Graph& mPrev;
     Graph mG;
     std::vector<std::string> mWarnings;
+    bool mWarnedProjection = false;
     std::vector<Binding>* mBindings = nullptr;
     std::map<std::string, Heads> mAnchors;
     int mColumn = 0;
@@ -370,6 +376,22 @@ private:
         return subInput(s, "anchor_" + anchor + "_" + channel, *c, src);
     }
 
+    /** src read through a projection (layerProjection's values); src itself when there is none. */
+    Src projected(Sub& s, const Src& src, const json& projection, const std::string& name, const std::string& pointer, glm::dvec2 pos)
+    {
+        if (!hasProjection(projection))
+            return src;
+        if (mSet.bakeProject.empty() && !mWarnedProjection)
+        {
+            mWarnings.push_back("projections read the mesh's position and normal maps, and the set has no bake project: they project the uvs instead");
+            mWarnedProjection = true;
+        }
+        GNode& n = subNode(s, name, "layerProjection", pos, projection);
+        bind(s.g.name, n.name, {}, pointer);
+        subLink(s, src, n.name, "input");
+        return {n.name, "out"};
+    }
+
     Src constantNode(Sub& s, const std::string& name, const Channel& c, const json& v, const std::string& pointer, glm::dvec2 pos)
     {
         const bool color = isColorType(c.type);
@@ -416,7 +438,16 @@ private:
             for (const Channel* c : outs)
             {
                 json v = l.material.contains(c->name) ? l.material[c->name] : channelDefault(c->name, c->type);
-                out(*c, constantNode(s, "C_" + c->name, *c, v, lp + "/material/" + c->name, {-400.0, y}));
+                if (v.is_string() && !v.get<std::string>().starts_with("#"))
+                {
+                    // An image fill: read in the layer's projection, so it lands where it is placed.
+                    GNode& n = subNode(s, "I_" + c->name, "layerImage", {-600.0, y});
+                    n.values["file"] = v;
+                    bind(s.g.name, n.name, "file", lp + "/material/" + c->name);
+                    out(*c, projected(s, {n.name, "out"}, l.projection, "Proj_" + c->name, lp + "/projection", {-400.0, y}));
+                }
+                else
+                    out(*c, constantNode(s, "C_" + c->name, *c, v, lp + "/material/" + c->name, {-400.0, y}));
                 y += 120.0;
             }
             break;
@@ -472,6 +503,8 @@ private:
             n.values["group"] = name;
             // Each output resampled through the layer's tiling, so the content repeats without editing its graph.
             auto tiled = [&](const std::string& socket, double yy) -> Src {
+                if (hasProjection(l.projection))
+                    return projected(s, {"Content", socket}, l.projection, "Proj_" + socket, lp + "/projection", {-200.0, yy});
                 if (l.tiling.identity())
                     return {"Content", socket};
                 GNode& t = subNode(s, "Tiling_" + socket, "layerTiling", {-200.0, yy});
@@ -620,6 +653,8 @@ private:
             }
             if (!v)
                 continue;
+            if (e.kind == MaskKind::Generator || e.kind == MaskKind::Paint)
+                v = projected(s, *v, e.projection, e.id + "_proj", mp + "/projection", {mx + 50.0, 850.0});
             GNode& b = subNode(s, e.id + "_blend", "layerMaskBlend", {mx + 100.0, 600.0});
             b.values["mode"] = e.mode;
             b.values["opacity"] = e.opacity;
@@ -842,6 +877,8 @@ json Mask::toJson() const
         j["channel"] = channel;
         break;
     }
+    if (hasProjection(projection))
+        j["projection"] = projection;
     return j;
 }
 
@@ -871,6 +908,9 @@ Mask Mask::fromJson(const json& j)
         m.image = field<std::string>(j, "image", "");
         m.anchor = field<std::string>(j, "anchor", "");
         m.channel = field<std::string>(j, "channel", "height");
+        m.projection = field<json>(j, "projection", json::object());
+        if (!m.projection.is_object())
+            throw std::invalid_argument("mask projection must be an object");
         return m;
     }
     catch (const json::exception& e)
@@ -911,6 +951,8 @@ json Layer::toJson() const
         j["anchor"] = anchor;
     if (!tiling.identity())
         j["tiling"] = {{"scale", tiling.scale}, {"rotation", tiling.rotation}, {"offsetX", tiling.offsetX}, {"offsetY", tiling.offsetY}};
+    if (hasProjection(projection))
+        j["projection"] = projection;
     if (heightBlend.enabled || heightBlend.sharpness != 0.8 || heightBlend.influence != 1.0)
         j["heightBlend"] = {{"enabled", heightBlend.enabled}, {"sharpness", heightBlend.sharpness}, {"influence", heightBlend.influence}};
     if (!masks.empty())
@@ -974,6 +1016,9 @@ Layer Layer::fromJson(const json& j)
             l.tiling.offsetX = field<double>(*it, "offsetX", 0.0);
             l.tiling.offsetY = field<double>(*it, "offsetY", 0.0);
         }
+        l.projection = field<json>(j, "projection", json::object());
+        if (!l.projection.is_object())
+            throw std::invalid_argument("projection must be an object");
         if (auto it = j.find("heightBlend"); it != j.end() && it->is_object())
         {
             l.heightBlend.enabled = field<bool>(*it, "enabled", false);
