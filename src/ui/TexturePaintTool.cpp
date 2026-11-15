@@ -3974,6 +3974,60 @@ void registerTexturePaintUi()
                   .doc = "Make a library material for every set of texture maps in a folder and its subfolders.",
                   .python = "texMaterialFromMaps(folder=\"C:/maps\")",
                   .keywords = {"batch import", "texture maps", "pbr folder"}});
+    // Ptex works on the open set and the selected mesh, one channel at a time.
+    auto ptexTarget = [](const char* what, std::string& set, std::string& mesh, std::string& channel) {
+        set = currentTextureSet();
+        scene::Graph& g = scene::Graph::current();
+        for (scene::NodeId id : g.selection())
+            if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+                mesh = n->path();
+        if (set.empty() || mesh.empty())
+        {
+            log::warn("{}: open a texture set and select its mesh", what);
+            return false;
+        }
+        QStringList names;
+        if (scene::Node* n = tex::findSet(g, set))
+            for (const tex::Channel& c : tex::readSettings(*n).channels)
+                names << QString::fromStdString(c.name);
+        bool ok = false;
+        const QString picked = QInputDialog::getItem(mainWindow(), what, "Channel", names, std::max<qsizetype>(0, names.indexOf("baseColor")), false, &ok);
+        channel = picked.toStdString();
+        return ok && !picked.isEmpty();
+    };
+    actions::add({.id = "tex.importPtex",
+                  .label = "Import Ptex...",
+                  .category = "Texture",
+                  .run =
+                      [ptexTarget] {
+                          std::string set, mesh, channel;
+                          if (!ptexTarget("Import Ptex", set, mesh, channel))
+                              return;
+                          const QString f = ui::fileDialog::getOpenFileName(mainWindow(), "Import Ptex", {}, "Ptex (*.ptx)");
+                          if (!f.isEmpty())
+                              actions::run({{"command", "texImportPtex"},
+                                            {"args", {{"args", {set}}, {"mesh", mesh}, {"file", f.toStdString()}, {"channel", channel}}}});
+                      },
+                  .doc = "Bring a Ptex file onto the open texture set as a fill layer, baked through the selected quad mesh's uvs.",
+                  .python = "texImportPtex(\"Crate\", mesh=\"|crate\", file=\"C:/maps/crate.ptx\")",
+                  .keywords = {"ptex", "ptx", "per-face texture", "import"}});
+    actions::add({.id = "tex.exportPtex",
+                  .label = "Export Ptex...",
+                  .category = "Texture",
+                  .run =
+                      [ptexTarget] {
+                          std::string set, mesh, channel;
+                          if (!ptexTarget("Export Ptex", set, mesh, channel))
+                              return;
+                          const QString f = ui::fileDialog::getSaveFileName(mainWindow(), "Export Ptex", QString::fromStdString(set + "_" + channel + ".ptx"),
+                                                                            "Ptex (*.ptx)");
+                          if (!f.isEmpty())
+                              actions::run({{"command", "texExportPtex"},
+                                            {"args", {{"args", {set}}, {"mesh", mesh}, {"file", f.toStdString()}, {"channel", channel}}}});
+                      },
+                  .doc = "Write one channel of the open texture set to a Ptex file, per face of the selected quad mesh.",
+                  .python = "texExportPtex(\"Crate\", mesh=\"|crate\", file=\"C:/maps/crate.ptx\", faceResolution=7)",
+                  .keywords = {"ptex", "ptx", "per-face texture", "export"}});
     actions::add({.id = "tex.transferSet",
                   .label = "Transfer Texture Set",
                   .category = "Texture",

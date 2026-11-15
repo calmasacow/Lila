@@ -53,6 +53,7 @@
     "libwebp",
     "zlib",
     "draco",
+    "ptex",
     {
       "name": "ffmpeg",
       "default-features": false,
