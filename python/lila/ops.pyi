@@ -10251,6 +10251,19 @@ def texBuildGraph(*objects: Any, assign: Sequence[Any] | None = None) -> Any:
         assign: Meshes to give the material (created when missing).
     """
 
+def texCaptureView(*objects: Any, view: Any | None = None, file: str | None = None, channel: str | None = None, layer: str | None = None, mesh: str | None = None, scale: float | None = None) -> Any:
+    """Write what a view sees of a texture set's channel (the stack's, or one paint layer's with layer=) as a 16-bit PNG, unlit: colour in sRGB, data as it is, transparent where the mesh isn't. Edit it in an image editor and project it back with texPaintStroke (kind project, image the file, the same view). view is a screen view or a saved view's name. Returns {file, width, height, channel}.
+
+    Args:
+        objects: set.
+        view: The screen view, or a texProjectionView name.
+        file: The PNG to write.
+        channel: The channel. Default 'baseColor'.
+        layer: A paint layer's own paint instead of the stack.
+        mesh: The mesh; default the first using the set's material.
+        scale: Pixels per view pixel. Default 1.0.
+    """
+
 def texClearLayer(*objects: Any, layer: str | None = None) -> Any:
     """Clear a paint layer: drop its strokes and pixels.
 
@@ -10559,6 +10572,13 @@ def texPaintStroke(*objects: Any, stroke: Any | None = None, layer: str | None =
         id: The stroke id the paint tool painted live under.
     """
 
+def texPaintStrokes(strokes: Sequence[Any] | None = None) -> Any:
+    """Paint one stroke that crosses several meshes or texture sets: strokes [{set, layer, stroke}], each as texPaintStroke takes it, all in one undo step. The paint tool commits a stroke dragged over several meshes this way. Returns each one's result.
+
+    Args:
+        strokes: [{set, layer, stroke}, ...].
+    """
+
 def texPasteLayers(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
     """Paste layers texCopyLayers copied, with fresh layer and mask ids, unique anchor names and their own copies of the paint. Placed like texAddLayer (above, below, parent, index). Returns {layers, warnings}.
 
@@ -10576,6 +10596,15 @@ def texPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
     Args:
         objects: set text.
         position: [x, y] canvas centre for the pasted nodes. Default [0, 0].
+    """
+
+def texProjectionView(*objects: Any, view: Any | None = None, remove: bool | None = None) -> Any:
+    """Save a projection view on a texture set by name (view=, a screen view as texPaintStroke takes it), remove it (remove=True), or recall it (neither): projecting from a saved view lands the same every time. texPaintStroke and texCaptureView take the name as view. Returns the view, or every saved view after a change.
+
+    Args:
+        objects: set name.
+        view: The view to save.
+        remove: Remove it. Default False.
     """
 
 def texRasterize(*objects: Any, layer: str | None = None, resolution: int | None = None, r: int | None = None) -> Any:

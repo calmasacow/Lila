@@ -1121,6 +1121,27 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "texPaintStrokes",
+        .doc = "Paint one stroke that crosses several meshes or texture sets: strokes [{set, layer, stroke}], each as texPaintStroke takes "
+               "it, all in one undo step. The paint tool commits a stroke dragged over several meshes this way. Returns each one's result.",
+        .flags = {{"strokes", "", T::List, nullptr, "[{set, layer, stroke}, ...]."}},
+        .run = [](const Args& a) -> json {
+            if (!a.has("strokes") || !a.flags["strokes"].is_array())
+                throw CommandError("texPaintStrokes: give strokes [{set, layer, stroke}, ...]");
+            json out = json::array();
+            for (const json& e : a.flags["strokes"])
+            {
+                if (!e.is_object() || !e.contains("set") || !e.contains("stroke"))
+                    throw CommandError("texPaintStrokes: each entry needs set and stroke");
+                json call = {{"args", {e["set"]}}, {"stroke", e["stroke"]}};
+                if (e.contains("layer"))
+                    call["layer"] = e["layer"];
+                out.push_back(ops::execute("texPaintStroke", call, CallSource::Script));
+            }
+            return out;
+        },
+    });
+    ops::registerCommand({
         .name = "texCaptureView",
         .doc = "Write what a view sees of a texture set's channel (the stack's, or one paint layer's with layer=) as a 16-bit PNG, unlit: "
                "colour in sRGB, data as it is, transparent where the mesh isn't. Edit it in an image editor and project it back with "

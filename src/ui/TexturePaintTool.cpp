@@ -2325,16 +2325,97 @@ private:
     }
 
     /** The shared stroke's view of the target under a pixel, in its object space. */
+    /** One mesh a stroke reaches: its target, layer, record and symmetry. A stroke over several meshes keeps one each. */
+    struct Segment
+    {
+        Target target;
+        std::string layer;
+        tp::Stroke record;
+        tp::PaintSymmetry sym;
+    };
+
+    /** Moves the stroke onto another mesh: what it painted so far stays with the last one, and the new one gets its own record. */
+    bool switchSegment(const Target& t, const ViewInfo& view)
+    {
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* set = g.node(t.set);
+        if (!set || !mStrokeTemplate)
+            return false;
+        flush();
+        auto keep = [&] {
+            for (Segment& sgm : mSegments)
+                if (sgm.target.mesh == mTarget.mesh && sgm.target.set == mTarget.set)
+                {
+                    sgm = {mTarget, mLayer, mRecord, mSym};
+                    return;
+                }
+            mSegments.push_back({mTarget, mLayer, mRecord, mSym});
+        };
+        keep();
+        for (Segment& sgm : mSegments)
+            if (sgm.target.mesh == t.mesh && sgm.target.set == t.set)
+            {
+                mTarget = sgm.target;
+                mTarget.hit = t.hit;
+                mLayer = sgm.layer;
+                mRecord = sgm.record;
+                mSym = sgm.sym;
+                return true;
+            }
+        const std::string layer = texturePaintState().quickMask ? std::string(kQuickMaskBuffer) : layerFor(*set);
+        if (layer.empty())
+            return false;
+        auto header = std::make_shared<tp::Stroke>(*mStrokeTemplate);
+        uint64_t top = 0;
+        if (const tex::paint::Buffer* b = tex::paint::readPaint(*set)->buffer(layer))
+            for (const auto& st : b->strokes)
+                top = std::max(top, st->id);
+        header->id = top + 1;
+        header->mesh = t.meshPath;
+        filterChannels(header->payload, *set);
+        header->payload.locked = lockedTriangles(*set, t.meshPath, *t.paint);
+        const scene::Node* meshNode = g.node(t.mesh);
+        scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        tp::PaintSymmetry sym = tp::brushSymmetry(texturePaintState().stroke, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+        header->symmetry = sym.toJson();
+        header->view = strokeView(view, t.world);
+        try
+        {
+            rp::beginLive(g, *set, layer, header);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("Texture paint: {}", ex.what());
+            return false;
+        }
+        mTarget = t;
+        mLayer = layer;
+        mSym = sym;
+        mRecord = *header;
+        mRecord.dabs.clear();
+        return true;
+    }
+
     bool surfaceQuery(glm::dvec2 px, const ViewInfo& view, brush::SurfaceHit& out)
     {
         glm::dvec3 o, d;
         view.ray(QPointF(px.x, px.y), o, d);
-        const glm::dmat4 inv = glm::inverse(mTarget.world);
         geo::BvhHit hit;
+        auto onTarget = [&] {
+            const glm::dmat4 inv = glm::inverse(mTarget.world);
+            const tex::paint::PaintMesh& tm = *mTarget.paint;
+            return tm.bvh->raycast(glm::dvec3(inv * glm::dvec4(o, 1.0)), glm::dvec3(inv * glm::dvec4(d, 0.0)), hit, std::numeric_limits<double>::max(), false) &&
+                   hit.triangle < tm.triangleCount();
+        };
+        if (!onTarget())
+        {
+            // Off this mesh: the stroke carries on over any other textured mesh under the brush.
+            std::optional<Target> other = mStroking ? pick(QPointF(px.x, px.y), view) : std::nullopt;
+            if (!other || other->set == kNoNode || !switchSegment(*other, view) || !onTarget())
+                return false;
+        }
+        const glm::dmat4 inv = glm::inverse(mTarget.world);
         const tex::paint::PaintMesh& m = *mTarget.paint;
-        if (!m.bvh->raycast(glm::dvec3(inv * glm::dvec4(o, 1.0)), glm::dvec3(inv * glm::dvec4(d, 0.0)), hit, std::numeric_limits<double>::max(), false) ||
-            hit.triangle >= m.triangleCount())
-            return false;
         mTarget.hit = hit;
         const glm::vec3* p = &m.positions[size_t(hit.triangle) * 3];
         const glm::dvec3 n = glm::cross(glm::dvec3(p[1] - p[0]), glm::dvec3(p[2] - p[0]));
@@ -2718,6 +2799,8 @@ private:
         mParticleIndex = 0;
         mRecord = *header;
         mRecord.dabs.clear();
+        mSegments.clear();
+        mStrokeTemplate = std::make_shared<tp::Stroke>(mRecord);
         try
         {
             rp::beginLive(g, *set, mLayer, header);
@@ -2782,21 +2865,30 @@ private:
         flush();
         mStroking = false;
         scene::Graph& g = scene::Graph::current();
-        scene::Node* set = g.node(mTarget.set);
-        if (!set || mRecord.dabs.empty())
+        std::vector<Segment> segments = std::exchange(mSegments, {});
+        std::erase_if(segments, [&](const Segment& sg) { return sg.target.mesh == mTarget.mesh && sg.target.set == mTarget.set; });
+        segments.push_back({mTarget, mLayer, mRecord, mSym});
+        mStrokeTemplate.reset();
+        // Every mesh the stroke crossed commits in one undo step.
+        UndoChunk chunk("Paint Stroke");
+        for (const Segment& sg : segments)
         {
-            rp::cancelLive(mTarget.set, mLayer);
-            return;
-        }
-        try
-        {
-            // The record goes in unechoed: it can hold thousands of dabs.
-            ops::execute("texPaintStroke", {{"args", {set->name(), mLayer}}, {"stroke", mRecord.toJson(false)}}, CallSource::Script);
-        }
-        catch (const std::exception& e)
-        {
-            log::warn("Texture paint: {}", e.what());
-            rp::cancelLive(mTarget.set, mLayer);
+            scene::Node* set = g.node(sg.target.set);
+            if (!set || sg.record.dabs.empty())
+            {
+                rp::cancelLive(sg.target.set, sg.layer);
+                continue;
+            }
+            try
+            {
+                // The record goes in unechoed: it can hold thousands of dabs.
+                ops::execute("texPaintStroke", {{"args", {set->name(), sg.layer}}, {"stroke", sg.record.toJson(false)}}, CallSource::Script);
+            }
+            catch (const std::exception& e)
+            {
+                log::warn("Texture paint: {}", e.what());
+                rp::cancelLive(sg.target.set, sg.layer);
+            }
         }
         // The stroke may have wired new channels; the next hover compiles what the stroke after it would add.
         mWarmedSet = kNoNode;
@@ -2808,6 +2900,9 @@ private:
         mStroke.cancel();
         mStroking = false;
         mPending.clear();
+        for (const Segment& sg : std::exchange(mSegments, {}))
+            rp::cancelLive(sg.target.set, sg.layer);
+        mStrokeTemplate.reset();
         rp::cancelLive(mTarget.set, mLayer);
         viewportTools::requestRedraw();
     }
@@ -3397,6 +3492,9 @@ private:
     bool mStroking = false;
     brush::Stroke mStroke;
     tp::PaintSymmetry mSym;
+    /** The meshes a stroke left for another, and the header every new one starts from. */
+    std::vector<Segment> mSegments;
+    std::shared_ptr<tp::Stroke> mStrokeTemplate;
     tp::Dab mCloneSourceDab;
     std::vector<tex::paint::Dab> mPending;
     tex::paint::Stroke mRecord;
