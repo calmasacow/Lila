@@ -69,6 +69,8 @@ struct LILA_SCENE_API SetSettings
     std::string heightSource = "channel";
     /** Named face sets for painting: {name: {mesh, faces: [...]}}, used as masks, fill targets and locks. */
     json faceGroups = json::object();
+    /** Saved projection views by name: the screen view JSON texPaintStroke takes, for projecting again from the same place. */
+    json projectionViews = json::object();
 
     /** heightDepth over the UV square's size: the height's slope per UV unit along u and v. */
     glm::dvec2 heightSlope() const { return {heightDepth / std::max(uvWidth, 1e-3), heightDepth / std::max(uvHeight, 1e-3)}; }

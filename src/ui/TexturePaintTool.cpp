@@ -13,6 +13,7 @@
 #include "brush/Symmetry.h"
 #include "core/Log.h"
 #include "core/Paths.h"
+#include "core/PrefStore.h"
 #include "core/Profile.h"
 #include "geo/Symmetry.h"
 #include "ops/Command.h"
@@ -35,6 +36,12 @@
 #include "ui/FileDialog.h"
 
 #include <QApplication>
+#include <QDir>
+#include <QDateTime>
+#include <QUrl>
+#include <QProcess>
+#include <QFileSystemWatcher>
+#include <QDesktopServices>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -57,6 +64,7 @@
 #include <QVBoxLayout>
 
 #include <cmath>
+#include <filesystem>
 
 namespace lila::ui
 {
@@ -387,7 +395,8 @@ void clearQuickMask();
 class TexturePaintPanel final : public QWidget
 {
 public:
-    std::function<void()> onChanged, onNewLayer, onCommit, onClearBuffer, onLoadImage, onLoadStencil, onClearStencil;
+    std::function<void()> onChanged, onNewLayer, onCommit, onClearBuffer, onLoadImage, onLoadStencil, onClearStencil, onImageEditor;
+    std::function<void(const std::string&)> onSaveView, onRecallView;
 
     explicit TexturePaintPanel(QWidget* parent) : QWidget(parent)
     {
@@ -421,6 +430,11 @@ public:
         moreMenu->addAction("Clear Layer", this, [] { actions::run(json("tex.clearLayer")); });
         moreMenu->addSeparator();
         moreMenu->addAction("Save Brush Preset...", this, [this] { savePresetAs(); });
+        moreMenu->addAction("Image Editor...", this, [this] {
+            const QString exe = ui::fileDialog::getOpenFileName(this, "Image Editor", {}, "Programs (*.exe);;All files (*)");
+            if (!exe.isEmpty())
+                PrefStore::get().set("general", "/texturePaint/imageEditor", exe.toStdString());
+        });
         more->setMenu(moreMenu);
         head->addWidget(more);
         col->addLayout(head);
@@ -736,9 +750,34 @@ public:
         auto* clearBuf = new QPushButton("Clear", this);
         auto* image = new QPushButton("Image...", this);
         image->setToolTip("Lay a picture on the buffer to project (decals, photo detail)");
-        for (QPushButton* b : {commit, clearBuf, image})
+        auto* editor = new QPushButton("Edit...", this);
+        editor->setObjectName("imageEditor");
+        editor->setToolTip("Edit in Image Editor: open what the view shows in your image editor; each save projects back from this view");
+        for (QPushButton* b : {commit, clearBuf, image, editor})
             bufButtons->addWidget(b);
         mBufferButtons = addRow(form, "", bufButtons);
+        connect(editor, &QPushButton::clicked, this, [this] { call(onImageEditor); });
+        mViews = new QComboBox(this);
+        mViews->setObjectName("projectionViews");
+        mViews->setToolTip("Saved projection views: pick one to look and project from it again");
+        auto* saveView = new QToolButton(this);
+        saveView->setIcon(icon("camera-plus"));
+        saveView->setAutoRaise(true);
+        saveView->setToolTip("Save this view for projecting from it again");
+        auto* viewsRow = new QHBoxLayout;
+        viewsRow->addWidget(mViews, 1);
+        viewsRow->addWidget(saveView);
+        mViewsRow = addRow(form, "View", viewsRow);
+        connect(saveView, &QToolButton::clicked, this, [this] {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, "Save Projection View", "Name", QLineEdit::Normal, "view", &ok);
+            if (ok && !name.trimmed().isEmpty() && onSaveView)
+                onSaveView(name.trimmed().toStdString());
+        });
+        connect(mViews, &QComboBox::activated, this, [this](int i) {
+            if (i > 0 && onRecallView)
+                onRecallView(mViews->itemText(i).toStdString());
+        });
         connect(commit, &QPushButton::clicked, this, [this] { call(onCommit); });
         connect(clearBuf, &QPushButton::clicked, this, [this] { call(onClearBuffer); });
         connect(image, &QPushButton::clicked, this, [this] { call(onLoadImage); });
@@ -946,6 +985,15 @@ public:
             mPickLayer->setChecked(s.pickLayer);
         }
         syncSwatches();
+        {
+            const QSignalBlocker bv(mViews);
+            mViews->clear();
+            mViews->addItem("Current");
+            const std::string setName = currentTextureSet();
+            if (scene::Node* set = setName.empty() ? nullptr : tex::findSet(scene::Graph::current(), setName))
+                for (const auto& [name, v] : tex::readSettings(*set).projectionViews.items())
+                    mViews->addItem(QString::fromStdString(name));
+        }
         mSelectMode->setCurrent(s.selectMode == "polygon" ? 1 : s.selectMode == "rect" ? 2 : 0);
         mGradient->setCurrent(s.gradientType == "radial" ? 1 : s.gradientType == "reflected" ? 2 : s.gradientType == "angle" ? 3 : 0);
         {
@@ -1056,7 +1104,7 @@ private:
         showRow(mSelectRow, t == "select");
         showRow(mGradientRow, t == "gradient");
         showRow(mSwatchRow, !texturePaintState().swatches.empty());
-        for (QWidget* w : {mBufferRow, mBufferFlags, mFacingRow, mBufferButtons})
+        for (QWidget* w : {mBufferRow, mBufferFlags, mFacingRow, mBufferButtons, mViewsRow})
             showRow(w, t == "project");
         showRow(mStencilOptions, texturePaintState().stencil.active());
     }
@@ -1258,6 +1306,8 @@ private:
     controls::Segmented* mStencilMode = nullptr;
     QCheckBox *mStencilInvert = nullptr, *mStencilTile = nullptr;
     QWidget* mStencilOptions = nullptr;
+    QComboBox* mViews = nullptr;
+    QWidget* mViewsRow = nullptr;
     QCheckBox* mPickLayer = nullptr;
     controls::Segmented* mSelectMode = nullptr;
     controls::Segmented* mGradient = nullptr;
@@ -1404,7 +1454,11 @@ json viewJson(const ViewInfo& v)
     json m = json::array();
     for (int i = 0; i < 16; ++i)
         m.push_back((&vp[0][0])[i]);
-    return {{"viewProj", m}, {"eye", {v.eye.x, v.eye.y, v.eye.z}}, {"width", v.width}, {"height", v.height}};
+    // lookAt goes along so a saved view can put the viewport camera back; viewProj is what projects.
+    glm::dvec3 o, d;
+    v.ray(QPointF(v.width * 0.5, v.height * 0.5), o, d);
+    const glm::dvec3 at = v.eye + glm::normalize(d) * 100.0;
+    return {{"viewProj", m}, {"eye", {v.eye.x, v.eye.y, v.eye.z}}, {"lookAt", {at.x, at.y, at.z}}, {"width", v.width}, {"height", v.height}};
 }
 
 /** The stroke view of a mesh (its object space). */
@@ -1463,6 +1517,9 @@ public:
             viewportTools::requestRedraw();
         };
         mPanel->onLoadImage = [this] { loadBufferImage(); };
+        mPanel->onImageEditor = [this] { editInImageEditor(); };
+        mPanel->onSaveView = [this](const std::string& name) { saveView(name); };
+        mPanel->onRecallView = [this](const std::string& name) { recallView(name); };
         mPanel->onLoadStencil = [this] { loadStencil(); };
         mPanel->onClearStencil = [this] {
             setStencilFile({});
@@ -1487,8 +1544,10 @@ public:
         if (mPanel)
         {
             for (std::function<void()>* fn : {&mPanel->onNewLayer, &mPanel->onCommit, &mPanel->onClearBuffer, &mPanel->onLoadImage,
-                                              &mPanel->onLoadStencil, &mPanel->onClearStencil})
+                                              &mPanel->onLoadStencil, &mPanel->onClearStencil, &mPanel->onImageEditor})
                 *fn = nullptr;
+            mPanel->onSaveView = nullptr;
+            mPanel->onRecallView = nullptr;
             mPanel->setTarget({});
         }
         textureSets::showBrushPage(false);
@@ -3003,7 +3062,7 @@ private:
         {
             payload["image"] = tp::PaintImage::fromRgba(img.width, img.height, img.rgba)->toJson();
             json stroke = {{"mesh", t->meshPath}, {"brush", texturePaintState().stroke.toJson()}, {"payload", payload}, {"occlusion", texturePaintState().occlusion}};
-            ops::execute("texPaintStroke", {{"args", {set->name(), layer}}, {"stroke", stroke}, {"view", viewJson(mBufferView)}}, CallSource::Script);
+            ops::execute("texPaintStroke", {{"args", {set->name(), layer}}, {"stroke", stroke}, {"view", projectionViewJson(mBufferView)}}, CallSource::Script);
             mBuffer.clear();
             mBufferView = mLastView;
         }
@@ -3043,6 +3102,119 @@ private:
         if (mPanel)
             mPanel->sync();
         viewportTools::requestRedraw();
+    }
+
+    /** The view projections and captures use: a recalled saved view, else the viewport's. */
+    json projectionViewJson(const ViewInfo& view) const { return mRecalledView.is_null() ? viewJson(view) : mRecalledView; }
+
+    void saveView(const std::string& name)
+    {
+        const std::string set = currentTextureSet();
+        if (set.empty())
+            return;
+        try
+        {
+            ops::execute("texProjectionView", {{"args", {set, name}}, {"view", viewJson(mLastView)}}, CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
+        if (mPanel)
+            mPanel->sync();
+    }
+
+    /** Projects from a saved view again: the viewport moves to it and projections use it exactly. */
+    void recallView(const std::string& name)
+    {
+        const std::string set = currentTextureSet();
+        try
+        {
+            mRecalledView = ops::execute("texProjectionView", {{"args", {set, name}}}, CallSource::UI);
+            if (mRecalledView.contains("eye") && mRecalledView.contains("lookAt"))
+                ops::execute("viewCamera", {{"eye", mRecalledView["eye"]}, {"lookAt", mRecalledView["lookAt"]}}, CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+            mRecalledView = json();
+        }
+        viewportTools::requestRedraw();
+    }
+
+    /**
+     * Writes what the view shows of the channel the buffer projects into, opens it in the image editor (the preference,
+     * else the system's), and projects the file back from the same view each time it is saved.
+     */
+    void editInImageEditor()
+    {
+        const std::string set = currentTextureSet();
+        if (set.empty())
+            return;
+        json view = projectionViewJson(mLastView);
+        // The view's eye and target travel with it, so the editor's projection lands from exactly here.
+        const std::string channel = "baseColor";
+        const std::string file = paths::toUtf8(std::filesystem::path(QDir::temp().filePath("lila_image_editor").toStdString()) /
+                                               (set + "_" + std::to_string(QDateTime::currentMSecsSinceEpoch()) + ".png"));
+        try
+        {
+            ops::execute("texCaptureView", {{"args", {set}}, {"view", view}, {"file", file}, {"channel", channel}, {"scale", texturePaintState().bufferScale}},
+                         CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+            return;
+        }
+        mEditorFile = file;
+        mEditorSet = set;
+        mEditorView = view;
+        if (!mWatcher)
+        {
+            mWatcher = std::make_unique<QFileSystemWatcher>();
+            QObject::connect(mWatcher.get(), &QFileSystemWatcher::fileChanged, [this, alive = std::weak_ptr<bool>(mAlive)](const QString& f) {
+                if (!alive.lock())
+                    return;
+                // Editors save by replacing the file: watch it again, and wait for the write to finish.
+                QTimer::singleShot(400, [this, f, alive] {
+                    if (!alive.lock())
+                        return;
+                    if (!mWatcher->files().contains(f))
+                        mWatcher->addPath(f);
+                    projectEdited();
+                });
+            });
+        }
+        mWatcher->addPath(QString::fromStdString(file));
+        const std::string editor = PrefStore::get().value<std::string>("general", "/texturePaint/imageEditor", std::string());
+        if (!editor.empty())
+            QProcess::startDetached(QString::fromStdString(editor), {QString::fromStdString(file)});
+        else
+            QDesktopServices::openUrl(QUrl::fromLocalFile(QString::fromStdString(file)));
+        log::info("Texture paint: editing {} in the image editor; each save projects it back", file);
+    }
+
+    void projectEdited()
+    {
+        scene::Node* set = tex::findSet(scene::Graph::current(), mEditorSet);
+        if (!set || mEditorFile.empty())
+            return;
+        tp::Payload p = payloadFor(texturePaintState(), false);
+        p.kind = "project";
+        p.channels.clear();
+        p.colorChannel = "baseColor";
+        json payload = p.toJson();
+        payload["image"] = mEditorFile;
+        try
+        {
+            ops::execute("texPaintStroke", {{"args", {set->name(), layerFor(*set)}}, {"stroke", {{"payload", payload}, {"brush", texturePaintState().stroke.toJson()}}},
+                                            {"view", mEditorView}},
+                         CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
     }
 
     void loadStencil()
@@ -3250,6 +3422,12 @@ private:
         Scale,
     } mStencilDrag = StencilDrag::None;
     QPointF mStencilFrom;
+    /** A recalled saved projection view, null for the viewport's. */
+    json mRecalledView;
+    /** Edit in Image Editor: the file being edited, its set and the view it was captured from. */
+    std::string mEditorFile, mEditorSet;
+    json mEditorView;
+    std::unique_ptr<QFileSystemWatcher> mWatcher;
     tp::Placement mStencilStart;
     /** The path being placed, or the last one painted (stroke set), whose points can still be dragged. Object space. */
     struct PathEdit

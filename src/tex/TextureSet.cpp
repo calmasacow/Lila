@@ -52,7 +52,8 @@ json SetSettings::toJson() const
     return {{"channels", ch},         {"width", width},           {"height", height},           {"tiles", tl},
             {"normalConvention", normalConvention}, {"bakeProject", bakeProject}, {"exportPreset", exportPreset}, {"material", material},
             {"heightDepth", heightDepth},   {"uvWidth", uvWidth},       {"uvHeight", uvHeight},       {"normalFromHeight", normalFromHeight},
-            {"normalFade", normalFade},     {"heightSource", heightSource}, {"faceGroups", faceGroups}};
+            {"normalFade", normalFade},     {"heightSource", heightSource}, {"faceGroups", faceGroups},
+            {"projectionViews", projectionViews}};
 }
 
 SetSettings SetSettings::fromJson(const json& j)
@@ -119,6 +120,7 @@ SetSettings SetSettings::fromJson(const json& j)
         s.normalFade = std::clamp(j.value("normalFade", s.normalFade), 0.0, 90.0);
         s.heightSource = j.value("heightSource", s.heightSource);
         s.faceGroups = j.value("faceGroups", json::object());
+        s.projectionViews = j.value("projectionViews", json::object());
         if (!s.faceGroups.is_object())
             throw std::invalid_argument("faceGroups must be an object of name: {mesh, faces}");
         if (s.heightSource != "channel" && s.heightSource != "mesh")

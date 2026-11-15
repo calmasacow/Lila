@@ -488,6 +488,116 @@ std::vector<uint32_t> fillTriangles(const json& pay, const PaintMesh& pm, const 
  * A projection's picture: a PaintImage document ({width, height, data}), the key of one the set already has, or an image
  * file ({path, rect [x, y, w, h], opacity, linear} or the path alone) laid onto a buffer the view's size.
  */
+/** A saved projection view's JSON from the set's settings, or the view itself when it is one. */
+json namedView(const Node& set, const json& v, const char* cmd)
+{
+    if (!v.is_string())
+        return v;
+    const json views = tex::readSettings(set).projectionViews;
+    if (!views.contains(v.get<std::string>()))
+        throw CommandError(std::string(cmd) + ": no projection view named '" + v.get<std::string>() + "'");
+    return views[v.get<std::string>()];
+}
+
+json captureView(const Args& a)
+{
+    Node& set = setArg(a, "texCaptureView");
+    if (!a.has("view"))
+        throw CommandError("texCaptureView: give view {width, height, camera | viewProj + eye | ...} or a saved view's name");
+    const ScreenView v = screenView(namedView(set, a.flags["view"], "texCaptureView"));
+    std::string mesh = a.get<std::string>("mesh", "");
+    if (mesh.empty())
+        mesh = meshForSet(set);
+    Node* meshNode = mesh.empty() ? nullptr : graph().find(mesh);
+    std::shared_ptr<const PaintMesh> pm = meshNode ? paintMesh(graph(), meshNode->path(), setMaterial(set)) : nullptr;
+    if (!pm)
+        throw CommandError("texCaptureView: no mesh uses " + set.name() + "'s material; pass mesh=");
+    const std::string channel = a.get<std::string>("channel", "baseColor");
+    const tex::SetSettings s = tex::readSettings(set);
+    const tex::Channel* ch = s.channel(channel);
+    if (!ch)
+        throw CommandError("texCaptureView: the set has no channel " + channel);
+    image::Image src;
+    if (a.has("layer"))
+    {
+        syncBuffer(graph(), set, a.get<std::string>("layer"));
+        src = readChannel(set.id(), a.get<std::string>("layer"), channel, s.tiles.front().udim);
+    }
+    else
+    {
+        tex::OutputRequest req;
+        for (const tex::OutputRequest& r : tex::channelRequests(tex::readGraph(set), s))
+            if (r.name == channel)
+                req = r;
+        try
+        {
+            src = tex::evaluateOutputs(set, {req}, s.tiles.front().udim, 0, 0).at(channel);
+        }
+        catch (const std::exception& e)
+        {
+            throw CommandError(std::string("texCaptureView: ") + e.what());
+        }
+    }
+    if (src.width <= 0)
+        throw CommandError("texCaptureView: nothing to capture in " + channel);
+    const double scale = std::clamp(a.get<double>("scale", 1.0), 0.1, 4.0);
+    const int w = std::max(1, int(v.width * scale)), h = std::max(1, int(v.height * scale));
+    const glm::dmat4 toObject = glm::inverse(worldOf(*meshNode));
+    const bool color = ch->type == tex::PortType::Color;
+    std::vector<float> rgba(size_t(w) * size_t(h) * 4, 0.0f);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            glm::dvec3 o, d;
+            pixelRay(v, toObject, {(x + 0.5) / scale, (y + 0.5) / scale}, o, d);
+            geo::BvhHit hit;
+            if (!pm->bvh->raycast(o, d, hit, std::numeric_limits<double>::max(), false) || hit.triangle >= pm->triangleCount() ||
+                !pm->paintable[hit.triangle])
+                continue;
+            const glm::vec2 uv = pm->uv(uint32_t(hit.triangle), float(hit.bary.y), float(hit.bary.z));
+            // Nearest texel: an unedited round trip then gives back the values it read.
+            const int tx = std::clamp(int((uv.x - std::floor(uv.x)) * src.width), 0, src.width - 1);
+            const int ty = std::clamp(int((1.0f - (uv.y - std::floor(uv.y))) * src.height), 0, src.height - 1);
+            const float* t = &src.rgba[(size_t(ty) * size_t(src.width) + size_t(tx)) * 4];
+            float* out = &rgba[(size_t(y) * size_t(w) + size_t(x)) * 4];
+            for (int c = 0; c < 3; ++c)
+            {
+                const float lin = std::clamp(color || ch->type == tex::PortType::Gray ? t[color ? c : 0] : t[c], 0.0f, 1.0f);
+                // Image editors work in sRGB; texPaintStroke's projection reads 8 and 16-bit files back as sRGB.
+                out[c] = color ? (lin <= 0.0031308f ? lin * 12.92f : 1.055f * std::pow(lin, 1.0f / 2.4f) - 0.055f) : lin;
+            }
+            out[3] = 1.0f;
+        }
+    const std::filesystem::path file = paths::fromUtf8(a.get<std::string>("file", ""));
+    if (file.empty())
+        throw CommandError("texCaptureView: give file (a .png)");
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    image::writePng(file, w, h, rgba, 16);
+    return {{"file", paths::toUtf8(file)}, {"width", w}, {"height", h}, {"channel", channel}};
+}
+
+json projectionView(const Args& a)
+{
+    Node& set = setArg(a, "texProjectionView");
+    if (a.positional.size() < 2 || !a.positional[1].is_string())
+        throw CommandError("texProjectionView: give the view's name");
+    const std::string name = a.positional[1].get<std::string>();
+    tex::SetSettings s = tex::readSettings(set);
+    if (a.get<bool>("remove", false))
+        s.projectionViews.erase(name);
+    else if (a.has("view"))
+        s.projectionViews[name] = a.flags["view"];
+    else
+    {
+        if (!s.projectionViews.contains(name))
+            throw CommandError("texProjectionView: no projection view named '" + name + "'");
+        return s.projectionViews[name];
+    }
+    tex::writeSettings(graph(), set, s);
+    return s.projectionViews;
+}
+
 /** A stencil's picture: texels, a key the set or the paint tool holds, or a file (decoded to linear for colour stencils). */
 std::shared_ptr<const PaintImage> stencilPicture(const json& img, const Node& set, bool color)
 {
@@ -747,7 +857,7 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         {
             if (!j.contains("view"))
                 throw CommandError("texPaintStroke: a projection needs view {width, height, camera | view + proj | eye + lookAt}");
-            s.view = strokeViewOf(screenView(j["view"]), *meshNode);
+            s.view = strokeViewOf(screenView(namedView(set, j["view"], "texPaintStroke")), *meshNode);
             std::shared_ptr<const PaintImage> img = projectionImage(projection, set, *s.view);
             s.payload.image = img->key();
             if (image)
@@ -1010,6 +1120,31 @@ void registerCommands()
         .run = paintStroke,
     });
 
+    ops::registerCommand({
+        .name = "texCaptureView",
+        .doc = "Write what a view sees of a texture set's channel (the stack's, or one paint layer's with layer=) as a 16-bit PNG, unlit: "
+               "colour in sRGB, data as it is, transparent where the mesh isn't. Edit it in an image editor and project it back with "
+               "texPaintStroke (kind project, image the file, the same view). view is a screen view or a saved view's name. Returns "
+               "{file, width, height, channel}.",
+        .positionalDoc = "set",
+        .flags = {{"view", "", T::Any, nullptr, "The screen view, or a texProjectionView name."},
+                  {"file", "", T::String, nullptr, "The PNG to write."},
+                  {"channel", "", T::String, "baseColor", "The channel."},
+                  {"layer", "", T::String, nullptr, "A paint layer's own paint instead of the stack."},
+                  {"mesh", "", T::String, nullptr, "The mesh; default the first using the set's material."},
+                  {"scale", "", T::Float, 1.0, "Pixels per view pixel."}},
+        .undoable = false,
+        .run = captureView,
+    });
+    ops::registerCommand({
+        .name = "texProjectionView",
+        .doc = "Save a projection view on a texture set by name (view=, a screen view as texPaintStroke takes it), remove it (remove=True), "
+               "or recall it (neither): projecting from a saved view lands the same every time. texPaintStroke and texCaptureView "
+               "take the name as view. Returns the view, or every saved view after a change.",
+        .positionalDoc = "set name",
+        .flags = {{"view", "", T::Any, nullptr, "The view to save."}, {"remove", "", T::Bool, false, "Remove it."}},
+        .run = projectionView,
+    });
     ops::registerCommand({
         .name = "texRasterize",
         .doc = "Re-rasterise a paint layer from its stroke records (and flattened pixels), at resolution= texels per side (0 follows the "
