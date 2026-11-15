@@ -96,6 +96,7 @@ constexpr ToolKind kTools[] = {
     {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
     {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
     {"path", "Path", "Click points on the surface (drag to curve), Enter paints along them; drag a point afterwards to repaint.", "ease-in-control-point"},
+    {"gradient", "Gradient", "Drag from where it paints fully to where it fades out: linear, radial, reflected or angle.", "transition-right"},
     {"select", "Selection", "Draw a lasso, polygon or rectangle to mask the active layer: Shift adds, Ctrl subtracts.", "lasso"},
     {"pick", "Picker", "Click the mesh to take every channel's value there; Shift+click keeps it as a swatch.", "color-picker"},
     {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it.", "bucket-droplet"},
@@ -186,6 +187,9 @@ struct TexturePaintSettings
     std::string quickLimit;
     /** Face groups whose faces strokes leave alone. */
     std::set<std::string> lockedGroups;
+    /** Gradient tool: linear, radial, reflected or angle, and whether it dithers. */
+    std::string gradientType = "linear";
+    bool gradientDither = true;
 };
 
 /** The paint buffer Quick Mask paints, outside the stack. */
@@ -225,7 +229,7 @@ bool filterTool(const std::string& t) { return t == "smudge" || t == "blur" || t
 tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
 {
     tp::Payload p;
-    p.kind = s.tool == "project" ? "project" : (s.tool == "path" || s.tool == "pick" || s.tool == "select") ? "paint" : s.tool;
+    p.kind = s.tool == "project" ? "project" : (s.tool == "path" || s.tool == "pick" || s.tool == "select") ? "paint" : s.tool == "gradient" ? "fill" : s.tool;
     for (const ChannelValue& c : s.channels)
         if (c.on)
             p.channels[c.name] = c.color ? c.value : glm::vec3(c.value.x);
@@ -265,6 +269,26 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
         p.limit.clear();
     }
     return p;
+}
+
+/**
+ * A gradient fill over the whole mesh from start to end (screen pixels of view, or uv): the channel values at full
+ * strength at the start, fading out to the end (reversed with reverse).
+ */
+json gradientPayload(const TexturePaintSettings& s, const json& start, const json& end, const std::string& space, bool reverse)
+{
+    tp::Payload p = payloadFor(s, false);
+    p.kind = "fill";
+    json pay = p.toJson();
+    pay.erase("triangles");
+    pay["fillBy"] = "mesh";
+    pay["gradient"] = {{"type", s.gradientType},
+                       {"space", space},
+                       {"start", start},
+                       {"end", end},
+                       {"dither", s.gradientDither},
+                       {"stops", {{{"position", 0.0}, {"amount", reverse ? 0.0 : 1.0}}, {{"position", 1.0}, {"amount", reverse ? 1.0 : 0.0}}}}};
+    return pay;
 }
 
 /** Triangles of the locked face groups on this mesh, for a stroke's payload. */
@@ -591,6 +615,24 @@ public:
         mSelectMode->add({}, "lasso-polygon", "Polygon: click corners, Enter or double-click closes it", 1);
         mSelectMode->add({}, "square", "Rectangle: drag a box", 2);
         mSelectRow = addRow(form, "Shape", mSelectMode);
+        mGradient = new controls::Segmented(this);
+        mGradient->setObjectName("gradientType");
+        mGradient->add("Linear", {}, "Linear: fades along the drag", 0);
+        mGradient->add("Radial", {}, "Radial: fades out from the press", 1);
+        mGradient->add("Reflected", {}, "Reflected: fades both ways from the press", 2);
+        mGradient->add("Angle", {}, "Angle: sweeps round the press", 3);
+        mGradientDither = new QCheckBox("Dither", this);
+        mGradientDither->setToolTip("Break up banding with a fixed half-step noise");
+        auto* gradRow = new QHBoxLayout;
+        gradRow->addWidget(mGradient, 1);
+        gradRow->addWidget(mGradientDither);
+        mGradientRow = addRow(form, "Gradient", gradRow);
+        connect(mGradient, &controls::Segmented::picked, this, [this](int id) {
+            static const char* kTypes[] = {"linear", "radial", "reflected", "angle"};
+            texturePaintState().gradientType = kTypes[std::clamp(id, 0, 3)];
+            changed();
+        });
+        connect(mGradientDither, &QCheckBox::toggled, this, [this](bool on) { set(texturePaintState().gradientDither, on); });
         connect(mSelectMode, &controls::Segmented::picked, this, [this](int id) {
             texturePaintState().selectMode = id == 1 ? "polygon" : id == 2 ? "rect" : "lasso";
             changed();
@@ -905,6 +947,11 @@ public:
         }
         syncSwatches();
         mSelectMode->setCurrent(s.selectMode == "polygon" ? 1 : s.selectMode == "rect" ? 2 : 0);
+        mGradient->setCurrent(s.gradientType == "radial" ? 1 : s.gradientType == "reflected" ? 2 : s.gradientType == "angle" ? 3 : 0);
+        {
+            const QSignalBlocker bd(mGradientDither);
+            mGradientDither->setChecked(s.gradientDither);
+        }
         {
             const QSignalBlocker bq(mQuickMask), bg(mGroups), bl(mLock);
             mQuickMask->setChecked(s.quickMask);
@@ -1007,6 +1054,7 @@ private:
         showRow(mParticleRow, t == "paint");
         showRow(mPickRow, t == "pick");
         showRow(mSelectRow, t == "select");
+        showRow(mGradientRow, t == "gradient");
         showRow(mSwatchRow, !texturePaintState().swatches.empty());
         for (QWidget* w : {mBufferRow, mBufferFlags, mFacingRow, mBufferButtons})
             showRow(w, t == "project");
@@ -1212,6 +1260,9 @@ private:
     QWidget* mStencilOptions = nullptr;
     QCheckBox* mPickLayer = nullptr;
     controls::Segmented* mSelectMode = nullptr;
+    controls::Segmented* mGradient = nullptr;
+    QCheckBox* mGradientDither = nullptr;
+    QWidget* mGradientRow = nullptr;
     QWidget* mSelectRow = nullptr;
     QToolButton *mQuickMask = nullptr, *mLock = nullptr;
     QComboBox* mGroups = nullptr;
@@ -1461,6 +1512,12 @@ public:
             return pathPress(e, view);
         if (tool == "select")
             return selectPress(e, view);
+        if (tool == "gradient")
+        {
+            mGradientFrom = mGradientTo = e->position();
+            mGradientDrag = true;
+            return true;
+        }
         if (tool == "pick")
         {
             if (std::optional<Target> t = pick(e->position(), view); t && t->set != kNoNode)
@@ -1510,6 +1567,12 @@ public:
         if (mSelecting)
         {
             selectMove(e);
+            return true;
+        }
+        if (mGradientDrag)
+        {
+            mGradientTo = e->position();
+            viewportTools::requestRedraw();
             return true;
         }
         if (mBufferDrag != BufferDrag::None)
@@ -1563,6 +1626,12 @@ public:
         if (mSelecting)
         {
             finishSelection(view);
+            return true;
+        }
+        if (mGradientDrag)
+        {
+            mGradientDrag = false;
+            paintGradient(e->modifiers() & Qt::ControlModifier, view);
             return true;
         }
         if (mBufferDrag != BufferDrag::None)
@@ -1743,8 +1812,46 @@ public:
         viewportTools::requestRedraw();
     }
 
+    /** Fills the mesh under the drag's start with a gradient along the drag, into the layer strokes go to. */
+    void paintGradient(bool reverse, const ViewInfo& view)
+    {
+        if (QLineF(mGradientFrom, mGradientTo).length() < 3.0)
+            return;
+        std::optional<Target> t = pick(mGradientFrom, view);
+        if (!t || t->set == kNoNode)
+            t = mOver;
+        scene::Node* set = t ? scene::Graph::current().node(t->set) : nullptr;
+        if (!set)
+        {
+            log::warn("Texture paint: start the gradient over a mesh with a texture set");
+            return;
+        }
+        const std::string layer = texturePaintState().quickMask ? std::string(kQuickMaskBuffer) : layerFor(*set);
+        json pay = gradientPayload(texturePaintState(), {mGradientFrom.x(), mGradientFrom.y()}, {mGradientTo.x(), mGradientTo.y()}, "screen", reverse);
+        if (std::vector<uint32_t> locked = lockedTriangles(*set, t->meshPath, *t->paint); !locked.empty())
+            pay["locked"] = locked;
+        try
+        {
+            ops::execute("texPaintStroke",
+                         {{"args", {set->name(), layer}},
+                          {"stroke", {{"mesh", t->meshPath}, {"brush", texturePaintState().stroke.toJson()}, {"payload", pay}, {"view", viewJson(view)}}}},
+                         CallSource::UI);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("Texture paint: {}", ex.what());
+        }
+        viewportTools::requestRedraw();
+    }
+
     void drawSelection(OverlayPainter& p)
     {
+        if (mGradientDrag)
+        {
+            p.line(mGradientFrom, mGradientTo, 1.5f, p.ink(0.9f));
+            p.disc(mGradientFrom, 4.0f, p.ink(0.9f));
+            p.disc(mGradientTo, 3.0f, p.ink(0.6f));
+        }
         if (mSelect.empty())
             return;
         std::vector<QPointF> pts = mSelect;
@@ -2063,6 +2170,11 @@ public:
         }
         if (st.tool != "project")
             drawStencil(fs, view);
+        if (st.tool == "gradient")
+        {
+            drawSelection(p);
+            status.keys = {{"drag", "start to fade"}, {"Ctrl", "reverse"}};
+        }
         if (st.tool == "select")
         {
             drawSelection(p);
@@ -3152,6 +3264,8 @@ private:
     } mPath;
     int mPathDrag = -1;
     std::vector<QPointF> mSelect;
+    QPointF mGradientFrom, mGradientTo;
+    bool mGradientDrag = false;
     bool mSelecting = false;
     Qt::KeyboardModifiers mSelectMods;
     bool mPathHandle = false, mPathMoved = false;
@@ -3243,6 +3357,11 @@ void setTexturePaintAlpha(const std::string& alphaPath)
 std::string texturePaintTexture() { return texturePaintState().source == "texture" ? texturePaintState().sourceImage : std::string(); }
 
 void pickTextureChannelsAt(const std::string& set, double u, double v, bool add) { pickChannels(set, {{"uv", {u, v}}}, add); }
+
+nlohmann::json texturePaintGradient(double u0, double v0, double u1, double v1, bool reverse)
+{
+    return gradientPayload(texturePaintState(), {u0, v0}, {u1, v1}, "uv", reverse);
+}
 
 void setTexturePaintTexture(const std::string& file)
 {

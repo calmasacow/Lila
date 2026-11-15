@@ -156,7 +156,48 @@ struct Params
     float4* limit;
     uint limitW;
     uint limitH;
+    uint gradType;
+    uint gradSpace;
+    uint gradDither;
+    uint gradOn;
+    float2 gradA;
+    float2 gradB;
+    float4* ramp;
+    float4x4 gradToClip;
 };
+
+static const uint kRamp = 256;
+
+/** Where a texel sits along the gradient, 0 to 1: linear, radial, reflected or angle, in uv or on the stroke's screen. */
+float gradientT(Params* p, float3 pos, float2 uv)
+{
+    float2 q = uv;
+    if (p.gradSpace == 1)
+    {
+        float4 clip = mul(p.gradToClip, float4(pos, 1.0));
+        q = clip.w > 1e-9 ? (clip.xy / clip.w * 0.5 + 0.5) * float2(float(p.viewW), float(p.viewH)) : float2(-1e9, -1e9);
+    }
+    float2 d = p.gradB - p.gradA;
+    float len2 = max(dot(d, d), 1e-12);
+    float2 r = q - p.gradA;
+    if (p.gradType == 1)
+        return saturate(length(r) / sqrt(len2));
+    if (p.gradType == 2)
+        return saturate(abs(dot(r, d)) / len2);
+    if (p.gradType == 3)
+    {
+        float a = atan2(d.x * r.y - d.y * r.x, dot(d, r));
+        return frac(a / 6.2831853 + 1.0);
+    }
+    return saturate(dot(r, d) / len2);
+}
+
+float4 rampAt(Params* p, uint c, float t)
+{
+    float x = saturate(t) * float(kRamp - 1);
+    uint i = min(uint(x), kRamp - 2);
+    return lerp(p.ramp[c * kRamp + i], p.ramp[c * kRamp + i + 1], x - float(i));
+}
 
 static const uint kStencilOn = 1;
 static const uint kStencilInvert = 2;
@@ -604,6 +645,18 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
     float t = cov * p.strength;
     if (p.limit != nullptr)
         t *= saturate(imageAt(p.limit, p.limitW, p.limitH, float2(frac(uv.x), 1.0 - frac(uv.y)), false).a);
+    float gradT = 0.0;
+    if (p.gradOn != 0)
+    {
+        gradT = gradientT(p, pos, uv);
+        // Dither: half a step of 8 bits either way, fixed per texel, so banding breaks up and replays the same; the ends stay exact.
+        if (p.gradDither != 0 && gradT > 0.0 && gradT < 1.0)
+        {
+            uint hsh = (uint(xy.x) * 73856093u) ^ (uint(xy.y) * 19349663u) ^ (item.tile * 83492791u);
+            hsh = hsh * 1664525u + 1013904223u;
+            gradT = saturate(gradT + (float(hsh >> 8) / 16777216.0 - 0.5) / 255.0);
+        }
+    }
     float3 stencilRgb = float3(0.0);
     if ((p.stencilFlags & kStencilOn) != 0)
     {
@@ -665,6 +718,13 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         else
         {
             float3 v = p.values[c].xyz;
+            float tc = t;
+            if (p.gradOn != 0)
+            {
+                float4 g = rampAt(p, c, gradT);
+                v = g.rgb;
+                tc = t * g.a;
+            }
             if (c == p.stencilColor)
                 v = stencilRgb;
             else if (direction && c == p.directionChannel)
@@ -673,7 +733,7 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
                 v = projected;
             else if ((p.flags & kFlagValueImages) != 0 && p.valueImages[c] != nullptr)
                 v = imageAt(p.valueImages[c], p.valueW, p.valueH, float2(uv.x * p.valueScale, 1.0 - uv.y * p.valueScale), true).xyz;
-            r = blendTexel(p, o, v, t, mask);
+            r = blendTexel(p, o, v, tc, mask);
         }
         if (isNormal && !mask)
             r.rgb = encodeNormal(decodeNormal(r.rgb));

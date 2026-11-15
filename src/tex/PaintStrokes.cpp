@@ -211,6 +211,8 @@ json Payload::toJson() const
         j["locked"] = packed::make<uint32_t>(locked, 1);
     if (!limit.empty())
         j["limit"] = limit;
+    if (!gradient.is_null())
+        j["gradient"] = gradient;
     return j;
 }
 
@@ -268,6 +270,15 @@ Payload Payload::fromJson(const json& j)
     std::sort(p.locked.begin(), p.locked.end());
     p.locked.erase(std::unique(p.locked.begin(), p.locked.end()), p.locked.end());
     p.limit = j.value("limit", std::string());
+    if (j.contains("gradient") && j["gradient"].is_object())
+    {
+        p.gradient = j["gradient"];
+        const std::string type = p.gradient.value("type", std::string("linear")), space = p.gradient.value("space", std::string("uv"));
+        if (type != "linear" && type != "radial" && type != "reflected" && type != "angle")
+            throw std::invalid_argument("gradient type is linear, radial, reflected or angle");
+        if (space != "screen" && space != "uv")
+            throw std::invalid_argument("gradient space is screen or uv");
+    }
     p.image = j.value("image", std::string());
     p.colorChannel = j.value("colorChannel", p.colorChannel);
     p.facingFade = std::clamp(j.value("facingFade", p.facingFade), 0.0f, 1.0f);

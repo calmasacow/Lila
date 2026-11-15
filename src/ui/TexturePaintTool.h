@@ -45,6 +45,8 @@ LILA_UI_API std::string texturePaintTexture();
 LILA_UI_API void setTexturePaintTexture(const std::string& file);
 /** The paint picker at a uv of a set (the 2D View and UV editor): its channel values into the brush, or with add a new swatch. */
 LILA_UI_API void pickTextureChannelsAt(const std::string& set, double u, double v, bool add);
+/** The paint tool's gradient as a fill payload from (u0, v0) to (u1, v1) in uv, for the 2D View and UV editor. */
+LILA_UI_API nlohmann::json texturePaintGradient(double u0, double v0, double u1, double v1, bool reverse);
 
 /** tex.paint and the paint layer actions (tex.rasterizeLayer, tex.flattenLayer, tex.clearLayer). */
 LILA_UI_API void registerTexturePaintUi();

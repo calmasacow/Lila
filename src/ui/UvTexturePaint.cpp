@@ -73,6 +73,7 @@ struct UvTexturePaint::State
     /** Selection tool: the shape drawn so far, in uv, and the modifiers it started with. */
     std::vector<glm::dvec2> select;
     bool selecting = false;
+    bool gradient = false;
     Qt::KeyboardModifiers selectMods;
     std::string set, channel;
     bool painting = false;
@@ -236,8 +237,9 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
     if (!set)
         return true;
     const json s = texturePaintSettings();
-    if (s.value("tool", "") == "select")
+    if (s.value("tool", "") == "select" || s.value("tool", "") == "gradient")
     {
+        m->gradient = s.value("tool", "") == "gradient";
         m->select = {toUv(e->position())};
         m->selecting = true;
         m->selectMods = e->modifiers();
@@ -382,6 +384,26 @@ bool UvTexturePaint::mouseMove(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
 
 bool UvTexturePaint::mouseRelease(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
 {
+    if (m->selecting && m->gradient)
+    {
+        // A gradient dragged in uv: from the press to the release.
+        m->selecting = false;
+        std::vector<glm::dvec2> pts = std::exchange(m->select, {});
+        if (pts.size() < 2 || glm::length(pts.back() - pts.front()) < 1e-4)
+            return true;
+        const std::string layer = textureSets::activeLayer(m->set).empty() ? rp::targetLayer(*tex::findSet(scene::Graph::current(), m->set), "", true)
+                                                                            : textureSets::activeLayer(m->set);
+        const json pay = texturePaintGradient(pts.front().x, pts.front().y, pts.back().x, pts.back().y, m->selectMods & Qt::ControlModifier);
+        try
+        {
+            ops::execute("texPaintStroke", {{"args", {m->set, layer}}, {"stroke", {{"payload", pay}}}}, CallSource::UI);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("UV editor: {}", ex.what());
+        }
+        return true;
+    }
     if (m->selecting)
     {
         // A drag is a lasso in uv; the layer selected in the Texture Set dock takes the mask.

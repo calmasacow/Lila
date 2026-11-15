@@ -735,6 +735,13 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
             if (s.payload.triangles.empty())
                 s.payload.triangles = symmetricFill(fillTriangles(pay, *pm, *meshNode, &set), s.payload.fillBy, *pm, sym);
             s.view.reset();
+            // A screen-space gradient keeps the view its ends were dragged in.
+            if (s.payload.gradient.is_object() && s.payload.gradient.value("space", std::string("uv")) == "screen")
+            {
+                if (!j.contains("view"))
+                    throw CommandError("texPaintStroke: a screen gradient needs view {width, height, camera | ...}");
+                s.view = strokeViewOf(screenView(j["view"]), *meshNode);
+            }
         }
         else
         {

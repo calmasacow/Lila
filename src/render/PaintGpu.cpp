@@ -115,6 +115,11 @@ struct GpuParams
     /** Locked triangles (a bit each), and the limit mask's texels (RGBA, its alpha read) with its size. */
     VkDeviceAddress locked = 0, limit = 0;
     uint32_t limitW = 0, limitH = 0;
+    /** A gradient fill: its type, space (0 uv, 1 screen), dither, ends, and per channel a ramp of kRamp rgba entries (value, amount). */
+    uint32_t gradType = 0, gradSpace = 0, gradDither = 0, gradOn = 0;
+    float gradA[2]{}, gradB[2]{};
+    VkDeviceAddress ramp = 0;
+    glm::mat4 gradToClip{1.0f};
 };
 static_assert(offsetof(GpuParams, items) == 288);
 static_assert(offsetof(GpuParams, valueImages) == 376);
@@ -123,7 +128,9 @@ static_assert(offsetof(GpuParams, strength) == 520);
 static_assert(offsetof(GpuParams, stencilW) == 560);
 static_assert(offsetof(GpuParams, stencil) == 600);
 static_assert(offsetof(GpuParams, locked) == 672);
-static_assert(sizeof(GpuParams) == 696);
+static_assert(offsetof(GpuParams, ramp) == 728);
+static_assert(sizeof(GpuParams) == 800);
+constexpr int kRamp = 256;
 
 struct DabPush
 {
@@ -434,6 +441,9 @@ struct Live
     std::vector<float> limit;
     int limitW = 0, limitH = 0;
     VkDeviceAddress lockAddr = 0, limitAddr = 0;
+    /** Gradient fills: per channel kRamp rgba entries (value, amount). */
+    std::vector<float> ramp;
+    VkDeviceAddress rampAddr = 0;
     /** project: the picture (RGBA floats) and the NDC box (x0, y0, x1, y1) of its covered pixels. */
     std::vector<float> image;
     int imageW = 0, imageH = 0;
@@ -906,6 +916,52 @@ uint32_t modeOf(const Payload& p, uint32_t& sub)
     return kModePaint;
 }
 
+/**
+ * A gradient's ramps: per stroke channel kRamp entries of (value, amount) between its stops, linear. A stop without the
+ * channel takes the payload's value; amount defaults to 1.
+ */
+std::vector<float> gradientRamp(const Payload& p, const std::vector<std::string>& channels, const std::vector<glm::vec3>& values)
+{
+    struct Stop
+    {
+        float position;
+        float amount;
+        json channels;
+    };
+    std::vector<Stop> stops;
+    for (const json& s : p.gradient.value("stops", json::array()))
+        stops.push_back({std::clamp(s.value("position", 0.0f), 0.0f, 1.0f), std::clamp(s.value("amount", 1.0f), 0.0f, 1.0f), s.value("channels", json::object())});
+    if (stops.empty())
+        stops = {{0.0f, 1.0f, json::object()}, {1.0f, 0.0f, json::object()}};
+    std::stable_sort(stops.begin(), stops.end(), [](const Stop& a, const Stop& b) { return a.position < b.position; });
+    auto valueAt = [&](const Stop& s, size_t c) {
+        const json v = s.channels.value(channels[c], json());
+        if (v.is_array() && v.size() >= 3)
+            return glm::vec3(v[0].get<float>(), v[1].get<float>(), v[2].get<float>());
+        if (v.is_number())
+            return glm::vec3(v.get<float>());
+        return values[c];
+    };
+    std::vector<float> ramp(channels.size() * kRamp * 4);
+    for (size_t c = 0; c < channels.size(); ++c)
+        for (int i = 0; i < kRamp; ++i)
+        {
+            const float t = float(i) / float(kRamp - 1);
+            size_t k = 0;
+            while (k + 1 < stops.size() && stops[k + 1].position < t)
+                ++k;
+            const Stop& a = stops[k];
+            const Stop& b = stops[std::min(k + 1, stops.size() - 1)];
+            const float span = b.position - a.position;
+            const float f = span > 1e-6f ? std::clamp((t - a.position) / span, 0.0f, 1.0f) : (t < a.position ? 0.0f : 1.0f);
+            const glm::vec3 v = glm::mix(valueAt(a, c), valueAt(b, c), f);
+            const float amount = glm::mix(a.amount, b.amount, f);
+            float* e = &ramp[(c * kRamp + size_t(i)) * 4];
+            e[0] = v.x, e[1] = v.y, e[2] = v.z, e[3] = amount;
+        }
+    return ramp;
+}
+
 /** What a stroke needs on the GPU besides its dabs, from its header. image is a project stroke's picture. */
 std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh> mesh, std::shared_ptr<const PaintImage> image = nullptr,
                                std::shared_ptr<const PaintImage> stencil = nullptr, std::shared_ptr<const PaintImage> limit = nullptr)
@@ -993,6 +1049,8 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
         live->sourceImages = valueImages(p.source, live->channels);
         live->valueScale = float(p.source.value("scale", 1.0));
     }
+    if (!p.gradient.is_null() && live->mode == kModeFill)
+        live->ramp = gradientRamp(p, live->channels, live->values);
     if (!header->payload.locked.empty())
     {
         live->lockMask.assign((live->mesh->triangleCount() + 31) / 32 + 1, 0u);
@@ -1059,6 +1117,8 @@ void ensureUploads(VulkanContext& vk, Gpu& g, Live& live)
         live.lockAddr = upload(live.lockMask.data(), live.lockMask.size() * 4);
     if (!live.limit.empty())
         live.limitAddr = upload(live.limit.data(), live.limit.size() * 4);
+    if (!live.ramp.empty())
+        live.rampAddr = upload(live.ramp.data(), live.ramp.size() * 4);
     if (live.sourceImages)
         for (size_t c = 0; c < live.channels.size(); ++c)
             if (auto it = live.sourceImages->channels.find(live.channels[c]); it != live.sourceImages->channels.end())
@@ -1294,6 +1354,25 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
     {
         params.valueW = uint32_t(live.sourceImages->width);
         params.valueH = uint32_t(live.sourceImages->height);
+    }
+    if (live.rampAddr)
+    {
+        const json& gr = pay.gradient;
+        const std::string type = gr.value("type", std::string("linear"));
+        params.gradOn = 1;
+        params.gradType = type == "radial" ? 1 : type == "reflected" ? 2 : type == "angle" ? 3 : 0;
+        params.gradSpace = gr.value("space", std::string("uv")) == "screen" ? 1 : 0;
+        params.gradDither = gr.value("dither", false) ? 1 : 0;
+        const json a = gr.value("start", json::array({0.0, 0.0})), b = gr.value("end", json::array({1.0, 0.0}));
+        params.gradA[0] = a[0].get<float>(), params.gradA[1] = a[1].get<float>();
+        params.gradB[0] = b[0].get<float>(), params.gradB[1] = b[1].get<float>();
+        params.ramp = live.rampAddr;
+        if (h.view)
+        {
+            params.gradToClip = h.view->objectToClip;
+            params.viewW = uint32_t(h.view->width);
+            params.viewH = uint32_t(h.view->height);
+        }
     }
     params.locked = live.lockAddr;
     params.limit = live.limitAddr;

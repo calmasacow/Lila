@@ -120,6 +120,12 @@ struct LILA_SCENE_API Payload
     std::vector<uint32_t> locked;
     /** A PaintData::images key: a uv mask (its alpha, tile 1001) every texel's amount is multiplied by (the quick mask). */
     std::string limit;
+    /**
+     * fill: a gradient over the filled triangles instead of flat values: {type linear|radial|reflected|angle, space screen|uv,
+     * start [x, y], end [x, y] (pixels of the stroke's view, or uv), stops [{position 0..1, amount 0..1, channels {name: value}}],
+     * dither}. Channels a stop leaves out take the payload's value; amount scales how much paints.
+     */
+    json gradient;
 
     /** The channels the stroke writes, the mask last. */
     std::vector<std::string> written() const;
