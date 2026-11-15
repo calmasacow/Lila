@@ -2,6 +2,7 @@
 
 #include "TestUtil.h"
 
+#include "core/Events.h"
 #include "core/MainQueue.h"
 #include "gn/Gn.h"
 #include "ops/Command.h"
@@ -17,17 +18,21 @@
 #pragma pop_macro("slots")
 #include "ui/Actions.h"
 #include "ui/Hotkeys.h"
+#include "ui/MenuContext.h"
 #include "ui/NodeEditor.h"
 #include "ui/TextureGraphUi.h"
 #include "ui/TextureSetPanel.h"
 #include "ui/ViewportHooks.h"
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QMimeData>
 #include <QMainWindow>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QDoubleSpinBox>
 #include <QSpinBox>
 #include <QToolButton>
@@ -115,9 +120,12 @@ TEST_CASE("texture set panel builds a layer stack through tex commands, and undo
     CHECK(rootIds() == std::vector<std::string>{b, a});
     CHECK(panel->tree()->topLevelItem(0)->data(0, Qt::UserRole + 1).toString().toStdString() == a);
 
-    // A channel toggle on a row turns a channel the fill had no value for on.
+    // Rows carry no channel toggles; the channel list in Properties turns a channel the fill had no value for on.
+    CHECK(panel->findChildren<QToolButton*>(QRegularExpression("^channel:")).isEmpty());
     CHECK_FALSE(layerIn(stack()["layers"], a)->at("resolved")["emissive"]["enabled"].get<bool>());
-    auto* emissive = panel->findChild<QToolButton*>(QString::fromStdString("channel:" + a + ":emissive"));
+    panel->selectLayer(a);
+    pumpWithDeletes();
+    auto* emissive = panel->findChild<QCheckBox*>("propChannel:emissive");
     REQUIRE(emissive);
     executed.clear();
     emissive->click();
@@ -260,9 +268,34 @@ TEST_CASE("smart materials and masks sit apart on the shelf, and a smart materia
     QListWidget* shelf = panel->smartShelf();
     REQUIRE(shelf->count() > 0);
     CHECK(shelf->dragEnabled());
-    CHECK(shelf->dragDropMode() == QAbstractItemView::DragOnly);
     for (int i = 0; i < shelf->count(); ++i)
-        CHECK(shelf->item(i)->isHidden() == (shelf->item(i)->data(Qt::UserRole + 1).toString() == "mask"));
+        CHECK(shelf->item(i)->isHidden() == (shelf->item(i)->data(Qt::UserRole + 1).toString() != "material"));
+
+    // Brushes: preset tiles only, no drags, and the search narrows them.
+    panel->showLibrary("brushes");
+    pumpWithDeletes();
+    int brushes = 0;
+    for (int i = 0; i < shelf->count(); ++i)
+        if (!shelf->item(i)->isHidden())
+        {
+            CHECK(shelf->item(i)->data(Qt::UserRole + 1).toString() == "brush");
+            ++brushes;
+        }
+    CHECK(brushes > 1);
+    CHECK_FALSE(shelf->dragEnabled());
+    auto* search = panel->findChild<QLineEdit*>("shelfSearch");
+    REQUIRE(search);
+    search->setText("airbrush");
+    int found = 0;
+    for (int i = 0; i < shelf->count(); ++i)
+        found += shelf->item(i)->isHidden() ? 0 : 1;
+    CHECK(found >= 1);
+    CHECK(found < brushes);
+    search->clear();
+    // The Brush page lives in the panel's lower pane.
+    CHECK(panel->findChild<QWidget*>("texturePaintPage") != nullptr);
+    panel->showLibrary("materials");
+    pumpWithDeletes();
 
     // A drop on a mesh with only Default gives it a material and a texture set, with the smart material's layer on top.
     QMimeData mime;
@@ -282,4 +315,63 @@ TEST_CASE("smart materials and masks sit apart on the shelf, and a smart materia
     const json view = run("texLayerStack", {{"args", {set}}});
     REQUIRE(view["layers"].size() == 1);
     CHECK(view["layers"][0]["name"] == "Rusty Iron");
+}
+
+TEST_CASE("texture set resolution steps through texture sizes with its up/down buttons")
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 1024}});
+
+    QMainWindow win;
+    auto* panel = new ui::TextureSetPanel(&win);
+    win.setCentralWidget(panel);
+    win.resize(420, 900);
+    win.show();
+    panel->setTextureSet("Rock");
+    pumpWithDeletes();
+
+    auto shown = [&](const char* name) -> QSpinBox* {
+        for (QSpinBox* b : panel->findChildren<QSpinBox*>(name))
+            if (!b->isHidden())
+                return b;
+        return nullptr;
+    };
+    QSpinBox* width = shown("width");
+    REQUIRE(width);
+    REQUIRE(width->value() == 1024);
+    auto* up = width->findChild<QToolButton*>("presetUp");
+    REQUIRE(up);
+    up->click();
+    pumpWithDeletes();
+    // Linked by default: both sides double.
+    REQUIRE(shown("width"));
+    CHECK(shown("width")->value() == 2048);
+    CHECK(shown("height")->value() == 2048);
+
+    shown("height")->findChild<QToolButton*>("presetDown")->click();
+    pumpWithDeletes();
+    CHECK(shown("width")->value() == 1024);
+    CHECK(shown("height")->value() == 1024);
+}
+
+TEST_CASE("menu context listeners hear a layout change while a tool keeps the menus the same")
+{
+    QMainWindow win;
+    ui::menuContext::install(&win);
+    static int heard = 0;
+    static bool added = false;
+    if (!std::exchange(added, true))
+        ui::menuContext::onChanged([] { ++heard; });
+    ui::menuContext::setLayoutSet("Texture");
+    // Texture Paint running keeps the Texture menus whatever the layout.
+    events::send({.type = events::Event::ViewportToolChanged, .name = "texturePaint"});
+    pumpWithDeletes();
+    REQUIRE(ui::menuContext::current() == "Texture");
+    const int before = heard;
+    ui::menuContext::setLayoutSet("Model");
+    // The menus didn't change, but the layout did: the texturing 2D View has to hear it to hide.
+    CHECK(heard == before + 1);
+    events::send({.type = events::Event::ViewportToolChanged, .name = ""});
+    pumpWithDeletes();
 }
