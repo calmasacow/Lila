@@ -72,6 +72,8 @@ struct UvTexturePaint::State
 {
     /** Selection tool: the shape drawn so far, in uv, and the modifiers it started with. */
     std::vector<glm::dvec2> select;
+    /** The set repeats: strokes wrap round the uv square's edges. */
+    bool tileable = false;
     bool selecting = false;
     bool gradient = false;
     Qt::KeyboardModifiers selectMods;
@@ -277,6 +279,7 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
     if (m->layer.empty())
         m->layer = rp::targetLayer(*set, "", true);
     m->setId = set->id();
+    m->tileable = tex::readSettings(*set).tileable;
     if (payload.kind == "fill")
     {
         uint32_t tri = 0;
@@ -365,7 +368,12 @@ bool UvTexturePaint::mouseMove(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
         d.pressure = float(s.pressure);
         d.opacity = float(std::clamp(m->brush.flow * m->brush.pressureOpacity.map(s.pressure) * s.opacity, 0.0, 1.0));
         for (const tp::Dab& c : m->sym.copies(*m->mesh, d))
+        {
             dabs.push_back(c);
+            if (m->tileable)
+                for (const tp::Dab& w : tp::tileWrapped(*m->mesh, c))
+                    dabs.push_back(w);
+        }
     }
     if (!dabs.empty())
     {

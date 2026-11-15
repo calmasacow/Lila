@@ -90,6 +90,48 @@ glm::vec3 PaintMesh::normal(uint32_t tri, float u, float v) const
     return glm::length(s) > 0.0f ? glm::normalize(s) : glm::vec3(0, 1, 0);
 }
 
+std::vector<Dab> tileWrapped(const PaintMesh& mesh, const Dab& d)
+{
+    std::vector<Dab> out;
+    if (d.triangle >= mesh.triangleCount())
+        return out;
+    const glm::vec3* p = &mesh.positions[size_t(d.triangle) * 3];
+    const glm::vec2* t = &mesh.uvs[size_t(d.triangle) * 3];
+    const double area3 = glm::length(glm::cross(glm::dvec3(p[1] - p[0]), glm::dvec3(p[2] - p[0])));
+    const double areaUv = std::abs(double((t[1].x - t[0].x) * (t[2].y - t[0].y) - (t[2].x - t[0].x) * (t[1].y - t[0].y)));
+    if (area3 <= 1e-18 || areaUv <= 1e-18)
+        return out;
+    const float r = float(d.radius * std::sqrt(areaUv / area3));
+    const glm::vec2 uv = mesh.uv(d.triangle, d.u, d.v);
+    const glm::vec2 f = uv - glm::floor(uv);
+    const int du = f.x - r < 0.0f ? 1 : f.x + r > 1.0f ? -1 : 0;
+    const int dv = f.y - r < 0.0f ? 1 : f.y + r > 1.0f ? -1 : 0;
+    for (const glm::ivec2 o : {glm::ivec2(du, 0), glm::ivec2(0, dv), glm::ivec2(du, dv)})
+    {
+        if (o == glm::ivec2(0) || (o.x != 0 && du == 0) || (o.y != 0 && dv == 0))
+            continue;
+        // The copy's centre lies just off the other edge: found on the triangle at that edge, its barycentrics run past it
+        // (the triangle's plane carries on), so the dab reaches back in exactly as far as it reached out.
+        const glm::vec2 target = uv + glm::vec2(o);
+        const glm::vec2 inside = glm::clamp(target, glm::vec2(1e-4f), glm::vec2(1.0f - 1e-4f)) + glm::floor(uv);
+        uint32_t tri = 0;
+        float u = 0.0f, v = 0.0f;
+        if (!mesh.atUv(inside, tri, u, v, 1e-3f) || !mesh.paintable[tri])
+            continue;
+        const glm::vec2* q = &mesh.uvs[size_t(tri) * 3];
+        const glm::vec2 e1 = q[1] - q[0], e2 = q[2] - q[0], rel = target + glm::floor(uv) - q[0];
+        const float det = e1.x * e2.y - e2.x * e1.y;
+        if (std::abs(det) < 1e-12f)
+            continue;
+        Dab w = d;
+        w.triangle = tri;
+        w.u = (rel.x * e2.y - e2.x * rel.y) / det;
+        w.v = (e1.x * rel.y - rel.x * e1.y) / det;
+        out.push_back(w);
+    }
+    return out;
+}
+
 std::shared_ptr<const PaintMesh> PaintMesh::build(const geo::Mesh& mesh, std::shared_ptr<const geo::MeshBvh> bvh, std::string_view material)
 {
     LILA_ZONE();

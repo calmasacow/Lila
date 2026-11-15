@@ -2525,6 +2525,7 @@ private:
         mTarget = t;
         mLayer = layer;
         mSym = sym;
+        mTileable = tex::readSettings(*set).tileable;
         mRecord = *header;
         mRecord.dabs.clear();
         return true;
@@ -2935,6 +2936,7 @@ private:
         mRecord = *header;
         mRecord.dabs.clear();
         mSegments.clear();
+        mTileable = tex::readSettings(*set).tileable;
         mStrokeTemplate = std::make_shared<tp::Stroke>(mRecord);
         try
         {
@@ -2973,6 +2975,13 @@ private:
         {
             std::vector<tp::Dab> copies = mSym.copies(*mTarget.paint, b);
             mPending.insert(mPending.end(), copies.begin(), copies.end());
+            // A tileable set: what reaches past the uv square's edge comes in on the other side too.
+            if (mTileable)
+                for (const tp::Dab& c : copies)
+                {
+                    std::vector<tp::Dab> w = tp::tileWrapped(*mTarget.paint, c);
+                    mPending.insert(mPending.end(), w.begin(), w.end());
+                }
         }
     }
 
@@ -3629,6 +3638,7 @@ private:
     tp::PaintSymmetry mSym;
     /** The meshes a stroke left for another, and the header every new one starts from. */
     std::vector<Segment> mSegments;
+    bool mTileable = false;
     std::shared_ptr<tp::Stroke> mStrokeTemplate;
     tp::Dab mCloneSourceDab;
     std::vector<tex::paint::Dab> mPending;

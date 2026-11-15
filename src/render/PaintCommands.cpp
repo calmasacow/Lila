@@ -1083,6 +1083,18 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         if (s.stencil->mode == "color" && !s.payload.channels.contains(s.stencil->colorChannel))
             s.payload.channels[s.stencil->colorChannel] = glm::vec3(1.0f);
     }
+    // A tileable set: generated dabs wrap round the uv square's edges; a record's dabs already did.
+    if (generated && tex::readSettings(set).tileable)
+    {
+        std::vector<Dab> all;
+        for (const Dab& d : s.dabs)
+        {
+            all.push_back(d);
+            std::vector<Dab> w = tex::paint::tileWrapped(*pm, d);
+            all.insert(all.end(), w.begin(), w.end());
+        }
+        s.dabs = std::move(all);
+    }
     // Anchors let the stroke follow the surface when the mesh's triangles or uvs change later.
     s.anchors.clear();
     for (const Dab& d : s.dabs)

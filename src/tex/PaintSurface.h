@@ -94,6 +94,12 @@ struct DabReach
  */
 LILA_SCENE_API bool recordDab(const PaintMesh& mesh, const brush::Dab& d, Dab& out);
 
+/**
+ * For a tileable texture: the dab's copies one uv square over (across u, v or both) where it reaches past an edge, on
+ * the surface that holds the uv it wraps to. Empty when it reaches no edge.
+ */
+LILA_SCENE_API std::vector<Dab> tileWrapped(const PaintMesh& mesh, const Dab& d);
+
 class LILA_SCENE_API SurfaceAtlas
 {
 public:

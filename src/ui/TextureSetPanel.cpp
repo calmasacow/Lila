@@ -1672,6 +1672,13 @@ struct TextureSetPanel::Impl
         QObject::connect(fromHeight, &QCheckBox::toggled, settingsBox,
                          [this](bool on) { runUi("texSetSettings", args({json{{"normalFromHeight", on}}})); });
         form->addRow("Export", fromHeight);
+        auto* tileable = new QCheckBox("Tileable", settingsBox);
+        tileable->setObjectName("tileable");
+        tileable->setChecked(settings.tileable);
+        setCheckDefault(tileable, defaults.tileable);
+        tileable->setToolTip("The texture repeats (trim sheets, tiling materials): strokes wrap round the uv square's edges, and the 2D View tiles it");
+        QObject::connect(tileable, &QCheckBox::toggled, settingsBox, [this](bool on) { runUi("texSetSettings", args({json{{"tileable", on}}})); });
+        form->addRow("Painting", tileable);
         form->addRow("Material", materialPicker(settingsBox));
         auto* bake = new QLabel(settings.bakeProject.empty() ? QString("None") : qs(settings.bakeProject), settingsBox);
         bake->setToolTip("The bake project whose maps feed the set's mesh inputs (texSetSettings bakeProject=)");
@@ -2165,8 +2172,8 @@ struct TextureSetPanel::Impl
         };
         if (kind == "decal")
         {
-            const json d = l.value("decal", json::object());
-            const json maps = d.value("maps", json::object());
+            const json dec = l.value("decal", json::object());
+            const json maps = dec.value("maps", json::object());
             for (const tex::Channel& c : settings.channels)
             {
                 const std::string ch = c.name;
@@ -2176,7 +2183,7 @@ struct TextureSetPanel::Impl
             }
             auto* atlas = new QHBoxLayout;
             for (const char* k : {"columns", "rows", "cell"})
-                atlas->addWidget(spin(k, k == std::string("cell") ? 0 : 1, 64, 1, 0, d.value(k, k == std::string("cell") ? 0 : 1),
+                atlas->addWidget(spin(k, k == std::string("cell") ? 0 : 1, 64, 1, 0, dec.value(k, k == std::string("cell") ? 0 : 1),
                                       [this, key = std::string(k)](double x) { propsLayer({{"decal", {{key, int(x)}}}}); }));
             auto* atlasRow = new QWidget(w);
             atlas->setContentsMargins(0, 0, 0, 0);

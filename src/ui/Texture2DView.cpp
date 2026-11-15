@@ -592,6 +592,9 @@ struct Texture2DView::Impl
         source->setToolTip(cur.set.empty() ? "Ctrl+Shift+click a node in the Texture Graph to show it here" : "What " + qs(cur.set) + " shows here");
     }
 
+    /** The set the tiling was last set for. */
+    std::string tiledFor;
+
     void redisplay()
     {
         if (!data)
@@ -603,6 +606,13 @@ struct Texture2DView::Impl
         const texture2d::Source& s = ctl().source;
         const std::string name = !s.channel.empty() ? s.channel : s.socket.empty() ? s.node : s.socket;
         canvas->setImage(texPreview::toQImage(*data, type, texPreview::isColor(type, name), soloChannel - 1));
+        // A tileable set shows tiled the first time it comes up, so strokes across its edges are seen wrapping.
+        if (s.set != tiledFor)
+        {
+            tiledFor = s.set;
+            if (scene::Node* set = tex::findSet(scene::Graph::current(), s.set); set && tex::readSettings(*set).tileable && !tile->isChecked())
+                tile->setChecked(true);
+        }
         computeHistogram();
     }
 

@@ -71,6 +71,8 @@ struct LILA_SCENE_API SetSettings
     json faceGroups = json::object();
     /** Saved projection views by name: the screen view JSON texPaintStroke takes, for projecting again from the same place. */
     json projectionViews = json::object();
+    /** The texture repeats (a trim sheet, a tiling material): strokes wrap round the uv square's edges. */
+    bool tileable = false;
 
     /** heightDepth over the UV square's size: the height's slope per UV unit along u and v. */
     glm::dvec2 heightSlope() const { return {heightDepth / std::max(uvWidth, 1e-3), heightDepth / std::max(uvHeight, 1e-3)}; }
