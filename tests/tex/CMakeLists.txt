@@ -11,6 +11,7 @@ add_executable(lila_tex_tests
     test_tex_paint_buffer.cpp
     test_tex_paint_data.cpp
     test_tex_painter.cpp
+    test_tex_particles.cpp
     test_tex_pipeline.cpp
     test_tex_plan.cpp
     test_tex_projection.cpp

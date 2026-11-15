@@ -622,6 +622,12 @@ public:
         mParticles->addItem("Drips", "drips");
         mParticles->addItem("Rain", "rain");
         mParticles->addItem("Sparks", "sparks");
+        mParticles->addItem("Rust Run", "rustRun");
+        mParticles->addItem("Leak", "leak");
+        mParticles->addItem("Rain Streaks", "rainStreaks");
+        mParticles->addItem("Dust Settle", "dustSettle");
+        mParticles->addItem("Burn", "burn");
+        mParticles->addItem("Scorch", "scorch");
         mParticles->setToolTip("Particles each dab emits, painting as they move over the surface");
         mParticleRow = addRow(form, "Particles", mParticles);
         mPickLayer = new QCheckBox("Layer only", this);
