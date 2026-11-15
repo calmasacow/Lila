@@ -1819,7 +1819,193 @@ def noise():
     save("noise", "clouds", smooth(stretch(tperlin(u, v, 2, 7, seed=942, gain=0.6), 5, 95)))
 
 
-NEW_GENERATORS = (damage_more, stone_more, organic_more, skin_more, fabric_more, hard_more, ornament, shapes_more, stylized, noise)
+def grain(u, v, cells, seed, lo=0.35, soft=0.25):
+    """Paper-tooth grain: 1 on the peaks a dry medium catches, 0 in the pits."""
+    return smooth((tnoise(u, v, cells, 3, seed=seed) - lo) / soft)
+
+
+def dots(u, v, xs, ys, rs, vals=None, soft=0.35):
+    return bumps(u, v, xs, ys, rs, profile=lambda t: t, soft=soft, heights=vals)
+
+
+def brush_tips():
+    """Tips for texture painting presets. With followStroke the stroke travels along u, so bristles sit along v."""
+    n = 256
+    u, v = grid(n)
+    R = np.sqrt(u * u + v * v)
+    D = disc(u, v, 0.92, 0.06)
+
+    r = np.random.default_rng(1001)
+    k = 70
+    rad, ang = np.sqrt(r.random(k)) * 0.8, r.uniform(0, 2 * np.pi, k)
+    save("brush tips", "bristle round", dots(u, v, rad * np.cos(ang), rad * np.sin(ang), r.uniform(0.04, 0.09, k), r.uniform(0.45, 1, k)))
+    r = np.random.default_rng(1002)
+    k = 44
+    ys = np.linspace(-0.85, 0.85, k) + r.normal(0, 0.01, k)
+    save("brush tips", "bristle flat", dots(u, v, r.normal(0, 0.05, k), ys, r.uniform(0.035, 0.06, k), r.uniform(0.5, 1, k)))
+    r = np.random.default_rng(1003)
+    k = 14
+    ys = np.sort(r.uniform(-0.85, 0.85, k))
+    save("brush tips", "bristle sparse", dots(u, v, r.normal(0, 0.04, k), ys, r.uniform(0.03, 0.07, k), r.uniform(0.4, 1, k)))
+    r = np.random.default_rng(1004)
+    k = 36
+    a = np.linspace(-1.0, 1.0, k) + r.normal(0, 0.02, k)
+    save("brush tips", "bristle fan", dots(u, v, np.cos(a) * 0.8 - 0.5, np.sin(a) * 0.8, r.uniform(0.03, 0.055, k), r.uniform(0.5, 1, k)))
+    r = np.random.default_rng(1005)
+    lines = [(np.array([[r.uniform(-0.6, -0.2), y], [r.uniform(0.2, 0.6), y + r.normal(0, 0.03)]]), r.uniform(0.012, 0.03), r.uniform(0.5, 1))
+             for y in r.uniform(-0.8, 0.8, 22)]
+    save("brush tips", "hairy streaks", strokes(u, v, lines, round_p) * D)
+
+    f1, f2, *_ = tworley(u, v, 9, seed=1006)
+    save("brush tips", "sponge dense", smooth((f1 - 0.28) / 0.1) * disc(u, v, 0.85 + 0.08 * (tnoise(u, v, 6, 2, seed=1007) - 0.5), 0.1))
+    f1, f2, *_ = tworley(u, v, 5, seed=1008)
+    save("brush tips", "sponge coarse", smooth((f1 - 0.33) / 0.12) * smooth((f2 - f1) / 0.05) * disc(u, v, 0.8 + 0.15 * (tnoise(u, v, 4, 2, seed=1009) - 0.5), 0.1))
+    rg = np.random.default_rng(1010)
+    save("brush tips", "powder puff", np.exp(-(R / 0.5) ** 2) * np.clip(blur(rg.random(u.shape), 1) * 2.6 - 0.9, 0, 1))
+    save("brush tips", "chalk grain", disc(u, v, 0.82 + 0.06 * (tnoise(u, v, 12, 2, seed=1011) - 0.5), 0.05) * grain(u, v, 48, 1012))
+    rough = disc(u * 0.7, v * 1.3, 0.75 + 0.15 * (tnoise(u, v, 10, 3, seed=1013) - 0.5), 0.06)
+    save("brush tips", "charcoal grain", rough * smooth((tnoise(u, v, (16, 64), 3, seed=1014) - 0.4) / 0.2))
+    save("brush tips", "pencil grain", disc(u, v, 0.8, 0.08) * (0.35 + 0.65 * grain(u, v, 64, 1015, 0.3, 0.3)))
+    save("brush tips", "pastel block", edge(rbox(u, v, 0.55, 0.85, 0.15), 0.06) * grain(u, v, 40, 1016, 0.3, 0.2))
+    hatch = lambda x, count, width: smooth(1 - np.abs(np.mod(x * count / 2, 1) - 0.5) / width)
+    save("brush tips", "hatch lines", hatch((u + v) / np.sqrt(2), 7, 0.14) * D)
+    save("brush tips", "cross hatch", np.maximum(hatch((u + v) / np.sqrt(2), 7, 0.12), hatch((u - v) / np.sqrt(2), 7, 0.12)) * D)
+    save("brush tips", "dense hatch", hatch(u * 0.95 + v * 0.3, 16, 0.18) * (0.7 + 0.3 * tnoise(u, v, 8, 2, seed=1017)) * D)
+
+    w1, w2 = tperlin(u, v, 2, 3, seed=1018) - 0.5, tperlin(u, v, 2, 3, seed=1019) - 0.5
+    wisp = stretch(ridged(u + w1 * 1.2, v + w2 * 1.2, 3, 4, seed=1020) ** 3)
+    save("brush tips", "smoke wisp", wisp * np.exp(-(R / 0.6) ** 2))
+    r = np.random.default_rng(1021)
+    k = 260
+    ang, rad = r.uniform(0, 2 * np.pi, k), np.abs(r.normal(0, 0.38, k))
+    save("brush tips", "spray speckle", dots(u, v, rad * np.cos(ang), rad * np.sin(ang), r.uniform(0.01, 0.03, k), r.uniform(0.5, 1, k), 0.5) * D)
+    r = np.random.default_rng(1022)
+    k = 600
+    ang, rad = r.uniform(0, 2 * np.pi, k), np.sqrt(r.random(k)) * 0.85
+    save("brush tips", "fine spray", dots(u, v, rad * np.cos(ang), rad * np.sin(ang), r.uniform(0.006, 0.014, k), r.uniform(0.3, 1, k), 0.6))
+
+    def splat(seed, blob, spikes, drops, spread):
+        rr = np.random.default_rng(seed)
+        a = np.arctan2(v, u)
+        body = blob * (1 + 0.25 * (tnoise(np.cos(a), np.sin(a), 5, 2, seed=seed + 1) - 0.5))
+        img = edge(R - body, 0.03)
+        lines = []
+        for ang in rr.uniform(0, 2 * np.pi, spikes):
+            ln = rr.uniform(0.15, spread)
+            lines.append((np.array([[np.cos(ang) * blob * 0.8, np.sin(ang) * blob * 0.8], [np.cos(ang) * (blob + ln), np.sin(ang) * (blob + ln)]]),
+                          np.array([rr.uniform(0.03, 0.07), 0.008])))
+        img = strokes(u, v, lines, flat_p, img)
+        ang, dist = rr.uniform(0, 2 * np.pi, drops), rr.uniform(blob + 0.05, blob + spread, drops)
+        sp = dots(u, v, np.cos(ang) * dist, np.sin(ang) * dist, rr.uniform(0.015, 0.05, drops), soft=0.15)
+        return np.clip(np.maximum(img, sp), 0, 1) * disc(u, v, 0.95, 0.04)
+
+    save("brush tips", "ink splat", splat(1023, 0.32, 14, 18, 0.55))
+    save("brush tips", "splatter cluster", splat(1025, 0.18, 5, 40, 0.65))
+    save("brush tips", "paint drop", np.maximum(edge(R - 0.42, 0.04), strokes(u, v, [(np.array([[0.0, 0.3], [0.05, 0.85]]), np.array([0.12, 0.05]))], flat_p)))
+    r = np.random.default_rng(1027)
+    k = 9
+    save("brush tips", "round spots", dots(u, v, r.uniform(-0.65, 0.65, k), r.uniform(-0.65, 0.65, k), r.uniform(0.06, 0.2, k), r.uniform(0.6, 1, k), 0.12))
+
+    mottle = 0.55 + 0.25 * tperlin(u, v, 5, 3, seed=1028)
+    body = 0.82 + 0.08 * (tnoise(np.cos(np.arctan2(v, u)), np.sin(np.arctan2(v, u)), 6, 3, seed=1029) - 0.5)
+    rim = smooth(1 - np.abs(R - body + 0.04) / 0.06)
+    save("brush tips", "watercolour bloom", np.clip(edge(R - body, 0.03) * mottle + rim * 0.45, 0, 1))
+    save("brush tips", "wet edge", np.clip(edge(R - 0.85, 0.03) * 0.35 + smooth(1 - np.abs(R - 0.8) / 0.08) * 0.65, 0, 1))
+    save("brush tips", "felt tip", edge(rbox(u, v, 0.7, 0.7, 0.35), 0.05) * (0.9 + 0.1 * tnoise(u, v, 24, 2, seed=1030)))
+    save("brush tips", "chisel marker", edge(rbox(u, v, 0.22, 0.88, 0.08), 0.04))
+    knife = edge(rbox(u, v, 0.3, 0.88, 0.05), 0.03)
+    ridge = smooth(1 - np.abs(np.abs(v) - 0.84) / 0.05) * 0.6
+    save("brush tips", "palette knife", np.clip(knife * (0.55 + 0.25 * tperlin(u * 4, v, (2, 6), 2, seed=1031)) + ridge * (np.abs(u) < 0.3), 0, 1))
+
+    r = np.random.default_rng(1032)
+    lines = []
+    for _ in range(60):
+        x0 = r.uniform(-0.6, 0.6)
+        p = walk(r, x0, 0.85, -np.pi / 2 + (x0 * 0.5) + r.normal(0, 0.12), r.uniform(0.9, 1.6), 12, 0.08)
+        lines.append((p, taper(len(p), r.uniform(0.012, 0.025), "end", 0.7), r.uniform(0.5, 1)))
+    save("brush tips", "fur strands", strokes(u, v, lines, round_p) * D)
+    lines = [(np.array([[-0.8, 0.0], [0.85, 0.0]]), np.array([0.04, 0.012]), 1.0)]
+    r = np.random.default_rng(1033)
+    for x in np.linspace(-0.7, 0.7, 26):
+        for side in (-1, 1):
+            ln = 0.55 * np.sin(np.pi * (x + 0.8) / 1.65) + 0.05
+            lines.append((np.array([[x, 0.0], [x + 0.35 * ln, side * ln]]), np.array([0.014, 0.006]), r.uniform(0.55, 0.9)))
+    save("brush tips", "feather barbs", strokes(u, v, lines, round_p) * D)
+    r = np.random.default_rng(1034)
+    lines = []
+    for _ in range(45):
+        p = walk(r, *r.uniform(-0.6, 0.6, 2), r.uniform(0, 6.3), r.uniform(0.25, 0.5), 10, 0.5, curl=r.choice([-0.3, 0.3]), pull=0.05)
+        lines.append((p, taper(len(p), 0.016, p=0.5), r.uniform(0.5, 1)))
+    save("brush tips", "moss fibres", strokes(u, v, lines, round_p) * D)
+    r = np.random.default_rng(1035)
+    lines = []
+    for _ in range(30):
+        a0 = r.choice([0.6, -0.6]) + r.normal(0, 0.15)
+        x0, y0 = r.uniform(-0.6, 0.6, 2)
+        p = walk(r, x0 - np.cos(a0) * 0.6, y0 - np.sin(a0) * 0.6, a0, 1.2, 14, 0.06)
+        lines.append((p, 0.012, r.uniform(0.5, 1)))
+    save("brush tips", "interlaced fibres", strokes(u, v, lines, round_p) * D)
+    r = np.random.default_rng(1036)
+    x = np.linspace(-0.9, 0.9, 40)
+    lines = [(np.stack([x, y + 0.04 * np.sin(x * r.uniform(3, 6) + r.uniform(0, 6))], 1), r.uniform(0.008, 0.016), r.uniform(0.5, 1))
+             for y in np.linspace(-0.7, 0.7, 11) + r.normal(0, 0.02, 11)]
+    save("brush tips", "hair lines", strokes(u, v, lines, round_p) * D)
+
+    warp = 0.06 * (tperlin(u, v, 3, 2, seed=1037) - 0.5)
+    ell = np.sqrt((u / 0.8) ** 2 + (v / 1.0) ** 2) + warp
+    breaks = smooth((tnoise(u, v, 14, 2, seed=1038) - 0.2) / 0.1)
+    save("brush tips", "whorl print", smooth(1 - np.abs(np.mod(ell * 11, 1) - 0.5) / 0.22) * breaks * disc(u, v, 0.85, 0.15))
+    loop = np.where(v < 0.1, np.abs(u) + warp, np.sqrt(u * u + (v - 0.1) ** 2) + warp)
+    save("brush tips", "loop print", smooth(1 - np.abs(np.mod(loop * 12, 1) - 0.5) / 0.22) * breaks * disc(u, v, 0.85, 0.15))
+
+    save("brush tips", "running stitch", edge(rbox(u, v, 0.55, 0.07, 0.07), 0.04) * (0.75 + 0.25 * dome_p(v / 0.07)))
+    save("brush tips", "cross stitch mark", strokes(u, v, [(np.array([[-0.5, -0.5], [0.5, 0.5]]), 0.08), (np.array([[-0.5, 0.5], [0.5, -0.5]]), 0.08)], dome_p))
+    staple = strokes(u, v, [(np.array([[-0.6, 0.2], [-0.6, -0.15], [0.6, -0.15], [0.6, 0.2]]), 0.07)], dome_p)
+    save("brush tips", "staple", staple)
+    save("brush tips", "zigzag segment", strokes(u, v, [(np.array([[-0.9, 0.0], [-0.45, 0.45], [0.0, 0.0], [0.45, -0.45], [0.9, 0.0]]), 0.06)], dome_p))
+    save("brush tips", "hazard band", edge(np.abs(u - v * 0.8) - 0.22, 0.03) * edge(np.abs(v) - 0.6, 0.03))
+    save("brush tips", "stripe bar", edge(np.abs(u) - 0.12, 0.03) * edge(np.abs(v) - 0.85, 0.03))
+    chev = edge(np.abs(u - np.abs(v) * 0.7 + 0.2) - 0.16, 0.04) * edge(np.abs(v) - 0.8, 0.04)
+    save("brush tips", "tread chevron", chev * (0.8 + 0.2 * dome_p((u - np.abs(v) * 0.7 + 0.2) / 0.16)))
+    pads = np.maximum(edge(rbox(u + 0.25, v - 0.45, 0.2, 0.3, 0.05), 0.03), edge(rbox(u - 0.25, v + 0.45, 0.2, 0.3, 0.05), 0.03))
+    save("brush tips", "track cleats", np.maximum(pads, edge(rbox(u, v, 0.08, 0.85, 0.03), 0.03) * 0.6))
+    arc = np.linspace(np.pi * 1.05, np.pi * 1.95, 24)
+    plate = np.concatenate([np.stack([np.cos(arc) * 0.8, np.sin(arc) * 0.8 + 0.05], 1), [[0.55, 0.45], [0.0, 0.88], [-0.55, 0.45]]])
+    sd = convex_sdf(u, v, plate)
+    save("brush tips", "scale plate", np.clip(-sd / 0.12, 0, 1) ** 0.6 * (0.7 + 0.3 * smooth((0.4 - v) / 0.8)))
+    hx = lambda lu, lv: smooth(1 - np.abs(ngon(lu, lv, 6, 0.8) + 0.07) / 0.07)
+    save("brush tips", "hex cell", stamp(u, v, np.zeros_like(u), 0, 0, 1.0, np.pi / 6, hx) + 0.35 * edge(ngon(u, v, 6, 0.6, np.pi / 6), 0.04))
+
+    r = np.random.default_rng(1039)
+    blob = disc(u, v, 0.55 + 0.25 * (tnoise(u, v, 4, 3, seed=1040) - 0.5), 0.08)
+    holes = smooth((tworley(u, v, 7, seed=1041)[0] - 0.1) / 0.08)
+    save("brush tips", "grit clump", blob * holes * (0.6 + 0.4 * grain(u, v, 32, 1042, 0.3, 0.3)))
+    body = disc(u, v, 0.45 + 0.15 * (tnoise(u, v, 5, 2, seed=1043) - 0.5), 0.05)
+    drips = strokes(u, v, [(np.array([[x, 0.0], [x + r.normal(0, 0.02), r.uniform(0.55, 0.9)]]), np.array([r.uniform(0.05, 0.09), 0.04]))
+                            for x in r.uniform(-0.35, 0.35, 4)], flat_p)
+    save("brush tips", "mud splash", np.maximum(body, drips) * (0.75 + 0.25 * tnoise(u, v, 16, 2, seed=1044)))
+    r = np.random.default_rng(1045)
+    k = 16
+    xs, ys, rs = r.uniform(-0.6, 0.6, k), r.uniform(-0.6, 0.6, k), r.uniform(0.07, 0.22, k)
+    fuzz = 0.6 + 0.4 * tnoise(u, v, 40, 2, seed=1046)
+    save("brush tips", "mold colony", bumps(u, v, xs, ys, rs, profile=lambda t: t ** 0.5, soft=0.6) * fuzz * D)
+    rg = np.random.default_rng(1047)
+    save("brush tips", "sandpaper grain", (rg.random(u.shape) > 0.8).astype(float) * (0.5 + 0.5 * rg.random(u.shape)) * D)
+    r = np.random.default_rng(1048)
+    k = 80
+    save("brush tips", "cement speckle", np.clip(dots(u, v, r.uniform(-0.85, 0.85, k), r.uniform(-0.85, 0.85, k), r.uniform(0.01, 0.05, k),
+                                                     r.uniform(0.3, 1, k), 0.4) + 0.25 * grain(u, v, 48, 1049), 0, 1) * D)
+    r = np.random.default_rng(1050)
+    k = 60
+    save("brush tips", "dust motes", dots(u, v, r.uniform(-0.8, 0.8, k), r.uniform(-0.8, 0.8, k), r.uniform(0.03, 0.09, k), r.uniform(0.5, 1, k), 0.6) * D)
+
+    save("brush tips", "leaf sprig", stamp(u, v, np.zeros_like(u), 0, 0, 0.8, 0.0, lambda lu, lv: leaf(lu, lv, 0.35, 0.7, 7)))
+    save("brush tips", "grass tuft", strokes(u, v, [(walk(np.random.default_rng(1051 + i), x, 0.85, -np.pi / 2 + x * 0.6, 1.4, 10, 0.05, curl=x * 0.02),
+                                                     taper(11, 0.05, "end", 0.9)) for i, x in enumerate(np.linspace(-0.4, 0.4, 7))], round_p) * D)
+    save("brush tips", "ink nib", edge(np.sqrt((u / 0.25) ** 2 + (v / 0.9) ** 2) - 1 + 0.06 * (tnoise(u, v, 20, 2, seed=1052) - 0.5), 0.08))
+
+
+NEW_GENERATORS = (damage_more, stone_more, organic_more, skin_more, fabric_more, hard_more, ornament, shapes_more, stylized, noise, brush_tips)
 
 
 if __name__ == "__main__":
