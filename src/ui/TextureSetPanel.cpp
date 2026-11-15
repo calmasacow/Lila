@@ -809,6 +809,7 @@ struct TextureSetPanel::Impl
     std::string propsKey;
 
     QComboBox* sets = nullptr;
+    QComboBox* variants = nullptr;
     QToolButton* follow = nullptr;
     QToolButton* settingsToggle = nullptr;
     QWidget* settingsBox = nullptr;
@@ -2369,6 +2370,23 @@ struct TextureSetPanel::Impl
 
     // Refresh ------------------------------------------------------------------------------------------------------------
 
+    void refreshVariants()
+    {
+        variants->blockSignals(true);
+        variants->clear();
+        variants->addItem("Base", QString());
+        for (const json& v : view.value("variants", json::array()))
+            variants->addItem(qs(v.get<std::string>()), qs(v.get<std::string>()));
+        variants->insertSeparator(variants->count());
+        variants->addItem("New Variant...", QString("\x01new"));
+        const std::string active = view.value("variant", std::string());
+        if (!active.empty())
+            variants->addItem("Remove " + qs(active), QString("\x01remove"));
+        variants->setCurrentIndex(std::max(0, variants->findData(qs(active))));
+        variants->setEnabled(setNode() != nullptr);
+        variants->blockSignals(false);
+    }
+
     void refreshSets()
     {
         std::vector<std::string> names = tex::setNames(scene::Graph::current());
@@ -2407,6 +2425,7 @@ struct TextureSetPanel::Impl
         const std::string vKey = set + "|" + nextView.dump() + "|" + sKey + "|" + shownChannel() + "|" + textureSets::activeLayer(set);
         settings = nextSettings;
         view = nextView;
+        refreshVariants();
         if (sKey != settingsKey || !settingsBox->layout())
         {
             settingsKey = sKey;
@@ -2597,7 +2616,13 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     auto* openGraph = toolButton(this, "node-editor", "Texture Graph: open this set's nodes");
     openGraph->setObjectName("openGraph");
     connect(openGraph, &QToolButton::clicked, this, [this] { openSelectedAsNodes(); });
+    d->variants = new QComboBox(this);
+    d->variants->setObjectName("variantPicker");
+    d->variants->setToolTip("Variant: the set's look shown and edited. A variant overrides layer settings (visibility, opacity, "
+                            "materials, seeds) over the base; Export with variants writes them all");
+    d->variants->setSizeAdjustPolicy(QComboBox::AdjustToContents);
     top->addWidget(d->sets, 1);
+    top->addWidget(d->variants);
     top->addWidget(d->follow);
     top->addWidget(openGraph);
     top->addWidget(newSet);
@@ -2915,6 +2940,25 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
             d->expanded[it->data(0, kRoleId).toString().toStdString()] = false;
     });
     connect(d->sets, &QComboBox::activated, this, [this](int) { setTextureSet(d->sets->currentData().toString().toStdString()); });
+    connect(d->variants, &QComboBox::activated, this, [this](int) {
+        const QString data = d->variants->currentData().toString();
+        const std::string set = d->set;
+        json call;
+        if (data == QString("\x01new"))
+        {
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, "New Variant", "Name", QLineEdit::Normal, "Variant", &ok).trimmed();
+            if (ok && !name.isEmpty())
+                call = {{"command", "texAddVariant"}, {"args", {set, name.toStdString()}}};
+        }
+        else if (data == QString("\x01remove"))
+            call = {{"command", "texRemoveVariant"}, {"args", {set, d->view.value("variant", std::string())}}};
+        else
+            call = {{"command", "texSwitchVariant"}, {"args", {set, data.toStdString()}}};
+        if (!call.is_null())
+            actions::run(call);
+        d->refresh();
+    });
 
     d->refreshTimer = new QTimer(this);
     d->refreshTimer->setSingleShot(true);

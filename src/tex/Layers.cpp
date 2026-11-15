@@ -80,7 +80,10 @@ struct Binding
 class Compiler
 {
 public:
-    Compiler(const LayerStack& stack, const SetSettings& settings, const Graph& previous) : mStack(stack), mSet(settings), mPrev(previous) {}
+    Compiler(const LayerStack& stack, const SetSettings& settings, const Graph& previous)
+        : mStack(withVariant(stack)), mStored(stack.toJson()), mSet(settings), mPrev(previous)
+    {
+    }
 
     StackCompile run(std::vector<Binding>* bindings)
     {
@@ -132,13 +135,14 @@ public:
             else
                 link(src, out.name, c.name);
         }
-        out.values[kStackKey] = mStack.toJson();
+        out.values[kStackKey] = mStored;
         mG.nodes.insert(mG.nodes.begin(), std::move(out));
         return {std::move(mG), std::move(mWarnings)};
     }
 
 private:
-    const LayerStack& mStack;
+    const LayerStack mStack;
+    const json mStored;
     const SetSettings& mSet;
     const Graph& mPrev;
     Graph mG;
@@ -1249,7 +1253,68 @@ json LayerStack::toJson() const
     json ls = json::array();
     for (const Layer& l : layers)
         ls.push_back(l.toJson());
-    return {{"version", 1}, {"nextId", nextId}, {"base", base}, {"heightNormal", heightNormal}, {"layers", ls}};
+    json out = {{"version", 1}, {"nextId", nextId}, {"base", base}, {"heightNormal", heightNormal}, {"layers", ls}};
+    if (!variants.empty())
+        out["variants"] = variants;
+    if (!variant.empty())
+        out["variant"] = variant;
+    return out;
+}
+
+void mergeOverride(json& into, const json& patch)
+{
+    if (!into.is_object() || !patch.is_object())
+    {
+        into = patch;
+        return;
+    }
+    for (const auto& [k, v] : patch.items())
+        if (v.is_object() && into.contains(k) && into[k].is_object())
+            mergeOverride(into[k], v);
+        else
+            into[k] = v;
+}
+
+namespace
+{
+/** Applies an override: merge patch semantics (null drops a value), with maskOverrides going to the masks by id. */
+void applyOverride(Layer& l, const json& patch)
+{
+    json j = l.toJson();
+    const json id = j["id"];
+    json p = patch;
+    json masks;
+    if (p.contains("maskOverrides"))
+    {
+        masks = p["maskOverrides"];
+        p.erase("maskOverrides");
+    }
+    j.merge_patch(p);
+    j["id"] = id;
+    if (masks.is_object() && j.contains("masks") && j["masks"].is_array())
+        for (json& m : j["masks"])
+            if (m.is_object() && masks.contains(m.value("id", std::string())))
+            {
+                const json mid = m["id"];
+                m.merge_patch(masks[m.value("id", std::string())]);
+                m["id"] = mid;
+            }
+    l = Layer::fromJson(j);
+}
+} // namespace
+
+LayerStack withVariant(const LayerStack& stack)
+{
+    LayerStack out = stack;
+    if (stack.variant.empty())
+        return out;
+    auto it = stack.variants.find(stack.variant);
+    if (it == stack.variants.end() || !it->is_object())
+        return out;
+    for (const auto& [id, patch] : it->items())
+        if (Layer* l = out.find(id); l && patch.is_object())
+            applyOverride(*l, patch);
+    return out;
 }
 
 LayerStack LayerStack::fromJson(const json& j)
@@ -1266,6 +1331,10 @@ LayerStack LayerStack::fromJson(const json& j)
         s.heightNormal = field<double>(j, "heightNormal", 1.0);
         for (const json& l : field<json>(j, "layers", json::array()))
             s.layers.push_back(Layer::fromJson(l));
+        s.variants = field<json>(j, "variants", json::object());
+        if (!s.variants.is_object())
+            throw std::invalid_argument("variants must be an object");
+        s.variant = field<std::string>(j, "variant", std::string());
         return s;
     }
     catch (const json::exception& e)
@@ -1525,13 +1594,20 @@ std::vector<std::string> externalsUsed(const Graph& g)
 
 json stackView(const StackState& state, const SetSettings& settings, const Graph& g)
 {
+    // The layers as the active variant shows them.
+    const LayerStack shown = withVariant(state.stack);
     json layers = json::array();
-    for (const Layer& l : state.stack.layers)
-        layers.push_back(layerView(state.stack, l, settings));
+    for (const Layer& l : shown.layers)
+        layers.push_back(layerView(shown, l, settings));
     json channels = json::array();
     for (const Channel& c : settings.channels)
         channels.push_back(c.name);
+    json variants = json::array();
+    for (const auto& [name, v] : state.stack.variants.items())
+        variants.push_back(name);
     return {{"mode", state.graphMode ? "graph" : "stack"},
+            {"variant", state.stack.variant},
+            {"variants", variants},
             {"edited", state.edited},
             {"channels", channels},
             {"base", state.stack.base},

@@ -542,6 +542,23 @@ void registerTextureGraphUi()
                       },
                   .doc = "Evaluate the current texture set and write its maps through its export preset (Unreal by default).",
                   .python = "lila.ops.texExport(\"RockTex\")"});
+    actions::add({.id = "texture.exportVariants",
+                  .label = "Export All Variants",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          if (std::string set = currentTextureSet(); !set.empty())
+                          {
+                              json call = argsCall({set});
+                              call["variants"] = true;
+                              if (json r = runUi("texExport", call); r.is_object())
+                                  log::info("exported {} variants", r.value("variants", json::object()).size());
+                          }
+                      },
+                  .doc = "Write the current texture set's maps once for the base and once for each variant, told apart by the {variant} "
+                         "token in the export preset's names (added when the preset has none).",
+                  .python = "lila.ops.texExport(\"RockTex\", variants=True)",
+                  .keywords = {"variants", "export", "colourways", "skins"}});
     actions::add({.id = "texture.clearPreview",
                   .label = "Clear Mesh Preview",
                   .category = "Texture",
@@ -551,7 +568,7 @@ void registerTextureGraphUi()
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
     menus::addActions("Texture", {"texture.newSet", "tex.paint", "tex.stencil", "tex.paintAlongCurve", "tex.patchFill", "tex.transferSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "tex.materialFromMaps", "tex.materialsFromFolder", "texture.importPainterSmart", "tex.importPtex", "tex.exportPtex", "texture.exportMaterial",
-                                  "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview", "#View", "viewport.textureView3d",
+                                  "texture.exportNodes", "texture.exportMaps", "texture.exportVariants", "", "texture.clearPreview", "#View", "viewport.textureView3d",
                                   "viewport.textureViewSplit", "viewport.textureView2d"});
 }
 } // namespace lila::ui

@@ -168,6 +168,10 @@ struct ExportOptions
      * into this folder, evaluating only the channels the rest read; a file whose pixels come out unchanged isn't rewritten.
      */
     bool incremental = false;
+    /** The variant the set shows, for the {variant} token. */
+    std::string variant;
+    /** Names must tell variants apart: a template without {variant} gets _{variant} added. */
+    bool needVariantToken = false;
     /** gpu or cpu; empty picks the GPU when there is one. */
     std::string backend;
     /** Overrides the set's normalFromHeight. */

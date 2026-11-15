@@ -180,6 +180,13 @@ struct LILA_SCENE_API LayerStack
     double heightNormal = 1.0;
     /** Bottom first. */
     std::vector<Layer> layers;
+    /**
+     * Named variants, {name: {layer id: override}}: an override is a merge patch over the layer's JSON form, where
+     * maskOverrides {mask id: patch} patches single masks. Variants hold settings, never pixels.
+     */
+    json variants = json::object();
+    /** The variant the stack compiles with; empty for the base. */
+    std::string variant;
 
     Layer* find(std::string_view id);
     const Layer* find(std::string_view id) const;
@@ -194,6 +201,11 @@ struct LILA_SCENE_API LayerStack
     /** Throws std::invalid_argument. */
     static LayerStack fromJson(const json& j);
 };
+
+/** The stack as its active variant has it: that variant's overrides applied, the variants themselves kept. */
+LILA_SCENE_API LayerStack withVariant(const LayerStack& stack);
+/** Merges a variant override into another, keeping nulls (which drop a value when the override is applied). */
+LILA_SCENE_API void mergeOverride(json& into, const json& patch);
 
 /** Whether a projection (layerProjection's values) moves content off the uvs: a mode other than uv. */
 LILA_SCENE_API bool hasProjection(const json& projection);

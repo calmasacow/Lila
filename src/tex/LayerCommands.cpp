@@ -728,6 +728,107 @@ void registerLayerCommands()
     maps::registerCommands();
     using T = ArgType;
     ops::registerCommand({
+        .name = "texVariants",
+        .doc = "A texture set's variants: {active, variants {name: {layer id: override}}}. An override patches the layer's settings "
+               "(enabled, opacity, material, params...) and maskOverrides {mask id: patch} its masks.",
+        .positionalDoc = "set",
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            Session s = open(a, "texVariants", false);
+            return {{"active", s.stack().variant}, {"variants", s.stack().variants}};
+        },
+    });
+    ops::registerCommand({
+        .name = "texAddVariant",
+        .doc = "Add a named variant to a texture set and switch to it: from then on layer and mask edits are its overrides, until "
+               "texSwitchVariant goes back to the base (name ''). copy= starts it from another variant's overrides.",
+        .positionalDoc = "set name",
+        .flags = {{"copy", "", T::String, nullptr, "A variant whose overrides it starts with."}},
+        .run = [](const Args& a) -> json {
+            Session s = open(a, "texAddVariant");
+            const std::string name = positional(a, 1, "texAddVariant", "variant name");
+            if (s.stack().variants.contains(name))
+                throw CommandError("texAddVariant: " + s.set->name() + " already has a variant " + name);
+            json start = json::object();
+            if (a.has("copy"))
+            {
+                const std::string from = a.get<std::string>("copy");
+                if (!s.stack().variants.contains(from))
+                    throw CommandError("texAddVariant: no variant " + from);
+                start = s.stack().variants[from];
+            }
+            s.stack().variants[name] = start;
+            s.stack().variant = name;
+            s.commit();
+            return {{"active", name}};
+        },
+    });
+    ops::registerCommand({
+        .name = "texRemoveVariant",
+        .doc = "Remove a texture set's variant; the set goes back to the base when it was active.",
+        .positionalDoc = "set name",
+        .run = [](const Args& a) -> json {
+            Session s = open(a, "texRemoveVariant");
+            const std::string name = positional(a, 1, "texRemoveVariant", "variant name");
+            if (!s.stack().variants.contains(name))
+                throw CommandError("texRemoveVariant: no variant " + name);
+            s.stack().variants.erase(name);
+            if (s.stack().variant == name)
+                s.stack().variant.clear();
+            s.commit();
+            return {{"active", s.stack().variant}};
+        },
+    });
+    ops::registerCommand({
+        .name = "texSwitchVariant",
+        .doc = "Show a texture set as one of its variants ('' for the base). Layer and mask edits go to the variant shown.",
+        .positionalDoc = "set name",
+        .run = [](const Args& a) -> json {
+            Session s = open(a, "texSwitchVariant");
+            const std::string name = a.positional.size() > 1 && a.positional[1].is_string() ? a.positional[1].get<std::string>() : std::string();
+            if (!name.empty() && !s.stack().variants.contains(name))
+                throw CommandError("texSwitchVariant: no variant " + name);
+            s.stack().variant = name;
+            s.commit();
+            return {{"active", name}};
+        },
+    });
+    ops::registerCommand({
+        .name = "texSetVariant",
+        .doc = "Set or clear a variant's override for one layer without switching to it: props is merged into the override (as "
+               "texSetLayer takes it, plus maskOverrides {mask id: patch}); props null clears the layer's override.",
+        .positionalDoc = "set name layer props",
+        .run = [](const Args& a) -> json {
+            Session s = open(a, "texSetVariant");
+            const std::string name = positional(a, 1, "texSetVariant", "variant name");
+            const std::string layer = positional(a, 2, "texSetVariant", "layer");
+            if (!s.stack().variants.contains(name))
+                throw CommandError("texSetVariant: no variant " + name);
+            if (!s.stack().find(layer))
+                throw CommandError("texSetVariant: no layer " + layer);
+            json& v = s.stack().variants[name];
+            const json props = a.positional.size() > 3 ? a.positional[3] : json();
+            if (props.is_null())
+                v.erase(layer);
+            else if (!props.is_object())
+                throw CommandError("texSetVariant: props must be a dict or null");
+            else
+                mergeOverride(v[layer], props);
+            LayerStack probe = s.stack();
+            probe.variant = name;
+            try
+            {
+                (void)withVariant(probe);
+            }
+            catch (const std::exception& e)
+            {
+                throw CommandError(std::string("texSetVariant: ") + e.what());
+            }
+            s.commit();
+            return v.contains(layer) ? v[layer] : json();
+        },
+    });
+    ops::registerCommand({
         .name = "texLayerStack",
         .doc = "A texture set's layer stack as JSON: layers bottom first (with each channel's resolved enable, mode and opacity), masks, anchors, "
                "the base values, the mesh maps it reads, and mode: stack, or graph when the graph was edited as nodes beyond what the stack "
@@ -881,16 +982,38 @@ void registerLayerCommands()
             Layer& l = s.layer(positional(a, 1, "texSetLayer", "layer"));
             if (a.positional.size() < 3)
                 throw CommandError("texSetLayer: props required");
-            Layer next = patched(l, a.positional[2], "texSetLayer");
-            if (const json& props = a.positional[2]; props.is_object() && props.contains("params"))
+            // With a variant active the edit is that variant's override; the base layer stays as it is.
+            const std::string variant = s.stack().variant;
+            const Layer* shown = &l;
+            LayerStack resolved;
+            if (!variant.empty())
+            {
+                resolved = withVariant(s.stack());
+                shown = resolved.find(l.id);
+            }
+            Layer next = patched(*shown, a.positional[2], "texSetLayer");
+            const json& props = a.positional[2];
+            if (props.is_object() && props.contains("params"))
                 applyGraphParams(next, props["params"]);
             if (next.kind != LayerKind::Folder && !next.children.empty())
                 throw CommandError("texSetLayer: only folders have children");
             checkLayer(s, next);
             for (const Mask& m : next.masks)
                 checkMask(s, m);
-            l = std::move(next);
-            json out = l.toJson();
+            json out = next.toJson();
+            if (!variant.empty())
+            {
+                json patch = props;
+                if (patch.contains("params"))
+                {
+                    patch.erase("params");
+                    patch["graph"] = out["graph"];
+                }
+                patch.erase("id");
+                mergeOverride(s.stack().variants[variant][l.id], patch);
+            }
+            else
+                l = std::move(next);
             s.commit();
             return out;
         },
@@ -950,10 +1073,24 @@ void registerLayerCommands()
                 throw CommandError("texSetMask: " + l.id + " has no mask " + id);
             if (a.positional.size() < 4)
                 throw CommandError("texSetMask: props required");
-            Mask next = patched(*it, a.positional[3], "texSetMask");
+            const std::string variant = s.stack().variant;
+            Mask current = *it;
+            if (!variant.empty())
+                if (const Layer* r = withVariant(s.stack()).find(l.id))
+                    for (const Mask& m : r->masks)
+                        if (m.id == id)
+                            current = m;
+            Mask next = patched(current, a.positional[3], "texSetMask");
             checkMask(s, next);
-            *it = std::move(next);
-            json out = it->toJson();
+            json out = next.toJson();
+            if (!variant.empty())
+            {
+                json patch = a.positional[3];
+                patch.erase("id");
+                mergeOverride(s.stack().variants[variant][l.id]["maskOverrides"][id], patch);
+            }
+            else
+                *it = std::move(next);
             s.commit();
             return out;
         },

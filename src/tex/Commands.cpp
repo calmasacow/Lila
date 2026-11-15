@@ -1121,7 +1121,9 @@ void registerCommands()
                   {"backend", "", T::String, nullptr, "gpu or cpu; the GPU when left out and the renderer can run.", {"gpu", "cpu"}},
                   {"normalFromHeight", "", T::Bool, nullptr,
                    "Write the normal as detail over the height, with the height at 16 bits, for materials that rebuild normals from "
-                   "it; the set's normalFromHeight when left out."}},
+                   "it; the set's normalFromHeight when left out."},
+                  {"variants", "", T::Bool, false,
+                   "Export the base and every variant in one go, each named by the {variant} token (base for the base)."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             Node& n = setNode(positionalString(a, 0, "texExport", "texture set"), "texExport");
@@ -1134,9 +1136,40 @@ void registerCommands()
             o.backend = a.get<std::string>("backend", "");
             if (a.has("normalFromHeight"))
                 o.normalFromHeight = a.get<bool>("normalFromHeight", false);
+            StackState st = readStack(readGraph(n), readSettings(n));
+            o.variant = st.stack.variant;
             try
             {
-                return exportSet(n, o);
+                if (!a.get<bool>("variants", false))
+                    return exportSet(n, o);
+                // Each variant in turn is compiled into the set, exported, and the one shown is put back.
+                std::vector<std::string> names = {""};
+                for (const auto& [name, v] : st.stack.variants.items())
+                    names.push_back(name);
+                const std::string shown = st.stack.variant;
+                auto show = [&](const std::string& v) {
+                    StackState now = readStack(readGraph(n), readSettings(n));
+                    now.stack.variant = v;
+                    writeGraph(graph(), n, compileStack(now.stack, readSettings(n), readGraph(n)).graph);
+                };
+                json out = {{"variants", json::object()}};
+                o.needVariantToken = true;
+                try
+                {
+                    for (const std::string& v : names)
+                    {
+                        show(v);
+                        o.variant = v;
+                        out["variants"][v.empty() ? "base" : v] = exportSet(n, o);
+                    }
+                }
+                catch (...)
+                {
+                    show(shown);
+                    throw;
+                }
+                show(shown);
+                return out;
             }
             catch (const std::exception& e)
             {

@@ -369,7 +369,7 @@ json exportSet(scene::Node& set, const ExportOptions& options)
     if (requests.empty())
         throw std::invalid_argument(g.firstOfType(kMaterialOutputType) ? "the set has no channels" : "the graph has no Material Output");
 
-    const std::string tmpl = target->output.value("name", std::string("T_{[!M_]material}_{map}"));
+    std::string tmpl = target->output.value("name", std::string("T_{[!M_]material}_{map}"));
     const std::string format = target->output.value("format", std::string("png"));
     const int outBits = target->output.value("bits", 8);
     const std::string udimStyle = target->output.value("udimNaming", std::string("1001"));
@@ -378,6 +378,11 @@ json exportSet(scene::Node& set, const ExportOptions& options)
     fs::create_directories(folder, ec);
 
     json warnings = json::array();
+    if (options.needVariantToken && !bake::hasToken(tmpl, "variant"))
+    {
+        tmpl += "_{variant}";
+        warnings.push_back("the " + presetName + " name template has no {variant}, so _{variant} was added to tell the variants apart");
+    }
     // Normals from height: the normal goes out as detail over the height, which goes out with it at 16 bits.
     bool fromHeight = options.normalFromHeight.value_or(s.normalFromHeight);
     if (fromHeight && !s.channel("height"))
@@ -512,6 +517,7 @@ json exportSet(scene::Node& set, const ExportOptions& options)
             tokens.udimStyle = udimStyle;
             tokens.width = all.width;
             tokens.height = all.height;
+            tokens.variant = options.variant;
             const fs::path path = folder / bake::expandName(tmpl, tokens, s.tiles.size() > 1);
             const std::string file = paths::toUtf8(path);
             uint64_t key = mix(mix(mix(0, file), uint64_t(j.bits)), uint64_t(j.flipGreen));
