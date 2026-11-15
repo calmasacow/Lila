@@ -10402,6 +10402,15 @@ def texImportImage(*objects: Any, kind: str | None = None, channel: str | None =
         folder: Where the copies go; textures/<set>/imported by default.
     """
 
+def texImportPainterSmartMaterials(*objects: Any, folder: str | None = None, overwrite: bool | None = None) -> Any:
+    """Convert Substance 3D Painter smart materials (.spsm files, or folders of them) into Lila smart materials, written as .lilasmart beside their embedded images. Painter's generators, noises and filters become their nearest Lila nodes; custom Substance graphs and painted strokes can't come across. Returns per file {file, materials, approximated, dropped, error}.
+
+    Args:
+        objects: file|folder [file|folder...].
+        folder: Where they go; your smart materials folder by default.
+        overwrite: Replace smart materials of the same name there. Default True.
+    """
+
 def texLayerStack(*objects: Any) -> Any:
     """A texture set's layer stack as JSON: layers bottom first (with each channel's resolved enable, mode and opacity), masks, anchors, the base values, the mesh maps it reads, and mode: stack, or graph when the graph was edited as nodes beyond what the stack can show (or was never layered).
 
@@ -10576,6 +10585,16 @@ def texSetSettings(*objects: Any) -> Any:
         objects: set settings.
     """
 
+def texSetSmartMaterialTags(*objects: Any, tags: Sequence[Any] | None = None, add: Sequence[Any] | None = None, remove: Sequence[Any] | None = None) -> Any:
+    """Set, add or remove a smart material's or mask's tags, for you only (built-in ones too). Returns its tags.
+
+    Args:
+        objects: smartMaterial.
+        tags: Replace its tags with these.
+        add: Tags to add.
+        remove: Tags to remove.
+    """
+
 def texSetTies(*objects: Any) -> Any:
     """Replace a texture set's zip ties, shaped as gnSetTies takes them. Display only; links not in the graph are dropped, and so is a tie left with fewer than two. Returns how many ties the graph has.
 
@@ -10593,8 +10612,12 @@ def texSetValue(*objects: Any) -> Any:
 def texSets() -> Any:
     """Names of the texture sets in the scene."""
 
-def texSmartMaterials() -> Any:
-    """The smart materials and masks in the libraries: name, kind, description, tier and file."""
+def texSmartMaterials(tags: Sequence[Any] | None = None) -> Any:
+    """The smart materials and masks in the libraries: name, kind, description, tags, tier and file. tags= keeps those with every tag given.
+
+    Args:
+        tags: Only those carrying all of these tags.
+    """
 
 def textCurves(text: str | None = None, font: str | None = None, size: float | None = None, alignment: str | None = None, anchor: str | None = None, wrapWidth: float | None = None, letterSpacing: float | None = None, wordSpacing: float | None = None, lineSpacing: float | None = None, textCase: str | None = None, width: float | None = None, slant: float | None = None, weight: float | None = None, underline: bool | None = None, strikethrough: bool | None = None, kerning: bool | None = None, mergeOverlaps: bool | None = None, constructionHistory: bool | None = None, name: str | None = None, *, ch: bool | None = None, n: str | None = None) -> Any:
     """Make text as curves (Maya's textCurves): closed Bezier outlines of each glyph, exact, in the XY plane with the first baseline on the origin. The curveText node keeps the text, font and layout live, so editing it updates anything built on the curve (a bevelPlus, say). Returns [curve, curveText].

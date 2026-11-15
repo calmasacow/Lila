@@ -25,6 +25,7 @@
 #include "ui/FileDialog.h"
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
+#include "ui/PainterImportUi.h"
 
 #include <QApplication>
 #include <QFormLayout>
@@ -504,6 +505,14 @@ void registerTextureGraphUi()
                   .run = [] { importFiles(); },
                   .doc = "Read .lilamat materials as new texture sets, or add a .lilatexnodes node library to your node library.",
                   .python = "lila.ops.texImportGraph(\"rock.lilamat\")"});
+    actions::add({.id = "texture.importPainterSmart",
+                  .label = "Import Painter Smart Materials...",
+                  .category = "Texture",
+                  .run = [] { importPainterSmartMaterialsDialog(); },
+                  .doc = "Convert Substance 3D Painter smart materials (.spsm) into Lila smart materials on the smart material shelf. "
+                         "What can't come across exactly is listed in the log.",
+                  .python = "lila.ops.texImportPainterSmartMaterials(\"C:/path/to/smart-materials\")",
+                  .keywords = {"substance", "spsm", "adobe", "smart material", "convert"}});
     actions::add({.id = "texture.exportMaterial",
                   .label = "Export Material...",
                   .category = "Texture",
@@ -535,7 +544,7 @@ void registerTextureGraphUi()
                   .python = "lila.ui.run_action(\"texture.clearPreview\")"});
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
-    menus::addActions("Texture", {"texture.newSet", "tex.paint", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.exportMaterial",
+    menus::addActions("Texture", {"texture.newSet", "tex.paint", "", "window.textureGraph", "window.texture2d", "", "texture.import", "texture.importPainterSmart", "texture.exportMaterial",
                                   "texture.exportNodes", "texture.exportMaps", "", "texture.clearPreview", "#View", "viewport.textureView3d",
                                   "viewport.textureViewSplit", "viewport.textureView2d"});
 }

@@ -1338,12 +1338,23 @@ Image readWebp(const fs::path& path, std::string* err)
 {
     std::ifstream in(path, std::ios::binary);
     const std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (bytes.empty())
+    {
+        if (err)
+            *err = "cannot open file";
+        return {};
+    }
+    return decodeWebp(bytes.data(), bytes.size(), err);
+}
+
+Image decodeWebp(const uint8_t* data, size_t size, std::string* err)
+{
     int w = 0, h = 0;
-    uint8_t* px = bytes.empty() ? nullptr : WebPDecodeRGBA(bytes.data(), bytes.size(), &w, &h);
+    uint8_t* px = data && size ? WebPDecodeRGBA(data, size, &w, &h) : nullptr;
     if (!px)
     {
         if (err)
-            *err = bytes.empty() ? "cannot open file" : "not a readable WebP image";
+            *err = "not a readable WebP image";
         return {};
     }
     Image img{w, h, std::vector<float>(size_t(w) * size_t(h) * 4)};

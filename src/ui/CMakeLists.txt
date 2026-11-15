@@ -194,6 +194,7 @@ lila_module(lila_ui UI
     UvProjectTool.cpp UvProjectTool.h
     UvSeamOverride.cpp UvSeamOverride.h
     FlowLayout.cpp FlowLayout.h
+    PainterImportUi.cpp PainterImportUi.h ShelfTags.cpp ShelfTags.h
     FixedRowLayout.cpp FixedRowLayout.h
     MenuButtons.cpp MenuButtons.h
     DockSidebar.cpp DockSidebar.h

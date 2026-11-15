@@ -8,6 +8,7 @@
 #include "tex/Evaluate.h"
 #include "tex/Interop.h"
 #include "tex/Layers.h"
+#include "tex/PainterImport.h"
 #include "tex/SlangRt.h"
 
 #include <algorithm>
@@ -1157,5 +1158,6 @@ void registerCommands()
 
     registerLayerCommands();
     registerInteropCommands();
+    painter::registerPainterCommands();
 }
 } // namespace lila::tex
