@@ -56,8 +56,24 @@ void StrokeSampler::begin(const BrushSettings& s, const StrokeInput& in, double 
     mOut.clear();
     mPath = {in.position};
     mPathPressure = {in.pressure};
-    if (mMode == StrokeMode::Freehand)
+    mAirRate = s.airRate;
+    mAirDue = 0.0;
+    mAnchoredSize = 1.0;
+    if (mMode == StrokeMode::Freehand || mMode == StrokeMode::Airbrush)
         push(in.position, in.pressure, glm::dvec2(0.0));
+}
+
+void StrokeSampler::tick(double ms)
+{
+    if (!mActive || mMode != StrokeMode::Airbrush)
+        return;
+    // Time owed in dabs: a long frame lays several so the build-up follows the clock, not the frame rate.
+    mAirDue += ms * mAirRate / 1000.0;
+    for (int k = 0; mAirDue >= 1.0 && k < 64; ++k)
+    {
+        mAirDue -= 1.0;
+        push(mBrush, mPressure, mDir);
+    }
 }
 
 void StrokeSampler::setRadius(double radiusPx)
@@ -73,9 +89,14 @@ void StrokeSampler::move(const StrokeInput& in)
     mCursor = in.position;
     mPressure = in.pressure;
     mPen = in;
-    if (mMode == StrokeMode::Line)
+    if (mMode == StrokeMode::Line || mMode == StrokeMode::DragDot)
     {
         mBrush = mCursor;
+        return;
+    }
+    if (mMode == StrokeMode::Anchored)
+    {
+        mAnchoredSize = std::max(glm::length(mCursor - mStart) / mRadius, 0.05);
         return;
     }
     if (mMode == StrokeMode::Curve)
@@ -106,6 +127,13 @@ void StrokeSampler::end()
 {
     if (!mActive)
         return;
+    if (mMode == StrokeMode::Anchored)
+    {
+        push(mStart, mPressure, glm::dvec2(0.0));
+        mOut.back().size *= mAnchoredSize;
+    }
+    if (mMode == StrokeMode::DragDot)
+        push(mCursor, mPressure, glm::dvec2(0.0));
     if (mMode == StrokeMode::Line)
     {
         const glm::dvec2 d = mCursor - mStart;
@@ -322,6 +350,14 @@ void Stroke::move(const StrokeInput& in)
     if (!mSampler.active())
         return;
     mSampler.move(in);
+    flush();
+}
+
+void Stroke::tick(double ms)
+{
+    if (!mSampler.active())
+        return;
+    mSampler.tick(ms);
     flush();
 }
 

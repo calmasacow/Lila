@@ -60,6 +60,10 @@ public:
     /** Line strokes lay their dabs here, from the press to the last position; curve strokes along their smoothed path. */
     void end();
     void cancel();
+    /** Airbrush: time passing while held; dabs come at the brush's rate whether it moves or not. Other modes ignore it. */
+    void tick(double ms);
+    /** Anchored: the radius the drag sets, as a multiple of the brush's; 1 before any drag. */
+    double anchoredSize() const { return mAnchoredSize; }
     /** The radius the spacing follows, e.g. a world radius seen at a new depth. */
     void setRadius(double radiusPx);
 
@@ -87,6 +91,7 @@ private:
     double mSpacing = 0.15;
     double mRadius = 1.0;
     double mStep = 1.0;
+    double mAirRate = 20.0, mAirDue = 0.0, mAnchoredSize = 1.0;
     /** The pen as the last input left it: tilt and rotation go to every sample until the next. */
     StrokeInput mPen;
     double mLazy = 0.0;
@@ -145,6 +150,8 @@ public:
      */
     bool begin(const BrushSettings& s, const StrokeInput& in, SurfaceQuery query, DabSink& sink, bool requireHit = true);
     void move(const StrokeInput& in);
+    /** Time passing while held, for airbrush strokes (see StrokeSampler::tick). */
+    void tick(double ms);
     void end();
     void cancel();
 

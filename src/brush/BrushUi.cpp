@@ -549,10 +549,11 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
     addNumber(numberField("flow", "Flow", false, 0.0, 1.0, 0.05, "How much each dab adds; strokes that build up do so more slowly below 1"),
               &BrushSettings::flow);
 
-    add(choiceField("mode", "Stroke", {{"freehand", "Freehand"}, {"line", "Line"}, {"curve", "Curve"}},
-                    "Line: drag from where the line starts to where it ends. Curve: draw the path freely and it is smoothed into a clean curve. Both lay their dabs on release"),
-        [](const BrushSettings& s) { return json(s.mode == StrokeMode::Line ? "line" : s.mode == StrokeMode::Curve ? "curve" : "freehand"); },
-        [](BrushSettings& s, const json& v) { s.mode = v == "line" ? StrokeMode::Line : v == "curve" ? StrokeMode::Curve : StrokeMode::Freehand; });
+    add(choiceField("mode", "Stroke", {{"freehand", "Freehand"}, {"line", "Line"}, {"curve", "Curve"}, {"airbrush", "Airbrush"}, {"anchored", "Anchored"}, {"dragDot", "Drag Dot"}},
+                    "Line: drag from start to end. Curve: draw freely, smoothed on release. Airbrush: builds up while held. Anchored: drag out one dab's size. Drag Dot: one dab, placed on release"),
+        [](const BrushSettings& s) { return json(strokeModeName(s.mode)); },
+        [](BrushSettings& s, const json& v) { s.mode = strokeModeFromName(v.is_string() ? v.get<std::string>() : std::string()); });
+    addNumber(numberField("airRate", "Air rate", false, 1.0, 200.0, 1.0, "Airbrush: dabs a second while the button is held"), &BrushSettings::airRate);
     addNumber(numberField("lazyRadius", "Lazy radius", false, 0.0, 500.0, 5.0,
                           "Lazy mouse: the brush trails the cursor on a string this long, so strokes come out steady", " px"),
               &BrushSettings::lazyRadius);

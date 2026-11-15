@@ -36,6 +36,7 @@
 #include "ui/FileDialog.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QDir>
 #include <QDateTime>
 #include <QUrl>
@@ -104,6 +105,7 @@ constexpr ToolKind kTools[] = {
     {"clone", "Clone", "Copies from the clone source: Ctrl+Alt+click sets it.", "copy"},
     {"heal", "Heal", "Clones detail, keeping the colour around it: Ctrl+Alt+click sets the source.", "bandage"},
     {"path", "Path", "Click points on the surface (drag to curve), Enter paints along them; drag a point afterwards to repaint.", "ease-in-control-point"},
+    {"reveal", "Reveal", "Paints a picture in through the brush, pinned to the screen or laid on the uvs.", "photo-scan"},
     {"gradient", "Gradient", "Drag from where it paints fully to where it fades out: linear, radial, reflected or angle.", "transition-right"},
     {"select", "Selection", "Draw a lasso, polygon or rectangle to mask the active layer: Shift adds, Ctrl subtracts.", "lasso"},
     {"pick", "Picker", "Click the mesh to take every channel's value there; Shift+click keeps it as a swatch.", "color-picker"},
@@ -195,6 +197,9 @@ struct TexturePaintSettings
     std::string quickLimit;
     /** Face groups whose faces strokes leave alone. */
     std::set<std::string> lockedGroups;
+    /** Reveal: the picture painted through, and whether it sits on the screen or on the uvs. */
+    std::string revealImage;
+    std::string revealSpace = "screen";
     /** Mirror strokes in uv space too: off, u or v, across the middle of uv space or of each island. */
     std::string uvMirror = "off";
     bool uvMirrorPerIsland = false;
@@ -242,7 +247,7 @@ bool filterTool(const std::string& t) { return t == "smudge" || t == "blur" || t
 tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
 {
     tp::Payload p;
-    p.kind = s.tool == "project" ? "project" : (s.tool == "path" || s.tool == "pick" || s.tool == "select") ? "paint" : s.tool == "gradient" ? "fill" : s.tool;
+    p.kind = s.tool == "project" ? "project" : (s.tool == "path" || s.tool == "pick" || s.tool == "select" || s.tool == "reveal") ? "paint" : s.tool == "gradient" ? "fill" : s.tool;
     for (const ChannelValue& c : s.channels)
         if (c.on)
             p.channels[c.name] = c.color ? c.value : glm::vec3(c.value.x);
@@ -266,6 +271,13 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
     p.facingFade = s.facingFade;
     p.fillBy = s.fillBy;
     const bool sourced = s.tool == "paint" || s.tool == "fill" || s.tool == "project" || s.tool == "path";
+    // Reveal on the uvs: the picture is the stroke's source, sampled where each texel's uv falls.
+    if (s.tool == "reveal" && s.revealSpace == "uv" && !s.revealImage.empty())
+    {
+        p.source = {{"node", "layerImage"}, {"values", {{"file", s.revealImage}}}, {"resolution", 2048}, {"scale", s.materialScale}};
+        if (!p.channels.contains("baseColor"))
+            p.channels["baseColor"] = glm::vec3(1.0f);
+    }
     if (sourced && s.source == "material" && !s.material.empty())
         p.source = {{"library", s.material}, {"resolution", 512}, {"scale", s.materialScale}};
     else if (sourced && s.source == "texture" && !s.sourceImage.empty())
@@ -649,6 +661,34 @@ public:
         mPickLayer->setObjectName("pickLayer");
         mPickLayer->setToolTip("Pick the active layer's own paint instead of the whole texture set");
         mPickRow = addRow(form, "Pick", mPickLayer);
+        mReveal = new QToolButton(this);
+        mReveal->setObjectName("revealImage");
+        controls::setRole(mReveal, "row");
+        mReveal->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        mReveal->setIcon(icon("photo"));
+        mReveal->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        mReveal->setToolTip("The picture the brush reveals: click to pick another");
+        mRevealSpace = new controls::Segmented(this);
+        mRevealSpace->setObjectName("revealSpace");
+        mRevealSpace->add("Screen", {}, "Screen: the picture is pinned to the view; paint it onto whatever is under it", 0);
+        mRevealSpace->add("UV", {}, "UV: the picture lies on the uvs, tiled by Scale", 1);
+        auto* revealRow = new QHBoxLayout;
+        revealRow->addWidget(mReveal, 1);
+        revealRow->addWidget(mRevealSpace);
+        mRevealRow = addRow(form, "Reveal", revealRow);
+        connect(mReveal, &QToolButton::clicked, this, [this] {
+            const QString f = ui::fileDialog::getOpenFileName(this, "Reveal Picture", {}, "Images (*.png *.jpg *.jpeg *.exr *.tga *.tif *.tiff *.psd)");
+            if (!f.isEmpty())
+            {
+                texturePaintState().revealImage = f.toStdString();
+                sync();
+                changed();
+            }
+        });
+        connect(mRevealSpace, &controls::Segmented::picked, this, [this](int id) {
+            texturePaintState().revealSpace = id == 1 ? "uv" : "screen";
+            changed();
+        });
         mSelectMode = new controls::Segmented(this);
         mSelectMode->setObjectName("selectMode");
         mSelectMode->add({}, "lasso", "Lasso: drag around what to select", 0);
@@ -1122,6 +1162,8 @@ public:
                     mViews->addItem(QString::fromStdString(name));
         }
         mSelectMode->setCurrent(s.selectMode == "polygon" ? 1 : s.selectMode == "rect" ? 2 : 0);
+        mReveal->setText(s.revealImage.empty() ? QString("None") : QFileInfo(QString::fromStdString(s.revealImage)).completeBaseName());
+        mRevealSpace->setCurrent(s.revealSpace == "uv" ? 1 : 0);
         mGradient->setCurrent(s.gradientType == "radial" ? 1 : s.gradientType == "reflected" ? 2 : s.gradientType == "angle" ? 3 : 0);
         {
             const QSignalBlocker bd(mGradientDither);
@@ -1228,6 +1270,7 @@ private:
         showRow(mFillRow, t == "fill");
         showRow(mParticleRow, t == "paint");
         showRow(mPickRow, t == "pick");
+        showRow(mRevealRow, t == "reveal");
         showRow(mSelectRow, t == "select");
         showRow(mGradientRow, t == "gradient");
         showRow(mSwatchRow, !texturePaintState().swatches.empty());
@@ -1441,6 +1484,9 @@ private:
     QWidget* mViewsRow = nullptr;
     QCheckBox* mPickLayer = nullptr;
     controls::Segmented* mSelectMode = nullptr;
+    QToolButton* mReveal = nullptr;
+    controls::Segmented* mRevealSpace = nullptr;
+    QWidget* mRevealRow = nullptr;
     controls::Segmented* mGradient = nullptr;
     QCheckBox* mGradientDither = nullptr;
     QWidget* mGradientRow = nullptr;
@@ -2911,7 +2957,7 @@ private:
         header->occlusion = texturePaintState().occlusion;
         header->seed = texturePaintState().stroke.seed;
         header->view = strokeView(view, t.world);
-        header->stencil = strokeStencil();
+        header->stencil = texturePaintState().tool == "reveal" ? revealStencil() : strokeStencil();
         if (header->stencil && header->stencil->mode == "color" && !header->payload.channels.contains(header->stencil->colorChannel))
             header->payload.channels[header->stencil->colorChannel] = glm::vec3(1.0f);
         mParticles.reset();
@@ -2948,6 +2994,19 @@ private:
             return;
         }
         mStroking = true;
+        // Airbrush: dabs keep coming while held, moving or not.
+        if (texturePaintState().stroke.mode == brush::StrokeMode::Airbrush)
+        {
+            mAirTimer = std::make_unique<QTimer>();
+            mAirClock.start();
+            QObject::connect(mAirTimer.get(), &QTimer::timeout, [this, alive = std::weak_ptr<bool>(mAlive)] {
+                if (!alive.lock() || !mStroking)
+                    return;
+                mStroke.tick(double(mAirClock.restart()));
+                flush();
+            });
+            mAirTimer->start(16);
+        }
         const ViewInfo vi = view;
         if (!mStroke.begin(texturePaintState().stroke, mControls.input(e),
                            [this, vi](glm::dvec2 px, brush::SurfaceHit& out) { return surfaceQuery(px, vi, out); }, *this, true))
@@ -3005,6 +3064,7 @@ private:
 
     void endStroke()
     {
+        mAirTimer.reset();
         mStroke.end();
         flush();
         mStroking = false;
@@ -3041,6 +3101,7 @@ private:
 
     void cancelStroke()
     {
+        mAirTimer.reset();
         mStroke.cancel();
         mStroking = false;
         mPending.clear();
@@ -3474,6 +3535,34 @@ private:
         viewportTools::requestRedraw();
     }
 
+    /** Reveal on the screen: the picture as a colour stencil filling the view's height, centred. */
+    std::optional<tp::StrokeStencil> revealStencil()
+    {
+        const TexturePaintSettings& s = texturePaintState();
+        if (s.revealSpace != "screen" || s.revealImage.empty())
+            return std::nullopt;
+        if (!mRevealPicture || mRevealPath != s.revealImage)
+        {
+            std::string err;
+            image::Image img = image::read(paths::fromUtf8(s.revealImage), &err);
+            if (img.width <= 0)
+            {
+                log::warn("Texture paint: reveal picture {}: {}", s.revealImage, err);
+                return std::nullopt;
+            }
+            for (size_t i = 0; i < img.rgba.size(); ++i)
+                if (i % 4 != 3)
+                    img.rgba[i] = srgbToLinear(std::clamp(img.rgba[i], 0.0f, 1.0f));
+            mRevealPicture = tp::PaintImage::fromRgba(img.width, img.height, img.rgba);
+            mRevealPath = s.revealImage;
+        }
+        tp::holdImage(mRevealPicture);
+        tp::StrokeStencil st;
+        st.image = mRevealPicture->key();
+        st.mode = "color";
+        return st;
+    }
+
     /** The stencil as a stroke records it, its picture held so the live stroke can read it before the command stores it. */
     std::optional<tp::StrokeStencil> strokeStencil()
     {
@@ -3638,6 +3727,8 @@ private:
     tp::PaintSymmetry mSym;
     /** The meshes a stroke left for another, and the header every new one starts from. */
     std::vector<Segment> mSegments;
+    std::unique_ptr<QTimer> mAirTimer;
+    QElapsedTimer mAirClock;
     bool mTileable = false;
     std::shared_ptr<tp::Stroke> mStrokeTemplate;
     tp::Dab mCloneSourceDab;
@@ -3653,7 +3744,8 @@ private:
     ViewInfo mBufferView;
     render::GpuImageRef mBufferImage, mStencilImage;
     uint64_t mStencilImageVersion = ~0ull, mStencilPictureVersion = ~0ull;
-    std::shared_ptr<const tp::PaintImage> mStencilPicture;
+    std::shared_ptr<const tp::PaintImage> mStencilPicture, mRevealPicture;
+    std::string mRevealPath;
     /** S held: drags place the stencil instead of painting. */
     bool mStencilKey = false;
     std::unique_ptr<QObject> mKeyWatch;

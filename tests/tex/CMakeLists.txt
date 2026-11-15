@@ -1,6 +1,7 @@
 add_executable(lila_tex_tests
     main.cpp
     test_brush_tilt.cpp
+    test_brush_stroke_methods.cpp
     test_tex_commands.cpp
     test_tex_eval.cpp
     test_tex_files.cpp

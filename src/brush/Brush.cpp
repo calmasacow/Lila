@@ -18,7 +18,7 @@ constexpr const char* kPrefs = "general";
 /** Every key toJson writes, for loading them back from prefs one by one. */
 constexpr std::string_view kKeys[] = {"radiusUnit", "radius", "worldRadius", "strength", "flow", "spacing", "falloff",
                                       "pressureSize", "pressureOpacity", "pressureFlow", "pressureCurve", "tilt", "jitter",
-                                      "angle", "followStroke", "roundness", "alpha", "strokeMode", "lazyRadius",
+                                      "angle", "followStroke", "roundness", "alpha", "strokeMode", "airRate", "lazyRadius",
                                       "smoothing", "mirror", "radial", "seed", "params"};
 
 json curveJson(const PressureCurve& c) { return {{"floor", c.floor}, {"exponent", c.exponent}}; }
@@ -162,6 +162,27 @@ void BrushSettings::ensureAlpha()
         alpha = AlphaImage::load(alphas::resolve(alphaPath));
 }
 
+const char* strokeModeName(StrokeMode m)
+{
+    switch (m)
+    {
+    case StrokeMode::Line: return "line";
+    case StrokeMode::Curve: return "curve";
+    case StrokeMode::Airbrush: return "airbrush";
+    case StrokeMode::Anchored: return "anchored";
+    case StrokeMode::DragDot: return "dragDot";
+    default: return "freehand";
+    }
+}
+
+StrokeMode strokeModeFromName(std::string_view name)
+{
+    for (StrokeMode m : {StrokeMode::Line, StrokeMode::Curve, StrokeMode::Airbrush, StrokeMode::Anchored, StrokeMode::DragDot})
+        if (name == strokeModeName(m))
+            return m;
+    return StrokeMode::Freehand;
+}
+
 json BrushSettings::toJson() const
 {
     return {{"radiusUnit", radiusUnit == RadiusUnit::World ? "world" : "screen"},
@@ -187,7 +208,8 @@ json BrushSettings::toJson() const
             {"followStroke", followStroke},
             {"roundness", roundness},
             {"alpha", alphaPath},
-            {"strokeMode", mode == StrokeMode::Line ? "line" : mode == StrokeMode::Curve ? "curve" : "freehand"},
+            {"strokeMode", strokeModeName(mode)},
+            {"airRate", airRate},
             {"lazyRadius", lazyRadius},
             {"smoothing", smoothing},
             {"mirror", mirror},
@@ -247,9 +269,11 @@ BrushSettings BrushSettings::fromJson(const json& j, const BrushSettings& defaul
         s.alphaPath = alpha;
         s.alpha.reset();
     }
-    std::string mode = s.mode == StrokeMode::Line ? "line" : s.mode == StrokeMode::Curve ? "curve" : "freehand";
+    std::string mode = strokeModeName(s.mode);
     read(j, "strokeMode", mode);
-    s.mode = mode == "line" ? StrokeMode::Line : mode == "curve" ? StrokeMode::Curve : StrokeMode::Freehand;
+    s.mode = strokeModeFromName(mode);
+    read(j, "airRate", s.airRate);
+    s.airRate = std::clamp(s.airRate, 1.0, 200.0);
     read(j, "lazyRadius", s.lazyRadius);
     read(j, "smoothing", s.smoothing);
     if (auto it = j.find("params"); it != j.end() && it->is_object())
