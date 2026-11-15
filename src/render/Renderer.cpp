@@ -2361,6 +2361,13 @@ struct Renderer::Impl
             {
                 for (const TexturePtr* t : {&mat.baseColorMap, &mat.normalMap, &mat.ormMap, &mat.emissiveMap, &mat.style.strokeMap})
                     addTexture(*t);
+                if (mat.style.model == ShadingModel::Extended)
+                    for (const TexturePtr& t : mat.ext.maps)
+                        if (t)
+                        {
+                            addTexture(t);
+                            addMap(t, kWhiteLinearKey);
+                        }
                 addMap(mat.baseColorMap, kWhiteSrgbKey);
                 addMap(mat.normalMap, kFlatNormalKey);
                 addMap(mat.ormMap, kWhiteLinearKey);
@@ -2714,7 +2721,20 @@ struct Renderer::Impl
     }
 
     /** Appends a style block per shaded draw section whose material uses a stylised shading model. */
-    void writeStyle(const void* draw, uint32_t slot, const MaterialStyle& style, const glm::vec3& boundsMin, const glm::vec3& boundsMax, bool zUp)
+    /** The table handles of an Extended material's maps, 0xffff where it has none. */
+    std::array<uint32_t, kExtendedMaps> extendedHandles(const Material& m)
+    {
+        std::array<uint32_t, kExtendedMaps> h;
+        for (uint32_t k = 0; k < kExtendedMaps; ++k)
+        {
+            const uint32_t handle = bindless ? mapHandle(m.ext.maps[k], kWhiteLinearKey) : kNoHandle;
+            h[k] = handle == kNoHandle ? 0xffffu : handle;
+        }
+        return h;
+    }
+
+    void writeStyle(const void* draw, uint32_t slot, const MaterialStyle& style, const glm::vec3& boundsMin, const glm::vec3& boundsMax, bool zUp,
+                    const void* extended = nullptr)
     {
         uint32_t stroke = 0xffffffffu;
         if (style.strokeMap && !style.strokeMap->isUdimSet() && textureKey(style.strokeMap, 0) != 0)
@@ -2726,7 +2746,8 @@ struct Renderer::Impl
             else if (it != frameHandles.end() && it->second != kNoHandle)
                 stroke = it->second;
         }
-        const auto block = packStyle(style, stroke, boundsMin, boundsMax, zUp);
+        const auto block = style.model == ShadingModel::Extended && extended ? packExtended(static_cast<const Material*>(extended)->ext, extendedHandles(*static_cast<const Material*>(extended)))
+                                                                 : packStyle(style, stroke, boundsMin, boundsMax, zUp);
         frameStyles[{draw, slot}] = uint32_t(frameTable.size());
         frameTable.insert(frameTable.end(), block.begin(), block.end());
     }
@@ -2739,7 +2760,7 @@ struct Renderer::Impl
                 continue;
             for (uint32_t slot = 0; slot < d.materials.size(); ++slot)
                 if (d.materials[slot].style.model != ShadingModel::DefaultLit)
-                    writeStyle(&d, slot, d.materials[slot].style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp);
+                    writeStyle(&d, slot, d.materials[slot].style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp, &d.materials[slot]);
         }
         // A heightfield shades with slot 0, over bounds in its own space as its mesh's would be.
         for (const HeightfieldDraw& d : s.heightfields)
@@ -2944,8 +2965,24 @@ struct Renderer::Impl
     /** The extended shading channels of a material into a path tracer section. */
     void extendedSection(const Material& m, PtSection& ps)
     {
-        (void)m;
-        (void)ps;
+        if (m.style.model != ShadingModel::Extended)
+            return;
+        const ExtendedShading& e = m.ext;
+        ps.ext0 = glm::vec4(e.sheenColor, e.sheenRoughness);
+        ps.ext1 = glm::vec4(e.coat, e.coatRoughness, e.anisotropy, e.anisotropyRotation);
+        ps.ext2 = glm::vec4(e.subsurfaceColor, e.transmission);
+        ps.ext3 = glm::vec4(e.specularColor * e.specularWeight, e.ior);
+        const std::array<uint32_t, kExtendedMaps> h = extendedHandles(m);
+        uint32_t words[8];
+        std::fill(std::begin(words), std::end(words), 0xffffffffu);
+        for (uint32_t k = 0; k < kExtendedMaps; ++k)
+        {
+            const uint32_t shift = (k & 1) * 16;
+            words[k / 2] = (words[k / 2] & ~(0xffffu << shift)) | (h[k] << shift);
+        }
+        ps.extMaps0 = glm::uvec4(words[0], words[1], words[2], words[3]);
+        ps.extMaps1 = glm::uvec4(words[4], words[5], words[6], words[7]);
+        ps.subsurfaceRadius = e.subsurfaceRadius;
     }
 
     // ---------------------------------------------------------------- displacement preview

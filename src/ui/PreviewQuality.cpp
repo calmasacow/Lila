@@ -10,11 +10,13 @@
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "scene/MeshNodes.h"
+#include "tex/ShadingChannels.h"
 #include "tex/TextureSet.h"
 #include "ui/Actions.h"
 #include "ui/Menus.h"
 #include "ui/Overlay.h"
 #include "ui/TexLive.h"
+#include "ui/TextureGraphUi.h"
 #include "ui/ViewInfo.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportToast.h"
@@ -63,7 +65,7 @@ struct DisplacementCache
 {
     std::map<std::pair<uint64_t, int>, Tessellated> meshes; // by source key and level
     /** Per set name: the height images it was made from and the map over them. */
-    std::unordered_map<std::string, std::pair<std::vector<render::GpuImage*>, render::TexturePtr>> heights;
+    std::unordered_map<std::string, std::pair<std::vector<render::GpuImage*>, render::TexturePtr>> maps; // by set|channel
     std::unordered_map<uint64_t, std::string> status;
     uint64_t frame = 0;
 };
@@ -102,45 +104,46 @@ std::string setFor(scene::Graph& g, const scene::Node& material)
     return set;
 }
 
-/** The live height map of a set over its tiles and its height depth, null (with why) when it isn't there. */
-render::TexturePtr heightMap(scene::Graph& g, const std::string& set, std::string& why, float& depth)
+/** A set's settings, read again only when the scene changed. Null when unreadable. */
+const tex::SetSettings* settingsOf(scene::Graph& g, const std::string& set)
 {
-    scene::Node* node = tex::findSet(g, set);
-    if (!node)
+    struct Entry
     {
-        why = "no texture set";
-        return nullptr;
-    }
-    tex::SetSettings settings;
-    try
+        uint64_t version = 0;
+        std::optional<tex::SetSettings> settings;
+    };
+    static std::unordered_map<std::string, Entry> entries;
+    Entry& e = entries[set];
+    if (e.version != g.version() || e.version == 0)
     {
-        settings = tex::readSettings(*node);
+        e.version = g.version();
+        e.settings.reset();
+        if (scene::Node* node = tex::findSet(g, set))
+            try
+            {
+                e.settings = tex::readSettings(*node);
+            }
+            catch (const std::exception&)
+            {
+            }
     }
-    catch (const std::exception& e)
-    {
-        why = e.what();
-        return nullptr;
-    }
-    if (!settings.channel("height"))
-    {
-        why = "no height channel";
-        return nullptr;
-    }
-    depth = float(settings.heightDepth);
+    return e.settings ? &*e.settings : nullptr;
+}
+
+/** A live set channel over the set's tiles as one map (a UDIM set when it has several), null when it isn't evaluated whole. */
+render::TexturePtr channelMap(const std::string& set, const tex::SetSettings& settings, const std::string& channel)
+{
     std::vector<render::GpuImage*> raw;
     std::vector<std::pair<int, render::GpuImageRef>> images;
     for (const tex::Tile& t : settings.tiles)
-        if (render::GpuImageRef img = texLive::channelImage(set, "height", t.udim))
+        if (render::GpuImageRef img = texLive::channelImage(set, channel, t.udim))
         {
             raw.push_back(img.get());
             images.emplace_back(t.udim, std::move(img));
         }
     if (images.empty())
-    {
-        why = "height not evaluated as whole images (paged set, or materials hidden)";
         return nullptr;
-    }
-    auto& entry = cache().heights[set];
+    auto& entry = cache().maps[set + "|" + channel];
     if (entry.first == raw && entry.second)
         return entry.second;
     entry.first = raw;
@@ -161,9 +164,88 @@ render::TexturePtr heightMap(scene::Graph& g, const std::string& set, std::strin
     return entry.second;
 }
 
+/** The live height map of a set and its height depth, null (with why) when it isn't there. */
+render::TexturePtr heightMap(scene::Graph& g, const std::string& set, std::string& why, float& depth)
+{
+    const tex::SetSettings* settings = settingsOf(g, set);
+    if (!settings)
+    {
+        why = "no texture set";
+        return nullptr;
+    }
+    if (!settings->channel("height"))
+    {
+        why = "no height channel";
+        return nullptr;
+    }
+    depth = float(settings->heightDepth);
+    render::TexturePtr t = channelMap(set, *settings, "height");
+    if (!t)
+        why = "height not evaluated as whole images (paged set, or materials hidden)";
+    return t;
+}
+
+/**
+ * Gives default lit materials whose texture set has shading channels (tex/ShadingChannels.h) the Extended model with
+ * those channels as maps, for the viewport and the path-traced view.
+ */
+void applyShadingChannels(render::FrameState& s)
+{
+    scene::Graph& g = scene::Graph::current();
+
+    bool any = false;
+    for (const render::MeshDraw& d : s.meshes)
+        if (!d.materials.empty() && d.node)
+        {
+            any = true;
+            break;
+        }
+    if (!any)
+        return;
+    std::vector<render::MeshDraw>* draws = nullptr;
+    for (size_t i = 0; i < s.meshes.size(); ++i)
+    {
+        const render::MeshDraw& cd = s.meshes[i];
+        if (cd.materials.empty() || !cd.node || !(cd.flags & render::DrawShaded))
+            continue;
+        const scene::Node* n = g.node(scene::NodeId(cd.node));
+        const int outMesh = n ? n->type().attrIndex("outMesh") : -1;
+        const scene::MeshPtr* mesh = outMesh >= 0 ? std::get_if<scene::MeshPtr>(&n->value(outMesh)) : nullptr;
+        if (!mesh || !*mesh)
+            continue;
+        for (size_t slot = 0; slot < cd.materials.size(); ++slot)
+        {
+            if (cd.materials[slot].style.model != render::ShadingModel::DefaultLit)
+                continue;
+            const scene::Node* material = scene::materials::find(g, scene::materials::slotName(**mesh, int32_t(slot)));
+            const std::string set = material ? setFor(g, *material) : std::string();
+            const tex::SetSettings* settings = set.empty() ? nullptr : settingsOf(g, set);
+            if (!settings)
+                continue;
+            render::ExtendedShading ext;
+            bool has = false;
+            const auto list = tex::shading::channels();
+            for (size_t k = 0; k < list.size() && k < render::kExtendedMaps; ++k)
+                if (settings->channel(list[k].name))
+                {
+                    has = true;
+                    ext.maps[k] = channelMap(set, *settings, list[k].name);
+                }
+            if (!has)
+                continue;
+            if (!draws)
+                draws = &s.meshes.edit();
+            render::Material& m = (*draws)[i].materials[slot];
+            m.ext = std::move(ext);
+            m.style.model = render::ShadingModel::Extended;
+        }
+    }
+}
+
 /** Swaps the meshes of displaced draws for their tessellations and gives their materials the set's height. */
 void drawDisplacement(render::FrameState& s, OverlayPainter&, const ViewInfo& view)
 {
+    applyShadingChannels(s);
     DisplacementCache& c = cache();
     ++c.frame;
     if (c.frame % 60 == 0)
@@ -467,11 +549,35 @@ void registerCommands()
     registerPathTrace();
 }
 
+void registerShadingChannelActions()
+{
+    actions::add({.id = "texture.addShadingChannels",
+                  .label = "Add Shading Channels",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          const std::string set = currentTextureSet();
+                          if (set.empty())
+                          {
+                              log::warn("Add Shading Channels: no texture set");
+                              return;
+                          }
+                          ops::execute("texAddShadingChannels", {{"args", {set}}}, CallSource::UI);
+                      },
+                  .doc = "Give the current texture set sheen, coat, subsurface, anisotropy, transmission, IOR and specular channels: paint or "
+                         "fill them like any other, and the viewport and exports use them.",
+                  .python = "texAddShadingChannels(\"RockTex\")",
+                  .icon = "layers-subtract",
+                  .keywords = {"sheen", "fuzz", "clearcoat", "coat", "subsurface", "sss", "anisotropy", "transmission", "ior", "specular color",
+                               "openpbr"}});
+}
+
 void registerUi()
 {
     registerCommands();
+    registerShadingChannelActions();
     registerDisplacementActions();
-    menus::addActions("Texture", {"", "texture.displacementPreview", "viewport.pathTraced"});
+    menus::addActions("Texture", {"", "texture.addShadingChannels", "texture.displacementPreview", "viewport.pathTraced"});
     registerPathTraceActions();
     menus::addActions("Display", {"", "viewport.pathTraced", "viewport.pathTracedDenoise", "texture.displacementPreview"});
 }

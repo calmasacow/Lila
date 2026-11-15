@@ -44,9 +44,13 @@ struct PtSection
     glm::vec4 ext0{0.0f, 0.0f, 0.0f, 0.5f};  // sheen rgb, sheen roughness
     glm::vec4 ext1{0.0f, 0.05f, 0.0f, 0.0f}; // coat, coat roughness, anisotropy, anisotropy rotation (radians)
     glm::vec4 ext2{0.0f};                    // subsurface rgb, transmission
-    glm::vec4 ext3{1.0f, 1.0f, 1.0f, 1.5f};  // specular colour rgb, ior
+    glm::vec4 ext3{1.0f, 1.0f, 1.0f, 1.5f};  // specular colour times weight, ior
+    glm::uvec4 extMaps0{0xffffffffu};        // 16-bit table handles of the ExtendedShading maps, two to a word
+    glm::uvec4 extMaps1{0xffffffffu};
+    float subsurfaceRadius = 1.0f;
+    float pad2[3]{};
 };
-static_assert(sizeof(PtSection) == 144);
+static_assert(sizeof(PtSection) == 192);
 
 /** pathtrace.slang's parameters, read through a device address. */
 struct PtParams

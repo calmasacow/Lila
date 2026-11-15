@@ -201,6 +201,51 @@ enum class ShadingModel : uint32_t
     Eye,
     /** The base colour map is a lit sphere looked up by the view-space normal, unlit otherwise. Viewport only. */
     Matcap,
+    /** Default lit plus the material's ExtendedShading (sheen, coat, subsurface, anisotropy, transmission, specular). */
+    Extended,
+};
+
+/** ExtendedShading's maps, in tex::shading::channels() order. */
+enum ExtendedMap : uint32_t
+{
+    ExtSheenColor,
+    ExtSheenRoughness,
+    ExtCoat,
+    ExtCoatRoughness,
+    ExtCoatNormal,
+    ExtSubsurfaceColor,
+    ExtSubsurfaceRadius,
+    ExtAnisotropy,
+    ExtAnisotropyDirection,
+    ExtTransmission,
+    ExtIor,
+    ExtSpecularWeight,
+    ExtSpecularColor,
+    kExtendedMaps,
+};
+
+/**
+ * Shading beyond Unreal's default lit inputs, from a texture set's shading channels (tex/ShadingChannels.h). Shaded when
+ * the material's model is ShadingModel::Extended. A map replaces its constant; maps are linear, the direction map holds a
+ * tangent-space vector as (x, y) * 0.5 + 0.5 and the ior map (ior - 1) / 2.
+ */
+struct ExtendedShading
+{
+    glm::vec3 sheenColor{0.0f};
+    float sheenRoughness = 0.5f;
+    float coat = 0.0f;
+    float coatRoughness = 0.05f;
+    glm::vec3 subsurfaceColor{0.0f};
+    float subsurfaceRadius = 1.0f;
+    float anisotropy = 0.0f;
+    float anisotropyRotation = 0.0f; // radians
+    float transmission = 0.0f;
+    float ior = 1.5f;
+    float specularWeight = 1.0f;
+    glm::vec3 specularColor{1.0f};
+    std::array<TexturePtr, kExtendedMaps> maps{};
+
+    bool operator==(const ExtendedShading&) const = default;
 };
 
 /** The stylised models' inputs (colours linear). Each model reads only its own group; see scene::material for meanings. */
@@ -265,6 +310,12 @@ constexpr int kStyleWords = 32;
 LILA_UI_API std::array<uint32_t, kStyleWords> packStyle(const MaterialStyle& s, uint32_t strokeHandle, const glm::vec3& boundsMin,
                                                                 const glm::vec3& boundsMax, bool zUp);
 
+/**
+ * The style block of a ShadingModel::Extended material: coat, sheen, subsurface, specular, anisotropy, transmission and ior,
+ * then the 16-bit table handles of its maps (ExtendedMap order, 0xffff for none). mesh.slang reads it.
+ */
+LILA_UI_API std::array<uint32_t, kStyleWords> packExtended(const ExtendedShading& e, const std::array<uint32_t, kExtendedMaps>& handles);
+
 /** Unreal default lit inputs for one slot. A map flag set means that map replaces its constant. */
 struct Material
 {
@@ -297,6 +348,8 @@ struct Material
     TexturePtr heightMap;
     float displacementDepth = 0.0f;
     float displacementMid = 0.5f;
+    /** Shaded when style.model is ShadingModel::Extended. */
+    ExtendedShading ext;
 };
 
 /**

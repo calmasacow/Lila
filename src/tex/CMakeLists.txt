@@ -27,6 +27,7 @@ lila_module(lila_tex Scene
     Plan.cpp
     Ports.cpp
     SetOps.cpp
+    ShadingChannels.cpp
     SlangRt.cpp
     SmartMaterial.cpp
     TextureSet.cpp

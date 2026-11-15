@@ -93,6 +93,7 @@ lila_add_shaders(lila_render FILES
     shaders/mesh.slang
     shaders/scene_color.slang
     shaders/tonemap.slang
+    shaders/extended.slang
     shaders/pathtrace_channels.slang
     shaders/stylised.slang
     shaders/bake_common.slang

@@ -55,7 +55,11 @@ struct PtSection
     float4 ext0;     // sheen rgb, sheen roughness
     float4 ext1;     // coat, coat roughness, anisotropy, anisotropy rotation (radians)
     float4 ext2;     // subsurface rgb, transmission
-    float4 ext3;     // specular colour rgb, ior
+    float4 ext3;     // specular colour times weight, ior
+    uint4 extMaps0;  // ExtendedShading map handles, two to a word
+    uint4 extMaps1;
+    float subsurfaceRadius;
+    float3 pad2;
 };
 
 struct PtPush
@@ -346,6 +350,8 @@ struct Hit
     float transmission;
     float3 specColor;
     float ior;
+    float3 coatN;  // the coat's normal: the surface's, or its coat normal map's
+    float3 anisoT; // the direction the highlight stretches along
 };
 
 uint sectionOf(PtInstance inst, uint prim)
@@ -514,8 +520,10 @@ struct Lobes
 Lobes lobesOf(Hit h, float nv)
 {
     Lobes l;
-    l.diffuse = h.baseColor * (1.0 - h.metallic) * (1.0 - h.transmission);
-    l.f0 = lerp(0.08 * h.specular * h.specColor, h.baseColor, h.metallic);
+    l.diffuse = h.baseColor * (1.0 - h.metallic) * (1.0 - h.transmission) * (1.0 - subsurfaceShare(h));
+    // Specular 0.5 at IOR 1.5 is Unreal's 4% reflectance.
+    float r = (h.ior - 1.0) / (h.ior + 1.0);
+    l.f0 = lerp(r * r * 2.0 * h.specular * h.specColor, h.baseColor, h.metallic);
     l.alpha = h.rough * h.rough;
     float3 F = fresnel(l.f0, nv);
     float ws = dot(F, float3(0.333, 0.333, 0.334)) + h.coat * 0.04, wd = dot(l.diffuse * (1.0 - F), float3(0.333, 0.333, 0.334));
@@ -541,7 +549,7 @@ float3 evalBsdf(Hit h, Lobes lb, float3 v, float3 l, out float pdf)
     float D = D_GGX(nh, lb.alpha);
     float3 spec = D * V_SmithGGX(nv, nl, lb.alpha) * F;
     float3 diff = (1.0 - F) * lb.diffuse / PI;
-    float3 f = spec + diff + extendedLobes(h, n, v, l, hv, nl, nv, nh, vh, diff);
+    float3 f = extendedCombine(h, lb, n, v, l, hv, nl, nv, nh, vh, spec, diff);
     float pdfSpec = D * G1(nv, lb.alpha) / (4.0 * nv);
     float pdfDiff = nl / PI;
     pdf = lb.pSpec * pdfSpec + (1.0 - lb.pSpec) * pdfDiff;
@@ -818,6 +826,33 @@ void traceCS(uint3 id: SV_DispatchThreadID)
                 float3 c = throughput * sampleLight(h, lb, v, offsetFrom(h, h.ng), rng);
                 radiance += depth > 0 ? min(c, p.misc.y) : c;
             }
+            // Thin transmission and subsurface light pass through the surface; the other lobes take the rest of the paths.
+            const float pT = h.transmission * (1.0 - h.metallic);
+            const float pS = subsurfaceShare(h) * (1.0 - h.metallic);
+            const float pick = rand(rng);
+            if (pick < pT + pS)
+            {
+                float3 through;
+                if (pick < pT)
+                {
+                    through = ray.Direction;
+                    throughput *= h.baseColor;
+                }
+                else
+                {
+                    float u1 = rand(rng), u2 = rand(rng), rr = sqrt(u1), phi = 2.0 * PI * u2;
+                    float3 tt = normalize(h.t - h.n * dot(h.n, h.t) + 1e-7), bb = cross(h.n, tt);
+                    through = normalize(tt * (rr * cos(phi)) + bb * (rr * sin(phi)) - h.n * sqrt(max(1.0 - u1, 0.0)));
+                    throughput *= h.subsurface / max(max(h.subsurface.r, max(h.subsurface.g, h.subsurface.b)), 1e-4);
+                }
+                lastPdf = 0.0;
+                ray.Origin = offsetFrom(h, through);
+                ray.Direction = through;
+                ray.TMin = 0.0;
+                ray.TMax = 1e30;
+                continue;
+            }
+            throughput /= max(1.0 - pT - pS, 1e-4);
             float3 L = sampleBsdf(h, lb, v, rng);
             float pdf;
             float3 f = evalBsdf(h, lb, v, L, pdf);

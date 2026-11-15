@@ -208,3 +208,42 @@ TEST_CASE("the path tracer converges: more samples bring the image closer to a l
     const double few = error(trace(s, 1)), many = error(trace(s, 16));
     CHECK(many < few);
 }
+
+TEST_CASE("extended shading: coat and sheen change the path-traced and the shaded view, and conserve energy")
+{
+    if (!tracing())
+        return;
+    const std::string env = uniformHdr(1.0f);
+    FrameState s = sphereFrame(env, 21, 16);
+    const std::vector<float> plain = trace(s, 8);
+    Material& m = s.meshes.edit()[0].materials[0];
+    m.style.model = ShadingModel::Extended;
+    m.ext.coat = 1.0f;
+    m.ext.coatRoughness = 0.05f;
+    m.ext.sheenColor = glm::vec3(0.5f);
+    const std::vector<float> coated = trace(s, 8);
+    double a = 0.0, b = 0.0;
+    const int size = 64;
+    for (int y = size / 2 - 8; y < size / 2 + 8; ++y)
+        for (int x = size / 2 - 8; x < size / 2 + 8; ++x)
+            for (int c = 0; c < 3; ++c)
+            {
+                a += plain[(size_t(y) * size + x) * 4 + c];
+                b += coated[(size_t(y) * size + x) * 4 + c];
+            }
+    a /= 16.0 * 16.0 * 3.0;
+    b /= 16.0 * 16.0 * 3.0;
+    CHECK(plain != coated);
+    // A white diffuse base under a coat reflects no more than the light that falls on it.
+    CHECK(b < 1.05);
+
+    // The rasterised view shades the Extended model too.
+    s.pathTrace.on = false;
+    s.post.tonemapper = PostSettings::Neutral;
+    std::vector<uint8_t> shadedExt, shadedPlain;
+    std::string err;
+    REQUIRE_MESSAGE(Renderer::get().renderOffscreen(s, 64, 64, shadedExt, &err), err);
+    s.meshes.edit()[0].materials[0].style.model = ShadingModel::DefaultLit;
+    REQUIRE_MESSAGE(Renderer::get().renderOffscreen(s, 64, 64, shadedPlain, &err), err);
+    CHECK(shadedExt != shadedPlain);
+}
