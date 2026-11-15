@@ -9,7 +9,9 @@
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "tex/PaintStrokes.h"
+#include "ops/Command.h"
 #include "tex/TextureSet.h"
+#include "ui/TexturePaintTool.h"
 #include "ui/ViewportTool.h"
 
 #include <QColor>
@@ -60,6 +62,9 @@ uint64_t& paintChanges()
     (void)listening;
     return n;
 }
+
+/** Tint draws the last frame added. */
+size_t gLastDraws = 0;
 
 bool sameStyle(const Style& a, const Style& b) { return a.color == b.color && a.opacity == b.opacity; }
 
@@ -179,6 +184,7 @@ QImage tintImage(const std::string& set)
 void addDraws(render::FrameState& fs, const std::string& setName)
 {
     LILA_ZONE();
+    gLastDraws = 0;
     if (setName.empty() || !style().shown)
         return;
     const render::TexturePtr image = tint(setName);
@@ -228,7 +234,37 @@ void addDraws(render::FrameState& fs, const std::string& setName)
         t.lightingChannels = d.lightingChannels;
         extra.push_back(std::move(t));
     }
+    gLastDraws = extra.size();
     for (render::MeshDraw& t : extra)
         fs.meshes.push_back(std::move(t));
+}
+
+void registerCommands()
+{
+    ops::registerCommand({
+        .name = "texQuickMaskOverlay",
+        .doc = "Show or hide the Quick Mask overlay, the tint over what the quick mask leaves out (show=), and report it: {shown, set "
+               "(the set the quick mask limits, empty when it holds nothing), tint {width, height, version, tinted (the share of its texels tinted)} or None, draws (tinted mesh "
+               "draws in the last viewport frame)}. Colour and opacity are the general prefs /texture/quickMaskColor and /texture/quickMaskOpacity.",
+        .flags = {{"show", "s", ArgType::Bool, nullptr, "Show the overlay, or hide it."}},
+        .undoable = false,
+        .run = [](const Args& a) -> nlohmann::json {
+            if (a.has("show"))
+                setShown(a.get<bool>("show"));
+            const std::string set = quickMaskSet();
+            uint64_t version = 0;
+            const render::TexturePtr t = set.empty() ? nullptr : tint(set, &version);
+            nlohmann::json out = {{"shown", style().shown}, {"set", set}, {"draws", gLastDraws}, {"tint", nullptr}};
+            if (t)
+            {
+                size_t tinted = 0;
+                for (size_t i = 3; i < t->rgba.size(); i += 4)
+                    tinted += t->rgba[i] > 0 ? 1 : 0;
+                out["tint"] = {{"width", t->width}, {"height", t->height}, {"version", version},
+                               {"tinted", double(tinted) / double(std::max<size_t>(t->rgba.size() / 4, 1))}};
+            }
+            return out;
+        },
+    });
 }
 } // namespace lila::ui::quickMaskOverlay

@@ -449,6 +449,7 @@ QImage render(const Options& o, Timing* timing, int repeat)
         if (textured)
             d.materials = drawMaterials(*shown);
         d.world = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+        d.node = uint64_t(id);
         if (viewportDisplay::vertexColorMode() != render::VertexColorMode::Off && !geo::colors::current(*shown).empty())
         {
             d.vertexColors = viewportDisplay::vertexColorMode();

@@ -54,4 +54,7 @@ LILA_UI_API QImage tintImage(const std::string& set);
  * the tint on the slots of the set and nothing on the others. Nothing while the style hides it or the set has no tint.
  */
 LILA_UI_API void addDraws(render::FrameState& fs, const std::string& set);
+
+/** texQuickMaskOverlay. */
+LILA_UI_API void registerCommands();
 } // namespace lila::ui::quickMaskOverlay

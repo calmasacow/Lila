@@ -36,6 +36,7 @@
 #include "ui/TextureSetPanel.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewInfo.h"
+#include "ui/ViewportHooks.h"
 #include "ui/ViewportTool.h"
 #include "ui/FileDialog.h"
 
@@ -1006,6 +1007,15 @@ public:
         mQuickOverlay->setChecked(quickMaskOverlay::style().shown);
         mQuickOverlay->setToolTip("Overlay: tint what the quick mask leaves out (colour and opacity in Preferences > General > Textures)");
         connect(mQuickOverlay, &QToolButton::toggled, this, [](bool on) { quickMaskOverlay::setShown(on); });
+        // The action, the command and Preferences flip it too.
+        const int overlayListener = PrefStore::get().onChanged([button = QPointer<QToolButton>(mQuickOverlay)](const std::string&) {
+            if (button && button->isChecked() != quickMaskOverlay::style().shown)
+            {
+                const QSignalBlocker block(button.data());
+                button->setChecked(quickMaskOverlay::style().shown);
+            }
+        });
+        connect(mQuickOverlay, &QObject::destroyed, [overlayListener] { PrefStore::get().removeOnChanged(overlayListener); });
         auto* quickRow = new QHBoxLayout;
         quickRow->addWidget(mQuickMask, 1);
         quickRow->addWidget(mQuickOverlay);
@@ -2715,7 +2725,6 @@ public:
             if (st.selectMode == "polygon")
                 status.keys.insert(status.keys.end(), {{"click", "corner"}, {"Enter", "close"}});
         }
-        quickMaskOverlay::addDraws(fs, quickMaskSet());
         if (st.quickMask)
             status.flags.push_back({"quick mask", true});
         else if (!st.quickLimit.empty())
@@ -4293,6 +4302,13 @@ nlohmann::json texturePaintSettings()
 
 void registerTexturePaintUi()
 {
+    quickMaskOverlay::registerCommands();
+    // A drawer, not the tool's draw, so offscreen captures show the tint too.
+    viewportHooks::addDrawer("lila.quickMaskOverlay", [](render::FrameState& fs, OverlayPainter&, const ViewInfo&) {
+        const ViewportTool* tool = viewportTools::active();
+        if (tool && std::string_view(tool->name()) == "texturePaint")
+            quickMaskOverlay::addDraws(fs, quickMaskSet());
+    });
     actions::add({.id = "tex.paint",
                   .label = "Texture Paint",
                   .category = "Texture",
