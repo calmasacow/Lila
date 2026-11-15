@@ -4,6 +4,7 @@
 #include "core/Profile.h"
 #include "core/PrefStore.h"
 #include "render/CubeLut.h"
+#include "render/Ocio.h"
 #include "render/DisplayOptions.h"
 #include "render/Renderer.h"
 #include "scene/LightingChannels.h"
@@ -12,12 +13,14 @@
 #include "scene/NodeBounds.h"
 #include "scene/Transform.h"
 #include "scene/PostProcess.h"
+#include "scene/ColorManagement.h"
 #include "scene/Relocate.h"
 #include "ui/Environments.h"
 #include "ui/Theme.h"
 #include "scene/SceneIndex.h"
 
 #include <atomic>
+#include <mutex>
 #include <QGuiApplication>
 #include <QScreen>
 
@@ -64,6 +67,7 @@ void apply(render::FrameState& s)
     s.wireUnderSelected = themeLinear("wireUnderSelected", s.wireUnderSelected);
     s.wireDefault = themeLinear("wireframe", s.wireDefault);
     applyPostProcess(s, p.value<bool>("general", kPostEffects, true));
+    applyColorManagement(s);
     applyLights(s);
     s.rtShadows = p.value<bool>("general", kRtShadows, true);
     const std::string reflections = p.value<std::string>("general", kReflections, "off");
@@ -313,6 +317,36 @@ void applyPostProcess(render::FrameState& s, bool effects)
     fog.start = num(pp::kFogStart);
     fog.sunScatter = num(pp::kFogSunScatter);
     fog.anisotropy = std::clamp(num(pp::kFogAnisotropy), 0.0f, 0.95f);
+}
+
+namespace
+{
+std::mutex gColorNoteMutex;
+std::string gColorNote;
+} // namespace
+
+void applyColorManagement(render::FrameState& s)
+{
+    LILA_ZONE();
+    namespace cm = scene::colorManagement;
+    const cm::Settings c = cm::settings(scene::Graph::current(), PrefStore::get().value<std::string>("general", cm::kConfigPref, ""));
+    s.post.view = nullptr;
+    std::string note;
+    if (c.ocio)
+    {
+        std::string err;
+        s.post.view = render::ocio::viewTransform(c.config, c.display, c.view, c.look, &err);
+        if (!s.post.view)
+            note = "OCIO failed (" + err + "): Lila's tonemapper";
+    }
+    std::lock_guard lock(gColorNoteMutex);
+    gColorNote = std::move(note);
+}
+
+std::string colorNote()
+{
+    std::lock_guard lock(gColorNoteMutex);
+    return gColorNote;
 }
 
 bool defaultMaterial()

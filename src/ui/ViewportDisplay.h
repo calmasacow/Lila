@@ -225,6 +225,15 @@ LILA_UI_API void resetLight();
 LILA_UI_API void applyQuality(Quality q);
 /** The scene's active post process into s (nothing when it has none); effects turns its grading, bloom and lens effects on. */
 LILA_UI_API void applyPostProcess(render::FrameState& s, bool effects);
+
+/**
+ * The scene's colour management into s: an OCIO view baked once per settings change, or Lila's tonemapper. A config
+ * that fails to load leaves Lila's tonemapper on and colorNote() says so.
+ */
+LILA_UI_API void applyColorManagement(render::FrameState& s);
+
+/** Why colour management isn't what the scene asks for (an OCIO config or view that failed), empty when it is. */
+LILA_UI_API std::string colorNote();
 /**
  * The scene's lights Lila's provider owns into s.lights, in the shader's units, with shadow matrices fit to the shown
  * meshes for directional and spot lights.

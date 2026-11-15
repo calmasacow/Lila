@@ -5,7 +5,7 @@
 
 struct ComposePush
 {
-    float4 params; // x: display gamma, y: 1 to dither, z: exposure, w: tonemapper (0 neutral, 1 AgX, 2 ACES, 3 linear)
+    float4 params; // x: display gamma, y: 1 to dither, z: exposure, w: tonemapper (0 neutral, 1 AgX, 2 ACES, 3 linear, 4 OCIO view)
     float4 grade;  // x: contrast, y: saturation, z: 1 for the post stack, w: AgX look (0 none, 1 punchy, 2 golden)
     float4 white;  // rgb: white balance gains, w: LUT intensity (0 skips it)
     float4 lift;   // rgb, w: vignette
@@ -13,7 +13,7 @@ struct ComposePush
     float4 gain;   // rgb, w: grain seed
     float4 lens;   // x: chromatic aberration (pixels at the corner), y: lens distortion, z: sharpen, w: bloom intensity
     float4 size;   // extent, then its inverse
-    float4 misc;   // x: 1 to apply the auto exposure, y: bloom scale (one over its levels)
+    float4 misc;   // x: 1 to apply the auto exposure, y: bloom scale (one over its levels), zw: the view LUT's log2 shaper range
 };
 
 [[vk::push_constant]] ComposePush cp;
@@ -21,6 +21,7 @@ struct ComposePush
 [[vk::binding(1, 0)]] Sampler2D bloomTex;   // half resolution, expanded radiance
 [[vk::binding(2, 0)]] Sampler3D lutTex;     // display-encoded in and out
 [[vk::binding(3, 0)]] Sampler2D exposureTex; // exposure.slang's state: texel 0 is the multiplier
+[[vk::binding(4, 0)]] Sampler3D viewLutTex;  // tonemapper 4: an OCIO view over a log2 shaper, display code values out
 
 struct ComposeOut
 {
@@ -180,8 +181,19 @@ float4 composePS(ComposeOut i) : SV_Target
         c = max(luma + cp.grade.y * (c - luma), 0.0);
     }
 
-    c = tonemap(c, uint(cp.params.w + 0.5), uint(cp.grade.w + 0.5));
-    c = pow(max(c, 0.0), 1.0 / max(cp.params.x, 0.01));
+    if (uint(cp.params.w + 0.5) == 4)
+    {
+        // The view's display code values, made linear so the sRGB target writes them back out unchanged.
+        float3 dims;
+        viewLutTex.GetDimensions(dims.x, dims.y, dims.z);
+        float3 shaped = saturate((log2(max(c, exp2(cp.misc.z))) - cp.misc.z) / (cp.misc.w - cp.misc.z));
+        c = fromSrgb(saturate(viewLutTex.SampleLevel(shaped * ((dims - 1.0) / dims) + 0.5 / dims, 0).rgb));
+    }
+    else
+    {
+        c = tonemap(c, uint(cp.params.w + 0.5), uint(cp.grade.w + 0.5));
+        c = pow(max(c, 0.0), 1.0 / max(cp.params.x, 0.01));
+    }
 
     if (stack)
     {

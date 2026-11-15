@@ -1,5 +1,6 @@
 #include "ui/RenderOutput.h"
 
+#include "core/PrefStore.h"
 #include "core/ImageIO.h"
 #include "core/Log.h"
 #include "core/Paths.h"
@@ -8,7 +9,9 @@
 #include "core/VideoWriter.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
+#include "render/Ocio.h"
 #include "render/Renderer.h"
+#include "scene/ColorManagement.h"
 #include "scene/Anim.h"
 #include "scene/Camera.h"
 #include "scene/Graph.h"
@@ -322,7 +325,10 @@ void write(const Frame& f, const std::string& path, bool transparent)
     out.height = f.height;
     out.rgba.resize(size_t(f.width) * f.height * 4);
     const size_t count = size_t(f.width) * f.height;
-    if (ext == ".exr" && !f.hdr.empty())
+    // EXR keeps scene-linear light for compositing unless colour management asks for the picture as the view shows it.
+    namespace cm = scene::colorManagement;
+    const bool exrDisplay = cm::settings(scene::Graph::current(), PrefStore::get().value<std::string>("general", cm::kConfigPref, "")).exrDisplay;
+    if (ext == ".exr" && !f.hdr.empty() && !exrDisplay)
         out.rgba = f.hdr;
     else
         for (size_t i = 0; i < count; ++i)
@@ -504,6 +510,31 @@ void registerCommands()
         o.pass = a.get<std::string>("renderPass", "beauty");
         return o;
     };
+
+    ops::registerCommand({
+        .name = "ocioInfo",
+        .doc = "What an OpenColorIO config offers: its displays, the views of a display, looks and colour spaces, and the colour space "
+               "Lila's scene-linear Rec.709 maps to. The scene's config (or the built-in one) when config is left out.",
+        .flags = {
+            {"config", "cfg", T::String, nullptr, "An .ocio file or ocio:// URI; the scene's when left out."},
+            {"display", "dsp", T::String, nullptr, "The display whose views to list; the default display when left out."},
+        },
+        .run = [](const Args& a) -> json {
+            namespace cm = scene::colorManagement;
+            const cm::Settings c = cm::settings(scene::Graph::current(), PrefStore::get().value<std::string>("general", cm::kConfigPref, ""));
+            const render::ocio::ConfigInfo info = render::ocio::info(a.get<std::string>("config", c.config), a.get<std::string>("display", c.display));
+            if (!info.ok)
+                throw std::runtime_error("OCIO config failed: " + info.error);
+            return {{"name", info.name},
+                    {"workingSpace", info.workingSpace},
+                    {"displays", info.displays},
+                    {"defaultDisplay", info.defaultDisplay},
+                    {"views", info.views},
+                    {"defaultView", info.defaultView},
+                    {"looks", info.looks},
+                    {"colorSpaces", info.colorSpaces}};
+        },
+    });
 
     std::vector<FlagDef> single = renderFlags();
     single.push_back({"path", "p", T::String, nullptr,

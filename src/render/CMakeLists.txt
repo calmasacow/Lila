@@ -17,6 +17,7 @@ lila_module(lila_render UI
     HdrImage.cpp
     HeightfieldRenderer.cpp
     MeshMaps.cpp
+    Ocio.cpp
     PaintCommands.cpp
     PaintGpu.cpp
     Renderer.cpp
@@ -32,6 +33,8 @@ lila_module(lila_render UI
     VulkanContext.cpp)
 
 target_link_libraries(lila_render PUBLIC lila_core volk::volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+find_package(OpenColorIO CONFIG REQUIRED)
+target_link_libraries(lila_render PRIVATE OpenColorIO::OpenColorIO)
 if(NOT WIN32)
     find_package(X11 REQUIRED COMPONENTS xcb)
     target_link_libraries(lila_render PRIVATE X11::xcb)

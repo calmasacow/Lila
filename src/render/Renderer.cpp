@@ -648,6 +648,7 @@ struct Viewport
     bool postImagesReady = false;      // moved out of UNDEFINED into GENERAL
     bool exposureValid = false;
     uint64_t lutKey = 0;               // the LUT the compose sets point at
+    uint64_t viewLutKey = 0;           // the OCIO view LUT the compose sets point at
     std::chrono::steady_clock::time_point lastExposure{};
     bool wantsMore = false;
     /** Still accumulating with no new state: the next of those frames draws at convergeAt, one per display refresh. */
@@ -3430,6 +3431,7 @@ struct Renderer::Impl
         v.postImagesReady = false;
         v.exposureValid = false;
         v.lutKey = 0;
+        v.viewLutKey = 0;
         if (!v.bloomDown.image || !v.bloomUp.image)
             return;
 
@@ -5818,6 +5820,7 @@ struct Renderer::Impl
         bool bloom = false;
         bool autoExposure = false;
         bool lut = false;
+        bool view = false; // the OCIO view LUT is bound
     };
 
     /**
@@ -5855,6 +5858,16 @@ struct Renderer::Impl
             v.lutKey = uint64_t(lut);
         }
         r.lut = lut != identityLut.view && s.post.lutIntensity > 0.0f;
+        const VkImageView viewLut = lutView(cmd, f, s.post.view ? s.post.view->lut : nullptr);
+        if (uint64_t(viewLut) != v.viewLutKey)
+        {
+            Frame& other = v.frames[(v.frameIndex + 1) % kFramesInFlight];
+            vkWaitForFences(vk.device, 1, &other.fence, VK_TRUE, UINT64_MAX);
+            for (VkDescriptorSet set : v.composeSets)
+                writeImage(set, 4, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, viewLut, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, linearSampler);
+            v.viewLutKey = uint64_t(viewLut);
+        }
+        r.view = s.post.view && viewLut != identityLut.view;
 
         if (s.post.autoExposure && histogramPipeline && averagePipeline)
         {
@@ -5944,7 +5957,10 @@ struct Renderer::Impl
         c.gain = glm::vec4(p.gain, float(frameCounter % 4096));
         c.lens = glm::vec4(std::max(p.chromaticAberration, 0.0f), p.distortion, std::max(p.sharpen, 0.0f), r.bloom ? std::clamp(p.bloom, 0.0f, 1.0f) : 0.0f);
         c.size = glm::vec4(float(v.extent.width), float(v.extent.height), 1.0f / float(v.extent.width), 1.0f / float(v.extent.height));
-        c.misc = glm::vec4(r.autoExposure ? 1.0f : 0.0f, 1.0f / float(std::max(v.bloomLevels, 1u)), 0.0f, 0.0f);
+        c.misc = glm::vec4(r.autoExposure ? 1.0f : 0.0f, 1.0f / float(std::max(v.bloomLevels, 1u)), p.view ? p.view->shaperMin : 0.0f,
+                           p.view ? p.view->shaperMax : 1.0f);
+        if (r.view)
+            c.params.w = 4.0f;
         return c;
     }
 

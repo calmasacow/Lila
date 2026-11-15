@@ -88,6 +88,7 @@ add_executable(lila_tests
     test_ifc.cpp
     test_light.cpp
     test_showcase.cpp
+    test_post2.cpp
     test_locks.cpp
     test_paths.cpp
     test_project_textures.cpp

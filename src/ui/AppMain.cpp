@@ -50,6 +50,7 @@
 #include "ui/Updater.h"
 #include "ui/CurveUi.h"
 #include "ui/ClayUi.h"
+#include "ui/ColorManagementUi.h"
 #include "ui/LayoutPencil.h"
 #include "ui/ConformTool.h"
 #include "ui/TexturePaintTool.h"
@@ -172,6 +173,7 @@ void registerUi()
     pointCloudDisplay::registerUi();
     registerConformActions();
     registerClayUi();
+    registerColorManagementUi();
     registerLayoutPencil();
     registerSculptUi();
     registerVertexPaintUi();

@@ -119,7 +119,10 @@ enum Attr
     kHeightUvHeight,
     // Per-texture sampling: wrapU, wrapV and filter for each of materials::sampledMaps(), in that order.
     kTextureSampling,
-    kCount = kTextureSampling + 7 * 4
+    // The colour maps' OCIO input colour spaces (base colour, emissive): a config colour space, empty to follow ColorSpace.
+    kBaseColorOcioSpace = kTextureSampling + 7 * 4,
+    kEmissiveOcioSpace,
+    kCount
 };
 
 /** The viewport (and Unreal master material) lighting model; DefaultLit is Unreal's default lit. */

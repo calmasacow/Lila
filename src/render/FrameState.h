@@ -273,6 +273,14 @@ struct Lut3D
     uint64_t key = nextResourceKey();
 };
 
+/** An OpenColorIO display and view baked to a 3D LUT over a log2 shaper of scene-linear light; outputs display code values. */
+struct ViewTransform
+{
+    std::shared_ptr<const Lut3D> lut;
+    float shaperMin = -12.0f, shaperMax = 10.0f; // log2 of the scene-linear range the LUT covers
+    std::string label;                           // "display / view", for logs and render metadata
+};
+
 /** How to turn the scene's light into the picture: tonemapper, grading, bloom and lens effects (scene::postProcess). */
 struct PostSettings
 {
@@ -302,6 +310,8 @@ struct PostSettings
     float sharpen = 0.0f;
     std::shared_ptr<const Lut3D> lut;
     float lutIntensity = 1.0f;
+    /** Colour management: an OCIO view in place of the tonemapper and display gamma; null keeps Lila's tonemapper. */
+    std::shared_ptr<const ViewTransform> view;
     /** Off for passes whose values must come out exact, such as object mattes. */
     bool dither = true;
 };

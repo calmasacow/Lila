@@ -592,6 +592,8 @@ void ViewportWidget::drawHud(OverlayPainter& p)
     ctx.motionBlurMs = stats.motionBlurMs;
     if (!stats.reflectionNote.empty())
         ctx.fallbacks.emplace_back("Reflections:", QString::fromStdString(stats.reflectionNote));
+    if (const std::string note = viewportDisplay::colorNote(); !note.empty())
+        ctx.fallbacks.emplace_back("Colour:", QString::fromStdString(note));
     std::vector<QRectF> drawn;
     ctx.drawn = &drawn;
     // A provisional uv count settles on the next frame once the mesh stops changing, which needs a frame to happen.
