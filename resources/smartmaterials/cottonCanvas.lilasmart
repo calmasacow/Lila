@@ -21,7 +21,17 @@
         "graph": {
           "name": "canvas",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 461,
+              "targets": [
+                "Anisotropic2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

@@ -20,7 +20,18 @@
         "graph": {
           "name": "planks",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 31,
+              "targets": [
+                "Planks1.seed",
+                "Directional2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

@@ -20,7 +20,40 @@
         "graph": {
           "name": "cobbles",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 6,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale 2",
+              "kind": "param",
+              "type": "int",
+              "default": 6,
+              "targets": [
+                "Cells3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 21,
+              "targets": [
+                "Cells1.seed",
+                "Cells3.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "height",

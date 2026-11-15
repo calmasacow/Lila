@@ -37,7 +37,40 @@
         "graph": {
           "name": "cast",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 12,
+              "targets": [
+                "Dirt1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Worley Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 30,
+              "targets": [
+                "Worley2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 341,
+              "targets": [
+                "Dirt1.seed",
+                "Worley2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "height",

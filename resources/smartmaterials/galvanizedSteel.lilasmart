@@ -37,7 +37,28 @@
         "graph": {
           "name": "spangle",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 10,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 351,
+              "targets": [
+                "Cells1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "roughness",

@@ -21,7 +21,29 @@
         "graph": {
           "name": "walnut",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Noise Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Perlin2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 361,
+              "targets": [
+                "Directional1.seed",
+                "Perlin2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

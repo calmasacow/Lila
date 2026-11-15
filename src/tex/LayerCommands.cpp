@@ -406,6 +406,39 @@ json saveSmart(const Args& a)
     }
     return paths::toUtf8(path);
 }
+
+/** A procedural layer's exposed settings: each param input's default and every node value it targets. Throws CommandError. */
+void applyGraphParams(Layer& l, const json& params)
+{
+    if (!params.is_object())
+        throw CommandError("texSetLayer: params is {name: value}");
+    if (l.kind != LayerKind::Procedural || !l.graph.is_object())
+        throw CommandError("texSetLayer: only procedural layers have params");
+    json& inputs = l.graph["inputs"];
+    json& nodes = l.graph["nodes"];
+    for (const auto& [key, value] : params.items())
+    {
+        json* in = nullptr;
+        if (inputs.is_array())
+            for (json& i : inputs)
+                if (i.value("name", "") == key && (i.value("kind", "") == "param" || i.contains("targets")))
+                    in = &i;
+        if (!in)
+            throw CommandError("texSetLayer: " + l.id + " has no setting " + key);
+        (*in)["default"] = value;
+        for (const json& t : in->value("targets", json::array()))
+        {
+            const std::string target = t.get<std::string>();
+            const auto dot = target.find('.');
+            if (dot == std::string::npos || !nodes.is_array())
+                continue;
+            for (json& n : nodes)
+                if (n.value("name", "") == target.substr(0, dot))
+                    n["values"][target.substr(dot + 1)] = value;
+        }
+    }
+}
+
 } // namespace
 
 void registerLayerCommands()
@@ -536,7 +569,8 @@ void registerLayerCommands()
         .name = "texSetLayer",
         .doc = "Change a layer: props is a merge patch over its JSON (texLayerStack shows it): name, enabled, channels {channel: {enabled, mode, "
                "opacity}}, material {channel: value, or null to drop it}, paint {channel or mask: image}, graph, source, filter, filterValues, "
-               "anchor, heightBlend {enabled, sharpness, influence}, masks, kind. Returns the layer.",
+               "anchor, heightBlend {enabled, sharpness, influence}, tiling {scale, rotation, offsetX, offsetY}, masks, kind; params {name: value} "
+               "sets a procedural layer's exposed settings (its graph's param inputs and the node values they target). Returns the layer.",
         .positionalDoc = "set layer props",
         .run = [](const Args& a) -> json {
             Session s = open(a, "texSetLayer");
@@ -544,6 +578,8 @@ void registerLayerCommands()
             if (a.positional.size() < 3)
                 throw CommandError("texSetLayer: props required");
             Layer next = patched(l, a.positional[2], "texSetLayer");
+            if (const json& props = a.positional[2]; props.is_object() && props.contains("params"))
+                applyGraphParams(next, props["params"]);
             if (next.kind != LayerKind::Folder && !next.children.empty())
                 throw CommandError("texSetLayer: only folders have children");
             checkLayer(s, next);

@@ -20,7 +20,40 @@
         "graph": {
           "name": "lava",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 211,
+              "targets": [
+                "Cells1.seed",
+                "Clouds3.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "height",

@@ -20,7 +20,53 @@
         "graph": {
           "name": "skin",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 90,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale 2",
+              "kind": "param",
+              "type": "int",
+              "default": 140,
+              "targets": [
+                "Cells5.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 511,
+              "targets": [
+                "Cells1.seed",
+                "Anisotropic2.seed",
+                "Clouds3.seed",
+                "Cells5.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

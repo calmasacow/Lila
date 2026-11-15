@@ -20,7 +20,17 @@
         "graph": {
           "name": "bricks",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 7,
+              "targets": [
+                "Bricks1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

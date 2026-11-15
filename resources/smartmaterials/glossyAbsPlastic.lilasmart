@@ -38,7 +38,40 @@
         "graph": {
           "name": "texture",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 60,
+              "targets": [
+                "Dirt1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 6,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 531,
+              "targets": [
+                "Dirt1.seed",
+                "Clouds3.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "height",

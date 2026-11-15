@@ -20,7 +20,29 @@
         "graph": {
           "name": "bark",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 41,
+              "targets": [
+                "Directional1.seed",
+                "Clouds2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "height",

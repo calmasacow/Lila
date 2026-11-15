@@ -21,7 +21,29 @@
         "graph": {
           "name": "grass",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Clouds2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 101,
+              "targets": [
+                "Directional1.seed",
+                "Clouds2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

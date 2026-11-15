@@ -38,7 +38,28 @@
         "graph": {
           "name": "rubber",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 50,
+              "targets": [
+                "Dirt1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 521,
+              "targets": [
+                "Dirt1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "height",

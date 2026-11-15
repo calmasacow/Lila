@@ -20,7 +20,28 @@
         "graph": {
           "name": "weave",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 161,
+              "targets": [
+                "Clouds3.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "height",

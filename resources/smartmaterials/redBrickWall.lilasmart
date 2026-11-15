@@ -21,7 +21,29 @@
         "graph": {
           "name": "bricks",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 10,
+              "targets": [
+                "Dirt3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 401,
+              "targets": [
+                "Bricks1.seed",
+                "Dirt3.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

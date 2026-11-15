@@ -20,7 +20,17 @@
         "graph": {
           "name": "tiles",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 191,
+              "targets": [
+                "Tiles1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

@@ -21,7 +21,18 @@
         "graph": {
           "name": "pine",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 371,
+              "targets": [
+                "Planks1.seed",
+                "Directional2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

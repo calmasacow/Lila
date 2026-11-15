@@ -38,7 +38,17 @@
         "graph": {
           "name": "swirls",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 311,
+              "targets": [
+                "Gabor1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "roughness",

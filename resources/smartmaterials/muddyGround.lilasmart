@@ -21,7 +21,64 @@
         "graph": {
           "name": "soil",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Pebble Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 22,
+              "targets": [
+                "Cells3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Pebble Size",
+              "kind": "param",
+              "type": "float",
+              "default": 0.82,
+              "targets": [
+                "Threshold7.threshold"
+              ],
+              "min": 0.0,
+              "max": 1.0
+            },
+            {
+              "name": "Pebble Spacing",
+              "kind": "param",
+              "type": "float",
+              "default": 0.6,
+              "targets": [
+                "Threshold9.threshold"
+              ],
+              "min": 0.0,
+              "max": 1.0
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 421,
+              "targets": [
+                "Clouds1.seed",
+                "Cells3.seed",
+                "Perlin4.seed",
+                "Perlin8.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

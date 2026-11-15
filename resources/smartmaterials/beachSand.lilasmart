@@ -20,7 +20,29 @@
         "graph": {
           "name": "sand",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 40,
+              "targets": [
+                "Dirt1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 431,
+              "targets": [
+                "Dirt1.seed",
+                "Directional2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

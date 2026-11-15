@@ -21,7 +21,17 @@
         "graph": {
           "name": "denim",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 471,
+              "targets": [
+                "Directional2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

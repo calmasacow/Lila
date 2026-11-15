@@ -20,7 +20,28 @@
         "graph": {
           "name": "knit",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 30,
+              "targets": [
+                "Dirt2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 483,
+              "targets": [
+                "Dirt2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

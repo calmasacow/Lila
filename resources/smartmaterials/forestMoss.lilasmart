@@ -20,7 +20,40 @@
         "graph": {
           "name": "moss",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Grain Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 40,
+              "targets": [
+                "Dirt1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 6,
+              "targets": [
+                "Clouds2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 451,
+              "targets": [
+                "Dirt1.seed",
+                "Clouds2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

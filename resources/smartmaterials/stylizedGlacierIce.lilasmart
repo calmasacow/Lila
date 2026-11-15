@@ -21,7 +21,40 @@
         "graph": {
           "name": "ice",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Clouds2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 141,
+              "targets": [
+                "Cells1.seed",
+                "Clouds2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

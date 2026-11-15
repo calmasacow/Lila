@@ -79,12 +79,18 @@ class Gr:
         self.links = []
         self.outs = []
         self.k = 0
+        self.params = []
+        self.internal = set()
 
     def n(self, type, **values):
         self.k += 1
         name = f"{type[0].upper()}{type[1:]}{self.k}"
         self.nodes.append({"name": name, "type": type, "position": [-650 + 150 * (self.k % 6), 120 * (self.k // 6)], "values": values})
         return name
+
+    def expose(self, name, type, default, targets, **limits):
+        """A setting shown on the layer: changing it sets every target ("Node.param")."""
+        self.params.append(dict({"name": name, "kind": "param", "type": type, "default": default, "targets": targets}, **limits))
 
     def l(self, a, b, bin, aout="out"):
         self.links.append([a, aout, b, bin])
@@ -124,6 +130,11 @@ class Gr:
         thin = self.n("perlin", scale=5, octaves=2, seed=seed + 2)
         tm = self.n("threshold", threshold=1.0 - keep, softness=0.05)
         self.l(thin, tm, "input")
+        self.internal |= {f"{wn}.scale", f"{thin}.scale"}
+        tag = "Pebble" if not any(q["name"].startswith("Pebble Scale") for q in self.params) else "Pebble 2"
+        self.expose(f"{tag} Scale", "int", scale, [f"{c}.scale"], min=1, softMax=64)
+        self.expose(f"{tag} Size", "float", size, [f"{dots}.threshold"], min=0.0, max=1.0)
+        self.expose(f"{tag} Spacing", "float", 1.0 - keep, [f"{tm}.threshold"], min=0.0, max=1.0)
         return self.mix(dots, tm, None, mode="multiply")
 
     def const(self, v):
@@ -132,7 +143,31 @@ class Gr:
     def json(self):
         outs = [{"name": c, "type": "gray" if c in GRAY_CH else "color"} for c in self.outs]
         nodes = self.nodes + [{"name": "GroupOutput", "type": "GroupOutput", "position": [400, 0]}]
-        return {"name": self.name, "typeVersion": 1, "inputs": [], "outputs": outs, "nodes": nodes, "links": self.links}
+        return {"name": self.name, "typeVersion": 1, "inputs": self.settings(), "outputs": outs, "nodes": nodes, "links": self.links}
+
+    NOISES = {"clouds": "Clouds", "perlin": "Noise", "simplex": "Noise", "valueNoise": "Noise", "cells": "Cells", "crystal": "Crystal",
+              "worley": "Worley", "voronoi": "Voronoi", "dirt": "Grain", "directional": "Streaks", "scratches": "Scratches"}
+
+    def settings(self):
+        """The named settings, then a scale for every noise not already covered and one seed for them all."""
+        out = list(self.params)
+        covered = {t for q in out for t in q["targets"]} | self.internal
+        counts = {}
+        seeds = []
+        for n in self.nodes:
+            label = self.NOISES.get(n["type"])
+            vals = n.get("values", {})
+            if "seed" in vals:
+                seeds.append(f'{n["name"]}.seed')
+            if not label or "scale" not in vals or f'{n["name"]}.scale' in covered:
+                continue
+            counts[label] = counts.get(label, 0) + 1
+            name = f"{label} Scale" if counts[label] == 1 else f"{label} Scale {counts[label]}"
+            out.append({"name": name, "kind": "param", "type": "int", "default": vals["scale"], "targets": [f'{n["name"]}.scale'], "min": 1, "softMax": 64})
+        if seeds:
+            first = next(n for n in self.nodes if f'{n["name"]}.seed' == seeds[0])
+            out.append({"name": "Seed", "kind": "param", "type": "seed", "default": first["values"]["seed"], "targets": seeds})
+        return out
 
 
 # Stylized finishing passes -------------------------------------------------------------------------------------------

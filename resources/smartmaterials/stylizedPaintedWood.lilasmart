@@ -22,7 +22,18 @@
         "graph": {
           "name": "planks",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 51,
+              "targets": [
+                "Planks1.seed",
+                "Directional2.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",
@@ -303,7 +314,28 @@
         "graph": {
           "name": "paint",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 52,
+              "targets": [
+                "Clouds1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

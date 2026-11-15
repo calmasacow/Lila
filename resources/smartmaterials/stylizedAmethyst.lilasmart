@@ -20,7 +20,28 @@
         "graph": {
           "name": "amethyst",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Crystal Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Crystal1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 151,
+              "targets": [
+                "Crystal1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",
@@ -188,7 +209,28 @@
         "graph": {
           "name": "glow",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 3,
+              "targets": [
+                "Clouds1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 152,
+              "targets": [
+                "Clouds1.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "emissive",

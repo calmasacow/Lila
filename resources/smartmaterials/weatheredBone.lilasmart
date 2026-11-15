@@ -21,7 +21,41 @@
         "graph": {
           "name": "bone",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Worley Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 20,
+              "targets": [
+                "Worley1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 4,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 551,
+              "targets": [
+                "Worley1.seed",
+                "Anisotropic2.seed",
+                "Clouds3.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",

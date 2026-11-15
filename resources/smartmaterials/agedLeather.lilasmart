@@ -21,7 +21,52 @@
         "graph": {
           "name": "leather",
           "typeVersion": 1,
-          "inputs": [],
+          "inputs": [
+            {
+              "name": "Cells Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 50,
+              "targets": [
+                "Cells1.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Cells Scale 2",
+              "kind": "param",
+              "type": "int",
+              "default": 12,
+              "targets": [
+                "Cells2.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Clouds Scale",
+              "kind": "param",
+              "type": "int",
+              "default": 5,
+              "targets": [
+                "Clouds3.scale"
+              ],
+              "min": 1,
+              "softMax": 64
+            },
+            {
+              "name": "Seed",
+              "kind": "param",
+              "type": "seed",
+              "default": 501,
+              "targets": [
+                "Cells1.seed",
+                "Cells2.seed",
+                "Clouds3.seed"
+              ]
+            }
+          ],
           "outputs": [
             {
               "name": "baseColor",
