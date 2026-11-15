@@ -51,6 +51,7 @@
     "joltphysics",
     "miniz",
     "libwebp",
+    "opencolorio",
     "zlib",
     "draco",
     "ptex",

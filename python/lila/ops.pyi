@@ -1779,6 +1779,17 @@ def collision(*objects: Any, colliders: Sequence[Any] | None = None, offset: flo
         name: Name for the deformer.
     """
 
+def colorManagement(mode: str | None = None, configPath: str | None = None, display: str | None = None, view: str | None = None, look: str | None = None, *, md: str | None = None, cfp: str | None = None, dsp: str | None = None, vw: str | None = None, lk: str | None = None) -> Any:
+    """The scene's colour management node, created if it has none. With flags, sets them on it. Returns its name.
+
+    Args:
+        mode: lila or ocio. Short form md.
+        configPath: An .ocio file; sets config to file. Empty goes back to the built-in config. Short form cfp.
+        display: OCIO display; empty for the config's default. Short form dsp.
+        view: OCIO view; empty for the display's default. Short form vw.
+        look: OCIO look; empty for none. Short form lk.
+    """
+
 def componentExport(*objects: Any, component: str | None = None, mode: str | None = None, unrealClass: str | None = None, tags: str | None = None, query: bool | None = None, c: str | None = None, m: str | None = None, uc: str | None = None, tg: str | None = None, q: bool | None = None) -> Any:
     """How a component on objects reaches Unreal: actorTags, assetUserData (the default), component (an actor component of unrealClass with matching properties), dataAsset (of unrealClass), custom (a registered exporter named by unrealClass) or none. actorTags tags the actor "Component.attr=value", or with tags="value" the bare values (a string attr holding whale-architecture tags whale-architecture; each element of a list; a true bool its attr's name). With query=True, returns the setting.
 
@@ -2052,7 +2063,7 @@ def createGroom(*objects: Any, guides: str | None = None, count: int | None = No
         sides: Points around each lock.
     """
 
-def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, bc: Sequence[float] | None = None) -> Any:
+def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, bc: Sequence[float] | None = None) -> Any:
     """Create a material (Unreal default lit inputs). Faces use it through a slot of the same name. Returns its name.
 
     Args:
@@ -2156,6 +2167,8 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         emissiveMapWrapV: What emissiveMap shows past its edges along V: repeat, clamp (the edge texels), mirror (repeat flipped) or black.
         emissiveMapFilter: How emissiveMap is filtered: linear (smooth, mipmapped) or nearest (hard texels, for pixel art).
         emissiveMapColorSpace: How emissiveMap's 8- and 16-bit values are read: auto (sRGB, as a colour map), sRGB, or linear (raw data). EXR and HDR files are always linear.
+        baseColorMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
+        emissiveMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
     """
 
 def createMesh(points: Sequence[Any] | None = None, faces: Sequence[Any] | None = None, uvs: Sequence[Any] | None = None, name: str | None = None, *, n: str | None = None) -> Any:
@@ -5202,6 +5215,15 @@ def lattice(*objects: Any, divisions: Sequence[float] | None = None, interpolati
         name: Name for the lattice.
     """
 
+def lensPreset(*objects: Any, node: str | None = None, camera: str | None = None, n: str | None = None, cam: str | None = None) -> Any:
+    """Set a post process's lens flare, streaks and dirt to a lens type: Spherical Prime (round glass, a few ghosts and a star), Anamorphic Scope (long blue streaks, oval ghosts), Vintage Glass (warm ghosts, strong halo, dust), Clean Coated (faint ghosts, no streaks). With no name, lists them.
+
+    Args:
+        objects: preset.
+        node: The post process; the active one (created if needed) when left out. Short form n.
+        camera: Also set this camera's anamorphicSqueeze and apertureBlades to match the lens. Short form cam.
+    """
+
 def light(type: str | None = None, name: str | None = None, parent: str | None = None, position: Sequence[float] | None = None, color: Sequence[float] | None = None, intensity: float | None = None, units: str | None = None, temperature: float | None = None, range: float | None = None, innerConeAngle: float | None = None, outerConeAngle: float | None = None, width: float | None = None, height: float | None = None, castShadows: bool | None = None, provider: str | None = None, skipSelect: bool | None = None, *, t: str | None = None, n: str | None = None, p: str | None = None, pos: Sequence[float] | None = None, c: Sequence[float] | None = None, i: float | None = None, u: str | None = None, tmp: float | None = None, r: float | None = None, ica: float | None = None, oca: float | None = None, w: float | None = None, h: float | None = None, cs: bool | None = None, prv: str | None = None, ss: bool | None = None) -> Any:
     """Create a light. Returns its path. Flags left out keep the light's defaults.
 
@@ -5644,7 +5666,7 @@ def measureSelection() -> Any:
     """Measure the selection without making nodes: 2 vertices or objects give distance and dx/dy/dz, 3 an angle, edges total and per-edge length, a closed edge loop or 4+ vertices a best-fit circle, faces area and perimeter, one object its bounding box (and diameter when it is cylinder-like), a measure node its value. Returns a dict: lengths in cm; 'value' and 'text' are the headline in the display unit (/units/linear)."""
 
 def measureView(view: str | None = None, lookThrough: str | None = None, yaw: float | None = None, pitch: float | None = None, width: int | None = None, height: int | None = None, display: str | None = None, isolate: bool | None = None, frameSelection: bool | None = None, grid: bool | None = None, showSelection: bool | None = None, samples: int | None = None, label: bool | None = None, overlays: bool | None = None, hud: bool | None = None, frames: int | None = None, ambientOcclusion: bool | None = None, *, v: str | None = None, lt: str | None = None, w: int | None = None, h: int | None = None, d: str | None = None, fs: bool | None = None, ov: bool | None = None, ao: bool | None = None) -> Any:
-    """Draw the scene offscreen several times like captureView and return the median GPU time per frame in ms, with the ambient occlusion share, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, frames}. 0 where the GPU has no timestamps.
+    """Draw the scene offscreen several times like captureView and return the median GPU time per frame in ms, with the ambient occlusion and post pass shares, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, reflectionMs, flareMs, dofMs, motionBlurMs, reflections (which ran), reflectionNote (why not what was asked), frames}. 0 where the GPU has no timestamps.
 
     Args:
         view: active, persp, three-quarter, front, back, left, right, side, top, bottom. Short form v. One of 'active', 'persp', 'three-quarter', 'front', 'back', 'left', 'right', 'side', 'top', 'bottom'. Default 'active'.
@@ -6119,6 +6141,14 @@ def objExists(*objects: Any) -> Any:
 
     Args:
         objects: name.
+    """
+
+def ocioInfo(config: str | None = None, display: str | None = None, *, cfg: str | None = None, dsp: str | None = None) -> Any:
+    """What an OpenColorIO config offers: its displays, the views of a display, looks and colour spaces, and the colour space Lila's scene-linear Rec.709 maps to. The scene's config (or the built-in one) when config is left out.
+
+    Args:
+        config: An .ocio file or ocio:// URI; the scene's when left out. Short form cfg.
+        display: The display whose views to list; the default display when left out. Short form dsp.
     """
 
 def offsetCurve(*objects: Any, distance: float | None = None, join: str | None = None, miterLimit: float | None = None, normal: Sequence[float] | None = None, tolerance: float | None = None, constructionHistory: bool | None = None, replaceOriginal: bool | None = None, name: str | None = None, ch: bool | None = None, rpo: bool | None = None, n: str | None = None) -> Any:
@@ -7775,7 +7805,7 @@ def renameTheme(*objects: Any, name: str | None = None, to: str | None = None, n
         to: New name.
     """
 
-def render(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, frame: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, f: float | None = None) -> Any:
+def render(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, frame: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, f: float | None = None) -> Any:
     """Render one frame of the scene through a camera, with the post process and lens, and write it. Returns the path.
 
     Args:
@@ -7787,6 +7817,7 @@ def render(camera: str | None = None, width: int | None = None, height: int | No
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
         path: Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render Output images, numbered, when left out. Short form p.
         frame: Frame to render; the current one when left out. Short form f.
     """
@@ -7804,7 +7835,7 @@ def renderMaterialThumbnail(*objects: Any, size: int | None = None, mesh: str | 
         all: Every library material (the scene's sets excluded). Default False.
     """
 
-def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
+def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
     """Render a frame range through a camera into an image sequence, an .mp4, or both. Returns {frames, path, video}.
 
     Args:
@@ -7816,6 +7847,7 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
         path: Images to write, #### standing for the frame number (added when missing). The Render Output images when left out. Short form p.
         video: An .mp4 to encode the frames into. Short form v.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.
@@ -7825,7 +7857,7 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         step: Frames between renders (1 by default). Short form by.
     """
 
-def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
+def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
     """Render a loop turning around the selection (or everything shown), framed to fit, into images, an .mp4, or both. The last frame stops one step short of the first, so the video loops. Returns {frames, path, video}.
 
     Args:
@@ -7837,6 +7869,7 @@ def renderTurntable(camera: str | None = None, width: int | None = None, height:
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
         path: Images to write, #### standing for the frame number. Left out with video= given, video only. Short form p.
         video: An .mp4 to encode the turntable into. Short form v.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.

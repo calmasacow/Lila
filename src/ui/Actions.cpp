@@ -836,6 +836,10 @@ void registerBuiltins()
     togglePref("viewport.toggleThirds", "Rule of Thirds", vd::kThirds, false, "Thirds lines inside the resolution gate.");
     togglePref("viewport.togglePostEffects", "Post Effects", vd::kPostEffects, true,
                "The scene's post process grading, bloom and lens effects in every viewport.");
+    togglePref("viewport.toggleDepthOfField", "Live Depth of Field", vd::kViewportDof, true,
+               "The camera's depth of field drawn every frame, so it shows while the view moves; a still view and renders refine it.");
+    togglePref("viewport.toggleMotionBlur", "Live Motion Blur", vd::kViewportMotionBlur, false,
+               "The camera's movement blurred over its shutter angle in the view and playblasts. Renders blur moving objects too.");
     togglePref("viewport.toggleTAA", "Temporal Antialiasing", vd::kTaa, true,
                "Smooths shading and texture shimmer as the view moves, and supersamples the view while it holds still.");
     togglePref("viewport.toggleGrid", "Grid", vd::kGrid, true, "The ground grid in every viewport.");
@@ -897,6 +901,22 @@ void registerBuiltins()
                       .run = [m] { PrefStore::get().set("general", vd::kLighting, m); },
                       .doc = doc,
                       .python = "lila.prefs.set(\"general\", \"/viewport/lighting\", \"" + m + "\")"});
+    }
+    for (auto [mode, label, doc] :
+         {std::tuple{"off", "No Reflections", "Glossy surfaces reflect the environment only."},
+          {"screenSpace", "Screen Space Reflections",
+           "Glossy surfaces reflect what the view shows, traced through its depth; off-screen things reflect the environment."},
+          {"rayTraced", "Ray-Traced Reflections",
+           "Glossy surfaces reflect the scene traced against its geometry, off-screen things included. Screen space on GPUs without "
+           "ray tracing; the view says when it falls back."}})
+    {
+        std::string m = mode;
+        actions::add({.id = "viewport.reflections." + m, .label = label, .category = "Display",
+                      .run = [m] { PrefStore::get().set("general", vd::kReflections, m); },
+                      .doc = doc,
+                      .python = "lila.prefs.set(\"general\", \"" + std::string(vd::kReflections) + "\", \"" + m + "\")",
+                      .checked = [m] { return PrefStore::get().value<std::string>("general", vd::kReflections, "off") == m; },
+                      .keywords = {"reflections", "ssr", "raytraced", "rtx", "mirror", "lumen", "eevee", "screen space"}});
     }
     actions::add({.id = "viewport.resetLight", .label = "Reset Light", .category = "Display", .run = [] { vd::resetLight(); },
                   .doc = "Puts the light back where it starts for the lighting mode in use: the HDRI unturned, or the studio or sculpt rig "

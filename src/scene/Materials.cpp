@@ -116,7 +116,7 @@ void heightAttrs(std::vector<AttrDef>& a)
 }
 
 constexpr int kSampledMaps[] = {kBaseColorMap, kMetallicMap, kRoughnessMap, kNormalMap, kAmbientOcclusionMap, kOrmMap, kEmissiveMap};
-static_assert(kCount == kTextureSampling + int(std::size(kSampledMaps)) * 4);
+static_assert(kBaseColorOcioSpace == kTextureSampling + int(std::size(kSampledMaps)) * 4);
 
 /** wrapU, wrapV, filter and colorSpace of every sampled map, named after it (baseColorMapWrapU). */
 void samplingAttrs(std::vector<AttrDef>& a)
@@ -148,6 +148,13 @@ void samplingAttrs(std::vector<AttrDef>& a)
 std::vector<AttrDef> materialAttrs()
 {
     std::vector<AttrDef> a(kCount);
+    for (auto [attr, name] : {std::pair{kBaseColorOcioSpace, "baseColorMapOcioSpace"}, {kEmissiveOcioSpace, "emissiveMapOcioSpace"}})
+    {
+        a[attr] = {.name = name, .type = PlugType::String, .defaultValue = std::string(), .flags = AttrInput | AttrStorable,
+                   .doc = "With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); "
+                          "empty reads it by its ColorSpace."};
+        a[attr].category = "Texture Sampling";
+    }
     a[kBaseColor] = colorAttr("baseColor", glm::dvec3(0.5), "Linear base color, used when no base color map is set.");
     a[kBaseColorMap] = pathAttr("baseColorMap", "Base color texture (sRGB unless baseColorMapColorSpace says otherwise); its alpha is the opacity of masked and translucent materials.");
     a[kMetallic] = floatAttr("metallic", 0.0, "0 dielectric, 1 metal.", 0.0, 1.0);

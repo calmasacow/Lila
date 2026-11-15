@@ -137,6 +137,11 @@ lila_module(lila_ui UI
     ArrayTool.cpp ArrayTool.h
     ClayTool.cpp
     ClayUi.cpp ClayUi.h
+    ColorManagementUi.cpp ColorManagementUi.h
+    GradeControls.cpp GradeControls.h
+    GradeUi.cpp GradeUi.h
+    ScopesPanel.cpp ScopesPanel.h
+    FocusTool.cpp FocusTool.h
     LayoutPencil.cpp LayoutPencil.h
     ConformTool.cpp ConformTool.h
     PythonBridge.cpp PythonBridge.h

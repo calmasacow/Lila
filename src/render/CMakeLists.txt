@@ -19,6 +19,8 @@ lila_module(lila_render UI
     HeightfieldRenderer.cpp
     MeshMaps.cpp
     PathTracer.cpp
+    Ocio.cpp
+    Grade.cpp
     PaintCommands.cpp
     PaintPathCommands.cpp
     PaintPickCommands.cpp
@@ -38,6 +40,8 @@ lila_module(lila_render UI
     VulkanContext.cpp)
 
 target_link_libraries(lila_render PUBLIC lila_core volk::volk Vulkan::Headers GPUOpen::VulkanMemoryAllocator)
+find_package(OpenColorIO CONFIG REQUIRED)
+target_link_libraries(lila_render PRIVATE OpenColorIO::OpenColorIO)
 if(NOT WIN32)
     find_package(X11 REQUIRED COMPONENTS xcb)
     target_link_libraries(lila_render PRIVATE X11::xcb)
@@ -72,9 +76,13 @@ lila_add_shaders(lila_render FILES
     shaders/paint_gather.slang
     shaders/paint_screen.slang
     shaders/post.slang
+    shaders/reflect.slang
+    shaders/flare.slang
+    shaders/film.slang
     shaders/rtao.slang
     shaders/rtbevel.slang
     shaders/rtshadow.slang
+    shaders/rtreflect.slang
     shaders/points.slang
     shaders/strands.slang
     shaders/pointcloud.slang
@@ -99,6 +107,7 @@ lila_add_shaders(lila_render FILES
     shaders/tonemap.slang
     shaders/extended.slang
     shaders/pathtrace_channels.slang
+    shaders/reflect_common.slang
     shaders/stylised.slang
     shaders/bake_common.slang
     shaders/bake_maps.slang

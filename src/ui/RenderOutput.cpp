@@ -1,5 +1,8 @@
 #include "ui/RenderOutput.h"
 
+#include <mutex>
+
+#include "core/PrefStore.h"
 #include "core/ImageIO.h"
 #include "core/Log.h"
 #include "core/Paths.h"
@@ -8,10 +11,14 @@
 #include "core/VideoWriter.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
+#include "render/Ocio.h"
 #include "render/Renderer.h"
+#include "scene/ColorManagement.h"
 #include "scene/Anim.h"
 #include "scene/Camera.h"
 #include "scene/Graph.h"
+#include "scene/Materials.h"
+#include "scene/MeshNodes.h"
 #include "scene/NodeBounds.h"
 #include "scene/RenderSettings.h"
 #include "scene/Transform.h"
@@ -26,7 +33,14 @@
 #include <QDir>
 #include <QImage>
 
+#include <tbb/parallel_for.h>
+
 #include <algorithm>
+#include <array>
+#include <bit>
+#include <cstring>
+#include <optional>
+#include <unordered_map>
 #include <cmath>
 #include <format>
 #include <stdexcept>
@@ -229,6 +243,281 @@ json setting(const Args& a, const char* key, const json& fallback)
 }
 } // namespace
 
+namespace
+{
+/** MurmurHash3 (x86, 32-bit) of a name, as Cryptomatte hashes object and material names. */
+uint32_t murmur3(std::string_view s, uint32_t seed = 0)
+{
+    const auto* data = reinterpret_cast<const uint8_t*>(s.data());
+    const size_t n = s.size();
+    uint32_t h = seed;
+    const uint32_t c1 = 0xcc9e2d51, c2 = 0x1b873593;
+    auto rotl = [](uint32_t x, int r) { return (x << r) | (x >> (32 - r)); };
+    size_t i = 0;
+    for (; i + 4 <= n; i += 4)
+    {
+        uint32_t k;
+        std::memcpy(&k, data + i, 4);
+        k *= c1;
+        k = rotl(k, 15);
+        k *= c2;
+        h ^= k;
+        h = rotl(h, 13);
+        h = h * 5 + 0xe6546b64;
+    }
+    uint32_t k = 0;
+    switch (n & 3)
+    {
+    case 3: k ^= uint32_t(data[i + 2]) << 16; [[fallthrough]];
+    case 2: k ^= uint32_t(data[i + 1]) << 8; [[fallthrough]];
+    case 1:
+        k ^= data[i];
+        k *= c1;
+        k = rotl(k, 15);
+        k *= c2;
+        h ^= k;
+    }
+    h ^= uint32_t(n);
+    h ^= h >> 16;
+    h *= 0x85ebca6b;
+    h ^= h >> 13;
+    h *= 0xc2b2ae35;
+    h ^= h >> 16;
+    return h;
+}
+
+/** A Cryptomatte id: the name's hash as a float, kept off denormals, infinities and NaNs as the spec asks. */
+uint32_t cryptoHash(const std::string& name)
+{
+    uint32_t h = murmur3(name);
+    const uint32_t exponent = (h >> 23) & 255;
+    if (exponent == 0 || exponent == 255)
+        h ^= 1u << 23;
+    return h;
+}
+
+/** The colour a flat id render writes for index i (1-based), as the 8-bit sRGB code values r, g, b of its bytes. */
+glm::vec3 indexColor(uint32_t i)
+{
+    auto lin = [](uint32_t code) {
+        const float c = float(code) / 255.0f;
+        return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+    };
+    return {lin(i & 255u), lin((i >> 8) & 255u), lin((i >> 16) & 255u)};
+}
+
+/**
+ * One Cryptomatte layer: renders the frame flat-coloured by object (or material) at a supersampled size, then per output
+ * pixel ranks the names that cover it by coverage. Writes `name`00 and `name`01 (four ranks) and the manifest attributes.
+ */
+void cryptoLayer(const render::FrameState& base, const scene::Graph& g, bool byMaterial, int w, int h, const std::string& name,
+                 std::vector<image::ExrChannel>& channels, std::vector<image::ExrAttribute>& attrs)
+{
+    render::FrameState s = base;
+    std::vector<std::string> names{""};
+    std::unordered_map<std::string, uint32_t> index;
+    auto idOf = [&](const std::string& n) {
+        auto [it, added] = index.emplace(n, uint32_t(names.size()));
+        if (added)
+            names.push_back(n);
+        return it->second;
+    };
+    s.lighting = render::FrameState::Lighting::Flat;
+    s.exposure = 1.0f;
+    s.gamma = 1.0f;
+    s.post = {};
+    s.post.tonemapper = render::PostSettings::Linear;
+    s.post.dither = false;
+    s.fog.on = false;
+    s.lights.clear();
+    s.envBackground = false;
+    s.background = glm::vec3(0.0f);
+    s.transparentBackground = false;
+    s.ambientOcclusion = false;
+    s.groundShadow = 0.0f;
+    s.lensRadius = 0.0f;
+    s.taa = false;
+    s.accumulateOnly = false;
+    s.reflections = render::FrameState::Reflections::Off;
+    s.viewportDof = s.viewportMotionBlur = false;
+    for (render::MeshDraw& d : s.meshes.edit())
+    {
+        const scene::Node* n = d.node ? g.node(scene::NodeId(d.node)) : nullptr;
+        d.vertexColors = render::VertexColorMode::Off;
+        if (!byMaterial)
+        {
+            d.baseColor = indexColor(idOf(n ? n->name() : std::string()));
+            d.materials.clear();
+            continue;
+        }
+        const scene::MeshPtr* mesh = n && n->type().isA("mesh") ? &n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
+        std::vector<render::Material> flat;
+        for (size_t slot = 0; slot < std::max<size_t>(d.materials.size(), 1); ++slot)
+        {
+            render::Material m;
+            m.baseColor = indexColor(idOf(mesh && *mesh ? scene::materials::slotName(**mesh, int32_t(slot)) : std::string("Default")));
+            flat.push_back(m);
+        }
+        d.baseColor = flat.front().baseColor;
+        d.materials = std::move(flat);
+    }
+    // Several samples per pixel, as many as the size limit allows, give each name's coverage.
+    const int ss = std::clamp(16384 / std::max(w, h), 1, 4);
+    render::Renderer::OffscreenResult res;
+    std::string err;
+    if (!render::Renderer::get().renderOffscreenFrames({s}, w * ss, h * ss, 1, false, res, &err))
+        throw std::runtime_error("cryptomatte render failed: " + err);
+    const int W = w * ss;
+    const size_t count = size_t(w) * h;
+    std::array<std::vector<float>, 8> out;
+    for (auto& c : out)
+        c.assign(count, 0.0f);
+    tbb::parallel_for(0, h, [&](int y) {
+        for (int x = 0; x < w; ++x)
+        {
+            std::array<std::pair<uint32_t, int>, 16> hits{};
+            int kinds = 0, total = 0;
+            for (int sy = 0; sy < ss; ++sy)
+                for (int sx = 0; sx < ss; ++sx)
+                {
+                    const uint8_t* p = res.bgra.data() + (size_t(y * ss + sy) * W + size_t(x * ss + sx)) * 4;
+                    const uint32_t id = uint32_t(p[2]) | uint32_t(p[1]) << 8 | uint32_t(p[0]) << 16;
+                    ++total;
+                    // Edges the multisampling blended decode to no name, or the wrong one rarely; both are skipped as background.
+                    if (id == 0 || id >= names.size())
+                        continue;
+                    int k = 0;
+                    while (k < kinds && hits[size_t(k)].first != id)
+                        ++k;
+                    if (k == kinds && kinds < 16)
+                        hits[size_t(kinds++)] = {id, 0};
+                    if (k < kinds)
+                        ++hits[size_t(k)].second;
+                }
+            std::sort(hits.begin(), hits.begin() + kinds, [](const auto& a, const auto& b) { return a.second > b.second; });
+            const size_t i = size_t(y) * w + x;
+            for (int r = 0; r < std::min(kinds, 4); ++r)
+            {
+                out[size_t(r) * 2][i] = std::bit_cast<float>(cryptoHash(names[hits[size_t(r)].first]));
+                out[size_t(r) * 2 + 1][i] = float(hits[size_t(r)].second) / float(total);
+            }
+        }
+    });
+    static const char* kRgba[] = {"R", "G", "B", "A"};
+    for (int c = 0; c < 8; ++c)
+        channels.push_back({name + (c < 4 ? "00." : "01.") + kRgba[c % 4], std::move(out[size_t(c)]), true});
+    json manifest = json::object();
+    for (size_t i = 1; i < names.size(); ++i)
+    {
+        char hex[9];
+        std::snprintf(hex, sizeof(hex), "%08x", cryptoHash(names[i]));
+        manifest[names[i]] = hex;
+    }
+    char key[9];
+    std::snprintf(key, sizeof(key), "%08x", murmur3(name));
+    const std::string prefix = "cryptomatte/" + std::string(key, 7) + "/";
+    attrs.push_back(image::exrString(prefix + "name", name));
+    attrs.push_back(image::exrString(prefix + "hash", "MurmurHash3_32"));
+    attrs.push_back(image::exrString(prefix + "conversion", "uint32_to_float32"));
+    attrs.push_back(image::exrString(prefix + "manifest", manifest.dump()));
+}
+
+/**
+ * Depth (cm along the view, 1e10 where nothing was drawn), world normals from the depth, and the camera's motion since
+ * the previous frame (pixels, x right, y up), from the beauty's depth readback.
+ */
+void depthLayers(const std::vector<float>& depth, int w, int h, const glm::dmat4& viewProj, const glm::dmat4& proj, const std::optional<glm::dmat4>& prevViewProj,
+                 const std::vector<std::string>& passes, std::vector<image::ExrChannel>& channels)
+{
+    if (depth.size() != size_t(w) * h)
+        return;
+    const glm::dmat4 inv = glm::inverse(viewProj), invProj = glm::inverse(proj);
+    auto want = [&](const char* p) { return std::ranges::find(passes, p) != passes.end(); };
+    auto world = [&](int x, int y) {
+        const double d = depth[size_t(y) * w + x];
+        const glm::dvec4 q = inv * glm::dvec4((x + 0.5) / w * 2.0 - 1.0, (y + 0.5) / h * 2.0 - 1.0, d, 1.0);
+        return glm::dvec3(q) / q.w;
+    };
+    const size_t count = size_t(w) * h;
+    if (want("depth"))
+    {
+        std::vector<float> z(count);
+        for (size_t i = 0; i < count; ++i)
+        {
+            const double d = depth[i];
+            if (d <= 0.0)
+            {
+                z[i] = 1e10f;
+                continue;
+            }
+            const int x = int(i % w), y = int(i / w);
+            const glm::dvec4 v = invProj * glm::dvec4((x + 0.5) / w * 2.0 - 1.0, (y + 0.5) / h * 2.0 - 1.0, d, 1.0);
+            z[i] = float(-v.z / v.w);
+        }
+        channels.push_back({"depth.Z", std::move(z), true});
+    }
+    if (want("normal"))
+    {
+        std::array<std::vector<float>, 3> n;
+        for (auto& c : n)
+            c.assign(count, 0.0f);
+        tbb::parallel_for(0, h, [&](int y) {
+            for (int x = 0; x < w; ++x)
+            {
+                if (depth[size_t(y) * w + x] <= 0.0)
+                    continue;
+                const glm::dvec3 p = world(x, y);
+                // The nearer neighbour on each axis, so edges keep their own surface's normal.
+                auto side = [&](int dx, int dy) -> std::optional<glm::dvec3> {
+                    const int qx = x + dx, qy = y + dy;
+                    if (qx < 0 || qy < 0 || qx >= w || qy >= h || depth[size_t(qy) * w + qx] <= 0.0)
+                        return std::nullopt;
+                    return world(qx, qy) - p;
+                };
+                auto pick = [&](std::optional<glm::dvec3> a, std::optional<glm::dvec3> b, double sign) -> glm::dvec3 {
+                    if (a && b)
+                        return glm::length(*a) < glm::length(*b) ? *a : -*b * sign * sign;
+                    return a ? *a : b ? -*b : glm::dvec3(0.0);
+                };
+                const glm::dvec3 dx = pick(side(1, 0), side(-1, 0), 1.0), dy = pick(side(0, 1), side(0, -1), 1.0);
+                glm::dvec3 nn = glm::cross(dy, dx);
+                if (glm::dot(nn, nn) < 1e-20)
+                    continue;
+                nn = glm::normalize(nn);
+                const glm::dvec4 eye = inv * glm::dvec4(0.0, 0.0, 1.0, 1.0);
+                if (glm::dot(nn, glm::dvec3(eye) / eye.w - p) < 0.0)
+                    nn = -nn;
+                const size_t i = size_t(y) * w + x;
+                for (int c = 0; c < 3; ++c)
+                    n[size_t(c)][i] = float(nn[c]);
+            }
+        });
+        for (int c = 0; c < 3; ++c)
+            channels.push_back({std::string("N.") + "XYZ"[c], std::move(n[size_t(c)]), false});
+    }
+    if (want("motion") && prevViewProj)
+    {
+        std::vector<float> mx(count, 0.0f), my(count, 0.0f);
+        tbb::parallel_for(0, h, [&](int y) {
+            for (int x = 0; x < w; ++x)
+            {
+                const size_t i = size_t(y) * w + x;
+                const double d = std::max(double(depth[i]), 1e-7);
+                const glm::dvec4 q = inv * glm::dvec4((x + 0.5) / w * 2.0 - 1.0, (y + 0.5) / h * 2.0 - 1.0, d, 1.0);
+                const glm::dvec4 prev = *prevViewProj * glm::dvec4(glm::dvec3(q) / q.w, 1.0);
+                if (prev.w <= 0.0)
+                    continue;
+                const double px = (prev.x / prev.w * 0.5 + 0.5) * w, py = (prev.y / prev.w * 0.5 + 0.5) * h;
+                mx[i] = float(x + 0.5 - px);
+                my[i] = float(py - (y + 0.5));
+            }
+        });
+        channels.push_back({"motion.X", std::move(mx), false});
+        channels.push_back({"motion.Y", std::move(my), false});
+    }
+}
+} // namespace
+
 Frame render(const Options& o, double seconds)
 {
     LILA_ZONE();
@@ -291,21 +580,59 @@ Frame render(const Options& o, double seconds)
     }
     textures::waitForLoads(30.0);
 
+    // The passes follow the middle moment of the shutter, as the beauty's sharpest point does.
+    const render::FrameState middle = frames[frames.size() / 2];
+    std::optional<glm::dmat4> prevViewProj;
+    if (std::ranges::find(o.passes, "motion") != o.passes.end())
+        if (const scene::Node* cam = cameraNode(g, o, *vp); cam && !o.orbit)
+        {
+            const double fps = std::max(scene::anim::playback().fps, 1.0);
+            g.setTime(seconds - 1.0 / fps, false);
+            g.evaluate();
+            Camera prev = vp->camera();
+            prev.lookThrough(*cam, cam->as<glm::dmat4>(scene::Transform::kWorldMatrix));
+            prevViewProj = prev.proj(double(w) / double(h)) * prev.view();
+            g.setTime(seconds, false);
+            g.evaluate();
+        }
     render::Renderer::OffscreenResult result;
     std::string err;
     const int each = (samples + moments - 1) / moments;
-    if (!r.renderOffscreenFrames(std::move(frames), w, h, each, o.hdr, result, &err))
+    const bool depthWanted = std::ranges::any_of(o.passes, [](const std::string& p) { return p == "depth" || p == "normal" || p == "motion"; });
+    if (!r.renderOffscreenFrames(std::move(frames), w, h, each, o.hdr || depthWanted, result, &err))
         throw std::runtime_error("render failed: " + err);
     Frame f;
     f.width = w;
     f.height = h;
     f.bgra = std::move(result.bgra);
     f.hdr = std::move(result.hdr);
+    if (depthWanted)
+        depthLayers(result.depth, w, h, middle.proj * middle.view, middle.proj, prevViewProj, o.passes, f.layers);
+    if (std::ranges::find(o.passes, "cryptoObject") != o.passes.end())
+        cryptoLayer(middle, g, false, w, h, "CryptoObject", f.layers, f.layerAttrs);
+    if (std::ranges::find(o.passes, "cryptoMaterial") != o.passes.end())
+        cryptoLayer(middle, g, true, w, h, "CryptoMaterial", f.layers, f.layerAttrs);
     return f;
+}
+
+namespace
+{
+std::mutex gLastMutex;
+QImage gLast;
+} // namespace
+
+QImage lastImage()
+{
+    std::lock_guard lock(gLastMutex);
+    return gLast;
 }
 
 void write(const Frame& f, const std::string& path, bool transparent)
 {
+    {
+        std::lock_guard lock(gLastMutex);
+        gLast = QImage(f.bgra.data(), f.width, f.height, f.width * 4, QImage::Format_ARGB32).copy();
+    }
     const std::string ext = lower(paths::fromUtf8(path).extension().string());
     std::error_code ec;
     if (auto parent = paths::fromUtf8(path).parent_path(); !parent.empty())
@@ -322,7 +649,10 @@ void write(const Frame& f, const std::string& path, bool transparent)
     out.height = f.height;
     out.rgba.resize(size_t(f.width) * f.height * 4);
     const size_t count = size_t(f.width) * f.height;
-    if (ext == ".exr" && !f.hdr.empty())
+    // EXR keeps scene-linear light for compositing unless colour management asks for the picture as the view shows it.
+    namespace cm = scene::colorManagement;
+    const bool exrDisplay = cm::settings(scene::Graph::current(), PrefStore::get().value<std::string>("general", cm::kConfigPref, "")).exrDisplay;
+    if (ext == ".exr" && !f.hdr.empty() && !exrDisplay)
         out.rgba = f.hdr;
     else
         for (size_t i = 0; i < count; ++i)
@@ -335,6 +665,27 @@ void write(const Frame& f, const std::string& path, bool transparent)
             out.rgba[i * 4 + 2] = std::min(f.bgra[i * 4 + 0] / 255.0f * unmul, 1.0f);
             out.rgba[i * 4 + 3] = a;
         }
+    if (ext == ".exr" && !f.layers.empty())
+    {
+        // Multilayer: the beauty as R, G, B, A, the passes beside it under their layer names.
+        std::vector<image::ExrChannel> channels;
+        const size_t px = size_t(f.width) * f.height;
+        for (int c = 0; c < 4; ++c)
+        {
+            image::ExrChannel ch{std::string(1, "RGBA"[c]), std::vector<float>(px), false};
+            for (size_t i = 0; i < px; ++i)
+                ch.data[i] = out.rgba[i * 4 + size_t(c)];
+            channels.push_back(std::move(ch));
+        }
+        for (const image::ExrChannel& l : f.layers)
+            channels.push_back(l);
+        std::vector<image::ExrAttribute> attrs = f.layerAttrs;
+        attrs.push_back(image::exrChromaticitiesRec709());
+        image::writeExrChannels(paths::fromUtf8(path), f.width, f.height, std::move(channels), attrs);
+        return;
+    }
+    if (!f.layers.empty())
+        log::warn("render: compositing passes need an .exr; {} has the beauty only", path);
     image::WriteOptions wo;
     wo.bits = ext == ".exr" ? 16 : 8;
     image::write(paths::fromUtf8(path), out, wo);
@@ -490,6 +841,9 @@ void registerCommands()
             {"renderPass", "rp", T::String, "beauty",
              "beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes).",
              {"beauty", "wireframe", "id"}},
+            {"passes", "ps", T::String, nullptr,
+             "Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, "
+             "cryptoMaterial, or all."},
         };
     };
     auto optionsFrom = [](const Args& a) {
@@ -502,8 +856,55 @@ void registerCommands()
         o.motionBlur = setting(a, "motionBlur", false).get<bool>();
         o.transparent = setting(a, "transparent", false).get<bool>();
         o.pass = a.get<std::string>("renderPass", "beauty");
+        std::vector<std::string> names;
+        {
+            std::string list = setting(a, "passes", "").get<std::string>(), item;
+            for (char ch : list + ",")
+                if (ch == ',')
+                {
+                    names.push_back(item);
+                    item.clear();
+                }
+                else
+                    item += ch;
+        }
+        for (std::string p : names)
+        {
+            std::erase_if(p, [](unsigned char c) { return std::isspace(c); });
+            if (p == "all")
+                o.passes = {"depth", "normal", "motion", "cryptoObject", "cryptoMaterial"};
+            else if (p == "depth" || p == "normal" || p == "motion" || p == "cryptoObject" || p == "cryptoMaterial")
+                o.passes.push_back(p);
+            else if (!p.empty())
+                throw CommandError("render: no pass named " + p + "; depth, normal, motion, cryptoObject, cryptoMaterial or all");
+        }
         return o;
     };
+
+    ops::registerCommand({
+        .name = "ocioInfo",
+        .doc = "What an OpenColorIO config offers: its displays, the views of a display, looks and colour spaces, and the colour space "
+               "Lila's scene-linear Rec.709 maps to. The scene's config (or the built-in one) when config is left out.",
+        .flags = {
+            {"config", "cfg", T::String, nullptr, "An .ocio file or ocio:// URI; the scene's when left out."},
+            {"display", "dsp", T::String, nullptr, "The display whose views to list; the default display when left out."},
+        },
+        .run = [](const Args& a) -> json {
+            namespace cm = scene::colorManagement;
+            const cm::Settings c = cm::settings(scene::Graph::current(), PrefStore::get().value<std::string>("general", cm::kConfigPref, ""));
+            const render::ocio::ConfigInfo info = render::ocio::info(a.get<std::string>("config", c.config), a.get<std::string>("display", c.display));
+            if (!info.ok)
+                throw std::runtime_error("OCIO config failed: " + info.error);
+            return {{"name", info.name},
+                    {"workingSpace", info.workingSpace},
+                    {"displays", info.displays},
+                    {"defaultDisplay", info.defaultDisplay},
+                    {"views", info.views},
+                    {"defaultView", info.defaultView},
+                    {"looks", info.looks},
+                    {"colorSpaces", info.colorSpaces}};
+        },
+    });
 
     std::vector<FlagDef> single = renderFlags();
     single.push_back({"path", "p", T::String, nullptr,

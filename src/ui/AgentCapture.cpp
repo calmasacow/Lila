@@ -11,6 +11,7 @@
 #include "mcp/McpServer.h"
 #include "render/Renderer.h"
 #include "scene/Components.h"
+#include "scene/Camera.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
@@ -402,6 +403,10 @@ QImage render(const Options& o, Timing* timing, int repeat)
     s.grid = o.grid && !cam.ortho;
     if (o.ambientOcclusion)
         s.ambientOcclusion = *o.ambientOcclusion;
+    // Looking through a camera takes its lens: depth of field, flare shape, physical exposure and its own post process.
+    if (!o.lookThrough.empty())
+        if (const scene::Node* n = scene::Graph::current().find(o.lookThrough); n && n->type().isA("camera"))
+            viewportDisplay::applyLens(s, scene::camera::lens(*n));
 
     bool showMaterials = materialsShown() && !viewportDisplay::defaultMaterial();
     if (showMaterials)
@@ -517,7 +522,8 @@ QImage render(const Options& o, Timing* timing, int repeat)
     if (!r.renderOffscreen(std::move(s), w, h, bgra, &err, &stats, repeat, std::max(o.samples, 1)))
         throw std::runtime_error("capture failed: " + err);
     if (timing)
-        *timing = {stats.gpuMs, stats.aoMs, stats.cpuMs, stats.aoCpuMs};
+        *timing = {stats.gpuMs,         stats.aoMs,  stats.cpuMs,          stats.aoCpuMs,     stats.reflectionMs,
+                   stats.flareMs,       stats.dofMs, stats.motionBlurMs,   stats.reflections, stats.reflectionNote};
     QImage img(bgra.data(), w, h, w * 4, QImage::Format_ARGB32);
     return img.convertToFormat(QImage::Format_RGB32);
 }
@@ -736,7 +742,8 @@ void registerCommands()
     ops::registerCommand({
         .name = "measureView",
         .doc = "Draw the scene offscreen several times like captureView and return the median GPU time per frame in ms, with the "
-               "ambient occlusion share, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, frames}. 0 where the GPU has no timestamps.",
+               "ambient occlusion and post pass shares, and the render thread's time recording it: {gpuMs, aoMs, cpuMs, aoCpuMs, reflectionMs, "
+               "flareMs, dofMs, motionBlurMs, reflections (which ran), reflectionNote (why not what was asked), frames}. 0 where the GPU has no timestamps.",
         .flags = mflags,
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -754,7 +761,18 @@ void registerCommands()
             {
                 throw CommandError(std::string("measureView: ") + e.what());
             }
-            return json{{"gpuMs", t.gpuMs}, {"aoMs", t.aoMs}, {"cpuMs", t.cpuMs}, {"aoCpuMs", t.aoCpuMs}, {"frames", frames}};
+            static const char* kReflections[] = {"environment", "screenSpace", "rayTraced"};
+            return json{{"gpuMs", t.gpuMs},
+                        {"aoMs", t.aoMs},
+                        {"cpuMs", t.cpuMs},
+                        {"aoCpuMs", t.aoCpuMs},
+                        {"reflectionMs", t.reflectionMs},
+                        {"flareMs", t.flareMs},
+                        {"dofMs", t.dofMs},
+                        {"motionBlurMs", t.motionBlurMs},
+                        {"reflections", kReflections[std::clamp(t.reflections, 0, 2)]},
+                        {"reflectionNote", t.reflectionNote},
+                        {"frames", frames}};
         },
     });
 

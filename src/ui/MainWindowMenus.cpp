@@ -310,12 +310,14 @@ void MainWindow::buildMenus()
                            "viewport.toggleXray", "viewport.toggleBackfaceCulling", "#Lighting and Effects"});
     addSubmenu("Display", "Lighting", syncChecks);
     menus::addActions("Display/Lighting", {"viewport.lighting.environment", "viewport.lighting.studio", "viewport.lighting.sculpt", "viewport.lighting.flat", "viewport.resetLight"});
+    addSubmenu("Display", "Reflections", syncChecks);
+    menus::addActions("Display/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
     addSubmenu("Display", "Vertex Colors", syncChecks);
     menus::addActions("Display/Vertex Colors", {"viewport.vertexColors.off", "viewport.vertexColors.shaded", "viewport.vertexColors.unlit", "",
                                          "viewport.colorChannel.rgb", "viewport.colorChannel.r", "viewport.colorChannel.g",
                                          "viewport.colorChannel.b", "viewport.colorChannel.a", "", "viewport.grayscaleWeights",
                                          "viewport.monotone"});
-    menus::addActions("Display", {"viewport.toggleShadows", "viewport.toggleAO", "viewport.toggleAA", "viewport.toggleKuwahara",
+    menus::addActions("Display", {"viewport.toggleShadows", "viewport.toggleAO", "viewport.toggleAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "viewport.toggleKuwahara",
                                   "viewport.toggleOutline"});
     addSubmenu("Display", "Antialiasing Samples", syncChecks);
     menus::addActions("Display/Antialiasing Samples", {"viewport.aaSamples2", "viewport.aaSamples4", "viewport.aaSamples8"});
@@ -362,7 +364,10 @@ void MainWindow::buildMenus()
 
     menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Level", "Animate", "Effects"});
     menus::addActions("Render", {"#Render", "render.frame", "render.sequence", "render.turntable", "window.renderOutput", "window.renderSettings", "#Look",
-                                 "render.postProcess", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "#Framing", "viewport.toggleResolutionGate",
+                                 "render.postProcess", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "camera.pickFocus"});
+    addSubmenu("Render", "Reflections", syncChecks);
+    menus::addActions("Render/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
+    menus::addActions("Render", {"#Framing", "viewport.toggleResolutionGate",
                                  "viewport.toggleSafeFrames", "viewport.toggleThirds"});
 
     menu("Windows", "Windows", Area::MenuBar, syncChecks);

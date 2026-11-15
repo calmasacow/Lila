@@ -754,15 +754,15 @@ private:
 
     void fillApi()
     {
-        constexpr size_t kMaxRows = 300;
+        constexpr size_t kMaxHitRows = 300;
         QString q = mEdit->text().trimmed();
         std::vector<std::pair<int, size_t>> hits;
         for (size_t i = 0; i < mSymbols.size(); ++i)
             if (int s = apiScore(mSymbols[i], q))
                 hits.emplace_back(-s, i);
         std::stable_sort(hits.begin(), hits.end(), [](auto& a, auto& b) { return a.first < b.first; });
-        if (hits.size() > kMaxRows)
-            hits.resize(kMaxRows);
+        if (hits.size() > kMaxHitRows)
+            hits.resize(kMaxHitRows);
         QBrush dim = palette().brush(QPalette::Disabled, QPalette::Text);
         for (auto& [s, i] : hits)
         {
@@ -828,7 +828,7 @@ private:
 
     void fillScene()
     {
-        constexpr size_t kMaxRows = 500;
+        constexpr size_t kMaxHitRows = 500;
         scene::Graph& g = scene::Graph::current();
         outliner::Filter f(mEdit->text().toStdString());
         f.setFuzzy(true);
@@ -838,8 +838,8 @@ private:
                 if (int s = f.score(n->name(), r.fullPath, &n->type()))
                     hits.emplace_back(-s, &r);
         std::stable_sort(hits.begin(), hits.end(), [](auto& a, auto& b) { return a.first < b.first; });
-        if (hits.size() > kMaxRows)
-            hits.resize(kMaxRows);
+        if (hits.size() > kMaxHitRows)
+            hits.resize(kMaxHitRows);
         const std::vector<scene::NodeId>& sel = g.selection();
         QBrush dim = palette().brush(QPalette::Disabled, QPalette::Text);
         for (auto& [s, r] : hits)
