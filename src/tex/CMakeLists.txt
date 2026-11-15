@@ -24,6 +24,7 @@ lila_module(lila_tex Scene
     PaintStrokes.h
     PaintSurface.cpp
     PaintSymmetry.cpp
+    PatchFill.cpp
     Ptex.cpp
     PaintSurface.h
     Plan.cpp

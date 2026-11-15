@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "gn/Routing.h"
 #include "ops/Command.h"
+#include "tex/PatchFill.h"
 #include "tex/Ptex.h"
 #include "scene/Materials.h"
 #include "scene/Node.h"
@@ -1161,5 +1162,6 @@ void registerCommands()
     registerInteropCommands();
     painter::registerPainterCommands();
     registerPtexCommands();
+    registerPatchFillCommands();
 }
 } // namespace lila::tex

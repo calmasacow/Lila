@@ -6,6 +6,7 @@
 #include "tex/Library.h"
 #include "tex/PaintBuffer.h"
 #include "tex/PaintParticles.h"
+#include "tex/PatchFill.h"
 #include "tex/PaintSymmetry.h"
 #include "tex/TextureSet.h"
 
@@ -429,7 +430,7 @@ void clearQuickMask();
 class TexturePaintPanel final : public QWidget
 {
 public:
-    std::function<void()> onChanged, onNewLayer, onCommit, onClearBuffer, onLoadImage, onLoadStencil, onClearStencil, onImageEditor;
+    std::function<void()> onChanged, onNewLayer, onCommit, onClearBuffer, onLoadImage, onLoadStencil, onClearStencil, onImageEditor, onPatchFill;
     std::function<void(const std::string&)> onSaveView, onRecallView;
 
     explicit TexturePaintPanel(QWidget* parent) : QWidget(parent)
@@ -696,7 +697,10 @@ public:
         mSelectMode->add({}, "lasso", "Lasso: drag around what to select", 0);
         mSelectMode->add({}, "lasso-polygon", "Polygon: click corners, Enter or double-click closes it", 1);
         mSelectMode->add({}, "square", "Rectangle: drag a box", 2);
-        mSelectRow = addRow(form, "Shape", mSelectMode);
+        auto* selectRow = new QHBoxLayout;
+        selectRow->addWidget(mSelectMode, 1);
+        selectRow->addWidget(controls::push("tex.patchFill", this, "Patch Fill"));
+        mSelectRow = addRow(form, "Shape", selectRow);
         mGradient = new controls::Segmented(this);
         mGradient->setObjectName("gradientType");
         mGradient->add("Linear", {}, "Linear: fades along the drag", 0);
@@ -821,10 +825,14 @@ public:
         auto* editor = new QPushButton("Edit...", this);
         editor->setObjectName("imageEditor");
         editor->setToolTip("Edit in Image Editor: open what the view shows in your image editor; each save projects back from this view");
-        for (QPushButton* b : {commit, clearBuf, image, editor})
+        auto* patch = new QPushButton("Patch Fill", this);
+        patch->setObjectName("patchFill");
+        patch->setToolTip("Patch Fill: paint over what to remove, then rebuild it from what the view shows around it; Project lays it on");
+        for (QPushButton* b : {commit, clearBuf, image, editor, patch})
             bufButtons->addWidget(b);
         mBufferButtons = addRow(form, "", bufButtons);
         connect(editor, &QPushButton::clicked, this, [this] { call(onImageEditor); });
+        connect(patch, &QPushButton::clicked, this, [this] { call(onPatchFill); });
         mViews = new QComboBox(this);
         mViews->setObjectName("projectionViews");
         mViews->setToolTip("Saved projection views: pick one to look and project from it again");
@@ -1699,6 +1707,7 @@ public:
         };
         mPanel->onLoadImage = [this] { loadBufferImage(); };
         mPanel->onImageEditor = [this] { editInImageEditor(); };
+        mPanel->onPatchFill = [this] { patchFillBuffer(); };
         mPanel->onSaveView = [this](const std::string& name) { saveView(name); };
         mPanel->onRecallView = [this](const std::string& name) { recallView(name); };
         mPanel->onLoadStencil = [this] { loadStencil(); };
@@ -1725,7 +1734,7 @@ public:
         if (mPanel)
         {
             for (std::function<void()>* fn : {&mPanel->onNewLayer, &mPanel->onCommit, &mPanel->onClearBuffer, &mPanel->onLoadImage,
-                                              &mPanel->onLoadStencil, &mPanel->onClearStencil, &mPanel->onImageEditor})
+                                              &mPanel->onLoadStencil, &mPanel->onClearStencil, &mPanel->onImageEditor, &mPanel->onPatchFill})
                 *fn = nullptr;
             mPanel->onSaveView = nullptr;
             mPanel->onRecallView = nullptr;
@@ -3498,6 +3507,74 @@ private:
         log::info("Texture paint: editing {} in the image editor; each save projects it back", file);
     }
 
+    /** Patch Fill in screen space: what is painted in the buffer is the hole, rebuilt from the view's own picture around it. */
+    void patchFillBuffer()
+    {
+        const std::string set = currentTextureSet();
+        if (set.empty() || mBuffer.empty())
+        {
+            log::warn("Patch Fill: paint over what to remove first");
+            return;
+        }
+        const image::Image painted = mBuffer.resolved();
+        const std::string file = paths::toUtf8(std::filesystem::path(QDir::temp().filePath("lila_patch_fill").toStdString()) /
+                                               (set + "_" + std::to_string(QDateTime::currentMSecsSinceEpoch()) + ".png"));
+        image::Image view;
+        try
+        {
+            ops::execute("texCaptureView", {{"args", {set}}, {"view", projectionViewJson(mBufferView)}, {"file", file}, {"scale", texturePaintState().bufferScale}},
+                         CallSource::UI);
+            std::string err;
+            view = image::read(paths::fromUtf8(file), &err);
+            if (view.width <= 0)
+                throw std::runtime_error(err);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Patch Fill: {}", e.what());
+            return;
+        }
+        std::error_code ec;
+        std::filesystem::remove(paths::fromUtf8(file), ec);
+        // The capture is the view's size times the buffer scale, as the buffer is; nearest texel covers any rounding.
+        const int w = painted.width, h = painted.height;
+        image::Image base;
+        base.width = w;
+        base.height = h;
+        base.rgba.resize(size_t(w) * h * 4);
+        std::vector<uint8_t> hole(size_t(w) * h), source(size_t(w) * h);
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x)
+            {
+                const size_t i = size_t(y) * w + x;
+                const float* v = &view.rgba[(size_t(std::min(view.height - 1, y * view.height / h)) * view.width + std::min(view.width - 1, x * view.width / w)) * 4];
+                for (int c = 0; c < 3; ++c)
+                    base.rgba[i * 4 + c] = srgbToLinear(std::clamp(v[c], 0.0f, 1.0f));
+                base.rgba[i * 4 + 3] = 1.0f;
+                hole[i] = painted.rgba[i * 4 + 3] > 0.01f ? 1 : 0;
+                source[i] = !hole[i] && v[3] > 0.5f ? 1 : 0;
+            }
+        try
+        {
+            const image::Image filled = tex::patchFill({base}, hole, source).front();
+            image::Image out = filled;
+            for (size_t i = 0; i < hole.size(); ++i)
+                out.rgba[i * 4 + 3] = hole[i] ? 1.0f : 0.0f;
+            mBuffer.clear();
+            mBuffer.place(out, glm::vec4(0.0f, 0.0f, float(w), float(h)));
+            mBuffer.bake();
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Patch Fill: {}", e.what());
+            return;
+        }
+        if (mPanel)
+            mPanel->sync();
+        viewportTools::requestRedraw();
+        log::info("Patch Fill: filled; Project (Enter) lays it on the layer");
+    }
+
     void projectEdited()
     {
         scene::Node* set = tex::findSet(scene::Graph::current(), mEditorSet);
@@ -3974,6 +4051,56 @@ void registerTexturePaintUi()
                   .doc = "Make a library material for every set of texture maps in a folder and its subfolders.",
                   .python = "texMaterialFromMaps(folder=\"C:/maps\")",
                   .keywords = {"batch import", "texture maps", "pbr folder"}});
+    actions::add({.id = "tex.patchFill",
+                  .label = "Patch Fill Selection",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          const std::string set = currentTextureSet();
+                          scene::Graph& g = scene::Graph::current();
+                          scene::Node* node = set.empty() ? nullptr : tex::findSet(g, set);
+                          const std::string layer = set.empty() ? std::string() : textureSets::activeLayer(set);
+                          image::Image sel;
+                          try
+                          {
+                              if (node && !layer.empty())
+                                  sel = rp::readChannel(node->id(), layer, "mask");
+                          }
+                          catch (const std::exception&)
+                          {
+                              sel = {};
+                          }
+                          bool any = false;
+                          for (size_t i = 3; i < sel.rgba.size() && !any; i += 4)
+                              any = sel.rgba[i] > 0.5f;
+                          if (!any)
+                          {
+                              log::warn("Patch Fill: select what to fill on a paint layer first (the Select tool)");
+                              return;
+                          }
+                          for (size_t i = 0; i < sel.rgba.size(); i += 4)
+                          {
+                              const float v = sel.rgba[i + 3] > 0.5f ? 1.0f : 0.0f;
+                              sel.rgba[i] = sel.rgba[i + 1] = sel.rgba[i + 2] = v;
+                              sel.rgba[i + 3] = 1.0f;
+                          }
+                          const std::filesystem::path file = std::filesystem::path(QDir::temp().filePath("lila_patch_fill").toStdString()) /
+                                                             (set + "_hole_" + std::to_string(QDateTime::currentMSecsSinceEpoch()) + ".png");
+                          std::error_code ec;
+                          std::filesystem::create_directories(file.parent_path(), ec);
+                          image::writePng(file, sel.width, sel.height, sel.rgba, 8);
+                          json call = {{"args", {set}}, {"hole", paths::toUtf8(file)}};
+                          for (scene::NodeId id : g.selection())
+                              if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+                                  call["mesh"] = n->path();
+                          if (!call.contains("mesh"))
+                              log::info("Patch Fill: no mesh selected, so patches come from all of uv space, not just the hole's own islands");
+                          actions::run({{"command", "texPatchFill"}, {"args", call}});
+                      },
+                  .doc = "Fill the selection on the active paint layer from patches of what is around it, in every channel: it lands as a new "
+                         "fill layer masked to the selection. With the mesh selected, patches come only from the uv islands the selection is on.",
+                  .python = "texPatchFill(\"Crate\", holeUv=[[0.4, 0.4], [0.6, 0.4], [0.6, 0.6], [0.4, 0.6]], mesh=\"|crate\")",
+                  .keywords = {"content aware", "heal", "remove", "clone", "fill hole", "patch"}});
     // Ptex works on the open set and the selected mesh, one channel at a time.
     auto ptexTarget = [](const char* what, std::string& set, std::string& mesh, std::string& channel) {
         set = currentTextureSet();
