@@ -1327,6 +1327,7 @@ json status()
                                   {"swaps", l < t->swaps.size() ? t->swaps[l].load() : 0},
                                   {"failed", failed},
                                   {"passesDirty", st.passesDirty},
+                                  {"passesCarried", st.passesCarried},
                                   {"passesRun", st.passesRun},
                                   {"compiled", st.compiled},
                                   {"pipelinesCreated", st.pipelinesCreated},

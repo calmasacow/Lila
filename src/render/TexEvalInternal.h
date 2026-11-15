@@ -222,6 +222,12 @@ struct Evaluator::State
     VkDeviceSize arenaLimit = 0;
     VkDeviceSize arenaTexels = 0;
     bool reallocate = true;
+    /** Buffers adopt kept from the last plan's arena: allocate copies them into the new one (texels). */
+    struct Carry
+    {
+        VkDeviceSize from = 0, to = 0, texels = 0;
+    };
+    std::vector<Carry> carry;
     VkDeviceSize scratchBase = 0;
     VkDeviceSize scratchCapacity = 0;
     /** Per-slice native frames (gU of kernel natives), bump allocated. */

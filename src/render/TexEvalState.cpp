@@ -80,6 +80,131 @@ bool sameStores(const std::vector<StoreTarget>& a, const std::vector<StoreTarget
 }
 
 uint64_t versionOf(const GpuImageRef& img) { return img ? img->key() * 1000003ull ^ img->version() : 0; }
+
+uint64_t mix(uint64_t h, uint64_t v)
+{
+    h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
+    return h * 0xff51afd7ed558ccdull;
+}
+
+uint64_t mixText(uint64_t h, std::string_view s) { return mix(h, std::hash<std::string_view>{}(s)); }
+
+/**
+ * A fused pass's source with the slot numbers it names (gU[n], texReadBuf(n, .base = nu) replaced by their order of
+ * first use, and those slots in that order: two plans that number their slots differently give equal text.
+ */
+std::pair<std::string, std::vector<int>> slotFree(const std::string& src)
+{
+    static constexpr std::string_view kMarks[] = {"gU[", "texReadBuf(", ".base = "};
+    std::string out;
+    out.reserve(src.size());
+    std::vector<int> order;
+    size_t i = 0;
+    while (i < src.size())
+    {
+        size_t at = std::string::npos;
+        std::string_view mark;
+        for (std::string_view m : kMarks)
+            if (size_t f = src.find(m, i); f < at)
+            {
+                at = f;
+                mark = m;
+            }
+        if (at == std::string::npos)
+        {
+            out.append(src, i);
+            break;
+        }
+        size_t d = at + mark.size();
+        out.append(src, i, d - i);
+        size_t e = d;
+        while (e < src.size() && src[e] >= '0' && src[e] <= '9')
+            ++e;
+        if (e == d)
+        {
+            i = d;
+            continue;
+        }
+        const int slot = std::stoi(src.substr(d, e - d));
+        auto it = std::find(order.begin(), order.end(), slot);
+        if (it == order.end())
+            it = order.insert(order.end(), slot);
+        out += "#" + std::to_string(it - order.begin());
+        i = e;
+    }
+    return {std::move(out), std::move(order)};
+}
+
+/**
+ * Per buffer, a hash of everything its texels depend on (the passes that make it, their values, the images and
+ * externals they read), 0 when it can't be told. Equal keys across two plans mean equal texels, so a changed stack
+ * keeps what it shares with the last one. externalKey gives an External buffer's key from its id.
+ */
+std::vector<uint64_t> contentKeys(const Prepared& p, const std::function<uint64_t(const BufferDesc&)>& externalKey)
+{
+    const Plan& plan = p.plan;
+    std::vector<uint64_t> key(plan.buffers.size(), 0);
+    std::map<int, int> bufferOfSlot;
+    for (const BufferDesc& b : plan.buffers)
+        bufferOfSlot[b.slot] = b.id;
+    auto shape = [&](uint64_t h, const BufferDesc& b) {
+        const size_t id = size_t(b.id);
+        h = mix(h, uint64_t(p.sizes[id].first) << 32 | uint32_t(p.sizes[id].second));
+        h = mix(h, p.half[id]);
+        h = mix(h, uint64_t(b.type));
+        return mixText(h, b.format);
+    };
+    auto value = [&](uint64_t h, int slot) {
+        if (auto it = bufferOfSlot.find(slot); it != bufferOfSlot.end())
+            return key[size_t(it->second)] ? mix(h, key[size_t(it->second)]) : 0;
+        uint64_t bits[2] = {};
+        if (size_t(slot) * 4 + 4 <= plan.uniforms.size())
+            std::memcpy(bits, &plan.uniforms[size_t(slot) * 4], sizeof(bits));
+        return mix(mix(h, bits[0]), bits[1]);
+    };
+    for (const BufferDesc& b : plan.buffers)
+    {
+        const size_t id = size_t(b.id);
+        if (b.kind == BufferKind::Image)
+            if (auto it = p.images.find(b.id); it != p.images.end() && it->second)
+                key[id] = shape(mix(mixText(1, b.name), uint64_t(uintptr_t(it->second.get()))), b);
+        if (b.kind == BufferKind::External)
+            if (uint64_t k = externalKey(b))
+                key[id] = shape(mix(mixText(2, b.name), k), b);
+    }
+    const uint64_t place =
+        mix(mix(std::bit_cast<uint32_t>(p.inputs.uvOffset[0]), std::bit_cast<uint32_t>(p.inputs.uvOffset[1])), p.gpuForm ? 1 : 0);
+    for (size_t i = 0; i < plan.passes.size(); ++i)
+    {
+        const Pass& pass = plan.passes[i];
+        uint64_t h = mix(3, place);
+        if (pass.kind == PassKind::Fused)
+        {
+            auto [text, slots] = slotFree(pass.source);
+            h = mixText(h, text);
+            for (int s : slots)
+                if (h && !(h = value(h, s)))
+                    break;
+        }
+        else
+        {
+            h = mixText(mix(h, i < p.routes.size() ? uint64_t(p.routes[i]) : 0), pass.nativeType);
+            for (const auto& [id, b] : pass.inputBuffers)
+                h = key[size_t(b)] ? mix(mixText(h, id), key[size_t(b)]) : 0;
+        }
+        for (int s : pass.slots)
+            if (h)
+                h = value(h, s);
+        for (int r : pass.reads)
+            h = h && key[size_t(r)] ? mix(h, key[size_t(r)]) : 0;
+        if (h && pass.output >= 0)
+            key[size_t(pass.output)] = shape(h, plan.buffers[size_t(pass.output)]);
+    }
+    for (size_t b = 0; b < key.size(); ++b)
+        if (p.unused[b])
+            key[b] = 0;
+    return key;
+}
 } // namespace
 
 void Evaluator::State::adopt(VkDeviceSize maxBytes)
@@ -97,6 +222,39 @@ void Evaluator::State::adopt(VkDeviceSize maxBytes)
                       cur->plan.height == np.height && cur->sizes == next->sizes && cur->unused == next->unused && cur->half == next->half &&
                       cur->pagePass == next->pagePass && cur->regionExternal == next->regionExternal && cur->plan.passes.size() == nPasses &&
                       next->scratchTexels <= scratchCapacity;
+    // A new structure (a layer added) still keeps the buffers the last plan computed that the new one makes the same way.
+    std::vector<std::pair<int, int>> carried;
+    std::vector<VkDeviceSize> carriedFrom;
+    std::vector<uint64_t> carriedVersion;
+    if (!keep && cur && arena.buffer && !arenaFresh && !trimmed && !packed && !cur->inputs.pages && !next->inputs.pages &&
+        !next->inputs.compact && dirty.size() == cur->plan.passes.size() && load.size() == cur->plan.buffers.size())
+    {
+        std::vector<uint64_t> was = contentKeys(*cur, [&](const BufferDesc& b) -> uint64_t {
+            const size_t id = size_t(b.id);
+            return load[id] || loadTarget[id] ? 0 : loadedVersion[id];
+        });
+        for (size_t p = 0; p < cur->plan.passes.size(); ++p)
+            if (dirty[p] && cur->plan.passes[p].output >= 0)
+                was[size_t(cur->plan.passes[p].output)] = 0;
+        for (const BufferDesc& b : cur->plan.buffers)
+            if (b.kind == BufferKind::Image && load[size_t(b.id)])
+                was[size_t(b.id)] = 0;
+        std::unordered_map<uint64_t, int> byKey;
+        for (size_t b = 0; b < was.size(); ++b)
+            if (was[b])
+                byKey.emplace(was[b], int(b));
+        const std::vector<uint64_t> now = contentKeys(*next, [&](const BufferDesc& b) -> uint64_t {
+            auto g = next->inputs.gpuExternals.find(b.name);
+            return g != next->inputs.gpuExternals.end() ? versionOf(g->second) : 0;
+        });
+        for (size_t b = 0; b < now.size(); ++b)
+            if (auto it = now[b] ? byKey.find(now[b]) : byKey.end(); it != byKey.end())
+            {
+                carried.emplace_back(it->second, int(b));
+                carriedFrom.push_back(offset[size_t(it->second)]);
+                carriedVersion.push_back(loadedVersion[size_t(it->second)]);
+            }
+    }
     std::set<int> changed;
     bool moved = false, storesChanged = false;
     std::vector<std::pair<size_t, GpuImageRef>> gpuLoads;
@@ -204,6 +362,29 @@ void Evaluator::State::adopt(VkDeviceSize maxBytes)
         dirtyAll();
         std::scoped_lock lock(mutex);
         stats.passesDirty = nPasses;
+    }
+    carry.clear();
+    if (!packed && !carried.empty())
+    {
+        std::vector<int> producer(nBuffers, -1);
+        for (size_t p = 0; p < nPasses; ++p)
+            if (cur->plan.passes[p].output >= 0)
+                producer[size_t(cur->plan.passes[p].output)] = int(p);
+        for (size_t i = 0; i < carried.size(); ++i)
+        {
+            const size_t b = size_t(carried[i].second);
+            carry.push_back({carriedFrom[i], offset[b], spans[b]});
+            if (producer[b] >= 0)
+                dirty[size_t(producer[b])] = 0;
+            else
+            {
+                load[b] = 0;
+                loadedVersion[b] = carriedVersion[i];
+            }
+        }
+        std::scoped_lock lock(mutex);
+        stats.passesDirty = size_t(std::count(dirty.begin(), dirty.end(), uint8_t(1)));
+        stats.passesCarried = carried.size();
     }
     // Pages plans: room for a batch of pages after the buffers, each page its region externals (with a margin for
     // bilinear reads) and its page passes' outputs.
@@ -394,10 +575,22 @@ void Evaluator::State::allocate(VulkanContext& vk)
         if (bytes > arenaLimit)
             throw ArenaTooLarge("texture graph GPU: the graph's buffers need " + std::to_string(bytes >> 20) + " MB, more than one GPU buffer can hold (" +
                                 std::to_string(arenaLimit >> 20) + " MB)");
-        compute::destroy(vk, arena);
+        compute::Buffer old = arena;
         arena = compute::makeBuffer(vk, bytes, 0, compute::Host::None);
         reallocate = false;
-        arenaFresh = true;
+        arenaFresh = carry.empty() || !old.buffer;
+        if (!arenaFresh)
+        {
+            std::vector<VkBufferCopy> regions;
+            for (const Carry& c : carry)
+                regions.push_back({c.from * kTexel, c.to * kTexel, c.texels * kTexel});
+            sub.run(vk, [&](VkCommandBuffer cmd) {
+                vkCmdCopyBuffer(cmd, old.buffer, arena.buffer, uint32_t(regions.size()), regions.data());
+                compute::memoryBarrier(cmd);
+            });
+        }
+        compute::destroy(vk, old);
+        carry.clear();
     }
     const VkDeviceSize uniformBytes = uniformValues.size() * sizeof(float);
     if (uniforms.size < uniformBytes)
