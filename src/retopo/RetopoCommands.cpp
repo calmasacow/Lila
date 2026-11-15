@@ -271,8 +271,8 @@ const std::vector<RemeshPreset>& remeshPresets()
          {{"targetFaces", 40000}, {"adaptivity", 0.35}, {"jointDensity", 1.0}, {"jointPoleAvoidance", 30.0}, {"edgesAround", 24}, {"sharpAngle", 40.0}}},
         {"stylized", "Stylized", "5K faces, even spacing for broad shapes, joints as Game Character.",
          {{"targetFaces", 5000}, {"adaptivity", 0.15}, {"jointDensity", 0.5}, {"jointPoleAvoidance", 30.0}, {"edgesAround", 10}, {"sharpAngle", 40.0}}},
-        {"hardSurface", "Hard Surface", "6K faces, dense at curves, loops on creases over 30 degrees, no joint handling.",
-         {{"targetFaces", 6000}, {"adaptivity", 0.5}, {"jointDensity", 0.0}, {"jointPoleAvoidance", 0.0}, {"edgesAround", 8}, {"sharpAngle", 30.0}}},
+        {"hardSurface", "Hard Surface", "6K faces, dense at curves, loops on hard edges and creases over 30 degrees, no joint handling.",
+         {{"targetFaces", 6000}, {"adaptivity", 0.5}, {"jointDensity", 0.0}, {"jointPoleAvoidance", 0.0}, {"edgesAround", 8}, {"sharpAngle", 30.0}, {"useHardEdges", true}}},
         {"prop", "Prop", "3K faces, dense at curves, no joint handling.",
          {{"targetFaces", 3000}, {"adaptivity", 0.4}, {"jointDensity", 0.0}, {"jointPoleAvoidance", 0.0}, {"edgesAround", 8}, {"sharpAngle", 40.0}}},
     };
@@ -318,7 +318,7 @@ std::vector<FlagDef> remeshFlags(const char* symmetry)
             {"timeout", "", T::Float, 0.0, "Seconds before giving up with an error saying how far it got, leaving the scene as it was; 0 waits until done or aborted.", {}, {}, 0.0},
             {"targetEdgeLength", "", T::Float, 0.0, "Edge length, cm; overrides targetFaces when positive.", {}, {}, 0.0},
             {"adaptivity", "", T::Float, 0.25, "0 uniform, 1 much denser where curved; painted point 'density' multiplies.", {}, {}, 0.0, 1.0},
-            {"useHardEdges", "", T::Bool, false, "Follow edges marked hard."},
+            {"useHardEdges", "", T::Bool, true, "Follow edges marked hard."},
             {"sharpAngle", "", T::Float, 40.0, "Also follow creases sharper than this, degrees; negative disables.", {}, {}, {}, 180.0},
             {"symmetry", "", T::String, symmetry, "off, x, y or z: remesh half and mirror, exactly symmetric. The mesh has to be symmetric across that plane through its origin.",
              {"off", "x", "y", "z"}},
@@ -336,11 +336,6 @@ std::vector<FlagDef> remeshFlags(const char* symmetry)
                       "as for guides."},
                      "curve|mesh"),
             {"featureGuidePoints", "", T::List, nullptr, "Feature guide polylines as lists of world [x, y, z]."},
-            nodeFlag({"densityVolumes", "", T::List, nullptr,
-                      "Meshes placed over the areas that want a different face size: each acts from its centre out to its largest half extent, "
-                      "easing out to the edge. A sphere over a head, say."},
-                     "mesh"),
-            {"volumeFaceSize", "", T::Float, 0.5, "Edge length inside the density volumes, as a multiple of what it would be: under 1 is denser.", {}, {}, 0.35, 2.8},
             {"densityHandles", "", T::List, nullptr,
              "Local face size as {position: world [x, y, z], radius, scale}: scale times the edge length at the centre (0.35 to 2.8), easing out to the radius."},
             {"pureQuads", "", T::Bool, true, "All quads; false allows a few triangles and pentagons."},
@@ -367,7 +362,7 @@ QuadRemeshOptions remeshOptions(const Args& given, const Node& src, const char* 
     o.timeout = std::max(0.0, a.get<double>("timeout", 0.0));
     o.targetEdgeLength = a.get<double>("targetEdgeLength", 0.0);
     o.adaptivity = std::clamp(a.get<double>("adaptivity", 0.25), 0.0, 1.0);
-    o.useHardEdges = a.get<bool>("useHardEdges", false);
+    o.useHardEdges = a.get<bool>("useHardEdges", true);
     o.sharpAngle = a.get<double>("sharpAngle", 40.0);
     std::string sym = a.get<std::string>("symmetry", "off");
     if (sym != "off" && (sym.size() != 1 || sym[0] < 'x' || sym[0] > 'z'))
@@ -378,16 +373,6 @@ QuadRemeshOptions remeshOptions(const Args& given, const Node& src, const char* 
     o.featureGuides = guidesFor(a, src, "featureGuides", "featureGuidePoints");
     if (a.has("densityHandles") && !a.flags["densityHandles"].is_null())
         o.densityHandles = densityHandlesFor(a.flags["densityHandles"], src, cmd);
-    if (a.has("densityVolumes") && a.flags["densityVolumes"].is_array())
-        for (const json& name : a.flags["densityVolumes"])
-        {
-            if (!name.is_string())
-                continue;
-            const geo::Bounds box = meshInSpaceOf(meshArg(name.get<std::string>(), cmd), src).bounds();
-            const glm::dvec3 size = box.size();
-            o.densityHandles.push_back({0.5 * (box.min + box.max), 0.5 * std::max({size.x, size.y, size.z}),
-                                        std::clamp(a.get<double>("volumeFaceSize", 0.5), 0.35, 2.8)});
-        }
     o.pureQuads = a.get<bool>("pureQuads", true);
     o.resolveGaps = a.get<bool>("resolveGaps", true);
     o.edgesAround = std::clamp(a.get<int>("edgesAround", 12), 0, 64);
