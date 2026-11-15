@@ -569,6 +569,13 @@ public:
         syncEditors();
     }
 
+protected:
+    void showEvent(QShowEvent* e) override
+    {
+        QWidget::showEvent(e);
+        QTimer::singleShot(0, this, [this] { refresh(); });
+    }
+
 private:
     static std::string kindLabel(const std::string& kind)
     {
