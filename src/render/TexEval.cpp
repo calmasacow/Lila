@@ -442,14 +442,12 @@ std::shared_ptr<const image::Image> blackImage()
 }
 } // namespace
 
-std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget> stores)
+namespace
 {
-    LILA_ZONE();
-    if (!plan.error.empty())
-        return plan.error;
-    if (plan.passes.empty())
-        return "the plan has no passes";
-    auto prep = std::make_unique<Prepared>();
+/** Compiles the plan's passes (blocking) and makes their pipelines, into prep. Empty, or why the plan can't run. */
+std::string compilePlan(const Plan& plan, std::unique_ptr<Prepared>& prep)
+{
+    prep = std::make_unique<Prepared>();
     prep->code.resize(plan.passes.size());
     prep->codeHash.resize(plan.passes.size());
     std::vector<std::string> gpuForms(plan.passes.size());
@@ -497,6 +495,31 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
     }
     createPipelines(plan, *prep, compiling);
     compiling.reset();
+    return {};
+}
+} // namespace
+
+std::string precompile(const tex::Plan& plan)
+{
+    LILA_ZONE();
+    if (!plan.error.empty())
+        return plan.error;
+    if (plan.passes.empty())
+        return "the plan has no passes";
+    std::unique_ptr<Prepared> prep;
+    return compilePlan(plan, prep);
+}
+
+std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget> stores)
+{
+    LILA_ZONE();
+    if (!plan.error.empty())
+        return plan.error;
+    if (plan.passes.empty())
+        return "the plan has no passes";
+    std::unique_ptr<Prepared> prep;
+    if (std::string err = compilePlan(plan, prep); !err.empty())
+        return err;
 
     // Buffers no pass touches and no output names (those of outputs another evaluation makes) take no room and load nothing.
     prep->unused.assign(plan.buffers.size(), 1);

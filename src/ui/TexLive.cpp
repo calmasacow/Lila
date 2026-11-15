@@ -114,6 +114,10 @@ events::SubscriptionId gShutdownSub = 0;
 std::mutex gJobMutex;
 std::condition_variable gJobCv;
 std::map<scene::NodeId, Job> gJobs; // newest per set
+/** Graphs a set is about to have, compiled ahead when no real job waits; newest per set. */
+std::map<scene::NodeId, Job> gWarm;
+/** Warm jobs finished, per set, for status(). */
+std::map<scene::NodeId, uint64_t> gWarmed;
 bool gJobBusy = false;
 bool gJobQuit = false;
 std::thread gWorker;
@@ -699,19 +703,63 @@ std::string runJob(const Job& job)
     return {};
 }
 
+/**
+ * Compiles the passes a graph will need at every level of every tile, into the shared shader and pipeline caches, so the
+ * edit that makes it the set's graph plans without compiling.
+ */
+void runWarm(const Job& job)
+{
+    LILA_ZONE();
+    if (job.pages)
+        return;
+    std::vector<tex::OutputRequest> requests = tex::channelRequests(job.graph, job.settings);
+    if (requests.empty())
+        return;
+    for (const auto& tile : job.tiles)
+        for (const auto& [w, h] : tile->levelSizes)
+        {
+            tex::PlanRequest req;
+            req.width = w;
+            req.height = h;
+            req.outputs = requests;
+            const tex::Plan plan = tex::buildPlan(job.graph, req);
+            if (!plan.error.empty())
+                return;
+            render::texgpu::precompile(plan);
+        }
+}
+
 void workerLoop()
 {
     for (;;)
     {
         Job job;
+        bool warm = false;
         {
             std::unique_lock lock(gJobMutex);
-            gJobCv.wait(lock, [] { return gJobQuit || !gJobs.empty(); });
+            gJobCv.wait(lock, [] { return gJobQuit || !gJobs.empty() || !gWarm.empty(); });
             if (gJobQuit)
                 return;
-            job = std::move(gJobs.begin()->second);
-            gJobs.erase(gJobs.begin());
-            gJobBusy = true;
+            // Real edits first: a warm job only fills the time the worker would sit idle.
+            warm = gJobs.empty();
+            std::map<scene::NodeId, Job>& from = warm ? gWarm : gJobs;
+            job = std::move(from.begin()->second);
+            from.erase(from.begin());
+            gJobBusy = !warm;
+        }
+        if (warm)
+        {
+            try
+            {
+                runWarm(job);
+            }
+            catch (const std::exception& e)
+            {
+                log::debug("texture set warm-up: {}", e.what());
+            }
+            std::scoped_lock lock(gJobMutex);
+            ++gWarmed[job.node];
+            continue;
         }
         std::string err;
         try
@@ -1085,7 +1133,7 @@ void install()
     if (!ops::find("texLiveStatus"))
         ops::registerCommand({
             .name = "texLiveStatus",
-            .doc = "The viewport's live texture sets: per set its material, tiles and evaluation levels (size, idle, plans, passes, compiles, GPU "
+            .doc = "The viewport's live texture sets: per set its material, warm-ups compiled ahead, tiles and evaluation levels (size, idle, plans, passes, compiles, GPU "
                    "milliseconds) and the last error; idle is whether every set has finished its latest edit.",
             .undoable = false,
             .run = [](const Args&) -> nlohmann::json { return {{"idle", idle()}, {"sets", status()}}; },
@@ -1148,6 +1196,33 @@ void shutdown()
     gSets.clear();
     gIndex.clear();
     gIndexDirty = true;
+}
+
+void warm(const std::string& set, const tex::Graph& graph)
+{
+    if (!gInstalled)
+        return;
+    for (const auto& [id, s] : gSets)
+    {
+        if (s->name != set || s->tiles.empty() || s->pages || s->virtualTexture)
+            continue;
+        Job job;
+        job.node = id;
+        job.graph = graph;
+        job.settings = s->settings;
+        job.tiles = s->tiles;
+        {
+            std::scoped_lock lock(gJobMutex);
+            if (!gWorker.joinable())
+            {
+                gJobQuit = false;
+                gWorker = std::thread(workerLoop);
+            }
+            gWarm[id] = std::move(job);
+        }
+        gJobCv.notify_one();
+        return;
+    }
 }
 
 bool idle()
@@ -1218,6 +1293,11 @@ json status()
             tiles.push_back({{"udim", t->udim}, {"levels", levels}});
         }
         json entry = {{"set", s->name}, {"material", s->material}, {"tiles", tiles}, {"error", s->error}};
+        {
+            std::scoped_lock lock(gJobMutex);
+            auto w = gWarmed.find(id);
+            entry["warmed"] = w == gWarmed.end() ? 0 : w->second;
+        }
         if (s->virtualTexture)
         {
             const render::vt::TextureStats vs = s->virtualTexture->stats();

@@ -15,7 +15,9 @@
 #include "ui/TexLive.h"
 
 #include <cmath>
+#include <chrono>
 #include <filesystem>
+#include <thread>
 
 using namespace textest;
 using namespace lila::render;
@@ -417,4 +419,54 @@ TEST_CASE("texture paint: prewarming builds the stroke pipelines without waiting
     gp::prewarm();
     const json r = paintStroke("Warm", "P", redStroke({{25, 0, 0}}, 20.0));
     CHECK(r["pages"].get<int>() > 0);
+}
+
+TEST_CASE("texture paint: the graph a first stroke makes is compiled ahead, so adding and wiring its paint layer compiles nothing")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Ahead", 256);
+    ui::texLive::install();
+    REQUIRE(ui::texLive::mapsFor("Ahead"));
+    REQUIRE(ui::texLive::waitIdle());
+    std::vector<std::string> channels;
+    for (const tex::Channel& c : tex::readSettings(set).channels)
+        channels.push_back(c.name);
+    channels.push_back(tex::paint::kMaskChannel);
+
+    // What Texture Paint's first stroke does: a new paint layer on top, every channel wired.
+    std::optional<tex::Graph> next = gp::wiredGraph(set, "", channels);
+    REQUIRE(next);
+    ui::texLive::warm("Ahead", *next);
+    auto warmed = [] {
+        for (const json& s : ui::texLive::status())
+            if (s["set"] == "Ahead")
+                return s.value("warmed", uint64_t(0));
+        return uint64_t(0);
+    };
+    for (int i = 0; i < 6000 && warmed() == 0; ++i)
+    {
+        mainq::drain();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(warmed() == 1);
+
+    const std::string layer = run("texAddLayer", {{"args", {"Ahead", "paint"}}})["id"].get<std::string>();
+    gp::wireLayer(set, layer, channels);
+    mainq::drain();
+    REQUIRE(ui::texLive::waitIdle());
+    // The prediction is exactly the graph the edits make, so the plans find every pass compiled.
+    CHECK(tex::readGraph(set).toJson() == next->toJson());
+    for (const json& s : ui::texLive::status())
+        if (s["set"] == "Ahead")
+            for (const json& level : s["tiles"][0]["levels"])
+            {
+                CHECK(level["compiled"].get<size_t>() == 0);
+                CHECK(level["pipelinesCreated"].get<size_t>() == 0);
+            }
+    // Wired already: nothing left to compile ahead.
+    CHECK_FALSE(gp::wiredGraph(set, layer, channels));
+    ui::texLive::shutdown();
 }

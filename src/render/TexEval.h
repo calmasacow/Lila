@@ -282,6 +282,12 @@ LILA_UI_API tex::EvalResult evaluate(const tex::Plan& plan, const tex::EvalOptio
 /** Fused passes compiled to SPIR-V and cache hits, process-wide. */
 LILA_UI_API std::pair<size_t, size_t> spirvCacheStats();
 
+/**
+ * Compiles a plan's passes and makes their pipelines into the shared caches, without evaluating: an Evaluator given an
+ * equal plan later finds them ready. Blocking, any thread but the render thread. Empty, or why the plan can't run.
+ */
+LILA_UI_API std::string precompile(const tex::Plan& plan);
+
 /** Makes this the texture graph GPU backend (tex::setGpuEvaluator): texEvaluate and exports use it. Starts the renderer on demand. */
 LILA_UI_API void registerTexGpu();
 } // namespace lila::render::texgpu

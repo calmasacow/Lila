@@ -27,6 +27,7 @@
 #include <cstring>
 #include <mutex>
 #include <set>
+#include <thread>
 
 namespace lila::render::paint
 {
@@ -1925,6 +1926,88 @@ std::shared_ptr<const PaintMesh> paintMesh(scene::Graph& g, const std::string& m
     if (!p)
         p = PaintMesh::build(*mesh, e.bvh, material);
     return p;
+}
+
+void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPath)
+{
+    LILA_ZONE();
+    g.evaluate();
+    scene::Node* n = g.find(meshPath);
+    if (!n || !n->type().isA("mesh"))
+        return;
+    scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    if (!mesh || !mesh->numFaces())
+        return;
+    const std::string material = setMaterial(set);
+    const std::map<int, std::pair<int, int>> sizes = wantedSizes(set, nullptr);
+    std::shared_ptr<const geo::MeshBvh> bvh;
+    std::map<std::string, std::shared_ptr<const PaintMesh>> have;
+    if (auto it = gMeshes.find(meshPath); it != gMeshes.end() && it->second.mesh == mesh)
+    {
+        bvh = it->second.bvh;
+        have = it->second.paint;
+    }
+    auto surfaced = [&](const std::shared_ptr<const PaintMesh>& p) {
+        for (const auto& [udim, size] : sizes)
+            if (!gSurfaces.contains(std::make_tuple(p.get(), udim, size.first, size.second)))
+                return false;
+        return true;
+    };
+    if (bvh && have.contains("") && have.contains(material) && surfaced(have[material]))
+        return;
+    // One warm-up per mesh version at a time.
+    static std::set<const void*> inFlight;
+    if (!inFlight.insert(mesh.get()).second)
+        return;
+    std::thread([mesh, meshPath, material, sizes, bvh, have]() mutable {
+        LILA_ZONE_N("paint target warm-up");
+        struct Built
+        {
+            std::shared_ptr<const geo::MeshBvh> bvh;
+            std::map<std::string, std::shared_ptr<const PaintMesh>> paint;
+            std::vector<std::tuple<int, int, int, std::shared_ptr<Surface>>> surfaces;
+        };
+        auto out = std::make_shared<Built>();
+        try
+        {
+            out->bvh = bvh ? bvh : std::make_shared<const geo::MeshBvh>(*mesh);
+            for (const std::string& m : {std::string(), material})
+                if (!out->paint.contains(m))
+                    out->paint[m] = have.contains(m) ? have[m] : PaintMesh::build(*mesh, out->bvh, m);
+            for (const auto& [udim, size] : sizes)
+            {
+                auto sf = std::make_shared<Surface>();
+                sf->mesh = out->paint[material];
+                sf->atlas = std::make_unique<SurfaceAtlas>(sf->mesh, udim, size.first, size.second);
+                out->surfaces.emplace_back(udim, size.first, size.second, std::move(sf));
+            }
+        }
+        catch (const std::exception& e)
+        {
+            log::debug("paint target warm-up: {}", e.what());
+        }
+        mainq::post([mesh, meshPath, material, out] {
+            inFlight.erase(mesh.get());
+            if (!out->bvh)
+                return;
+            MeshEntry& e = gMeshes[meshPath];
+            // A newer mesh or a build the stroke already made wins over the warm-up.
+            if (e.mesh && e.mesh != mesh)
+                return;
+            if (!e.mesh)
+            {
+                e.mesh = mesh;
+                e.bvh = out->bvh;
+            }
+            for (auto& [m, p] : out->paint)
+                if (!e.paint[m])
+                    e.paint[m] = p;
+            // Atlases only for the paint mesh the cache kept, which is the one strokes will use.
+            for (auto& [udim, w, h, sf] : out->surfaces)
+                if (e.paint[material] == sf->mesh)
+                    gSurfaces.try_emplace(std::make_tuple(sf->mesh.get(), udim, w, h), sf);
+        });
+    }).detach();
 }
 
 void sync(scene::Graph& g, scene::Node& set)

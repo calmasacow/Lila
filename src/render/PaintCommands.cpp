@@ -146,6 +146,63 @@ void wireLayer(Node& set, const std::string& layer, const std::vector<std::strin
     }
 }
 
+std::optional<tex::Graph> wiredGraph(Node& set, const std::string& layer, const std::vector<std::string>& channels)
+{
+    std::optional<tex::StackState> stack = stackOf(set);
+    if (!stack)
+        return std::nullopt;
+    tex::SetSettings settings;
+    tex::Graph graph;
+    try
+    {
+        settings = tex::readSettings(set);
+        graph = tex::readGraph(set);
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+    tex::Layer* l = layer.empty() ? nullptr : stack->stack.find(layer);
+    if (!layer.empty() && (!l || l->kind != tex::LayerKind::Paint))
+        return std::nullopt;
+    if (!l)
+    {
+        // As texAddLayer makes one: on top, named by kind and id, starting from the channels' defaults.
+        tex::Layer added;
+        added.kind = tex::LayerKind::Paint;
+        added.id = stack->stack.newId('L');
+        added.name = std::string(tex::layerKindName(added.kind)) + " " + added.id.substr(1);
+        added.material = json::object();
+        for (const char* c : {"baseColor", "roughness", "metallic", "height"})
+            if (const tex::Channel* ch = settings.channel(c))
+                added.material[c] = tex::channelDefault(c, ch->type);
+        stack->stack.layers.push_back(std::move(added));
+        l = &stack->stack.layers.back();
+    }
+    bool changed = layer.empty();
+    if (!l->paint.is_object())
+        l->paint = json::object();
+    for (const std::string& c : channels)
+    {
+        const std::string ref = imageRef(l->id, c);
+        if (l->paint.value(c, std::string()) != ref)
+        {
+            l->paint[c] = ref;
+            changed = true;
+        }
+    }
+    if (!changed)
+        return std::nullopt;
+    try
+    {
+        return tex::compileStack(stack->stack, settings, graph).graph;
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+}
+
 namespace
 {
 

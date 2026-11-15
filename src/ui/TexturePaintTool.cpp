@@ -930,6 +930,7 @@ public:
     void activate() override
     {
         rp::prewarm();
+        warmTargets();
         mAlive = std::make_shared<bool>(true);
         mControls.activate();
         mActiveListener = textureSets::addActiveLayerListener([this](const std::string& setName, const std::string& layer) {
@@ -1031,7 +1032,15 @@ public:
             return true;
         }
         if (e->buttons() == Qt::NoButton)
+        {
             mOver = pick(mHover, view);
+            if (mOver && mOver->set != kNoNode && mOver->set != mWarmedSet)
+                if (scene::Node* set = scene::Graph::current().node(mOver->set))
+                {
+                    mWarmedSet = set->id();
+                    warmGraph(*set);
+                }
+        }
         viewportTools::requestRedraw();
         return false;
     }
@@ -1215,6 +1224,63 @@ private:
     }
 
     /** The layer strokes go to, adding a paint layer (pointed at its paint) when the set has none. */
+    /**
+     * What the first stroke would build as it starts, built ahead in the background: every textured mesh's ray tree, paint
+     * meshes and atlases, and each set's next graph compiled (the paint layer the stroke adds or wires).
+     */
+    void warmTargets()
+    {
+        scene::Graph& g = scene::Graph::current();
+        g.evaluate();
+        for (const std::string& name : tex::setNames(g))
+        {
+            scene::Node* set = tex::findSet(g, name);
+            if (!set)
+                continue;
+            const std::string material = rp::setMaterial(*set);
+            for (NodeId id : g.nodes())
+            {
+                scene::Node* n = g.node(id);
+                if (!n || !n->type().isA("mesh"))
+                    continue;
+                scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+                if (!m || !m->numFaces())
+                    continue;
+                const auto& names = m->materialNames();
+                if (std::find(names.begin(), names.end(), material) != names.end())
+                    rp::prewarmTarget(g, *set, n->path());
+            }
+            warmGraph(*set);
+        }
+    }
+
+    /** Compiles in the background the graph the next stroke on set gives it: a new paint layer, or the target one wired for the stroke's channels. */
+    void warmGraph(scene::Node& set)
+    {
+        std::string layer = textureSets::activeLayer(set.name());
+        if (layer.empty())
+            if (auto known = gLayers.find(set.id()); known != gLayers.end())
+                layer = known->second;
+        if (layer.empty())
+            layer = rp::targetLayer(set, "", false);
+        std::vector<std::string> channels;
+        if (layer.empty())
+        {
+            // createLayer wires every channel and the mask.
+            for (const tex::Channel& c : tex::readSettings(set).channels)
+                channels.push_back(c.name);
+            channels.push_back(tex::paint::kMaskChannel);
+        }
+        else
+        {
+            tp::Payload p = payloadFor(texturePaintState(), false);
+            filterChannels(p, set);
+            channels = p.written();
+        }
+        if (std::optional<tex::Graph> next = rp::wiredGraph(set, layer, channels))
+            texLive::warm(set.name(), *next);
+    }
+
     std::string layerFor(scene::Node& set)
     {
         // The Texture Set panel's active paint layer wins.
@@ -1466,6 +1532,8 @@ private:
             log::warn("Texture paint: {}", e.what());
             rp::cancelLive(mTarget.set, mLayer);
         }
+        // The stroke may have wired new channels; the next hover compiles what the stroke after it would add.
+        mWarmedSet = kNoNode;
         viewportTools::requestRedraw();
     }
 
@@ -1880,6 +1948,8 @@ private:
     std::shared_ptr<bool> mAlive;
     int mActiveListener = 0;
     QPointer<TexturePaintPanel> mPanel;
+    /** The set the hover last compiled the next graph for. */
+    NodeId mWarmedSet = kNoNode;
     QPointF mHover;
     std::optional<Target> mOver;
     Target mTarget;
