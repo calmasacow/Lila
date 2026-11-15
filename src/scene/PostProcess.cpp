@@ -117,6 +117,32 @@ std::vector<AttrDef> attrs()
     a[kLensDirt] = {.name = "lensDirt", .shortName = "ldt", .type = PlugType::String, .defaultValue = std::string(), .flags = kStored | AttrFile | AttrImage,
                     .doc = "Smudges on the lens lit by bloom and flare: an image, or a built-in (dust, smudge, streaks, rain)."};
     a[kLensDirtIntensity] = number("lensDirtIntensity", "ldi", 0.5, "How much the lens dirt lights up, 0 to 4.", 0.0, 4.0);
+    a[kHalation] = number("halation", "hal", 0.0, "Film halation: a warm glow bleeding round bright edges, 0 to 1.", 0.0, 1.0);
+    a[kHalationThreshold] = number("halationThreshold", "halt", 1.0, "Halation: how bright light must be to bleed, in the exposed picture.", 0.0, 50.0);
+    a[kHalationTint] = color("halationTint", "halc", 1.0, "Halation: the glow's colour; film's is a deep red-orange.");
+    a[kHalationTint].defaultValue = glm::dvec3(1.0, 0.25, 0.08);
+    a[kGrainSize] = number("grainSize", "grs", 1.5, "Film grain: size of a grain, pixels.", 0.5, 8.0);
+    a[kGrainColor] = number("grainColor", "grc", 0.3, "Film grain: 0 is the same in every channel (mono), 1 differs per channel.", 0.0, 1.0);
+    a[kGrainResponse] = number("grainResponse", "grr", 0.7, "Film grain: 0 even everywhere, 1 strongest in the mid-tones and faint in shadows and highlights.", 0.0, 1.0);
+    a[kLetterboxAspect] = number("letterboxAspect", "lba", 0.0, "Bars matting the picture to this width over height (2.39 is scope); 0 is none. Renders include them.", 0.0, 10.0);
+    a[kLetterboxOpacity] = number("letterboxOpacity", "lbo", 1.0, "How dark the letterbox bars are, 0 to 1.", 0.0, 1.0);
+    a[kVolume] = {.name = "volume", .shortName = "vol", .type = PlugType::Enum, .defaultValue = int64_t(0), .flags = kStored,
+                  .enumNames = {"global", "box", "sphere"},
+                  .doc = "Global applies everywhere; box and sphere only while the camera is inside (fading over volumeBlend), "
+                         "over the global one."};
+    a[kVolumeCenter] = color("volumeCenter", "vcn", 0.0, "Volume: the centre, cm.");
+    a[kVolumeCenter].flags &= ~uint32_t(AttrColor);
+    a[kVolumeCenter].minValue.reset();
+    a[kVolumeSize] = color("volumeSize", "vsz", 500.0, "Volume: a box's full size, cm; a sphere's radius in x.");
+    a[kVolumeSize].flags &= ~uint32_t(AttrColor);
+    for (int attr : {int(kVolumeCenter), int(kVolumeSize)})
+        for (int i = 0; i < 3; ++i)
+        {
+            a[attr].childNames[i] = a[attr].name + "XYZ"[i];
+            a[attr].childShort[i] = a[attr].shortName + "xyz"[i];
+        }
+    a[kVolumeBlend] = number("volumeBlend", "vbl", 100.0, "Volume: distance outside it over which it fades out, cm.", 0.0);
+    a[kVolumePriority] = number("volumePriority", "vpr", 0.0, "Volume: where volumes overlap, the higher priority applies over the lower.");
     return a;
 }
 
@@ -151,10 +177,32 @@ int firstAttr()
 NodeId active(const Graph& g)
 {
     const int first = firstAttr();
+    // Volumes apply over this one where the camera is; the global one is the first enabled that is no volume.
     for (const Node* n : sceneIndex::ofType(g, "postProcess"))
-        if (n->as<bool>(first + kEnabled))
+        if (n->as<bool>(first + kEnabled) && n->as<int64_t>(first + kVolume) == 0)
             return n->id();
     return kNoNode;
+}
+
+double volumeWeight(const Node& post, const glm::dvec3& eye)
+{
+    const int first = firstAttr();
+    const int64_t mode = post.as<int64_t>(first + kVolume);
+    if (mode == 0)
+        return 1.0;
+    const glm::dvec3 c = post.as<glm::dvec3>(first + kVolumeCenter), size = post.as<glm::dvec3>(first + kVolumeSize);
+    double outside = 0.0;
+    if (mode == 1)
+    {
+        const glm::dvec3 d = glm::max(glm::abs(eye - c) - glm::abs(size) * 0.5, glm::dvec3(0.0));
+        outside = glm::length(d);
+    }
+    else
+        outside = std::max(glm::length(eye - c) - std::abs(size.x), 0.0);
+    const double blend = std::max(post.as<double>(first + kVolumeBlend), 0.0);
+    if (outside <= 0.0)
+        return 1.0;
+    return blend > 0.0 ? std::clamp(1.0 - outside / blend, 0.0, 1.0) : 0.0;
 }
 
 glm::dvec3 whiteBalance(double kelvin, double tint)

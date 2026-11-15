@@ -836,6 +836,10 @@ void registerBuiltins()
     togglePref("viewport.toggleThirds", "Rule of Thirds", vd::kThirds, false, "Thirds lines inside the resolution gate.");
     togglePref("viewport.togglePostEffects", "Post Effects", vd::kPostEffects, true,
                "The scene's post process grading, bloom and lens effects in every viewport.");
+    togglePref("viewport.toggleDepthOfField", "Live Depth of Field", vd::kViewportDof, true,
+               "The camera's depth of field drawn every frame, so it shows while the view moves; a still view and renders refine it.");
+    togglePref("viewport.toggleMotionBlur", "Live Motion Blur", vd::kViewportMotionBlur, false,
+               "The camera's movement blurred over its shutter angle in the view and playblasts. Renders blur moving objects too.");
     togglePref("viewport.toggleTAA", "Temporal Antialiasing", vd::kTaa, true,
                "Smooths shading and texture shimmer as the view moves, and supersamples the view while it holds still.");
     togglePref("viewport.toggleGrid", "Grid", vd::kGrid, true, "The ground grid in every viewport.");

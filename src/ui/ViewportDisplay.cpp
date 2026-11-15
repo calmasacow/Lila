@@ -10,6 +10,7 @@
 #include "render/DisplayOptions.h"
 #include "render/Renderer.h"
 #include "scene/LightingChannels.h"
+#include "scene/Anim.h"
 #include "scene/Graph.h"
 #include "scene/Light.h"
 #include "scene/Materials.h"
@@ -82,6 +83,8 @@ void apply(render::FrameState& s)
                     : reflections == "screenSpace" ? render::FrameState::Reflections::ScreenSpace
                                                    : render::FrameState::Reflections::Off;
     s.reflectionCutoff = std::clamp(p.value<float>("general", kReflectionCutoff, 0.6f), 0.05f, 1.0f);
+    s.viewportDof = p.value<bool>("general", kViewportDof, true);
+    s.viewportMotionBlur = p.value<bool>("general", kViewportMotionBlur, false);
 }
 
 int frameCap()
@@ -270,10 +273,28 @@ void applyLights(render::FrameState& s)
 
 void applyLens(render::FrameState& s, const scene::camera::Lens& lens)
 {
+    // A camera's own post process replaces the scene's for its shots.
+    if (!lens.postProcess.empty())
+        if (const scene::Node* post = scene::Graph::current().find(lens.postProcess); post && post->type().isA("postProcess"))
+        {
+            applyPostProcess(s, PrefStore::get().value<bool>("general", kPostEffects, true), post->id());
+            applyColorManagement(s);
+        }
+    if (lens.physicalExposure)
+    {
+        // EV100 against the default camera's (f/5.6, a 180 degree shutter at 24 fps, ISO 100), so that camera keeps Lila's
+        // exposure and every stop of aperture, shutter or ISO moves it by a stop.
+        const double fps = std::max(scene::anim::playback().fps, 1.0);
+        const double time = std::max(lens.shutterAngle, 1.0) / 360.0 / fps;
+        const double ev = std::log2(lens.fStop * lens.fStop / time) - std::log2(std::max(lens.iso, 1.0) / 100.0);
+        const double reference = std::log2(5.6 * 5.6 / (0.5 / 24.0));
+        s.exposure *= float(std::exp2(reference - ev));
+    }
     // The lens shapes flare (ray count, streak stretch) whether or not it blurs.
     s.post.flare.blades = lens.blades;
     s.post.flare.bladeRotation = float(lens.bladeRotation);
     s.post.flare.squeeze = float(std::max(lens.anamorphicSqueeze, 1.0));
+    s.shutter = float(std::clamp(lens.shutterAngle, 0.0, 360.0) / 360.0);
     s.anamorphicSqueeze = s.post.flare.squeeze;
     if (!lens.depthOfField)
         return;
@@ -324,31 +345,63 @@ static std::shared_ptr<const render::PostImage> lensDirt(const std::string& name
     return out;
 }
 
-void applyPostProcess(render::FrameState& s, bool effects)
+void applyPostProcess(render::FrameState& s, bool effects, scene::NodeId cameraPost)
 {
     LILA_ZONE();
     namespace pp = scene::postProcess;
-    s.post = {};
     const scene::Graph& g = scene::Graph::current();
-    const scene::NodeId id = pp::active(g);
-    if (id == scene::kNoNode)
-        return;
-    const scene::Node& n = *g.node(id);
+    const float exposureBefore = s.exposure / std::max(s.postExposure, 1e-12f);
+    s.post = {};
+    s.exposure = exposureBefore;
+    s.postExposure = 1.0f;
     const int a = pp::firstAttr();
-    auto num = [&](int attr) { return float(n.as<double>(a + attr)); };
-    auto vec = [&](int attr) { return glm::vec3(n.as<glm::dvec3>(a + attr)); };
+    const scene::Node* camNode = cameraPost != scene::kNoNode ? g.node(cameraPost) : nullptr;
+    const scene::NodeId id = camNode && camNode->type().isA("postProcess") ? cameraPost : pp::active(g);
+    // Volumes the camera stands in blend over the base, lowest priority first; numbers blend, switches flip half way.
+    std::vector<std::pair<double, const scene::Node*>> volumes;
+    for (const scene::Node* v : scene::sceneIndex::ofType(g, "postProcess"))
+        if (v->id() != id && v->as<bool>(a + pp::kEnabled) && v->as<int64_t>(a + pp::kVolume) != 0)
+            if (const double w = pp::volumeWeight(*v, s.eye + s.renderOrigin); w > 0.0)
+                volumes.emplace_back(w, v);
+    if (id == scene::kNoNode && volumes.empty())
+        return;
+    std::ranges::sort(volumes, [&](const auto& x, const auto& y) { return x.second->as<double>(a + pp::kVolumePriority) < y.second->as<double>(a + pp::kVolumePriority); });
+    const scene::Node& base = id != scene::kNoNode ? *g.node(id) : *volumes.front().second;
+    std::vector<scene::PlugValue> vals(pp::kCount);
+    for (int i = 0; i < pp::kCount; ++i)
+        vals[size_t(i)] = base.value(a + i);
+    for (const auto& [w, v] : volumes)
+        for (int i = pp::kTonemapper; i < pp::kVolume; ++i)
+        {
+            const scene::PlugValue other = v->value(a + i);
+            scene::PlugValue& mine = vals[size_t(i)];
+            if (const double* x = std::get_if<double>(&mine); x && std::holds_alternative<double>(other))
+                mine = *x + (std::get<double>(other) - *x) * w;
+            else if (const glm::dvec3* xv = std::get_if<glm::dvec3>(&mine); xv && std::holds_alternative<glm::dvec3>(other))
+                mine = *xv + (std::get<glm::dvec3>(other) - *xv) * w;
+            else if (w >= 0.5)
+                mine = other;
+        }
+    auto valF = [&](int attr) { return std::get<double>(vals[size_t(attr)]); };
+    auto valB = [&](int attr) { return std::get<bool>(vals[size_t(attr)]); };
+    auto valI = [&](int attr) { return std::get<int64_t>(vals[size_t(attr)]); };
+    auto valS = [&](int attr) { return std::get<std::string>(vals[size_t(attr)]); };
+    auto valV = [&](int attr) { return std::get<glm::dvec3>(vals[size_t(attr)]); };
+    auto num = [&](int attr) { return float(valF(attr)); };
+    auto vec = [&](int attr) { return glm::vec3(valV(attr)); };
     render::PostSettings& p = s.post;
     s.fog = {};
-    p.tonemapper = render::PostSettings::Tonemapper(std::clamp(int(n.as<int64_t>(a + pp::kTonemapper)), 0, 3));
-    p.agxLook = int(n.as<int64_t>(a + pp::kAgxLook));
-    s.exposure *= std::exp2(num(pp::kExposure));
-    p.autoExposure = n.as<bool>(a + pp::kAutoExposure);
+    p.tonemapper = render::PostSettings::Tonemapper(std::clamp(int(valI(pp::kTonemapper)), 0, 3));
+    p.agxLook = int(valI(pp::kAgxLook));
+    s.postExposure = std::exp2(num(pp::kExposure));
+    s.exposure *= s.postExposure;
+    p.autoExposure = valB(pp::kAutoExposure);
     p.exposureCompensation = num(pp::kExposureCompensation);
     p.exposureMin = num(pp::kExposureMin);
     p.exposureMax = std::max(num(pp::kExposureMax), p.exposureMin);
     p.exposureSpeed = num(pp::kExposureSpeed);
     p.effects = effects;
-    p.whiteBalance = glm::vec3(pp::whiteBalance(n.as<double>(a + pp::kTemperature), n.as<double>(a + pp::kTint)));
+    p.whiteBalance = glm::vec3(pp::whiteBalance(valF(pp::kTemperature), valF(pp::kTint)));
     p.contrast = num(pp::kContrast);
     p.saturation = num(pp::kSaturation);
     p.lift = vec(pp::kLift);
@@ -366,7 +419,7 @@ void applyPostProcess(render::FrameState& s, bool effects)
     p.highlightsRange = std::max(num(pp::kHighlightsRange), p.shadowsRange);
     std::array<std::string, render::grade::kCurveCount> curves;
     for (int i = 0; i < render::grade::kCurveCount; ++i)
-        curves[size_t(i)] = n.as<std::string>(a + pp::kCurveMaster + i);
+        curves[size_t(i)] = valS(pp::kCurveMaster + i);
     p.curves = render::grade::curves(curves);
     p.bloom = num(pp::kBloom);
     p.bloomRadius = num(pp::kBloomRadius);
@@ -376,7 +429,7 @@ void applyPostProcess(render::FrameState& s, bool effects)
     p.distortion = num(pp::kDistortion);
     p.sharpen = num(pp::kSharpen);
     p.lutIntensity = num(pp::kLutIntensity);
-    if (const std::string lut = n.as<std::string>(a + pp::kLut); !lut.empty())
+    if (const std::string lut = valS(pp::kLut); !lut.empty())
         p.lut = render::loadCubeLut(lut);
     render::LensFlare& flare = p.flare;
     flare.intensity = num(pp::kLensFlare);
@@ -391,10 +444,10 @@ void applyPostProcess(render::FrameState& s, bool effects)
     flare.anamorphic = num(pp::kAnamorphicStreaks);
     flare.anamorphicTint = vec(pp::kAnamorphicTint);
     flare.dirtIntensity = num(pp::kLensDirtIntensity);
-    if (const std::string dirt = n.as<std::string>(a + pp::kLensDirt); !dirt.empty() && flare.dirtIntensity > 0.0f)
+    if (const std::string dirt = valS(pp::kLensDirt); !dirt.empty() && flare.dirtIntensity > 0.0f)
         flare.dirt = lensDirt(dirt);
     render::FrameState::Fog& fog = s.fog;
-    fog.on = n.as<bool>(a + pp::kFog) && num(pp::kFogDensity) > 0.0f;
+    fog.on = valB(pp::kFog) && num(pp::kFogDensity) > 0.0f;
     fog.color = vec(pp::kFogColor);
     fog.density = num(pp::kFogDensity) * 0.01f;
     fog.height = num(pp::kFogHeight);
@@ -402,6 +455,14 @@ void applyPostProcess(render::FrameState& s, bool effects)
     fog.start = num(pp::kFogStart);
     fog.sunScatter = num(pp::kFogSunScatter);
     fog.anisotropy = std::clamp(num(pp::kFogAnisotropy), 0.0f, 0.95f);
+    p.halation = num(pp::kHalation);
+    p.halationThreshold = num(pp::kHalationThreshold);
+    p.halationTint = vec(pp::kHalationTint);
+    p.grainSize = num(pp::kGrainSize);
+    p.grainColor = num(pp::kGrainColor);
+    p.grainResponse = num(pp::kGrainResponse);
+    p.letterboxAspect = num(pp::kLetterboxAspect);
+    p.letterboxOpacity = num(pp::kLetterboxOpacity);
 }
 
 namespace

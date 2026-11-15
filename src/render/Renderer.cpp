@@ -187,6 +187,7 @@ struct ComposeParams
     glm::vec4 halation;   // intensity, threshold, radius (bloom levels' share), 0
     glm::vec4 grain;      // size (pixels), colour amount, luminance response, 0
     glm::vec4 letterbox;  // aspect (0 none), opacity, 0, 0
+    glm::vec4 halationTint; // rgb
 };
 
 struct ComposePush
@@ -203,6 +204,14 @@ struct FlareLight
 };
 
 constexpr uint32_t kMaxFlareLights = 8;
+
+/** Matches film.slang's FilmParams. */
+struct FilmParams
+{
+    glm::mat4 invViewProj, prevViewProj;
+    glm::vec4 size, dof, dof2, mb;
+    glm::vec4 depthToView;
+};
 
 /** Matches flare.slang's FlareParams. */
 struct FlareParams
@@ -312,7 +321,9 @@ constexpr uint32_t kShadowTile = 2048;
 constexpr uint32_t kMaxLights = 256;
 
 constexpr uint32_t kMaxBloomLevels = 6;
-constexpr uint32_t kBloomSets = 3 + 2 * (kMaxBloomLevels - 1); // first level per compose input, then the rest down, then up
+/** What the compose pass can read: the scene, either temporal history, or the viewport film pass's output. */
+constexpr int kComposeInputs = 4;
+constexpr uint32_t kBloomSets = kComposeInputs + 2 * (kMaxBloomLevels - 1); // first level per compose input, then the rest down, then up
 constexpr VkFormat kBloomFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 
 /**
@@ -623,6 +634,7 @@ struct Frame
     compute::Buffer reflectParams; // ReflectParams for this frame's reflection passes
     compute::Buffer flareParams;   // FlareParams for this frame's lens flare
     compute::Buffer composeParams; // ComposeParams for this frame's compose pass
+    compute::Buffer filmParams;    // FilmParams for this frame's depth of field and motion blur
     std::vector<compute::Buffer> scratch; // acceleration structure builds' scratch, freed with the staging
     vt::Feedback feedback;       // virtual texture page requests, read once the fence signals
     // GPU timestamps: frame start, before and after ambient occlusion, frame end.
@@ -664,7 +676,7 @@ struct Viewport
     Image sceneMs, scene, sceneDepth;
     std::array<Image, 2> history;
     VkDescriptorSet taaSets[2][2]{};  // writes history[i] from history[1 - i]; [1] reads aoDepth (single-sample fast AO)
-    VkDescriptorSet composeSets[3]{}; // reads scene, history[0], history[1]
+    VkDescriptorSet composeSets[kComposeInputs]{}; // reads scene, history[0], history[1], film[0]
     int historyIndex = 0;             // the one written last
     bool historyValid = false;
     /** Frames blended into the history since the view last changed, and the next sample of the jitter sequence. */
@@ -678,7 +690,7 @@ struct Viewport
     std::vector<VkImageView> bloomDownViews, bloomUpViews;
     uint32_t bloomLevels = 0;
     VkDescriptorSet bloomSets[kBloomSets]{};
-    VkDescriptorSet exposureSets[3]{}; // reading scene, history[0], history[1]
+    VkDescriptorSet exposureSets[kComposeInputs]{}; // reading scene, history[0], history[1], film[0]
     bool postImagesReady = false;      // moved out of UNDEFINED into GENERAL
     bool exposureValid = false;
     uint64_t lutKey = 0;               // the LUT the compose sets point at
@@ -716,7 +728,14 @@ struct Viewport
     float prevExposure = 1.0f; // the exposure last frame's scene image carries
     /** Lens flare: quarter-resolution bright pass and flare, and each flaring light's eased visibility. */
     Image flareBright, flareOut, flareVisibility;
-    VkDescriptorSet flareSets[3][2]{}; // by compose input, then [1] reading aoDepth (single-sample fast AO)
+    VkDescriptorSet flareSets[kComposeInputs][2]{}; // by compose input, then [1] reading aoDepth (single-sample fast AO)
+    /** Viewport depth of field and motion blur: film[0] is the compose pass's fourth input, film[1] a step between the two. */
+    std::array<Image, 2> film;
+    VkDescriptorSet filmSets[kComposeInputs][2][2]{}; // by input, depth (as flareSets), output film image
+    bool filmReady = false;
+    glm::dmat4 filmPrevViewProj{1.0};
+    glm::dvec3 filmPrevOrigin{0.0};
+    bool filmPrevValid = false; // filmPrevViewProj holds a drawn frame's camera
     bool flareImagesReady = false;
     uint64_t dirtKey = 0; // the lens dirt image the compose sets point at
     std::array<Frame, kFramesInFlight> frames;
@@ -757,7 +776,11 @@ struct Viewport
     void* readbackMapped = nullptr;
     bool readbackWanted = true; // false lets an offscreen frame go without copying the picture back
     bool hdrWanted = false;
-    AllocatedBuffer hdrReadback;
+    AllocatedBuffer hdrReadback, depthReadback;
+    void* depthMapped = nullptr;
+    /** The frame's single-sample depth after the frame pass, and its layout then, for the depth readback. */
+    VkImage frameDepthImage = VK_NULL_HANDLE;
+    VkImageLayout frameDepthLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     void* hdrMapped = nullptr;
 };
 
@@ -773,8 +796,9 @@ struct OffscreenJob
     int samples = 1; // jittered frames averaged into the result
     /** Frames drawn in order instead of `state`, each `samples` times, all averaged into one image. */
     std::vector<FrameState> frames;
-    bool hdr = false;         // also read back the scene's linear light
+    bool hdr = false;         // also read back the scene's linear light and depth
     std::vector<float> hdrPixels; // RGBA, scene-linear (exposed), alpha coverage
+    std::vector<float> depthPixels; // reversed-Z, of the last draw
 
     const std::string& envPath() const { return frames.empty() ? state.envPath : frames.front().envPath; }
 };
@@ -1082,8 +1106,12 @@ struct Renderer::Impl
                 vmaDestroyBuffer(vk.allocator, v.readback.buffer, v.readback.alloc);
             if (v.hdrReadback.buffer)
                 vmaDestroyBuffer(vk.allocator, v.hdrReadback.buffer, v.hdrReadback.alloc);
+            if (v.depthReadback.buffer)
+                vmaDestroyBuffer(vk.allocator, v.depthReadback.buffer, v.depthReadback.alloc);
             v.readback = {};
             v.hdrReadback = {};
+            v.depthReadback = {};
+            v.depthMapped = nullptr;
             v.readbackMapped = nullptr;
             v.hdrMapped = nullptr;
         }
@@ -1098,7 +1126,7 @@ struct Renderer::Impl
         destroyImage(v.depth);
         for (Image* img : {&v.aoDepth, &v.aoNormal, &v.aoRaw, &v.aoFinal, &v.bevel, &v.rtShadow, &v.postColor, &v.cloudColor, &v.cloudDepth, &v.sceneMs, &v.scene, &v.sceneDepth, &v.history[0], &v.history[1],
                            &v.bloomDown, &v.bloomUp, &v.histogram, &v.exposureState, &v.hiz, &v.reflectRaw, &v.reflectOut, &v.reflectHistory[0],
-                           &v.reflectHistory[1], &v.curves, &v.flareBright, &v.flareOut, &v.flareVisibility})
+                           &v.reflectHistory[1], &v.curves, &v.flareBright, &v.flareOut, &v.flareVisibility, &v.film[0], &v.film[1]})
             destroyImage(*img);
         for (std::vector<VkImageView>* views : {&v.bloomDownViews, &v.bloomUpViews, &v.hizViews})
         {
@@ -1146,6 +1174,10 @@ struct Renderer::Impl
             if (vmaCreateBuffer(vk.allocator, &bci, &aci, &v.hdrReadback.buffer, &v.hdrReadback.alloc, &info) != VK_SUCCESS)
                 return false;
             v.hdrMapped = info.pMappedData;
+            bci.size = VkDeviceSize(extent.width) * extent.height * 4;
+            if (vmaCreateBuffer(vk.allocator, &bci, &aci, &v.depthReadback.buffer, &v.depthReadback.alloc, &info) != VK_SUCCESS)
+                return false;
+            v.depthMapped = info.pMappedData;
         }
 
         if (vk.msaa != VK_SAMPLE_COUNT_1_BIT)
@@ -1328,6 +1360,11 @@ struct Renderer::Impl
             for (auto& sets : v.flareSets)
                 for (VkDescriptorSet& set : sets)
                     set = allocateSet(reflectPool, flareSetLayout);
+        if (filmSetLayout)
+            for (auto& byDepth : v.filmSets)
+                for (auto& sets : byDepth)
+                    for (VkDescriptorSet& set : sets)
+                        set = allocateSet(reflectPool, filmSetLayout);
         v.reflectTlasGeneration = 0;
         v.reflectEnvEpoch = ~uint64_t(0);
         for (VkDescriptorSet set : {v.aoSampleSet, v.postSet, v.edlSet})
@@ -1352,6 +1389,7 @@ struct Renderer::Impl
             compute::destroy(vk, f.reflectParams);
             compute::destroy(vk, f.flareParams);
             compute::destroy(vk, f.composeParams);
+            compute::destroy(vk, f.filmParams);
             if (f.lines)
             {
                 vmaUnmapMemory(vk.allocator, f.linesAlloc);
@@ -1368,7 +1406,7 @@ struct Renderer::Impl
         }
         destroySwapchain(v);
         for (VkDescriptorSet set : {v.gtaoSet, v.denoiseSet, v.aoSampleSet, v.postSet, v.taaSets[0][0], v.taaSets[0][1], v.taaSets[1][0],
-                                    v.taaSets[1][1], v.composeSets[0], v.composeSets[1], v.composeSets[2]})
+                                    v.taaSets[1][1], v.composeSets[0], v.composeSets[1], v.composeSets[2], v.composeSets[3]})
             if (set)
                 vkFreeDescriptorSets(vk.device, aoPool, 1, &set);
         for (VkDescriptorSet set : v.bloomSets)
@@ -1391,6 +1429,9 @@ struct Renderer::Impl
         std::ranges::for_each(v.reflectSpatialSets, freeReflect);
         for (auto& sets : v.flareSets)
             std::ranges::for_each(sets, freeReflect);
+        for (auto& byDepth : v.filmSets)
+            for (auto& sets : byDepth)
+                std::ranges::for_each(sets, freeReflect);
         if (v.swapchain)
             vkDestroySwapchainKHR(vk.device, v.swapchain, nullptr);
         if (v.surface)
@@ -3306,10 +3347,12 @@ struct Renderer::Impl
         writeImage(whiteAoSet, 5, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, blackBevel.view, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         initReflections();
         initFlares();
+        initFilm();
     }
 
     void destroyAo()
     {
+        destroyFilm();
         destroyFlares();
         destroyReflections();
         destroyImage(whiteAo);
@@ -3426,6 +3469,10 @@ struct Renderer::Impl
                 writeImage(set, 2, sampler, v.history[1 - i].view, general, linearSampler);
                 writeImage(set, 3, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, v.history[i].view, general);
             }
+        // The film images first: the post, flare and film sets read film[0] as the fourth compose input.
+        for (Image& img : v.film)
+            destroyImage(img);
+        createFilmTargets(v, extent);
         createPostTargets(v, extent);
         createReflectTargets(v, extent);
         createFlareTargets(v, extent);
@@ -3496,8 +3543,9 @@ struct Renderer::Impl
         constexpr auto storageType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
         constexpr auto general = VK_IMAGE_LAYOUT_GENERAL;
         constexpr auto shaderRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        const std::pair<VkImageView, VkImageLayout> inputs[3] = {{v.scene.view, shaderRead}, {v.history[0].view, general}, {v.history[1].view, general}};
-        for (int i = 0; i < 3; ++i)
+        const std::pair<VkImageView, VkImageLayout> inputs[kComposeInputs] = {
+            {v.scene.view, shaderRead}, {v.history[0].view, general}, {v.history[1].view, general}, {v.film[0].view, general}};
+        for (int i = 0; i < kComposeInputs; ++i)
         {
             writeImage(v.bloomSets[i], 0, sampler, inputs[i].first, inputs[i].second, linearSampler);
             writeImage(v.bloomSets[i], 2, storageType, v.bloomDownViews[0], general);
@@ -3510,14 +3558,14 @@ struct Renderer::Impl
         }
         for (uint32_t mip = 1; mip < levels; ++mip)
         {
-            VkDescriptorSet down = v.bloomSets[3 + mip - 1];
+            VkDescriptorSet down = v.bloomSets[kComposeInputs + mip - 1];
             writeImage(down, 0, sampler, v.bloomDownViews[mip - 1], general, linearSampler);
             writeImage(down, 2, storageType, v.bloomDownViews[mip], general);
         }
         // Up level mip blends the level below it (the down chain's last level at the bottom) into the down chain's own level.
         for (uint32_t mip = 0; mip + 1 < levels; ++mip)
         {
-            VkDescriptorSet up = v.bloomSets[3 + kMaxBloomLevels - 1 + mip];
+            VkDescriptorSet up = v.bloomSets[kComposeInputs + kMaxBloomLevels - 1 + mip];
             writeImage(up, 0, sampler, mip + 2 == levels ? v.bloomDownViews[mip + 1] : v.bloomUpViews[mip + 1], general, linearSampler);
             writeImage(up, 1, sampler, v.bloomDownViews[mip], general, linearSampler);
             writeImage(up, 2, storageType, v.bloomUpViews[mip], general);
@@ -4377,6 +4425,160 @@ struct Renderer::Impl
         return mode;
     }
 
+    // ---------------------------------------------------------------- viewport depth of field and motion blur
+
+    VkDescriptorSetLayout filmSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout filmLayout = VK_NULL_HANDLE;
+    VkPipeline dofPipeline = VK_NULL_HANDLE, motionPipeline = VK_NULL_HANDLE;
+
+    void initFilm()
+    {
+        if (!reflectPool)
+            return;
+        LILA_ZONE();
+        constexpr auto stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        const VkDescriptorSetLayoutBinding b[3] = {{0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, stage, nullptr},
+                                                   {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, stage, nullptr},
+                                                   {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, stage, nullptr}};
+        VkDescriptorSetLayoutCreateInfo lci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+        lci.bindingCount = 3;
+        lci.pBindings = b;
+        if (vkCreateDescriptorSetLayout(vk.device, &lci, nullptr, &filmSetLayout) != VK_SUCCESS)
+            return;
+        filmLayout = compute::pipelineLayout(vk, sizeof(ReflectPush), stage, std::span(&filmSetLayout, 1));
+        if (VkShaderModule mod = module(loadSpirv("film.spv")))
+        {
+            dofPipeline = buildCompute(filmLayout, mod, "dofCS");
+            motionPipeline = buildCompute(filmLayout, mod, "motionCS");
+            vkDestroyShaderModule(vk.device, mod, nullptr);
+        }
+    }
+
+    void destroyFilm()
+    {
+        for (VkPipeline* p : {&dofPipeline, &motionPipeline})
+        {
+            if (*p)
+                vkDestroyPipeline(vk.device, *p, nullptr);
+            *p = VK_NULL_HANDLE;
+        }
+        if (filmLayout)
+            vkDestroyPipelineLayout(vk.device, filmLayout, nullptr);
+        if (filmSetLayout)
+            vkDestroyDescriptorSetLayout(vk.device, filmSetLayout, nullptr);
+        filmLayout = VK_NULL_HANDLE;
+        filmSetLayout = VK_NULL_HANDLE;
+    }
+
+    /** Two full-resolution film images (the compose pass's fourth input is film[0]) and the sets writing them. */
+    void createFilmTargets(Viewport& v, VkExtent2D extent)
+    {
+        constexpr auto sampler = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        constexpr auto storage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        constexpr auto general = VK_IMAGE_LAYOUT_GENERAL;
+        constexpr auto shaderRead = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        constexpr auto depthRead = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        for (Image& img : v.film)
+            img = createImage(kHistoryFormat, VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, extent, VK_SAMPLE_COUNT_1_BIT,
+                              VK_IMAGE_ASPECT_COLOR_BIT);
+        v.filmReady = false;
+        if (!filmSetLayout || !v.filmSets[0][0][0])
+            return;
+        const bool msaa = vk.msaa != VK_SAMPLE_COUNT_1_BIT;
+        const VkImageView depths[2] = {msaa ? v.sceneDepth.view : v.depth.view, v.aoDepth.view};
+        const std::pair<VkImageView, VkImageLayout> inputs[kComposeInputs] = {
+            {v.scene.view, shaderRead}, {v.history[0].view, general}, {v.history[1].view, general}, {v.film[1].view, general}};
+        for (int k = 0; k < kComposeInputs; ++k)
+            for (int d = 0; d < 2; ++d)
+                for (int o = 0; o < 2; ++o)
+                {
+                    VkDescriptorSet set = v.filmSets[k][d][o];
+                    writeImage(set, 0, sampler, inputs[k].first, inputs[k].second, linearSampler);
+                    writeImage(set, 1, sampler, depths[d], depthRead);
+                    writeImage(set, 2, storage, v.film[o].view, general);
+                }
+    }
+
+    /**
+     * Viewport depth of field and motion blur from compose input `input` into film[0], through film[1] when both run.
+     * The compose input to use after, or `input` when neither ran.
+     */
+    int recordFilm(VkCommandBuffer cmd, Frame& f, Viewport& v, const FrameState& s, int input, bool depthIsAo, bool depthReadOnly)
+    {
+        const bool perspective = s.proj[3][3] == 0.0;
+        const bool dof = s.viewportDof && s.lensRadius > 0.0f && perspective && dofPipeline;
+        const bool motion = s.viewportMotionBlur && s.shutter > 0.0f && motionPipeline && v.filmPrevValid;
+        if ((!dof && !motion) || s.accumulateOnly || s.externalScene || !v.filmSets[0][0][0] || !v.film[0].image)
+            return input;
+        LILA_ZONE();
+        try
+        {
+            if (f.filmParams.size < sizeof(FilmParams))
+                f.filmParams = compute::makeBuffer(vk, sizeof(FilmParams), 0, compute::Host::Write);
+        }
+        catch (const std::exception& e)
+        {
+            log::error("render: {}", e.what());
+            return input;
+        }
+        FilmParams p{};
+        const glm::dmat4 viewProj = s.proj * s.view;
+        p.invViewProj = glm::mat4(glm::inverse(viewProj));
+        p.prevViewProj = glm::mat4(v.filmPrevViewProj * glm::translate(glm::dmat4(1.0), s.renderOrigin - v.filmPrevOrigin));
+        p.size = glm::vec4(float(v.extent.width), float(v.extent.height), 1.0f / float(v.extent.width), 1.0f / float(v.extent.height));
+        p.dof = glm::vec4(s.lensRadius, std::max(s.focusDistance, 0.1f), float(s.proj[1][1]) * float(v.extent.height) * 0.5f,
+                          std::min(32.0f, float(v.extent.height) * 0.03f));
+        p.dof2 = glm::vec4(float(s.apertureBlades), glm::radians(s.apertureRotation), std::max(s.anamorphicSqueeze, 1.0f), 0.35f);
+        p.mb = glm::vec4(std::clamp(s.shutter, 0.0f, 1.0f), std::min(48.0f, float(v.extent.width) * 0.05f), 0.0f, 0.0f);
+        const glm::dmat4 invProj = glm::inverse(s.proj);
+        p.depthToView = glm::vec4(float(invProj[2][2]), float(invProj[3][2]), float(invProj[2][3]), float(invProj[3][3]));
+        std::memcpy(f.filmParams.mapped, &p, sizeof(p));
+        vmaFlushAllocation(vk.allocator, f.filmParams.alloc, 0, VK_WHOLE_SIZE);
+
+        constexpr auto compute = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+        constexpr auto fragment = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+        constexpr auto read = VK_ACCESS_2_SHADER_SAMPLED_READ_BIT;
+        constexpr auto write = VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT;
+        constexpr auto general = VK_IMAGE_LAYOUT_GENERAL;
+        constexpr auto color = VK_IMAGE_ASPECT_COLOR_BIT;
+        if (!v.filmReady)
+        {
+            for (Image& img : v.film)
+                barrier(cmd, img.image, VK_IMAGE_LAYOUT_UNDEFINED, general, compute | fragment, 0, compute, read | write, color);
+            v.filmReady = true;
+        }
+        const VkImage depthImage = depthIsAo ? v.aoDepth.image : (vk.msaa != VK_SAMPLE_COUNT_1_BIT ? v.sceneDepth.image : v.depth.image);
+        constexpr auto depthStage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+        constexpr auto depthAccess = VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+        if (!depthReadOnly)
+            barrier(cmd, depthImage, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depthStage, depthAccess,
+                    compute, read, VK_IMAGE_ASPECT_DEPTH_BIT);
+        ReflectPush push;
+        push.params = f.filmParams.address;
+        const int d = depthIsAo ? 1 : 0;
+        auto run = [&](VkPipeline pipeline, int from, int to) {
+            barrier(cmd, v.film[to].image, general, general, compute | fragment, read, compute, write, color);
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, filmLayout, 0, 1, &v.filmSets[from][d][to], 0, nullptr);
+            vkCmdPushConstants(cmd, filmLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+            vkCmdDispatch(cmd, (v.extent.width + 7) / 8, (v.extent.height + 7) / 8, 1);
+            barrier(cmd, v.film[to].image, general, general, compute, write, compute | fragment, read, color);
+        };
+        if (dof && motion)
+        {
+            run(dofPipeline, input, 1);
+            run(motionPipeline, 3, 0);
+        }
+        else
+            run(dof ? dofPipeline : motionPipeline, input, 0);
+        if (!depthReadOnly)
+            barrier(cmd, depthImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, compute, 0, depthStage,
+                    depthAccess, VK_IMAGE_ASPECT_DEPTH_BIT);
+        f.dofTimed = dof;
+        f.motionBlurTimed = motion;
+        return 3;
+    }
+
     // ---------------------------------------------------------------- lens flares
 
     VkDescriptorSetLayout flareSetLayout = VK_NULL_HANDLE;
@@ -4453,9 +4655,9 @@ struct Renderer::Impl
             return;
         const bool msaa = vk.msaa != VK_SAMPLE_COUNT_1_BIT;
         const VkImageView depths[2] = {msaa ? v.sceneDepth.view : v.depth.view, v.aoDepth.view};
-        const std::pair<VkImageView, VkImageLayout> colors[3] = {
-            {v.scene.view, shaderRead}, {v.history[0].view, general}, {v.history[1].view, general}};
-        for (int k = 0; k < 3; ++k)
+        const std::pair<VkImageView, VkImageLayout> colors[kComposeInputs] = {
+            {v.scene.view, shaderRead}, {v.history[0].view, general}, {v.history[1].view, general}, {v.film[0].view, general}};
+        for (int k = 0; k < kComposeInputs; ++k)
             for (int d = 0; d < 2; ++d)
             {
                 VkDescriptorSet set = v.flareSets[k][d];
@@ -4572,7 +4774,7 @@ struct Renderer::Impl
         if (lights > 0 && !depthReadOnly)
             barrier(cmd, depthImage, VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL, depthStage, depthAccess,
                     compute, VK_ACCESS_2_SHADER_SAMPLED_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
-        VkDescriptorSet set = v.flareSets[std::clamp(input, 0, 2)][depthIsAo ? 1 : 0];
+        VkDescriptorSet set = v.flareSets[std::clamp(input, 0, kComposeInputs - 1)][depthIsAo ? 1 : 0];
         ReflectPush push;
         push.params = f.flareParams.address;
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, flareLayout, 0, 1, &set, 0, nullptr);
@@ -5284,8 +5486,9 @@ struct Renderer::Impl
         auto span = [&](bool ran, uint32_t first) { return ran ? double(t[first + 1] - t[first]) * toMs : 0.0; };
         v.timing.reflectionMs = span(f.reflectTimed, kTimeReflect);
         v.timing.flareMs = span(f.flareTimed, kTimeFlare);
+        // Depth of field and motion blur share one timed span; it counts as whichever ran, or as depth of field when both did.
         v.timing.dofMs = span(f.dofTimed, kTimeDof);
-        v.timing.motionBlurMs = span(f.motionBlurTimed, kTimeMotionBlur);
+        v.timing.motionBlurMs = f.dofTimed ? 0.0 : span(f.motionBlurTimed, kTimeDof);
     }
 
     void timestamp(VkCommandBuffer cmd, Frame& f, uint32_t query)
@@ -5497,7 +5700,8 @@ struct Renderer::Impl
             jitter[3][0] = 2.0 * o.x / double(v.extent.width);
             jitter[3][1] = 2.0 * o.y / double(v.extent.height);
             sceneViewProj = jitter * viewProj;
-            if (s.lensRadius > 0.0f && s.focusDistance > 0.0f && s.proj[3][3] == 0.0)
+            // A live view gathering its depth of field keeps one lens point; stills and renders average the aperture.
+            if (s.lensRadius > 0.0f && s.focusDistance > 0.0f && s.proj[3][3] == 0.0 && (!s.viewportDof || s.accumulateOnly))
             {
                 // Look from a point of the aperture, sheared so the focus plane stays where it was: x' = x - l (1 - depth / focus).
                 // An anamorphic lens's aperture is taller than wide by its squeeze, so its bokeh is too.
@@ -5804,9 +6008,24 @@ struct Renderer::Impl
         v.prevView = s.view;
         v.prevProj = s.proj;
         v.prevOrigin = s.renderOrigin;
-        // Next frame's screen space reflections read this frame's picture from where the compose pass does.
+        // Next frame's screen space reflections read this frame's picture from where the compose pass does, before any blur.
         v.lastComposeInput = s.externalScene ? -1 : composeInput;
         v.prevExposure = s.exposure;
+        timestamp(cmd, f, kTimeDof);
+        f.dofTimed = f.motionBlurTimed = false;
+        {
+            LILA_GPU_SECTION(gpuPass, "Depth of field and motion blur");
+            const int filmInput = recordFilm(cmd, f, v, s, composeInput, depthIsAo, taa && msaa);
+            if (filmInput != composeInput)
+            {
+                composeInput = filmInput;
+                composeSet = v.composeSets[filmInput];
+            }
+        }
+        timestamp(cmd, f, kTimeDof + 1);
+        v.filmPrevViewProj = s.proj * s.view;
+        v.filmPrevOrigin = s.renderOrigin;
+        v.filmPrevValid = true;
         PostResult postResult = recordPostStack(cmd, f, v, s, composeInput);
         timestamp(cmd, f, kTimeFlare);
         {
@@ -5819,6 +6038,9 @@ struct Renderer::Impl
         timestamp(cmd, f, kTimeFlare + 1);
         postResult.dirt = updateDirt(cmd, f, v, s);
 
+        // The single-sample depth as the frame pass leaves it, for a render's depth readback.
+        v.frameDepthImage = msaa ? v.sceneDepth.image : frameDepth;
+        v.frameDepthLayout = msaa && taa ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         // The frame: the composed scene, then lines and overlays depth tested against the scene's depth.
         LILA_GPU_SECTION(gpuPass, "Compose and overlays");
         VkRenderingAttachmentInfo frameColor{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
@@ -5998,7 +6220,7 @@ struct Renderer::Impl
             f.feedback.end(vk, cmd);
         gpuPass.end();
         gpuFrame.end();
-        for (uint32_t q : {kTimeDof, kTimeMotionBlur})
+        for (uint32_t q : {kTimeMotionBlur})
         {
             timestamp(cmd, f, q);
             timestamp(cmd, f, q + 1);
@@ -6265,7 +6487,8 @@ struct Renderer::Impl
         else
             v.exposureValid = false;
 
-        if (s.post.effects && s.post.bloom > 0.0f && v.bloomLevels > 1 && bloomDownPipeline && bloomUpPipeline)
+        // Halation glows through the bloom chain too, so either one runs it.
+        if (s.post.effects && (s.post.bloom > 0.0f || s.post.halation > 0.0f) && v.bloomLevels > 1 && bloomDownPipeline && bloomUpPipeline)
         {
             auto levelSize = [&](uint32_t m) {
                 return glm::uvec2(std::max(v.extent.width / 2 >> m, 1u), std::max(v.extent.height / 2 >> m, 1u));
@@ -6284,13 +6507,13 @@ struct Renderer::Impl
             for (uint32_t mip = 0; mip < v.bloomLevels; ++mip)
             {
                 const glm::uvec2 src = mip == 0 ? glm::uvec2(v.extent.width, v.extent.height) : levelSize(mip - 1);
-                dispatch(bloomDownPipeline, mip == 0 ? v.bloomSets[input] : v.bloomSets[3 + mip - 1], levelSize(mip), 1.0f / glm::vec2(src),
+                dispatch(bloomDownPipeline, mip == 0 ? v.bloomSets[input] : v.bloomSets[kComposeInputs + mip - 1], levelSize(mip), 1.0f / glm::vec2(src),
                          mip == 0 ? 1.0f : 0.0f, 1.0f);
                 barrier(cmd, v.bloomDown.image, general, general, compute, write, compute, read, color, v.bloomLevels);
             }
             for (int mip = int(v.bloomLevels) - 2; mip >= 0; --mip)
             {
-                dispatch(bloomUpPipeline, v.bloomSets[3 + kMaxBloomLevels - 1 + mip], levelSize(mip), 1.0f / glm::vec2(levelSize(mip + 1)), 0.0f,
+                dispatch(bloomUpPipeline, v.bloomSets[kComposeInputs + kMaxBloomLevels - 1 + mip], levelSize(mip), 1.0f / glm::vec2(levelSize(mip + 1)), 0.0f,
                          std::max(s.post.bloomRadius, 0.1f));
                 barrier(cmd, v.bloomUp.image, general, general, compute, write, compute | fragment, read, color, v.bloomLevels);
             }
@@ -6311,6 +6534,8 @@ struct Renderer::Impl
         c.gamma = glm::vec4(p.gamma, std::max(p.grain, 0.0f));
         c.gain = glm::vec4(p.gain, float(frameCounter % 4096));
         c.lens = glm::vec4(std::max(p.chromaticAberration, 0.0f), p.distortion, std::max(p.sharpen, 0.0f), r.bloom ? std::clamp(p.bloom, 0.0f, 1.0f) : 0.0f);
+        if (r.bloom && p.bloom <= 0.0f && p.halation > 0.0f)
+            c.lens.w = 0.0f;
         c.size = glm::vec4(float(v.extent.width), float(v.extent.height), 1.0f / float(v.extent.width), 1.0f / float(v.extent.height));
         c.misc = glm::vec4(r.autoExposure ? 1.0f : 0.0f, 1.0f / float(std::max(v.bloomLevels, 1u)), p.view ? p.view->shaperMin : 0.0f,
                            p.view ? p.view->shaperMax : 1.0f);
@@ -6322,6 +6547,10 @@ struct Renderer::Impl
         c.midtones = glm::vec4(p.midtones, 0.0f);
         c.highlights = glm::vec4(p.highlights, p.highlightsRange);
         c.flare = glm::vec4(r.flare ? 1.0f : 0.0f, r.dirt ? p.flare.dirtIntensity : 0.0f, r.dirt ? 1.0f : 0.0f, 0.0f);
+        c.halation = glm::vec4(r.bloom ? std::max(p.halation, 0.0f) : 0.0f, std::max(p.halationThreshold, 0.0f), 0.0f, 0.0f);
+        c.halationTint = glm::vec4(p.halationTint, 0.0f);
+        c.grain = glm::vec4(p.grainSize, std::clamp(p.grainColor, 0.0f, 1.0f), std::clamp(p.grainResponse, 0.0f, 1.0f), 0.0f);
+        c.letterbox = glm::vec4(std::max(p.letterboxAspect, 0.0f), std::clamp(p.letterboxOpacity, 0.0f, 1.0f), 0.0f, 0.0f);
         return c;
     }
 
@@ -6372,6 +6601,19 @@ struct Renderer::Impl
             barrier(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, layout, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
                     VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_SAMPLED_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
+            if (v.depthReadback.buffer && v.frameDepthImage)
+            {
+                constexpr auto depthStage = VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+                barrier(cmd, v.frameDepthImage, v.frameDepthLayout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        depthStage | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                        VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_ACCESS_2_TRANSFER_READ_BIT, VK_IMAGE_ASPECT_DEPTH_BIT);
+                VkBufferImageCopy dr{};
+                dr.imageSubresource = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 0, 1};
+                dr.imageExtent = {v.extent.width, v.extent.height, 1};
+                vkCmdCopyImageToBuffer(cmd, v.frameDepthImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, v.depthReadback.buffer, 1, &dr);
+                barrier(cmd, v.frameDepthImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, v.frameDepthLayout, VK_PIPELINE_STAGE_2_TRANSFER_BIT, 0,
+                        depthStage | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, 0, VK_IMAGE_ASPECT_DEPTH_BIT);
+            }
         }
         barrier(cmd, v.images[0], VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT, VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT,
@@ -6394,6 +6636,8 @@ struct Renderer::Impl
         vmaInvalidateAllocation(vk.allocator, v.readback.alloc, 0, VK_WHOLE_SIZE);
         if (v.hdrReadback.alloc)
             vmaInvalidateAllocation(vk.allocator, v.hdrReadback.alloc, 0, VK_WHOLE_SIZE);
+        if (v.depthReadback.alloc)
+            vmaInvalidateAllocation(vk.allocator, v.depthReadback.alloc, 0, VK_WHOLE_SIZE);
         v.frameIndex = (v.frameIndex + 1) % kFramesInFlight;
         return false;
     }
@@ -6446,6 +6690,11 @@ struct Renderer::Impl
                 job.hdrPixels[i * 4 + 2] = rgb.b;
                 job.hdrPixels[i * 4 + 3] = std::clamp(c.a, 0.0f, 1.0f);
             });
+        }
+        if (v.depthMapped)
+        {
+            const auto* d = static_cast<const float*>(v.depthMapped);
+            job.depthPixels.assign(d, d + size_t(v.extent.width) * v.extent.height);
         }
         std::nth_element(runs.begin(), runs.begin() + runs.size() / 2, runs.end(),
                          [](const Renderer::FrameStats& a, const Renderer::FrameStats& b) { return a.gpuMs < b.gpuMs; });
@@ -7902,6 +8151,7 @@ bool Renderer::renderOffscreenFrames(std::vector<FrameState> frames, int width, 
     }
     out.bgra = std::move(job->pixels);
     out.hdr = std::move(job->hdrPixels);
+    out.depth = std::move(job->depthPixels);
     out.timing = job->timing;
     return true;
 }

@@ -767,6 +767,8 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"render.lightRig.product", "bulb"},
     {"viewport.toggleRtShadows", "shadow"},
     {"viewport.reflections.off", "sphere-off"},
+    {"viewport.toggleDepthOfField", "aperture"},
+    {"viewport.toggleMotionBlur", "wind"},
     {"viewport.reflections.screenSpace", "flip-horizontal"},
     {"viewport.reflections.rayTraced", "sparkles"},
     {"viewport.togglePostEffects", "filters"},

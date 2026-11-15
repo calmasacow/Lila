@@ -11,6 +11,7 @@
 #include "mcp/McpServer.h"
 #include "render/Renderer.h"
 #include "scene/Components.h"
+#include "scene/Camera.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
@@ -402,6 +403,10 @@ QImage render(const Options& o, Timing* timing, int repeat)
     s.grid = o.grid && !cam.ortho;
     if (o.ambientOcclusion)
         s.ambientOcclusion = *o.ambientOcclusion;
+    // Looking through a camera takes its lens: depth of field, flare shape, physical exposure and its own post process.
+    if (!o.lookThrough.empty())
+        if (const scene::Node* n = scene::Graph::current().find(o.lookThrough); n && n->type().isA("camera"))
+            viewportDisplay::applyLens(s, scene::camera::lens(*n));
 
     bool showMaterials = materialsShown() && !viewportDisplay::defaultMaterial();
     if (showMaterials)

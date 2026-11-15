@@ -7805,7 +7805,7 @@ def renameTheme(*objects: Any, name: str | None = None, to: str | None = None, n
         to: New name.
     """
 
-def render(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, frame: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, f: float | None = None) -> Any:
+def render(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, frame: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, f: float | None = None) -> Any:
     """Render one frame of the scene through a camera, with the post process and lens, and write it. Returns the path.
 
     Args:
@@ -7817,6 +7817,7 @@ def render(camera: str | None = None, width: int | None = None, height: int | No
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
         path: Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render Output images, numbered, when left out. Short form p.
         frame: Frame to render; the current one when left out. Short form f.
     """
@@ -7834,7 +7835,7 @@ def renderMaterialThumbnail(*objects: Any, size: int | None = None, mesh: str | 
         all: Every library material (the scene's sets excluded). Default False.
     """
 
-def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
+def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
     """Render a frame range through a camera into an image sequence, an .mp4, or both. Returns {frames, path, video}.
 
     Args:
@@ -7846,6 +7847,7 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
         path: Images to write, #### standing for the frame number (added when missing). The Render Output images when left out. Short form p.
         video: An .mp4 to encode the frames into. Short form v.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.
@@ -7855,7 +7857,7 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         step: Frames between renders (1 by default). Short form by.
     """
 
-def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
+def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
     """Render a loop turning around the selection (or everything shown), framed to fit, into images, an .mp4, or both. The last frame stops one step short of the first, so the video loops. Returns {frames, path, video}.
 
     Args:
@@ -7867,6 +7869,7 @@ def renderTurntable(camera: str | None = None, width: int | None = None, height:
         motionBlur: Blur what moves across the camera's shutter. Short form mb.
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
+        passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
         path: Images to write, #### standing for the frame number. Left out with video= given, video only. Short form p.
         video: An .mp4 to encode the turntable into. Short form v.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.

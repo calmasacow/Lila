@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "core/ImageIO.h"
+
 namespace lila::render
 {
 struct FrameState;
@@ -36,6 +38,8 @@ struct Options
     double environmentSpin = 0.0;
     /** "beauty", "wireframe" (edges over the beauty), or "id": each object a flat colour from its path, exact, for compositing mattes. */
     std::string pass = "beauty";
+    /** Compositing passes written beside the beauty in a multilayer EXR: depth, normal, motion, cryptoObject, cryptoMaterial. */
+    std::vector<std::string> passes;
 };
 
 /** The colour an object gets in the id pass: a hash of its path, saturated and mid-bright so neighbours stay apart. */
@@ -46,6 +50,9 @@ struct Frame
     int width = 0, height = 0;
     std::vector<uint8_t> bgra; // display-encoded, top row first
     std::vector<float> hdr;    // RGBA linear light, when asked for
+    /** Compositing passes and their header attributes (Cryptomatte manifests), written beside the beauty in an EXR. */
+    std::vector<image::ExrChannel> layers;
+    std::vector<image::ExrAttribute> layerAttrs;
 };
 
 /** The scene at `seconds` through the camera, as Options says. Throws std::runtime_error. */

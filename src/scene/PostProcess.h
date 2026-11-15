@@ -82,8 +82,24 @@ enum Attr
     kAnamorphicTint,
     kLensDirt,
     kLensDirtIntensity,
+    kHalation,
+    kHalationThreshold,
+    kHalationTint,
+    kGrainSize,
+    kGrainColor,
+    kGrainResponse,
+    kLetterboxAspect,
+    kLetterboxOpacity,
+    kVolume,         // global, box, sphere
+    kVolumeCenter,   // cm
+    kVolumeSize,     // box: full size, cm; sphere: x is the radius
+    kVolumeBlend,    // cm outside the volume over which it fades out
+    kVolumePriority, // higher wins where volumes overlap
     kCount
 };
+
+/** Where a camera at eye sits against a volume post process: 1 inside, falling to 0 at its blend distance outside. */
+LILA_SCENE_API double volumeWeight(const Node& post, const glm::dvec3& eye);
 
 /** The lens presets lensPreset applies, Lila's own names: spherical, anamorphic, vintage and clean glass. */
 LILA_SCENE_API const std::vector<std::string>& lensPresetNames();

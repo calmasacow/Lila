@@ -53,6 +53,7 @@
 #include "ui/ColorManagementUi.h"
 #include "ui/GradeUi.h"
 #include "ui/ScopesPanel.h"
+#include "ui/FocusTool.h"
 #include "ui/LayoutPencil.h"
 #include "ui/ConformTool.h"
 #include "ui/TexturePaintTool.h"
@@ -178,6 +179,7 @@ void registerUi()
     registerColorManagementUi();
     registerGradeUi();
     registerScopesPanel();
+    registerFocusTool();
     registerLayoutPencil();
     registerSculptUi();
     registerVertexPaintUi();

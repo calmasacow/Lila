@@ -70,6 +70,7 @@ lila_add_shaders(lila_render FILES
     shaders/post.slang
     shaders/reflect.slang
     shaders/flare.slang
+    shaders/film.slang
     shaders/rtao.slang
     shaders/rtbevel.slang
     shaders/rtshadow.slang

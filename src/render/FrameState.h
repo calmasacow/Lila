@@ -353,6 +353,13 @@ struct PostSettings
     std::shared_ptr<const Lut3D> lut;
     float lutIntensity = 1.0f;
     LensFlare flare;
+    /** Film halation: highlights bleed a tinted glow (through the bloom chain) above a threshold of exposed light. */
+    float halation = 0.0f, halationThreshold = 1.0f;
+    glm::vec3 halationTint{1.0f, 0.25f, 0.08f};
+    /** Film grain shape: grain size in pixels, 0 mono to 1 per channel, 0 even to 1 mid-tone weighted. */
+    float grainSize = 1.5f, grainColor = 0.3f, grainResponse = 0.7f;
+    /** Letterbox bars to this aspect (0 none), at this opacity. */
+    float letterboxAspect = 0.0f, letterboxOpacity = 1.0f;
     /** Colour management: an OCIO view in place of the tonemapper and display gamma; null keeps Lila's tonemapper. */
     std::shared_ptr<const ViewTransform> view;
     /** Off for passes whose values must come out exact, such as object mattes. */
@@ -428,6 +435,8 @@ struct FrameState
     glm::vec4 wireDefault{0.02f, 0.02f, 0.02f, 1.0f};
     DrawList meshes;
     float exposure = 1.0f; // linear multiplier
+    /** The share of exposure the post process applied, so applying another (a camera's own) replaces it rather than stacking. */
+    float postExposure = 1.0f;
     float gamma = 1.0f;    // display gamma on top of the tonemap, like Maya's viewport gamma
     /** Requested MSAA count (1, 2, 4, 8); the renderer clamps it to the device and rebuilds its targets on change. */
     int msaaSamples = 8;
@@ -451,6 +460,13 @@ struct FrameState
     float apertureRotation = 0.0f; // degrees
     /** Anamorphic squeeze of the lens: the aperture is that much taller than wide, so bokeh stretches tall. */
     float anamorphicSqueeze = 1.0f;
+    /**
+     * Live depth of field and motion blur: a gather over the picture (from the lens above and the camera's movement over
+     * `shutter`, a share of a frame) instead of the jittered lens a still view and renders accumulate.
+     */
+    bool viewportDof = false;
+    bool viewportMotionBlur = false;
+    float shutter = 0.5f;
     std::vector<LightDraw> lights;
     /** Up to four shadowed lights trace their shadows against the scene (GPUs with ray queries) instead of shadow maps. */
     bool rtShadows = false;

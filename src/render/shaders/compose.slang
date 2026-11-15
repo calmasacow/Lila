@@ -24,6 +24,7 @@ struct ComposeParams
     float4 halation;   // intensity, threshold, radius, 0
     float4 grain;      // size (pixels), colour amount, luminance response, 0
     float4 letterbox;  // aspect (0 none), opacity
+    float4 halationTint; // rgb
 };
 
 struct ComposePush
@@ -204,6 +205,15 @@ float hash(float2 p)
     return frac((p3.x + p3.y) * p3.z);
 }
 
+/** Smooth value noise in -1..1 at grain scale: a lattice of hashes, blended. */
+float grainNoise(float2 p)
+{
+    float2 i = floor(p), f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i), b = hash(i + float2(1, 0)), c = hash(i + float2(0, 1)), d = hash(i + float2(1, 1));
+    return lerp(lerp(a, b, f.x), lerp(c, d, f.x), f.y) * 2.0 - 1.0;
+}
+
 [shader("fragment")]
 float4 composePS(ComposeOut i) : SV_Target
 {
@@ -245,6 +255,13 @@ float4 composePS(ComposeOut i) : SV_Target
         }
         if (cp.flare.x > 0.5)
             c += flareTex.SampleLevel(base, 0).rgb * (1.0 + dirt);
+        if (cp.halation.x > 0.0)
+        {
+            // Halation: light scattered back through the film base, a tinted glow round what is brighter than the threshold.
+            float3 glow = bloomTex.SampleLevel(base, 0).rgb * cp.misc.y;
+            float over = max(dot(glow, float3(0.2126, 0.7152, 0.0722)) - cp.halation.y, 0.0);
+            c += cp.halationTint.rgb * over * cp.halation.x;
+        }
         uv = base;
     }
 
@@ -295,10 +312,21 @@ float4 composePS(ComposeOut i) : SV_Target
         }
         if (cp.gammaC.w > 0.0)
         {
-            // Grain strongest in the mid-tones, as on film.
-            float n = hash(i.pos.xy + cp.gain.w * 97.0) + hash(i.pos.xy * 1.37 + cp.gain.w * 61.0) - 1.0;
+            // Grain of a size, mono or per channel, strongest in the mid-tones as on film by its response.
+            float2 g = i.pos.xy / max(cp.grain.x, 0.5) + cp.gain.w * float2(17.3, 31.7);
+            float mono = grainNoise(g);
+            float3 coloured = float3(mono, grainNoise(g + 51.3), grainNoise(g + 97.1));
+            float3 n = lerp(mono.xxx, coloured, cp.grain.y);
             float luma = dot(s, float3(0.2126, 0.7152, 0.0722));
-            s = saturate(s + n * cp.gammaC.w * 0.12 * (1.0 - abs(luma * 2.0 - 1.0) * 0.6));
+            float weight = lerp(1.0, 4.0 * luma * (1.0 - luma), cp.grain.z);
+            s = saturate(s + n * cp.gammaC.w * 0.15 * weight);
+        }
+        if (cp.letterbox.x > 0.0)
+        {
+            float pic = cp.size.x * cp.size.w;
+            float2 bar = cp.letterbox.x > pic ? float2(0.0, 0.5 * (1.0 - pic / cp.letterbox.x)) : float2(0.5 * (1.0 - cp.letterbox.x / pic), 0.0);
+            if (any(uv < bar) || any(uv > 1.0 - bar))
+                s *= 1.0 - cp.letterbox.y;
         }
         c = fromSrgb(s);
     }

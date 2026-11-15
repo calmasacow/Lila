@@ -6,7 +6,10 @@
 #include "render/FrameState.h"
 #include "render/Grade.h"
 #include "render/Ocio.h"
+#include "scene/Anim.h"
+#include "scene/Camera.h"
 #include "scene/ColorManagement.h"
+#include "scene/PostProcess.h"
 #include "scene/Graph.h"
 #include "ui/ViewportDisplay.h"
 
@@ -199,4 +202,65 @@ TEST_CASE("lens presets set the flare and the lens dirt reaches the frame")
     CHECK(s.post.flare.dirt->width > 0);
     CHECK(s.post.flare.dirt->rgba.size() == size_t(s.post.flare.dirt->width) * s.post.flare.dirt->height * 4);
     CHECK_THROWS(post2Run("lensPreset", {{"args", {"No Such Lens"}}}));
+}
+
+TEST_CASE("post volumes blend over the global post process by where the camera is")
+{
+    post2Run("newScene");
+    const std::string global = post2Run("postProcess", {{"name", "Global"}}).get<std::string>();
+    const std::string room = post2Run("postProcess", {{"name", "Room"}}).get<std::string>();
+    post2Run("setAttr", {{"args", {room + ".volume", 1}}});
+    post2Run("setAttr", {{"args", {room + ".volumeCenter", json::array({0.0, 0.0, 0.0})}}});
+    post2Run("setAttr", {{"args", {room + ".volumeSize", json::array({200.0, 200.0, 200.0})}}});
+    post2Run("setAttr", {{"args", {room + ".volumeBlend", 100.0}}});
+    post2Run("setAttr", {{"args", {room + ".saturation", 0.0}}});
+    const Node* r = Graph::current().find(room);
+    REQUIRE(r);
+    CHECK(postProcess::volumeWeight(*r, {0.0, 0.0, 0.0}) == doctest::Approx(1.0));
+    CHECK(postProcess::volumeWeight(*r, {150.0, 0.0, 0.0}) == doctest::Approx(0.5));
+    CHECK(postProcess::volumeWeight(*r, {400.0, 0.0, 0.0}) == doctest::Approx(0.0));
+    CHECK(postProcess::active(Graph::current()) == Graph::current().find(global)->id());
+    render::FrameState s;
+    s.eye = {150.0, 0.0, 0.0};
+    ui::viewportDisplay::applyPostProcess(s, true);
+    CHECK(s.post.saturation == doctest::Approx(0.5f));
+    s.eye = {0.0, 0.0, 0.0};
+    ui::viewportDisplay::applyPostProcess(s, true);
+    CHECK(s.post.saturation == doctest::Approx(0.0f));
+}
+
+TEST_CASE("a camera's own post process and physical exposure reach its frames")
+{
+    post2Run("newScene");
+    post2Run("postProcess", {{"name", "Global"}});
+    const std::string shot = post2Run("postProcess", {{"name", "Shot"}}).get<std::string>();
+    post2Run("setAttr", {{"args", {shot + ".exposure", 1.0}}});
+    const std::string cam = post2Run("createNode", {{"args", {"camera"}}, {"name", "Cam"}}).get<std::string>();
+    post2Run("setAttr", {{"args", {cam + ".postProcess", shot}}});
+    render::FrameState s;
+    s.exposure = 1.0f;
+    ui::viewportDisplay::applyPostProcess(s, true);
+    CHECK(s.exposure == doctest::Approx(1.0f));
+    ui::viewportDisplay::applyLens(s, camera::lens(*Graph::current().find(cam)));
+    CHECK(s.exposure == doctest::Approx(2.0f));
+    // Applying it again replaces the scene's exposure share rather than stacking.
+    ui::viewportDisplay::applyLens(s, camera::lens(*Graph::current().find(cam)));
+    CHECK(s.exposure == doctest::Approx(2.0f));
+    post2Run("setAttr", {{"args", {cam + ".postProcess", ""}}});
+    post2Run("setAttr", {{"args", {cam + ".physicalExposure", true}}});
+    post2Run("setAttr", {{"args", {cam + ".fStop", 2.8}}});
+    render::FrameState p;
+    p.exposure = 1.0f;
+    ui::viewportDisplay::applyPostProcess(p, true);
+    const float before = p.exposure;
+    ui::viewportDisplay::applyLens(p, camera::lens(*Graph::current().find(cam)));
+    const double fps = std::max(anim::playback().fps, 1.0);
+    // Two stops wider than f/5.6, with the shutter at this frame rate against the 24 fps reference.
+    CHECK(p.exposure / before == doctest::Approx(4.0 * 24.0 / fps).epsilon(1e-3));
+}
+
+TEST_CASE("render passes take known names only")
+{
+    post2Run("newScene");
+    CHECK_THROWS(post2Run("render", {{"path", post2Scratch("bad.exr").string()}, {"passes", "depth,nonsense"}}));
 }

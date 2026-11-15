@@ -40,6 +40,10 @@ inline constexpr const char* kRtShadows = "/viewport/rtShadows";
 inline constexpr const char* kReflections = "/viewport/post/reflections";
 /** Roughness above which surfaces reflect the environment alone. */
 inline constexpr const char* kReflectionCutoff = "/viewport/post/reflectionCutoff";
+/** Live depth of field: the camera's lens blur gathered every frame, so it shows while the view moves. */
+inline constexpr const char* kViewportDof = "/viewport/post/depthOfField";
+/** Live motion blur: the camera's movement smeared over its shutter, in the view and playblasts (renders accumulate their own). */
+inline constexpr const char* kViewportMotionBlur = "/viewport/post/motionBlur";
 inline constexpr const char* kThirds = "/viewport/thirds";
 /** The scene's post process grading, bloom and lens effects in viewports (its tonemapper and exposure always apply). */
 inline constexpr const char* kPostEffects = "/viewport/post/effects";
@@ -224,7 +228,8 @@ LILA_UI_API void tiltLight(double degrees);
 LILA_UI_API void resetLight();
 LILA_UI_API void applyQuality(Quality q);
 /** The scene's active post process into s (nothing when it has none); effects turns its grading, bloom and lens effects on. */
-LILA_UI_API void applyPostProcess(render::FrameState& s, bool effects);
+/** cameraPost: a post process the view's camera links to, used in place of the scene's; volumes blend over either. */
+LILA_UI_API void applyPostProcess(render::FrameState& s, bool effects, scene::NodeId cameraPost = scene::kNoNode);
 
 /**
  * The scene's colour management into s: an OCIO view baked once per settings change, or Lila's tonemapper. A config

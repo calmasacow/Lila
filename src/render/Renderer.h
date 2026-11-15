@@ -77,6 +77,7 @@ public:
     {
         std::vector<uint8_t> bgra; // display-encoded, top row first; alpha is coverage with a transparent background
         std::vector<float> hdr;    // with hdr: RGBA floats, the scene's exposed linear light before tonemapping
+        std::vector<float> depth;  // with hdr: the last draw's reversed-Z depth (0 where nothing was drawn), top row first
         FrameStats timing;
     };
     /**
