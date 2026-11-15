@@ -765,7 +765,7 @@ std::shared_ptr<const PaintImage> projectionImage(const json& img, const Node& s
  * The symmetry a call asks for: symmetry {mirror: true | "x" | "y" | "z" | [nx, ny, nz, offset], radial {count, axis}}
  * when given, else the brush's mirror (across the mesh's symmetry plane, through its point pairs) and radial copies.
  */
-tex::paint::PaintSymmetry symmetryOf(const json& j, const brush::BrushSettings& bs, const Node& meshNode)
+tex::paint::PaintSymmetry spatialSymmetryOf(const json& j, const brush::BrushSettings& bs, const Node& meshNode)
 {
     const int64_t attr = meshNode.as<int64_t>(scene::MeshNode::kSymmetry);
     int axis = attr >= 1 && attr <= 3 ? int(attr - 1) : 0;
@@ -791,6 +791,16 @@ tex::paint::PaintSymmetry symmetryOf(const json& j, const brush::BrushSettings& 
         }
     }
     return tex::paint::brushSymmetry(b, mesh.get(), axis, scene::symmetryOffset(meshNode, axis));
+}
+
+/** The stroke's symmetry: its spatial copies, each mirrored in uv too when the stroke asks (uvMirror, or symmetry.uvMirror). */
+tex::paint::PaintSymmetry symmetryOf(const json& j, const brush::BrushSettings& bs, const Node& meshNode)
+{
+    tex::paint::PaintSymmetry s = spatialSymmetryOf(j, bs, meshNode);
+    const json uv = j.contains("uvMirror") ? j["uvMirror"] : j.contains("symmetry") && j["symmetry"].is_object() ? j["symmetry"].value("uvMirror", json()) : json();
+    if (uv.is_object())
+        s.uvMirror = tex::paint::PaintSymmetry::fromJson({{"uvMirror", uv}}).uvMirror;
+    return s;
 }
 
 /** The fill's triangles with every symmetry copy's: islands and materials of the copies are filled whole. */

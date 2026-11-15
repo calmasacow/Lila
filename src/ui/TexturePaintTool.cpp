@@ -195,6 +195,9 @@ struct TexturePaintSettings
     std::string quickLimit;
     /** Face groups whose faces strokes leave alone. */
     std::set<std::string> lockedGroups;
+    /** Mirror strokes in uv space too: off, u or v, across the middle of uv space or of each island. */
+    std::string uvMirror = "off";
+    bool uvMirrorPerIsland = false;
     /** Brush limits (Payload::limits): where on the surface the brush may paint. */
     json limits = json::object();
     /** Gradient tool: linear, radial, reflected or angle, and whether it dithers. */
@@ -301,6 +304,18 @@ json gradientPayload(const TexturePaintSettings& s, const json& start, const jso
                        {"dither", s.gradientDither},
                        {"stops", {{{"position", 0.0}, {"amount", reverse ? 0.0 : 1.0}}, {{"position", 1.0}, {"amount", reverse ? 1.0 : 0.0}}}}};
     return pay;
+}
+
+/** The brush's uv mirror on top of its spatial symmetry. */
+void addUvMirror(tp::PaintSymmetry& sym)
+{
+    const TexturePaintSettings& s = texturePaintState();
+    if (s.uvMirror == "off")
+        return;
+    tp::UvMirror m;
+    m.axis = s.uvMirror == "v" ? 1 : 0;
+    m.perIsland = s.uvMirrorPerIsland;
+    sym.uvMirror = m;
 }
 
 /** Triangles of the locked face groups on this mesh, for a stroke's payload. */
@@ -919,6 +934,22 @@ public:
         mMirror = new QCheckBox("Mirror", this);
         mMirror->setToolTip("Mirror strokes across the mesh's symmetry axis (X when it has none)");
         form->addRow(mMirror);
+        mUvMirror = new controls::Segmented(this);
+        mUvMirror->setObjectName("uvMirror");
+        mUvMirror->add("Off", {}, "No uv mirror", 0);
+        mUvMirror->add("U", {}, "Mirror strokes across u: left and right halves of a symmetric unwrap", 1);
+        mUvMirror->add("V", {}, "Mirror strokes across v: top and bottom halves", 2);
+        mUvIsland = new QCheckBox("Per island", this);
+        mUvIsland->setToolTip("Mirror across each uv island's own middle instead of the middle of uv space");
+        auto* uvRow = new QHBoxLayout;
+        uvRow->addWidget(mUvMirror, 1);
+        uvRow->addWidget(mUvIsland);
+        addRow(form, "UV mirror", uvRow);
+        connect(mUvMirror, &controls::Segmented::picked, this, [this](int id) {
+            texturePaintState().uvMirror = id == 1 ? "u" : id == 2 ? "v" : "off";
+            changed();
+        });
+        connect(mUvIsland, &QCheckBox::toggled, this, [this](bool on) { set(texturePaintState().uvMirrorPerIsland, on); });
         col->addLayout(form);
         mStrokeOptions = new brush::ui::StrokeOptions(this, []() -> brush::BrushSettings& { return texturePaintState().stroke; }, [this] { changed(); });
         col->addWidget(mStrokeOptions);
@@ -1051,6 +1082,11 @@ public:
         mStrength->setValue(s.stroke.strength);
         mFalloff->setCurrentIndex(std::max(0, mFalloff->findData(QString::fromStdString(s.stroke.falloff))));
         mOcclusion->setChecked(s.occlusion);
+        mUvMirror->setCurrent(s.uvMirror == "u" ? 1 : s.uvMirror == "v" ? 2 : 0);
+        {
+            const QSignalBlocker bu(mUvIsland);
+            mUvIsland->setChecked(s.uvMirrorPerIsland);
+        }
         mMirror->setChecked(s.stroke.mirror);
         mSource->setCurrent(s.source == "material" ? 1 : s.source == "texture" ? 2 : 0);
         mTexture->setText(s.sourceImage.empty() ? QString("None") : QFileInfo(QString::fromStdString(s.sourceImage)).completeBaseName());
@@ -1419,6 +1455,8 @@ private:
     QComboBox* mFalloff = nullptr;
     QCheckBox* mOcclusion = nullptr;
     QCheckBox* mMirror = nullptr;
+    controls::Segmented* mUvMirror = nullptr;
+    QCheckBox* mUvIsland = nullptr;
     brush::ui::StrokeOptions* mStrokeOptions = nullptr;
 };
 
@@ -2472,6 +2510,7 @@ private:
         const scene::Node* meshNode = g.node(t.mesh);
         scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
         tp::PaintSymmetry sym = tp::brushSymmetry(texturePaintState().stroke, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+        addUvMirror(sym);
         header->symmetry = sym.toJson();
         header->view = strokeView(view, t.world);
         try
@@ -2850,6 +2889,7 @@ private:
             const scene::Node* meshNode = g.node(t.mesh);
             scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
             mSym = tp::brushSymmetry(texturePaintState().stroke, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+            addUvMirror(mSym);
             header->symmetry = mSym.toJson();
         }
         if (tool == "clone" || tool == "heal")

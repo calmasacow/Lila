@@ -46,6 +46,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_image_editor.cpp
     test_tex_multi_stroke.cpp
     test_tex_brush_limits.cpp
+    test_tex_uv_mirror.cpp
     test_tex_vt.cpp)
 target_link_libraries(lila_tex_gpu_tests PRIVATE LilaUI doctest::doctest)
 add_dependencies(lila_tex_gpu_tests lila_slang_runtime)
