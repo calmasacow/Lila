@@ -4401,7 +4401,7 @@ void registerTexturePaintUi()
                       [] {
                           const QString f = ui::fileDialog::getOpenFileName(mainWindow(), "Stencil", {}, "Images (*.png *.jpg *.jpeg *.exr *.tga *.tif *.tiff *.psd)");
                           if (!f.isEmpty())
-                              actions::run({{"command", "texPaintStencil"}, {"args", {f.toStdString()}}});
+                              actions::run({{"command", "texPaintStencil"}, {"args", {{"args", {f.toStdString()}}}}});
                       },
                   .doc = "Pin a picture to the screen for texture painting: every stroke paints through it, as a mask or in its colours. "
                          "Hold S and drag to move it, with Shift to rotate, with Ctrl to scale.",
