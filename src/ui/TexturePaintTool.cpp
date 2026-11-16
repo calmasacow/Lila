@@ -25,6 +25,7 @@
 #include "scene/Graph.h"
 #include "scene/Materials.h"
 #include "scene/MeshNodes.h"
+#include "scene/Transform.h"
 #include "ui/Actions.h"
 #include "ui/ColorPopup.h"
 #include "ui/Controls.h"
@@ -3120,9 +3121,13 @@ private:
         view.ray(px, o, d);
         std::optional<Target> best;
         double nearest = 1e300;
+        std::optional<Target> unpaintable;
+        double nearestUnpaintable = 1e300;
         for (NodeId id : candidates)
         {
             scene::Node* n = g.node(id);
+            if (!scene::effectivelyVisible(g, id))
+                continue;
             std::shared_ptr<const tex::paint::PaintMesh> pm = rp::paintMesh(g, n->path(), "");
             if (!pm)
                 continue;
@@ -3134,7 +3139,6 @@ private:
             const double dist = glm::length(glm::dvec3(w * glm::dvec4(hit.point, 1.0)) - o);
             if (dist >= nearest)
                 continue;
-            nearest = dist;
             Target t;
             t.mesh = id;
             t.meshPath = n->path();
@@ -3147,9 +3151,21 @@ private:
                 t.setName = set->name();
                 t.paint = rp::paintMesh(g, t.meshPath, rp::setMaterial(*set));
             }
+            // A surface without a texture set (glass, a canopy) doesn't stop the brush reaching the painted one behind it.
+            if (t.set == kNoNode)
+            {
+                if (dist < nearestUnpaintable)
+                {
+                    nearestUnpaintable = dist;
+                    unpaintable = t;
+                }
+                continue;
+            }
+            nearest = dist;
             best = t;
         }
-        return best;
+        // With nothing paintable under the cursor, the nearest unpainted surface still says why.
+        return best ? best : unpaintable;
     }
 
     /** The shared stroke's view of the target under a pixel, in its object space. */
