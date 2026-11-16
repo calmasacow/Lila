@@ -7912,6 +7912,20 @@ def reorderDisplayLayer(*objects: Any, index: int | None = None, i: int | None =
         index: Row it moves to. Short form i. Default 0.
     """
 
+def reorderMaterialSlots(*objects: Any) -> Any:
+    """Reorder an object's material slots, the order exporters write them in: the named slots first, in the order given, the rest after them. Returns the new slot order.
+
+    Args:
+        objects: object slot [slot...].
+    """
+
+def reorderMaterials(*objects: Any) -> Any:
+    """Reorder the Material Editor's list: the named materials first, in the order given, the rest after them. Returns the new order.
+
+    Args:
+        objects: material [material...].
+    """
+
 def reportIssue(*objects: Any, message: str | None = None, severity: str | None = None, source: str | None = None, blocks: Sequence[Any] | None = None, fix: str | None = None, select: str | None = None, m: str | None = None, sv: str | None = None, src: str | None = None, b: Sequence[Any] | None = None, fx: str | None = None, sel: str | None = None) -> Any:
     """Attaches info, a warning or an error to an object, one of its components or an attribute.
 

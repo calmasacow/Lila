@@ -17,6 +17,7 @@
 #include <iterator>
 #include <map>
 #include <set>
+#include <tuple>
 
 namespace lila::scene
 {
@@ -181,6 +182,8 @@ std::vector<AttrDef> materialAttrs()
                     .doc = "Draw back faces too (with flipped normals). One-sided materials cull them, as in Unreal."};
     a[kUvSet] = {.name = "uvSet", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable,
                  .doc = "UV set the textures use (0 or 1).", .minValue = 0.0, .maxValue = 1.0};
+    a[kListOrder] = {.name = "listOrder", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable | AttrHidden,
+                     .doc = "Position in the Material Editor's list (reorderMaterials); 0 sorts by name after the placed ones."};
     stylisedAttrs(a);
     heightAttrs(a);
     samplingAttrs(a);
@@ -378,6 +381,17 @@ std::vector<Node*> all(Graph& g)
     for (NodeId id : g.nodes())
         if (Node* n = g.node(id); n->type().isA("material"))
             out.push_back(n);
+    return out;
+}
+
+std::vector<Node*> ordered(Graph& g)
+{
+    std::vector<Node*> out = all(g);
+    auto key = [](const Node* n) {
+        const int64_t order = n->as<int64_t>(material::kListOrder);
+        return std::tuple(order == 0, order, n->name());
+    };
+    std::ranges::sort(out, [&](const Node* a, const Node* b) { return key(a) < key(b); });
     return out;
 }
 
@@ -636,6 +650,31 @@ void pruneSlots(geo::Mesh& mesh)
     names = std::move(kept);
 }
 
+bool reorderSlots(geo::Mesh& mesh, const std::vector<std::string>& order)
+{
+    auto& names = mesh.materialNames();
+    if (names.size() < 2)
+        return false;
+    std::vector<std::string> next;
+    for (const std::string& s : order)
+        if (std::ranges::find(names, s) != names.end() && std::ranges::find(next, s) == next.end())
+            next.push_back(s);
+    for (const std::string& s : names)
+        if (std::ranges::find(next, s) == next.end())
+            next.push_back(s);
+    if (next == names)
+        return false;
+    std::vector<int32_t> remap(names.size());
+    for (size_t i = 0; i < names.size(); ++i)
+        remap[i] = int32_t(std::ranges::find(next, names[i]) - next.begin());
+    std::span<int32_t> ids = mesh.faceAttrs().getOrAdd<int32_t>(geo::attr::kMaterial);
+    for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
+        if (mesh.faceValid(f) && size_t(std::max(0, ids[f])) < remap.size())
+            ids[f] = remap[size_t(std::max(0, ids[f]))];
+    names = std::move(next);
+    return true;
+}
+
 std::vector<std::pair<std::string, uint32_t>> slotUsage(const geo::Mesh& mesh)
 {
     std::span<const int32_t> ids = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
@@ -712,6 +751,8 @@ void registerCommands()
     for (size_t i = kShadingModel; i < attrs.size(); ++i)
     {
         const AttrDef& d = attrs[i];
+        if (d.flags & AttrHidden)
+            continue;
         const T type = d.type == PlugType::Float ? T::Float : d.type == PlugType::Vec3 ? T::Vec3 : d.type == PlugType::Bool ? T::Bool
                        : d.type == PlugType::Int ? T::Int : d.type == PlugType::String ? T::String : T::Any;
         create.flags.push_back({d.name, "", type, nullptr, d.doc, {}, {}, d.minValue, d.maxValue});
@@ -746,6 +787,68 @@ void registerCommands()
                 out.push_back(g.node(id)->path());
             }
             return out;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "reorderMaterials",
+        .doc = "Reorder the Material Editor's list: the named materials first, in the order given, the rest after them. "
+               "Returns the new order.",
+        .positionalDoc = "material [material...]",
+        .run = [](const Args& a) -> json {
+            Graph& g = Graph::current();
+            std::vector<Node*> next;
+            for (const json& v : a.positional)
+            {
+                if (!v.is_string())
+                    continue;
+                Node& n = materialArg(g, v.get<std::string>(), "reorderMaterials");
+                if (std::ranges::find(next, &n) == next.end())
+                    next.push_back(&n);
+            }
+            if (next.empty())
+                throw CommandError("reorderMaterials: give material names");
+            for (Node* n : materials::ordered(g))
+                if (std::ranges::find(next, n) == next.end())
+                    next.push_back(n);
+            UndoChunk chunk("Reorder Materials");
+            json out = json::array();
+            for (size_t i = 0; i < next.size(); ++i)
+            {
+                if (next[i]->as<int64_t>(material::kListOrder) != int64_t(i + 1))
+                    g.setValue({next[i]->id(), material::kListOrder, -1}, int64_t(i + 1));
+                out.push_back(next[i]->path());
+            }
+            return out;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "reorderMaterialSlots",
+        .doc = "Reorder an object's material slots, the order exporters write them in: the named slots first, in the order "
+               "given, the rest after them. Returns the new slot order.",
+        .positionalDoc = "object slot [slot...]",
+        .run = [](const Args& a) -> json {
+            Graph& g = Graph::current();
+            if (a.positional.size() < 2 || !a.positional[0].is_string())
+                throw CommandError("reorderMaterialSlots: give an object and slot names");
+            Node* n = g.find(a.positional[0].get<std::string>());
+            if (!n || !n->type().isA("mesh"))
+                throw CommandError("reorderMaterialSlots: " + a.positional[0].get<std::string>() + " is not a mesh");
+            std::vector<std::string> order;
+            for (size_t i = 1; i < a.positional.size(); ++i)
+                if (a.positional[i].is_string())
+                    order.push_back(a.positional[i].get<std::string>());
+            UndoChunk chunk("Reorder Material Slots");
+            PlugRef base = modifiers::editPlug(g, n->id());
+            geo::Mesh m = baseMesh(g, base);
+            if (materials::reorderSlots(m, order))
+            {
+                json out = m.materialNames();
+                g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
+                return out;
+            }
+            return m.materialNames();
         },
     });
 

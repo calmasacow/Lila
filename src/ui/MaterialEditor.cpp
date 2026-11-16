@@ -13,6 +13,7 @@
 #include "scene/MeshNodes.h"
 #include "ui/AchievementRules.h"
 #include "ui/Actions.h"
+#include "ui/AttributeEditor.h"
 #include "ui/ChoiceTips.h"
 #include "ui/ColorPopup.h"
 #include "ui/Controls.h"
@@ -39,6 +40,7 @@
 #include <QDropEvent>
 #include <QFileInfo>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QComboBox>
 #include <QDockWidget>
 #include <QGridLayout>
@@ -370,6 +372,79 @@ std::vector<scene::Node*> materialsOnSelection()
     return out;
 }
 
+/**
+ * Middle-drag moves a list row, from firstRow() down only; dropped(order) then gets the rows' UserRole (or text)
+ * in their new order, from firstRow() on.
+ */
+class MiddleDragReorder : public QObject
+{
+public:
+    MiddleDragReorder(QListWidget* list, std::function<int()> firstRow, std::function<void(const std::vector<std::string>&)> dropped)
+        : QObject(list), mList(list), mFirstRow(std::move(firstRow)), mDropped(std::move(dropped))
+    {
+        list->viewport()->installEventFilter(this);
+    }
+
+    bool dragging() const { return mRow >= 0; }
+
+    static std::string key(const QListWidgetItem* item)
+    {
+        const QVariant v = item->data(Qt::UserRole);
+        return (v.typeId() == QMetaType::QString ? v.toString() : item->text()).toStdString();
+    }
+
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override
+    {
+        auto* e = dynamic_cast<QMouseEvent*>(event);
+        if (!e)
+            return QObject::eventFilter(watched, event);
+        if (event->type() == QEvent::MouseButtonPress && e->button() == Qt::MiddleButton)
+        {
+            if (QListWidgetItem* item = mList->itemAt(e->position().toPoint()); item && mList->row(item) >= mFirstRow())
+            {
+                mRow = mList->row(item);
+                mList->viewport()->setCursor(Qt::ClosedHandCursor);
+            }
+            return true;
+        }
+        if (mRow < 0)
+            return QObject::eventFilter(watched, event);
+        if (event->type() == QEvent::MouseMove)
+        {
+            QListWidgetItem* over = mList->itemAt(QPoint(4, int(e->position().y())));
+            int to = over ? mList->row(over) : (e->position().y() < 0 ? mFirstRow() : mList->count() - 1);
+            to = std::max(to, mFirstRow());
+            if (to != mRow)
+            {
+                QSignalBlocker block(mList);
+                QListWidgetItem* moved = mList->takeItem(mRow);
+                mList->insertItem(to, moved);
+                mList->setCurrentItem(moved);
+                mRow = to;
+            }
+            return true;
+        }
+        if (event->type() == QEvent::MouseButtonRelease && e->button() == Qt::MiddleButton)
+        {
+            mRow = -1;
+            mList->viewport()->unsetCursor();
+            std::vector<std::string> order;
+            for (int i = mFirstRow(); i < mList->count(); ++i)
+                order.push_back(key(mList->item(i)));
+            mDropped(order);
+            return true;
+        }
+        return QObject::eventFilter(watched, event);
+    }
+
+private:
+    QListWidget* mList;
+    std::function<int()> mFirstRow;
+    int mRow = -1;
+    std::function<void(const std::vector<std::string>&)> mDropped;
+};
+
 QPointer<MaterialEditor>& floatingEditor()
 {
     static QPointer<MaterialEditor> e;
@@ -467,6 +542,13 @@ MaterialEditor::MaterialEditor(QWidget* parent) : QWidget(parent)
     mList->setMaximumHeight(140);
     mList->setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::EditKeyPressed);
     mList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    mList->setToolTip("Middle-drag a material to move it in the list.");
+    new MiddleDragReorder(
+        mList, [this] { return mList->count() && isDefaultRow(mList->item(0)) ? 1 : 0; },
+        [](const std::vector<std::string>& order) {
+            if (!order.empty())
+                runUi("reorderMaterials", {{"args", order}});
+        });
     listColumn->addWidget(mList, 1);
     top->addLayout(listColumn, 1);
     connect(mFilter, &QLineEdit::textChanged, this, [this] { applyFilter(); });
@@ -669,9 +751,8 @@ void MaterialEditor::refreshList()
     LILA_ZONE();
     scene::Graph& g = scene::Graph::current();
     std::vector<std::string> names;
-    for (scene::Node* n : scene::materials::all(g))
+    for (scene::Node* n : scene::materials::ordered(g))
         names.push_back(n->name());
-    std::sort(names.begin(), names.end());
     // The built-in default heads the list, unless a material of that name has taken its slot.
     const bool defaultRow = !scene::materials::find(g, scene::materials::kDefaultSlot);
     if (defaultRow)
@@ -1283,8 +1364,90 @@ void MaterialEditor::fitWidth()
     mScroll->setMinimumWidth(std::max(rows, kPreviewSize + fontMetrics().averageCharWidth() * 30));
 }
 
+namespace
+{
+/** An object's material slots in export order; middle-drag a row to move it. Double-click edits the material. */
+class MaterialSlotList : public QListWidget
+{
+public:
+    explicit MaterialSlotList(scene::NodeId mesh) : mMesh(mesh)
+    {
+        setSelectionMode(QAbstractItemView::NoSelection);
+        setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        setToolTip("Exporters write the slots in this order. Middle-drag a slot to move it; double-click to edit its material.");
+        connect(this, &QListWidget::itemDoubleClicked, this, [](QListWidgetItem* item) {
+            const std::string slot = MiddleDragReorder::key(item);
+            if (scene::materials::find(scene::Graph::current(), slot))
+                runUi("editMaterial", {{"args", json::array({slot})}});
+        });
+        mDrag = new MiddleDragReorder(this, [] { return 0; }, [this](const std::vector<std::string>& order) {
+            if (const scene::Node* n = scene::Graph::current().node(mMesh))
+            {
+                json args = json::array({n->path()});
+                for (const std::string& slot : order)
+                    args.push_back(slot);
+                runUi("reorderMaterialSlots", {{"args", args}});
+            }
+            refresh();
+        });
+        refresh();
+    }
+
+    void refresh()
+    {
+        if (mDrag->dragging())
+            return;
+        clear();
+        scene::Graph& g = scene::Graph::current();
+        const scene::Node* n = g.node(mMesh);
+        const scene::MeshPtr mesh = n ? n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
+        if (!mesh)
+            return;
+        int index = 0;
+        for (const auto& [slot, faces] : scene::materials::slotUsage(*mesh))
+        {
+            auto* item = new QListWidgetItem(QString("%1  %2").arg(index++).arg(QString::fromStdString(slot)), this);
+            item->setData(Qt::UserRole, QString::fromStdString(slot));
+            item->setToolTip(QString("%1 faces").arg(faces));
+        }
+        setFixedHeight(std::max(1, count()) * sizeHintForRow(0) + 2 * frameWidth());
+    }
+
+private:
+    scene::NodeId mMesh;
+    MiddleDragReorder* mDrag = nullptr;
+};
+
+/** The Material Slots section of a mesh with two or more slots, kept current by a graph listener. */
+QWidget* materialSlotsSection(scene::NodeId id)
+{
+    scene::Graph& g = scene::Graph::current();
+    const scene::Node* n = g.node(id);
+    const scene::MeshPtr mesh = n ? n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
+    if (!mesh || scene::materials::slotUsage(*mesh).size() < 2)
+        return nullptr;
+    auto* list = new MaterialSlotList(id);
+    // Deferred: listeners fire mid-edit, when the graph must not be evaluated.
+    auto queued = std::make_shared<bool>(false);
+    QPointer<MaterialSlotList> guard(list);
+    int listener = g.addListener([guard, queued](scene::Change, scene::NodeId) {
+        if (*queued || !guard)
+            return;
+        *queued = true;
+        QTimer::singleShot(0, guard, [guard, queued] {
+            *queued = false;
+            if (guard)
+                guard->refresh();
+        });
+    });
+    QObject::connect(list, &QObject::destroyed, [listener] { scene::Graph::current().removeListener(listener); });
+    return list;
+}
+} // namespace
+
 void registerMaterialUi()
 {
+    attributeEditor::addSection("mesh", "Material Slots", materialSlotsSection);
     scene::materials::registerTypes();
     if (!ops::find("createMaterial"))
         scene::materials::registerCommands();

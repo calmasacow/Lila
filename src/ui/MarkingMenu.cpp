@@ -387,9 +387,8 @@ MarkingMenu::Level MarkingMenu::buildLevel(const json& def, QPointF center, std:
             if (j.value("insert", std::string()) == "materials")
             {
                 std::vector<std::string> names;
-                for (const scene::Node* n : scene::materials::all(scene::Graph::current()))
+                for (const scene::Node* n : scene::materials::ordered(scene::Graph::current()))
                     names.push_back(n->path());
-                std::ranges::sort(names);
                 for (const std::string& name : names)
                     level.overflow.push_back(toItem({{"label", name},
                                                      {"action", {{"command", "assignMaterial"}, {"args", {{"args", {name}}}}}},

@@ -122,6 +122,8 @@ enum Attr
     // The colour maps' OCIO input colour spaces (base colour, emissive): a config colour space, empty to follow ColorSpace.
     kBaseColorOcioSpace = kTextureSampling + 7 * 4,
     kEmissiveOcioSpace,
+    // Position in the Material Editor's list; 0 sorts by name after the placed ones.
+    kListOrder,
     kCount
 };
 
@@ -264,6 +266,8 @@ LILA_SCENE_API std::string strokeSheetPath(const std::string& strokeMap);
 /** paths::resolvePath of a stored texture path, as UTF-8. */
 LILA_SCENE_API std::string resolvePath(const std::string& path);
 
+/** The scene's materials in the Material Editor's order: by listOrder, then unplaced ones by name. */
+LILA_SCENE_API std::vector<Node*> ordered(Graph& g);
 /** Slot index for name, added when missing. */
 LILA_SCENE_API int32_t slotIndex(geo::Mesh& mesh, const std::string& name);
 /** Points every face (faces empty) or the given faces at the named slot, then drops slots no face uses. */
@@ -272,6 +276,11 @@ LILA_SCENE_API void assign(geo::Mesh& mesh, const std::string& slot, const std::
 LILA_SCENE_API void pruneSlots(geo::Mesh& mesh);
 /** Slot name per face id; ids outside the names get "Material<id>", like the FBX exporter. */
 LILA_SCENE_API std::string slotName(const geo::Mesh& mesh, int32_t id);
+/**
+ * Puts the named slots first, in the given order, the rest after them in their current order, and renumbers the
+ * faces to match. Unknown names are ignored. False when nothing moved.
+ */
+LILA_SCENE_API bool reorderSlots(geo::Mesh& mesh, const std::vector<std::string>& order);
 /** Faces per slot name, in slot order. */
 LILA_SCENE_API std::vector<std::pair<std::string, uint32_t>> slotUsage(const geo::Mesh& mesh);
 
