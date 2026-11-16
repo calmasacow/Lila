@@ -283,6 +283,8 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
             flags = render::DrawPreselect;
         else if (selected.contains(id) && (!tool || tool->showsSelection(id)))
             flags = order.other(id) ? render::DrawSelected | render::DrawSelectedOther : render::DrawSelected;
+        else if (selected.contains(id) && tool && tool->dimsSelection(id))
+            flags = render::DrawUnderSelected;
         else if (preselecting && (mPreselect.node == id || (e.arrayed != scene::kNoNode && preselectedArray(g, id, mPreselect.node))))
             flags = render::DrawPreselect;
         else if (!componentMode && underSelection.contains(id))

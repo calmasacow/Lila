@@ -40,6 +40,7 @@
 #include "ui/ViewInfo.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportTool.h"
+#include "ui/ViewportToast.h"
 #include "ui/FileDialog.h"
 
 #include <QApplication>
@@ -87,6 +88,9 @@ namespace tp = tex::paint;
 namespace rp = render::paint;
 
 constexpr const char* kTexturePaintPrefix = "/texturePaint";
+constexpr const char* kDimWirePref = "/texturePaint/dimWire";
+
+void ensureTexturePaint();
 /** Base colour, roughness, metallic, height and emissive: always in the brush page. The rest show when the set has them. */
 constexpr size_t kMainChannels = 5;
 
@@ -345,6 +349,25 @@ json gradientPayload(const TexturePaintSettings& s, const json& start, const jso
                        {"dither", s.gradientDither},
                        {"stops", {{{"position", 0.0}, {"amount", reverse ? 0.0 : 1.0}}, {{"position", 1.0}, {"amount", reverse ? 1.0 : 0.0}}}}};
     return pay;
+}
+
+/** The brush settings a stroke on mesh uses: it mirrors whenever the mesh has symmetry, as sculpt strokes do. */
+brush::BrushSettings meshSymmetryBrush(const scene::Node& mesh)
+{
+    brush::BrushSettings b = texturePaintState().stroke;
+    b.mirror = scene::symmetrySpec(mesh).has_value();
+    return b;
+}
+
+/** The meshes the Symmetry strip shows and sets: the selected ones. */
+std::vector<scene::Node*> symmetryMeshes()
+{
+    scene::Graph& g = scene::Graph::current();
+    std::vector<scene::Node*> out;
+    for (scene::NodeId id : g.selection())
+        if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+            out.push_back(n);
+    return out;
 }
 
 /** The brush's uv mirror on top of its spatial symmetry. */
@@ -775,6 +798,10 @@ public:
         moreMenu->addAction("Flatten Layer", this, [] { actions::run(json("tex.flattenLayer")); });
         moreMenu->addAction("Clear Layer", this, [] { actions::run(json("tex.clearLayer")); });
         moreMenu->addSeparator();
+        QAction* wire = moreMenu->addAction("Wireframe While Painting\tShift+F", this, [] { actions::run(json("tex.paintWire")); });
+        wire->setCheckable(true);
+        connect(moreMenu, &QMenu::aboutToShow, wire, [wire] { wire->setChecked(texturePaintDimWire()); });
+        moreMenu->addSeparator();
         moreMenu->addAction("Save Brush Preset...", this, [this] { savePresetAs(); });
         moreMenu->addAction("Image Editor...", this, [this] {
             const QString exe = ui::fileDialog::getOpenFileName(this, "Image Editor", {}, "Programs (*.exe);;All files (*)");
@@ -811,12 +838,49 @@ public:
                 texturePaintState().tool = id;
                 syncTools();
                 changed();
+                ensureTexturePaint();
             });
             mTools.push_back(b);
             tiles.push_back(b);
         }
         // Two icon rows: the brush row above names the current tool, the tooltips name the rest.
         col->addWidget(controls::grid(tiles, int(std::size(kTools) + 1) / 2, this));
+        auto* symRow = new QHBoxLayout;
+        auto* symLabel = new QLabel("Symmetry", this);
+        controls::setRole(symLabel, "dim");
+        symRow->addWidget(symLabel);
+        mSymmetry = new controls::Segmented(this);
+        mSymmetry->setObjectName("paintSymmetry");
+        // Segment ids are the mesh's symmetry values: off, x, y, z, radial.
+        mSymmetry->add("Off", {}, "No symmetry", 0);
+        mSymmetry->add("X", {}, "Mirror strokes across X", 1);
+        mSymmetry->add("Y", {}, "Mirror strokes across Y", 2);
+        mSymmetry->add("Z", {}, "Mirror strokes across Z", 3);
+        mSymmetry->add("Radial", {}, "Repeat strokes round the mesh's radial axis", 4);
+        mSymmetry->setToolTip("Symmetry: the selected mesh's symmetry setting, shared with Sculpt and the viewport header");
+        symRow->addWidget(mSymmetry, 1);
+        col->addLayout(symRow);
+        connect(mSymmetry, &controls::Segmented::picked, this, [](int id) {
+            static constexpr std::array<const char*, 5> kAxes = {"off", "x", "y", "z", "radial"};
+            json targets = json::array();
+            for (scene::Node* n : symmetryMeshes())
+                targets.push_back(n->path());
+            if (targets.empty())
+                return;
+            try
+            {
+                ops::execute("setSymmetry", {{"args", targets}, {"axis", kAxes[size_t(std::clamp(id, 0, 4))]}}, CallSource::UI);
+            }
+            catch (const std::exception& e)
+            {
+                log::warn("Texture paint: {}", e.what());
+            }
+        });
+        mSymmetryListener = scene::Graph::current().addListener([this](scene::Change change, scene::NodeId) {
+            if (change == scene::Change::Selection || change == scene::Change::Value)
+                syncSymmetry();
+        });
+        connect(this, &QObject::destroyed, [id = mSymmetryListener] { scene::Graph::current().removeListener(id); });
         mSource = new controls::Segmented(this);
         mSource->setObjectName("brushSource");
         mSource->add("Values", {}, "Paint the channel values below", 0);
@@ -1377,9 +1441,6 @@ public:
         mOcclusion = new QCheckBox("Only what the view sees", this);
         mOcclusion->setToolTip("Leave surfaces hidden from the view unpainted (the painted mesh only)");
         form->addRow(mOcclusion);
-        mMirror = new QCheckBox("Mirror", this);
-        mMirror->setToolTip("Mirror strokes across the mesh's symmetry axis (X when it has none)");
-        form->addRow(mMirror);
         mUvMirror = new controls::Segmented(this);
         mUvMirror->setObjectName("uvMirror");
         mUvMirror->add("Off", {}, "No uv mirror", 0);
@@ -1482,10 +1543,6 @@ public:
             texturePaintState().occlusion = v;
             changed();
         });
-        connect(mMirror, &QCheckBox::toggled, this, [this](bool v) {
-            texturePaintState().stroke.mirror = v;
-            changed();
-        });
         sync();
     }
 
@@ -1506,6 +1563,15 @@ public:
     }
 
 
+    /** The strip shows the selected mesh's symmetry, off and disabled without one. */
+    void syncSymmetry()
+    {
+        const std::vector<scene::Node*> meshes = symmetryMeshes();
+        const QSignalBlocker block(mSymmetry);
+        mSymmetry->setEnabled(!meshes.empty());
+        mSymmetry->setCurrent(meshes.empty() ? 0 : int(std::clamp<int64_t>(meshes.back()->as<int64_t>(scene::MeshNode::kSymmetry), 0, scene::kSymmetryRadial)));
+    }
+
     void syncTools()
     {
         for (size_t i = 0; i < mTools.size(); ++i)
@@ -1516,7 +1582,7 @@ public:
     {
         const TexturePaintSettings& s = texturePaintState();
         syncTools();
-        const QSignalBlocker b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion), b7(mMirror);
+        const QSignalBlocker b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion);
         const QSignalBlocker b8(mMaterial), b9(mMaterialScale), b10(mFlow), b11(mNormalMode), b12(mIntensity), b13(mStamp), b14(mFilterRadius);
         const QSignalBlocker b15(mAmount), b17(mParticles), b18(mBufferBrush), b19(mBufferScale), b20(mTransform), b21(mWarp);
         const QSignalBlocker b22(mAuto), b23(mFacing), b24(mVariedTurn), b25(mVariedBlend), b26(mVariedBrightness);
@@ -1553,7 +1619,7 @@ public:
             const QSignalBlocker bu(mUvIsland);
             mUvIsland->setChecked(s.uvMirrorPerIsland);
         }
-        mMirror->setChecked(s.stroke.mirror);
+        syncSymmetry();
         mSource->setCurrent(s.source == "material" ? 1 : s.source == "texture" ? 2 : 0);
         mTexture->setText(s.sourceImage.empty() ? QString("None") : QFileInfo(QString::fromStdString(s.sourceImage)).completeBaseName());
         mStencilPick->setText(!s.stencil.active() ? QString("None")
@@ -2041,7 +2107,8 @@ private:
     QDoubleSpinBox* mStrength = nullptr;
     QComboBox* mFalloff = nullptr;
     QCheckBox* mOcclusion = nullptr;
-    QCheckBox* mMirror = nullptr;
+    controls::Segmented* mSymmetry = nullptr;
+    int mSymmetryListener = 0;
     controls::Segmented* mUvMirror = nullptr;
     QCheckBox* mUvIsland = nullptr;
     brush::ui::StrokeOptions* mStrokeOptions = nullptr;
@@ -2227,6 +2294,11 @@ public:
                 });
             }
         });
+        // A tapped Shift+F toggles the wire, as in Sculpt.
+        mControls.setStrengthTap([] {
+            actions::run(json("tex.paintWire"));
+            viewportToast::showActive(texturePaintDimWire() ? "Wireframe on" : "Wireframe off", 1000);
+        });
         mControls.activate();
         mActiveListener = textureSets::addActiveLayerListener([this](const std::string& setName, const std::string& layer) {
             if (scene::Node* set = tex::findSet(scene::Graph::current(), setName))
@@ -2292,6 +2364,8 @@ public:
     }
 
     bool ownsBrushRadius() const override { return true; }
+    bool showsSelection(scene::NodeId) const override { return texturePaintShowsWire(); }
+    bool dimsSelection(scene::NodeId) const override { return texturePaintDimWire(); }
 
     bool mousePress(QMouseEvent* e, const ViewInfo& view) override
     {
@@ -3220,7 +3294,7 @@ private:
         header->payload.locked = lockedTriangles(*set, t.meshPath, *t.paint);
         const scene::Node* meshNode = g.node(t.mesh);
         scene::MeshPtr outMesh = rp::paintSurface(*meshNode);
-        tp::PaintSymmetry sym = tp::brushSymmetry(texturePaintState().stroke, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+        tp::PaintSymmetry sym = tp::brushSymmetry(meshSymmetryBrush(*meshNode), outMesh.get(), scene::paintSymmetrySpec(*meshNode));
         addUvMirror(sym);
         header->symmetry = sym.toJson();
         header->view = strokeView(view, t.world);
@@ -3671,7 +3745,7 @@ private:
         {
             const scene::Node* meshNode = g.node(t.mesh);
             scene::MeshPtr outMesh = rp::paintSurface(*meshNode);
-            mSym = tp::brushSymmetry(texturePaintState().stroke, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+            mSym = tp::brushSymmetry(meshSymmetryBrush(*meshNode), outMesh.get(), scene::paintSymmetrySpec(*meshNode));
             addUvMirror(mSym);
             header->symmetry = mSym.toJson();
         }
@@ -3847,6 +3921,7 @@ private:
 
     void updatePanel()
     {
+        LILA_ZONE();
         if (!mPanel)
             return;
         scene::Graph& g = scene::Graph::current();
@@ -3867,6 +3942,7 @@ private:
      */
     void syncSetChannels()
     {
+        LILA_ZONE();
         scene::Graph& g = scene::Graph::current();
         scene::Node* set = g.node(mStroking ? mTarget.set : (mOver ? mOver->set : kNoNode));
         if (!set)
@@ -4796,6 +4872,14 @@ void startTexturePaint() { viewportTools::set(std::make_unique<TexturePaintTool>
 
 bool texturePaintActive() { return dynamic_cast<TexturePaintTool*>(viewportTools::active()) != nullptr; }
 
+bool texturePaintDimWire() { return PrefStore::get().value<bool>("general", kDimWirePref, false); }
+
+bool texturePaintShowsWire()
+{
+    const TexturePaintSettings& s = texturePaintState();
+    return s.tool == "fill" && (s.fillBy == "triangle" || s.fillBy == "polygon" || s.fillBy == "island");
+}
+
 QWidget* texturePaintPage(QWidget* parent)
 {
     TexturePaintPanel* page = brushPage();
@@ -4876,6 +4960,18 @@ void registerTexturePaintUi()
         if (tool && std::string_view(tool->name()) == "texturePaint")
             quickMaskOverlay::addDraws(fs, quickMaskSet());
     });
+    actions::add({.id = "tex.paintWire",
+                  .label = "Wireframe While Painting",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          PrefStore::get().set("general", kDimWirePref, !texturePaintDimWire());
+                          viewportTools::requestRedraw();
+                      },
+                  .doc = "Keeps the mesh wire visible while Texture Paint hides it, dimmed: in the viewport and over the 2D View. Tap Shift+F while painting.",
+                  .checked = [] { return texturePaintDimWire(); },
+                  .icon = "grid-pattern",
+                  .keywords = {"wireframe", "uvs", "edges"}});
     actions::add({.id = "tex.paint",
                   .label = "Texture Paint",
                   .category = "Texture",

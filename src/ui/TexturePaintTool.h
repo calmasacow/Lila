@@ -20,6 +20,7 @@ namespace lila::ui
  *   Enter                projection: project the paint buffer
  *   B or F held + drag   brush radius (F tapped still frames)
  *   M or Shift+F + drag  strength
+ *   Shift+F tapped       wireframe while painting
  *   [ ]                  radius smaller / larger
  *   Esc                  cancel the stroke, clear the buffer, or leave the tool
  */
@@ -27,6 +28,12 @@ LILA_UI_API void startTexturePaint();
 
 /** Texture Paint is the active viewport tool (the 2D View paints with it then). */
 LILA_UI_API bool texturePaintActive();
+
+/** Texture Paint shows the mesh wire: only Fill picking triangles, faces or UV islands, which needs to see them. */
+LILA_UI_API bool texturePaintShowsWire();
+
+/** Wireframe While Painting (tex.paintWire): the mesh wire stays visible, dimmed, while Texture Paint hides it. */
+LILA_UI_API bool texturePaintDimWire();
 
 /**
  * The texture paint tool's current stroke settings, for other surfaces that paint with them (the UV editor):
