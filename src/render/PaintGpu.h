@@ -33,7 +33,8 @@
  * The texture graph reads a channel through an External buffer named tex::paint::externalName(buffer, channel): its
  * image (externalImage) is kept up to date from the pages after every change.
  *
- * Everything here runs on the main thread (GPU work waits for the render thread), except externalImage.
+ * Everything here runs on the main thread (GPU work waits for the render thread), except externalImage. Live dabs paint
+ * on a worker: liveDabs returns at once, and every other call here waits for the dabs queued before it.
  */
 namespace lila::render::paint
 {
@@ -74,7 +75,13 @@ LILA_UI_API void rasterize(scene::Graph& g, scene::Node& set, const std::string&
 LILA_UI_API void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, StrokePtr header);
 /** Builds the stroke pipelines on the render thread without waiting, so the first stroke doesn't stall on them. Nothing while the renderer is stopped. */
 LILA_UI_API void prewarm();
+/**
+ * Queues dabs for the live stroke and returns: they paint off the main thread, dabs queued while a batch runs joining the
+ * next one, and the change listeners hear of it once the GPU is done.
+ */
 LILA_UI_API void liveDabs(scene::NodeId set, const std::string& buffer, std::span<const Dab> dabs);
+/** Waits until the dabs queued so far have painted, and tells the change listeners. */
+LILA_UI_API void settleLive();
 /** Puts the pages back as they were before the live stroke. */
 LILA_UI_API void cancelLive(scene::NodeId set, const std::string& buffer);
 LILA_UI_API bool liveActive(scene::NodeId set, const std::string& buffer);

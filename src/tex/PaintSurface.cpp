@@ -507,7 +507,7 @@ std::vector<uint32_t> SurfaceAtlas::pagesWhere(const std::function<bool(uint32_t
     return out;
 }
 
-std::map<uint32_t, std::vector<uint32_t>> SurfaceAtlas::pagesFor(std::span<const DabReach> dabs, uint32_t first) const
+std::map<uint32_t, std::vector<uint32_t>> SurfaceAtlas::pagesFor(std::span<const DabReach> dabs, uint32_t first, std::span<const uint8_t> skip) const
 {
     LILA_ZONE();
     std::map<uint32_t, std::vector<uint32_t>> out;
@@ -523,7 +523,7 @@ std::map<uint32_t, std::vector<uint32_t>> SurfaceAtlas::pagesFor(std::span<const
         const float r2 = dabs[i].radius * dabs[i].radius;
         for (geo::Index t : bvh.overlapping(box))
         {
-            if (t >= mMesh->triangleCount() || !mMesh->paintable[t])
+            if (t >= mMesh->triangleCount() || !mMesh->paintable[t] || (t < skip.size() && skip[t]))
                 continue;
             for (uint32_t k = mTriPageStart[t]; k < mTriPageStart[size_t(t) + 1]; ++k)
             {

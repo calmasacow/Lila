@@ -1299,6 +1299,7 @@ bool waitIdle(double timeoutMs)
     const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(timeoutMs);
     for (;;)
     {
+        render::paint::settleLive();
         mainq::drain();
         if (idle())
         {

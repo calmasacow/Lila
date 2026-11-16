@@ -122,9 +122,10 @@ public:
 
     /**
      * For every page the dabs reach, the indices of the dabs reaching it (offset by first), in order. A dab reaches a
-     * page when a triangle near its centre (within reach) has texels or padding there.
+     * page when a triangle near its centre (within reach) has texels or padding there. Triangles skip marks (non-zero)
+     * reach nothing.
      */
-    std::map<uint32_t, std::vector<uint32_t>> pagesFor(std::span<const DabReach> dabs, uint32_t first = 0) const;
+    std::map<uint32_t, std::vector<uint32_t>> pagesFor(std::span<const DabReach> dabs, uint32_t first = 0, std::span<const uint8_t> skip = {}) const;
     /** Pages holding texels (or padding) of a triangle that keep says yes to, ascending. */
     std::vector<uint32_t> pagesWhere(const std::function<bool(uint32_t tri)>& keep) const;
 

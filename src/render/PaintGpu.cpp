@@ -23,7 +23,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstring>
 #include <mutex>
@@ -318,6 +320,8 @@ struct Gpu
     Pool wide{kWidePage, 16};
     uint32_t zeroPage = kNone;
     compute::Submitter sub;
+    /** Live stroke batches: launched by the render thread, waited on by the paint worker. */
+    compute::Submitter batches;
     bool ready = false;
     Kernel dab, depth, vis, uvmap, view, gather, particles;
     std::map<const PaintMesh*, TriBuffer> tris;
@@ -328,6 +332,7 @@ struct Gpu
         if (ready)
             return;
         sub.init(vk);
+        batches.init(vk);
         loadKernel(vk, dab, "paint_dab.spv", sizeof(DabPush));
         loadKernel(vk, depth, "paint_depth.spv", sizeof(DepthPush));
         loadKernel(vk, vis, "paint_screen.spv", sizeof(VisPush));
@@ -420,6 +425,7 @@ struct Gpu
         wide.destroy(vk);
         zeroPage = kNone;
         sub.destroy(vk);
+        batches.destroy(vk);
         ready = false;
     }
 };
@@ -445,9 +451,15 @@ void installStopHook()
     });
 }
 
-/** Runs f on the render thread and waits for it. Main thread. */
+void drain();
+
+/**
+ * Runs f on the render thread and waits for it, once queued live batches have painted. Main thread. f may free what
+ * earlier GPU work (live batches, launched texture graph slices) used: the queue is idle when it starts.
+ */
 template <class F> void gpuRun(F&& f)
 {
+    drain();
     Renderer& r = Renderer::get();
     if (!r.running() && !r.start())
         throw std::runtime_error("texture painting needs a GPU, and the renderer could not start");
@@ -455,6 +467,7 @@ template <class F> void gpuRun(F&& f)
     r.runTask([&](VulkanContext& vk) {
          Gpu& g = gpu();
          g.init(vk);
+         vkQueueWaitIdle(vk.queue);
          f(vk, g);
          return true;
      }).get();
@@ -553,6 +566,8 @@ struct Live
     PaintSymmetry sym;
     std::vector<StrokeView> views;
     size_t viewIndex = 0;
+    /** Per triangle, 1 where the stroke view sees only its back (the kernel paints none of it); empty until a batch needs it. */
+    std::vector<uint8_t> backFacing;
 
     const StrokeView* view() const
     {
@@ -628,6 +643,7 @@ void notify(NodeId set)
 
 Layer& layerFor(const Key& k)
 {
+    drain();
     std::shared_ptr<Layer>& l = gLayers[k];
     if (!l)
         l = std::make_shared<Layer>();
@@ -642,16 +658,27 @@ Layer& layerFor(const Key& k)
     return *l;
 }
 
-Layer* findLayer(const Key& k)
+/** The layer without waiting for queued live batches: for what they leave alone (whether it exists, its live stroke). */
+std::shared_ptr<Layer> peekLayer(const Key& k)
 {
     auto it = gLayers.find(k);
     if (it == gLayers.end() || it->second->epoch != gEpoch.load())
         return nullptr;
-    return it->second.get();
+    return it->second;
 }
+
+Layer* findLayer(const Key& k)
+{
+    drain();
+    return peekLayer(k).get();
+}
+
+/** Guards gSurfaces: the paint worker finds surfaces while the main thread adds warmed ones. */
+std::mutex gSurfaceMutex;
 
 std::shared_ptr<Surface> surface(const std::shared_ptr<const PaintMesh>& mesh, int udim, int w, int h)
 {
+    std::scoped_lock lock(gSurfaceMutex);
     const auto key = std::make_tuple(mesh.get(), udim, w, h);
     if (auto it = gSurfaces.find(key); it != gSurfaces.end())
         return it->second;
@@ -667,6 +694,7 @@ bool meshInUse(const PaintMesh* m);
 /** Frees the geometry pages and triangles of meshes nothing paints any more (render thread, the main thread waiting). */
 void pruneSurfaces(VulkanContext& vk, Gpu& g)
 {
+    std::scoped_lock lock(gSurfaceMutex);
     for (auto it = gSurfaces.begin(); it != gSurfaces.end();)
         if (!meshInUse(it->second->mesh.get()))
         {
@@ -695,9 +723,13 @@ uint32_t channelSlot(Layer& l, const TileKey& k, uint32_t page)
     return p == it->second.pages.end() ? kNone : p->second;
 }
 
+/** Guards Layer::changed: live batches note changes on the render thread while the main thread takes them. */
+std::mutex gChangedMutex;
+
 /** Notes that texels [x0, x1) x [y0, y1) of a tile changed. */
 void noteChanged(Layer& l, int udim, int x0, int y0, int x1, int y1)
 {
+    std::scoped_lock lock(gChangedMutex);
     auto [it, fresh] = l.changed.try_emplace(udim, std::array<int, 4>{x0, y0, x1, y1});
     if (!fresh)
         it->second = {std::min(it->second[0], x0), std::min(it->second[1], y0), std::max(it->second[2], x1), std::max(it->second[3], y1)};
@@ -734,9 +766,13 @@ void dropViews(VulkanContext& vk, NodeId set, const std::string& buffer)
     std::erase_if(gViewSizes, [&](const auto& kv) { return std::get<0>(kv.first) == set && std::get<1>(kv.first) == buffer; });
 }
 
-/** Rebuilds the views of a layer's tiles whose pages changed (render thread, the main thread waiting). */
-void updateViews(VulkanContext& vk, Gpu& g, const Key& key, Layer& l)
+/**
+ * Rebuilds the views of a layer's tiles whose pages changed (render thread, inside a recording): the tables are written
+ * by the commands, so GPU work launched before still reads the tables it was recorded with.
+ */
+void updateViews(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& key, Layer& l, std::vector<compute::Buffer>& temps)
 {
+    bool copied = false;
     for (auto& [udim, size] : l.sizes)
         gViewSizes[{key.set, key.buffer, udim}] = size;
     for (auto& [tk, tile] : l.tiles)
@@ -752,18 +788,22 @@ void updateViews(VulkanContext& vk, Gpu& g, const Key& key, Layer& l)
         const VkDeviceSize bytes = std::max<VkDeviceSize>(pagesX * pagesY * sizeof(VkDeviceAddress), 16);
         if (v.table.size != bytes)
         {
+            // The queue is idle when a table changes size (a sync or a rasterise, through gpuRun).
             compute::destroy(vk, v.table);
-            v.table = compute::makeBuffer(vk, bytes, 0, compute::Host::Write);
+            v.table = compute::makeBuffer(vk, bytes, 0, compute::Host::None);
         }
         v.width = w;
         v.height = h;
-        auto* table = static_cast<VkDeviceAddress*>(v.table.mapped);
-        std::fill(table, table + pagesX * pagesY, VkDeviceAddress(0));
+        std::vector<VkDeviceAddress> table(size_t(bytes / sizeof(VkDeviceAddress)), 0);
         for (auto& [page, slot] : tile.pages)
             if (page < pagesX * pagesY)
                 table[page] = g.half.address(slot);
-        vmaFlushAllocation(vk.allocator, v.table.alloc, 0, VK_WHOLE_SIZE);
+        temps.push_back(compute::hostBuffer(vk, table.data(), bytes));
+        compute::copy(cmd, temps.back(), v.table, bytes);
+        copied = true;
     }
+    if (copied)
+        compute::memoryBarrier(cmd);
 }
 
 /**
@@ -846,7 +886,7 @@ std::vector<std::array<int, 4>> pageRegions(std::span<const uint32_t> pages, int
 /** Copies stale pages into the images the graph reads (render thread, inside a recording). */
 void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& key, Layer& l, std::vector<compute::Buffer>& temps)
 {
-    updateViews(vk, g, key, l);
+    updateViews(vk, cmd, g, key, l, temps);
     for (auto& [tk, tile] : l.tiles)
     {
         GpuImageRef img;
@@ -882,6 +922,8 @@ void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& ke
         const int pagesX = (img->width() + kPageSize - 1) / kPageSize;
         if (!full)
             img->noteWriteRegions(pageRegions(pages, pagesX, img->width(), img->height()));
+        // One copy command per pool chunk: a copy per page costs several times the bytes it moves.
+        std::map<VkBuffer, std::vector<VkBufferImageCopy>> regions;
         for (uint32_t p : pages)
         {
             const int x0 = int(p % uint32_t(pagesX)) * kPageSize, y0 = int(p / uint32_t(pagesX)) * kPageSize;
@@ -897,8 +939,10 @@ void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& ke
             region.imageOffset = {x0, y0, 0};
             region.imageExtent = {uint32_t(std::min(kPageSize, img->width() - x0)), uint32_t(std::min(kPageSize, img->height() - y0)), 1};
             img->noteWriteRect(x0, y0, x0 + std::min(kPageSize, img->width() - x0), y0 + std::min(kPageSize, img->height() - y0));
-            vkCmdCopyBufferToImage(cmd, g.half.buffer(slot), img->image(), VK_IMAGE_LAYOUT_GENERAL, 1, &region);
+            regions[g.half.buffer(slot)].push_back(region);
         }
+        for (const auto& [buffer, list] : regions)
+            vkCmdCopyBufferToImage(cmd, buffer, img->image(), VK_IMAGE_LAYOUT_GENERAL, uint32_t(list.size()), list.data());
         compute::memoryBarrier(cmd);
         img->endWrite(cmd);
     }
@@ -1383,10 +1427,33 @@ struct Batch
     }
 };
 
+/** Marks the triangles whose every corner normal faces away from the stroke's view: the kernel rejects all their texels. */
+void cullBackFacing(Live& live)
+{
+    const StrokeView* view = live.view();
+    if (!view || live.mode == kModeFill || !live.backFacing.empty())
+        return;
+    const PaintMesh& m = *live.mesh;
+    const glm::vec3 toEye = -glm::normalize(view->direction);
+    live.backFacing.assign(m.triangleCount(), 0);
+    for (size_t t = 0; t < m.triangleCount(); ++t)
+    {
+        bool away = true;
+        for (size_t k = 0; k < 3 && away; ++k)
+        {
+            const glm::vec3& n = m.normals[t * 3 + k];
+            // A margin, so rounding in the kernel's interpolation can't turn a culled texel to face the view.
+            away = glm::dot(n, toEye) < -1e-3f * glm::length(n);
+        }
+        live.backFacing[t] = away ? 1 : 0;
+    }
+}
+
 Batch prepareBatch(Layer& l, Live& live, std::span<const Dab> dabs)
 {
     LILA_ZONE();
     Batch b;
+    cullBackFacing(live);
     std::vector<DabReach> reach;
     const float extent = live.alpha || !live.stamp.empty() ? 1.415f : 1.0f;
     for (const Dab& d : dabs)
@@ -1398,7 +1465,7 @@ Batch prepareBatch(Layer& l, Live& live, std::span<const Dab> dabs)
     for (const auto& [udim, size] : l.sizes)
     {
         std::shared_ptr<Surface> s = surface(live.mesh, udim, size.first, size.second);
-        const std::map<uint32_t, std::vector<uint32_t>> reached = s->atlas->pagesFor(reach);
+        const std::map<uint32_t, std::vector<uint32_t>> reached = s->atlas->pagesFor(reach, 0, live.backFacing);
         // A brush entering unpainted parts reaches many new pages at once; rasterised one by one they stall the stroke.
         std::vector<uint32_t> pages;
         for (const auto& [page, list] : reached)
@@ -1463,11 +1530,15 @@ Batch prepareWhole(Layer& l, Live& live)
     return b;
 }
 
-/** Paints a batch (render thread): copy on write, build-up pages, the dab kernel, then the images. */
-size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live, Batch& b)
+/**
+ * Paints a batch (render thread): copy on write, build-up pages, the dab kernel, then the images. With launched, the work
+ * is launched on Gpu::batches and its temporaries go there, to be freed once it finishes; else it waits for the GPU.
+ */
+size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live, Batch& b, std::vector<compute::Buffer>* launched = nullptr)
 {
     LILA_ZONE();
-    pruneSurfaces(vk, g);
+    if (!launched)
+        pruneSurfaces(vk, g);
     ensureDepth(vk, g, live);
     ensureUploads(vk, g, live);
     std::vector<compute::Buffer> temps;
@@ -1700,7 +1771,7 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
     params.itemCount = uint32_t(items.size());
     const VkDeviceAddress paramsAddr = host(&params, sizeof(params));
 
-    g.sub.run(vk, [&](VkCommandBuffer cmd) {
+    auto record = [&](VkCommandBuffer cmd) {
         for (size_t i = 0; i < uploads.size(); ++i)
         {
             VkBufferCopy r{0, g.wide.offset(uploads[i].second), kWidePage};
@@ -1728,7 +1799,15 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
             compute::memoryBarrier(cmd);
         }
         recordResolve(vk, cmd, g, key, l, temps);
-    });
+    };
+    if (launched)
+    {
+        g.batches.launch(vk, record);
+        launched->insert(launched->end(), temps.begin(), temps.end());
+        launched->insert(launched->end(), geoStaging.begin(), geoStaging.end());
+        return newPages;
+    }
+    g.sub.run(vk, record);
     for (compute::Buffer& t : temps)
         compute::destroy(vk, t);
     for (compute::Buffer& t : geoStaging)
@@ -1766,6 +1845,162 @@ void paintWhole(const Key& key, Layer& l)
     }
 }
 
+// ---------------------------------------------------------------------------------------------------- live batches
+
+/**
+ * Live strokes paint off the main thread. liveDabs queues dabs and returns; the paint worker takes everything a buffer
+ * has queued, prepares one batch, has the render thread record and launch it, and waits for the GPU itself (the render
+ * thread goes back to drawing). The main thread hears of the change afterwards. Anything else that reads or changes
+ * paint state drains the queue first (findLayer, layerFor, gpuRun), which keeps batches, cancels and commits in order.
+ */
+struct LiveQueue
+{
+    struct Job
+    {
+        std::shared_ptr<Layer> layer;
+        std::vector<Dab> dabs;
+    };
+    std::mutex mutex;
+    std::condition_variable cv;
+    std::map<Key, Job> queued;
+    bool busy = false;
+    bool quit = false;
+    int draining = 0;
+    /** When the next batch may launch: at most one a frame, so dabs arriving meanwhile join it. */
+    std::chrono::steady_clock::time_point nextLaunch{};
+    /** Sets whose paint changed that the main thread hasn't told its listeners about yet. */
+    std::set<NodeId> changedSets;
+    bool tellPosted = false;
+    std::thread thread;
+};
+
+// Leaked on purpose, like gpu(): a joinable thread destroyed at exit would terminate.
+LiveQueue& liveQueue()
+{
+    static LiveQueue* q = new LiveQueue;
+    return *q;
+}
+
+thread_local bool tPaintWorker = false;
+constexpr auto kBatchInterval = std::chrono::milliseconds(8);
+
+/** Tells the change listeners about sets live batches changed. Main thread. */
+void tellListeners()
+{
+    std::set<NodeId> sets;
+    {
+        LiveQueue& q = liveQueue();
+        std::scoped_lock lock(q.mutex);
+        sets.swap(q.changedSets);
+        q.tellPosted = false;
+    }
+    for (NodeId set : sets)
+        notify(set);
+}
+
+/** Paints a job's dabs (the paint worker). */
+void paintQueued(const Key& key, LiveQueue::Job& job)
+{
+    LILA_ZONE();
+    Layer& l = *job.layer;
+    if (!l.live)
+        return;
+    Live& live = *l.live;
+    Renderer& r = Renderer::get();
+    const std::span<const Dab> dabs(job.dabs);
+    for (size_t i = 0; i < dabs.size(); i += kDabsPerBatch)
+    {
+        std::span<const Dab> part = dabs.subspan(i, std::min<size_t>(kDabsPerBatch, dabs.size() - i));
+        Batch b = prepareBatch(l, live, part);
+        std::vector<compute::Buffer> temps;
+        r.runTask([&](VulkanContext& vk) {
+             Gpu& g = gpu();
+             g.init(vk);
+             runBatch(vk, g, key, l, live, b, &temps);
+             return true;
+         }).get();
+        if (VulkanContext* vk = r.context())
+        {
+            gpu().batches.waitLaunched(*vk);
+            for (compute::Buffer& t : temps)
+                compute::destroy(*vk, t);
+        }
+        live.dabs += part.size();
+    }
+}
+
+void workerLoop()
+{
+    LILA_THREAD_NAME("Paint");
+    tPaintWorker = true;
+    LiveQueue& q = liveQueue();
+    std::unique_lock lock(q.mutex);
+    for (;;)
+    {
+        q.cv.wait(lock, [&] { return q.quit || !q.queued.empty(); });
+        if (q.quit)
+            return;
+        q.cv.wait_until(lock, q.nextLaunch, [&] { return q.quit || q.draining > 0; });
+        if (q.quit)
+            return;
+        auto it = q.queued.begin();
+        const Key key = it->first;
+        LiveQueue::Job job = std::move(it->second);
+        q.queued.erase(it);
+        q.busy = true;
+        q.nextLaunch = std::chrono::steady_clock::now() + kBatchInterval;
+        lock.unlock();
+        try
+        {
+            paintQueued(key, job);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+        }
+        lock.lock();
+        q.busy = false;
+        q.changedSets.insert(key.set);
+        if (!q.tellPosted)
+        {
+            q.tellPosted = true;
+            mainq::post([] { tellListeners(); });
+        }
+        q.cv.notify_all();
+    }
+}
+
+/** Waits until every queued live batch has painted. Anywhere but the paint worker. */
+void drain()
+{
+    if (tPaintWorker)
+        return;
+    LiveQueue& q = liveQueue();
+    std::unique_lock lock(q.mutex);
+    if (q.queued.empty() && !q.busy)
+        return;
+    LILA_ZONE();
+    ++q.draining;
+    q.cv.notify_all();
+    q.cv.wait(lock, [&] { return q.queued.empty() && !q.busy; });
+    --q.draining;
+}
+
+void stopWorker()
+{
+    LiveQueue& q = liveQueue();
+    drain();
+    {
+        std::scoped_lock lock(q.mutex);
+        q.quit = true;
+    }
+    q.cv.notify_all();
+    if (q.thread.joinable())
+        q.thread.join();
+    std::scoped_lock lock(q.mutex);
+    q.quit = false;
+}
+
 /** Ends the live stroke: the build-up pages go back; the originals go to undo (returned) or back to the pool. */
 std::vector<std::pair<std::pair<TileKey, uint32_t>, CowPage>> finishLive(Layer& l, bool keepOriginals)
 {
@@ -1778,6 +2013,7 @@ std::vector<std::pair<std::pair<TileKey, uint32_t>, CowPage>> finishLive(Layer& 
             for (auto& [k, c] : out)
                 g.half.release(c.before);
         releaseLive(vk, *live);
+        pruneSurfaces(vk, g);
     });
     return out;
 }
@@ -2253,6 +2489,7 @@ void syncOne(scene::Graph& g, scene::Node& set, const std::string& id, const Buf
 
 void dropLayer(const Key& key)
 {
+    drain();
     auto it = gLayers.find(key);
     if (it == gLayers.end())
         return;
@@ -2418,6 +2655,7 @@ void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPat
         have = it->second.paint;
     }
     auto surfaced = [&](const std::shared_ptr<const PaintMesh>& p) {
+        std::scoped_lock lock(gSurfaceMutex);
         for (const auto& [udim, size] : sizes)
             if (!gSurfaces.contains(std::make_tuple(p.get(), udim, size.first, size.second)))
                 return false;
@@ -2473,6 +2711,7 @@ void prewarmTarget(scene::Graph& g, scene::Node& set, const std::string& meshPat
                 if (!e.paint[m])
                     e.paint[m] = p;
             // Atlases only for the paint mesh the cache kept, which is the one strokes will use.
+            std::scoped_lock lock(gSurfaceMutex);
             for (auto& [udim, w, h, sf] : out->surfaces)
                 if (e.paint[material] == sf->mesh)
                     gSurfaces.try_emplace(std::make_tuple(sf->mesh.get(), udim, w, h), sf);
@@ -2557,11 +2796,24 @@ void beginLive(scene::Graph& g, scene::Node& set, const std::string& buffer, Str
 void liveDabs(NodeId set, const std::string& buffer, std::span<const Dab> dabs)
 {
     const Key key{set, buffer};
-    Layer* l = findLayer(key);
+    std::shared_ptr<Layer> l = peekLayer(key);
     if (!l || !l->live || dabs.empty())
         return;
-    paintDabs(key, *l, dabs);
-    notify(set);
+    installStopHook();
+    LiveQueue& q = liveQueue();
+    std::scoped_lock lock(q.mutex);
+    if (!q.thread.joinable())
+        q.thread = std::thread(workerLoop);
+    LiveQueue::Job& job = q.queued[key];
+    job.layer = std::move(l);
+    job.dabs.insert(job.dabs.end(), dabs.begin(), dabs.end());
+    q.cv.notify_all();
+}
+
+void settleLive()
+{
+    drain();
+    tellListeners();
 }
 
 void cancelLive(NodeId set, const std::string& buffer)
@@ -2576,7 +2828,7 @@ void cancelLive(NodeId set, const std::string& buffer)
 
 bool liveActive(NodeId set, const std::string& buffer)
 {
-    Layer* l = findLayer({set, buffer});
+    std::shared_ptr<Layer> l = peekLayer({set, buffer});
     return l && l->live;
 }
 
@@ -2825,6 +3077,7 @@ void recordGather(VulkanContext& vk, VkCommandBuffer cmd, const PageView& view, 
 std::map<int, std::array<int, 4>> takeChanges(NodeId set)
 {
     std::map<int, std::array<int, 4>> out;
+    std::scoped_lock lock(gChangedMutex);
     for (auto& [k, l] : gLayers)
     {
         if (k.set != set)
@@ -3119,7 +3372,7 @@ std::vector<uint8_t> viewImage(const GpuImageRef& img, const glm::vec4& uvRect, 
 
 GpuImageRef channelImage(NodeId set, const std::string& buffer, const std::string& channel, int udim)
 {
-    if (!findLayer({set, buffer}))
+    if (!peekLayer({set, buffer}))
         return nullptr;
     return externalImage(set, externalName(buffer, channel), udim);
 }
@@ -3135,6 +3388,7 @@ void removeChangeListener(int id) { gListeners.erase(id); }
 
 void shutdown()
 {
+    stopWorker();
     std::vector<Key> keys;
     for (auto& [k, l] : gLayers)
         keys.push_back(k);

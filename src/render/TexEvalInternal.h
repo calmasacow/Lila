@@ -256,6 +256,13 @@ struct Evaluator::State
     double rate = 4e6; // texel * cost units per ms
     VkDescriptorPool pool = VK_NULL_HANDLE;
     compute::Submitter sub;
+    /** The slice in flight (sub.busy()): its temporaries, predicted cost and counts, settled once the GPU is done. */
+    std::vector<compute::Buffer> sliceTemps;
+    double slicePredicted = 0.0;
+    Stats sliceDelta;
+
+    /** Waits up to timeoutNs for the slice in flight and settles it; false while it is still running. */
+    bool settle(VulkanContext& vk, uint64_t timeoutNs);
 
     void release(VulkanContext& vk)
     {
@@ -270,6 +277,7 @@ struct Evaluator::State
 
     void freeDevice(VulkanContext& vk)
     {
+        sub.waitLaunched(vk);
         for (compute::Buffer* b : {&arena, &uniforms, &uniformStaging, &headers, &scratch, &words, &frames, &loadRaw})
             compute::destroy(vk, *b);
         if (pool)
@@ -281,6 +289,9 @@ struct Evaluator::State
         compute::destroy(vk, pageHeaders);
         compute::destroy(vk, pageUniforms);
         sub.destroy(vk);
+        for (compute::Buffer& b : sliceTemps)
+            compute::destroy(vk, b);
+        sliceTemps.clear();
     }
 
     /** Marks every load, pass and store to be redone in full, from the first pass. */
