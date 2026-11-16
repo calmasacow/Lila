@@ -73,6 +73,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <set>
 
 namespace lila::ui
 {
@@ -116,7 +117,7 @@ constexpr ToolKind kTools[] = {
     {"gradient", "Gradient", "Drag from where it paints fully to where it fades out: linear, radial, reflected or angle.", "transition-right"},
     {"select", "Selection", "Draw a lasso, polygon or rectangle to mask the active layer: Shift adds, Ctrl subtracts.", "lasso"},
     {"pick", "Picker", "Click the mesh to take every channel's value there; Shift+click keeps it as a swatch.", "color-picker"},
-    {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it.", "bucket-droplet"},
+    {"fill", "Fill", "Click to fill what the Fill mode picks (the highlight shows it); drag a box to fill everything in it; hold Tab and drag to fill each one the cursor passes over.", "bucket-droplet"},
     {"project", "Projection", "Paint on the screen-space paint buffer, then Enter projects it into every visible texel.", "photo"},
 };
 
@@ -2169,6 +2170,7 @@ public:
         rp::prewarm();
         warmTargets();
         mAlive = std::make_shared<bool>(true);
+        watchTab();
         mControls.activate();
         mActiveListener = textureSets::addActiveLayerListener([this](const std::string& setName, const std::string& layer) {
             if (scene::Node* set = tex::findSet(scene::Graph::current(), setName))
@@ -2210,6 +2212,9 @@ public:
         if (mStroking)
             cancelStroke();
         mKeyWatch.reset();
+        mTabWatch.reset();
+        mTabDown = false;
+        endSweep();
         mStencilKey = false;
         mStencilDrag = StencilDrag::None;
         mControls.deactivate();
@@ -2277,6 +2282,15 @@ public:
             viewportTools::requestRedraw();
             return true;
         }
+        if (tool == "fill" && mTabDown)
+        {
+            // One undo step for the whole sweep.
+            UndoStack::get().openChunk("Fill Sweep");
+            mSweeping = true;
+            mSwept.clear();
+            sweepFill(*t);
+            return true;
+        }
         if (tool == "fill")
         {
             // The fill waits for the release: a drag instead boxes every region in it.
@@ -2326,6 +2340,15 @@ public:
             flush();
             return true;
         }
+        if (mSweeping && (e->buttons() & Qt::LeftButton))
+        {
+            mOver = pick(e->position(), view);
+            if (mOver && mOver->set != kNoNode)
+                sweepFill(*mOver);
+            updateFillHover();
+            viewportTools::requestRedraw();
+            return true;
+        }
         if (mFillPress && (e->buttons() & Qt::LeftButton))
         {
             mMarqueeTo = e->position();
@@ -2352,6 +2375,11 @@ public:
     {
         if (mControls.mouseRelease(e))
             return true;
+        if (mSweeping)
+        {
+            endSweep();
+            return true;
+        }
         if (mStencilDrag != StencilDrag::None)
         {
             stencilMove(e, view);
@@ -2996,6 +3024,8 @@ public:
             status.keys = {{"Ctrl", "snap 15 degrees"}};
         else if (st.stencil.active())
             status.keys.insert(status.keys.end(), {{"S+drag", "move stencil"}, {"S+Shift+drag", "rotate"}, {"S+Ctrl+drag", "scale"}});
+        if (st.tool == "fill" && mStencilDrag == StencilDrag::None)
+            status.keys.insert(status.keys.begin(), {{"click", "fill"}, {"drag", "box"}, {"Tab+drag", "fill each"}});
         drawToolStatus(p, view, status);
         if (st.tool == "fill")
             drawFill(p, view);
@@ -3441,6 +3471,56 @@ private:
         {
             log::warn("Texture paint: {}", e.what());
         }
+    }
+
+    /** Tab+drag: fills the region under the cursor (by the Fill mode) unless this sweep already filled it. */
+    void sweepFill(const Target& t)
+    {
+        if (!t.paint || t.hit.triangle < 0)
+            return;
+        const std::vector<uint32_t> region = fillRegion(*t.paint, uint32_t(t.hit.triangle), t.mesh);
+        if (region.empty())
+            return;
+        const std::string key = std::to_string(t.mesh) + "|" + std::to_string(*std::min_element(region.begin(), region.end()));
+        if (!mSwept.insert(key).second)
+            return;
+        fill(t);
+    }
+
+    void endSweep()
+    {
+        if (!mSweeping)
+            return;
+        mSweeping = false;
+        mSwept.clear();
+        UndoStack::get().closeChunk();
+    }
+
+    /** Tab held over the viewport, for sweep fills (watched app-wide: Tab is focus navigation otherwise). */
+    void watchTab()
+    {
+        struct Watch final : QObject
+        {
+            bool* down = nullptr;
+            bool eventFilter(QObject* obj, QEvent* ev) override
+            {
+                if (ev->type() != QEvent::KeyPress && ev->type() != QEvent::KeyRelease && ev->type() != QEvent::ShortcutOverride)
+                    return false;
+                auto* k = static_cast<QKeyEvent*>(ev);
+                QWidget* focus = QApplication::focusWidget();
+                if ((k->key() != Qt::Key_Tab && k->key() != Qt::Key_Backtab) || !focus || obj != focus || !focus->inherits("lila::ui::ViewportWidget"))
+                    return false;
+                if (ev->type() == QEvent::ShortcutOverride)
+                    ev->accept();
+                else if (!k->isAutoRepeat())
+                    *down = ev->type() == QEvent::KeyPress;
+                return true;
+            }
+        };
+        auto watch = std::make_unique<Watch>();
+        watch->down = &mTabDown;
+        qApp->installEventFilter(watch.get());
+        mTabWatch = std::move(watch);
     }
 
     void fill(const Target& t)
@@ -4499,7 +4579,9 @@ private:
     std::string mRevealPath;
     /** S held: drags place the stencil instead of painting. */
     bool mStencilKey = false;
-    std::unique_ptr<QObject> mKeyWatch;
+    std::unique_ptr<QObject> mKeyWatch, mTabWatch;
+    bool mTabDown = false, mSweeping = false;
+    std::set<std::string> mSwept;
     enum class StencilDrag
     {
         None,
