@@ -1308,6 +1308,17 @@ void registerMaterialUi()
                   },
                   .doc = "Create a material and assign it to the selected objects or faces.",
                   .python = "assignMaterial(createMaterial('M_Material'))"});
+    actions::add({.id = "material.editAssigned", .label = "Edit Material", .category = "Materials",
+                  .run =
+                      [] {
+                          if (MaterialEditor* e = showEditor())
+                              e->followSelection();
+                      },
+                  .enabled = actions::hasSelection,
+                  .doc = "Open the Material Editor on the selected object's material.",
+                  .python = "lila.ui.run_action(\"material.editAssigned\")",
+                  .icon = "color-swatch",
+                  .keywords = {"material attributes", "show material", "open material editor", "hypershade"}});
     actions::add({.id = "material.clearTextures", .label = "Clear Texture Maps", .category = "Materials",
                   .run =
                       [] {
