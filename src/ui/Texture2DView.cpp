@@ -19,6 +19,7 @@
 #include "ui/MaterialDraw.h"
 #include "ui/TexCompare.h"
 #include "ui/QuickMaskOverlay.h"
+#include "ui/TexLive.h"
 #include "ui/TexPreview.h"
 #include "ui/TexturePaintTool.h"
 #include "ui/Theme.h"
@@ -28,6 +29,7 @@
 #include "ui/ViewportTool.h"
 
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QButtonGroup>
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -40,6 +42,8 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <QWheelEvent>
+
+#include <glm/gtc/constants.hpp>
 
 #include <algorithm>
 #include <array>
@@ -67,6 +71,11 @@ struct Controller
     int sceneListener = 0;
     int paintListener = 0;
     bool queued = false;
+    /** When paint last changed the shown set: edits to it soon after are the paint's too, and wait for it to settle. */
+    QElapsedTimer painted;
+    /** The canvases of the open views: with none shown and no mesh preview, nothing renders until one shows. */
+    std::vector<QPointer<QWidget>> canvases;
+    bool skipped = false;
     /** Slot name -> bound set, rebuilt after scene edits. */
     std::map<std::string, std::string> bindings;
     bool bindingsDirty = true;
@@ -90,6 +99,25 @@ void requestSoon()
         ctl().queued = false;
         request();
     });
+}
+
+/** How long paint must pause before the preview renders it again. */
+constexpr int kPaintSettleMs = 1500;
+
+/** A request once paint has paused for kPaintSettleMs; each call restarts the wait. */
+void requestSettled()
+{
+    static QTimer* settle = nullptr;
+    if (!QCoreApplication::instance())
+        return;
+    if (!settle)
+    {
+        settle = new QTimer(QCoreApplication::instance());
+        settle->setSingleShot(true);
+        settle->setInterval(kPaintSettleMs);
+        QObject::connect(settle, &QTimer::timeout, [] { requestSoon(); });
+    }
+    settle->start();
 }
 
 void notify()
@@ -120,20 +148,14 @@ void installSceneListener()
     Controller& c = ctl();
     if (c.sceneListener)
         return;
-    // Paint shows once the strokes settle: each update reads the painted tiles back, too much for every dab.
+    // The views draw the live channel while painting; the preview (histogram, pixel readout) catches up once painting
+    // pauses, as each update reads every paint buffer back and evaluates the whole graph again.
     c.paintListener = render::paint::addChangeListener([](scene::NodeId id) {
-        static QTimer* settle = nullptr;
         const scene::Node* set = tex::findSet(scene::Graph::current(), ctl().source.set);
         if (!set || set->id() != id || !QCoreApplication::instance())
             return;
-        if (!settle)
-        {
-            settle = new QTimer(QCoreApplication::instance());
-            settle->setSingleShot(true);
-            settle->setInterval(250);
-            QObject::connect(settle, &QTimer::timeout, [] { requestSoon(); });
-        }
-        settle->start();
+        ctl().painted.start();
+        requestSettled();
     });
     c.sceneListener = scene::Graph::current().addListener([](scene::Change change, scene::NodeId id) {
         Controller& c = ctl();
@@ -146,7 +168,12 @@ void installSceneListener()
                 return;
             c.bindingsDirty = true;
             if (n->name() == c.source.set)
-                requestSoon();
+            {
+                if (c.painted.isValid() && c.painted.elapsed() < kPaintSettleMs)
+                    requestSettled();
+                else
+                    requestSoon();
+            }
             return;
         }
         c.bindingsDirty = true;
@@ -178,10 +205,26 @@ void updateMeshTexture()
     viewportTools::requestRedraw();
 }
 
+/** A view shows or the mesh preview is on: someone sees what a render would make. */
+bool wanted()
+{
+    Controller& c = ctl();
+    if (c.onMesh)
+        return true;
+    for (const QPointer<QWidget>& w : c.canvases)
+        if (w && w->isVisible())
+            return true;
+    return false;
+}
+
 void request()
 {
     LILA_ZONE();
     Controller& c = ctl();
+    // A hidden view's preview reads every paint buffer back and evaluates the graph again on each edit.
+    c.skipped = !wanted();
+    if (c.skipped)
+        return;
     if (c.source.set.empty() || !tex::findSet(scene::Graph::current(), c.source.set))
     {
         c.result = {};
@@ -253,7 +296,7 @@ QString describe(const texture2d::Source& s)
     return qs(s.set) + "  " + qs(s.node) + (s.socket.empty() ? QString() : "." + qs(s.socket));
 }
 
-/** The image area: zoom with the wheel, pan with any drag, double-click or F to fit. */
+/** The image area: zoom with the wheel, pan with any drag, Alt+left drag to rotate (Shift snaps), double-click or F to fit. */
 class Canvas final : public QWidget
 {
 public:
@@ -262,6 +305,18 @@ public:
         setMouseTracking(true);
         setFocusPolicy(Qt::ClickFocus);
         setMinimumSize(160, 160);
+        brush.onUpdate = [this] {
+            if (!mLive && !paintsHere())
+                return;
+            // Paint landing from the viewport refreshes this view at a lower rate: each refresh reads the channel back.
+            if (mStroking)
+                update();
+            else if (!mThrottle.isActive())
+                mThrottle.start();
+        };
+        mThrottle.setSingleShot(true);
+        mThrottle.setInterval(100);
+        connect(&mThrottle, &QTimer::timeout, this, [this] { update(); });
     }
 
     QImage image;
@@ -288,6 +343,19 @@ public:
     /** Texture Paint is the active tool and there is an image to paint over. */
     bool paintsHere() const { return !image.isNull() && brush.shown() && texturePaintActive(); }
 
+    /** The image shown is a set channel in full colour, so the live paint can stand in for it during a stroke. */
+    bool liveMatches = false;
+
+    /** A settled image arrived: once it is newer than the last stroke, it replaces the live paint. */
+    void settled()
+    {
+        if (mLive && !mStroking && mReleased.isValid() && mReleased.elapsed() > 300)
+        {
+            mLive = false;
+            update();
+        }
+    }
+
     double pxPerUv() const { return double(image.width()) * mScale; }
 
     UvTexturePaint::ToUv toUvFn() const
@@ -302,6 +370,7 @@ public:
     void fit()
     {
         mUserView = false;
+        mAngle = 0.0;
         if (image.isNull())
             return;
         const QSizeF size(image.size());
@@ -342,10 +411,47 @@ public:
 protected:
     QPointF origin() const { return QPointF(width() * 0.5, height() * 0.5) + mPan; }
 
+    QPointF centre() const { return QPointF(width() * 0.5, height() * 0.5); }
+
+    /** A widget point in the unrotated view, where origin(), mScale and mPan apply. */
+    QPointF unrotate(QPointF w) const
+    {
+        const double a = -mAngle * glm::pi<double>() / 180.0;
+        const QPointF d = w - centre();
+        return centre() + QPointF(d.x() * std::cos(a) - d.y() * std::sin(a), d.x() * std::sin(a) + d.y() * std::cos(a));
+    }
+
     QPointF toTexel(QPointF w) const
     {
         QPointF o = origin() - QPointF(image.width(), image.height()) * mScale * 0.5;
-        return (w - o) / mScale;
+        return (unrotate(w) - o) / mScale;
+    }
+
+    /** The cursor angle around the centre, in degrees. */
+    double angleAt(QPointF w) const
+    {
+        const QPointF d = w - centre();
+        return std::atan2(d.y(), d.x()) * 180.0 / glm::pi<double>();
+    }
+
+    /** The UVs show unless painting hides them, as Fill picking faces still needs them, or dims them. */
+    bool uvsShown() const { return showUvs && !uvLines.isEmpty() && (!paintsHere() || texturePaintShowsWire() || texturePaintDimWire()); }
+    bool uvsDimmed() const { return paintsHere() && !texturePaintShowsWire(); }
+
+    /** The live paint over the image while strokes land, in the unrotated view. */
+    void drawLive(QPainter& p, const QPointF& topLeft, const QSizeF& sz)
+    {
+        QTransform t;
+        t.translate(centre().x(), centre().y());
+        t.rotate(-mAngle);
+        t.translate(-centre().x(), -centre().y());
+        const QRect area = t.mapRect(QRectF(rect())).toAlignedRect();
+        const auto toScreen = [&](const glm::dvec2& uv) { return topLeft + QPointF(uv.x * sz.width(), (1.0 - uv.y) * sz.height()); };
+        const auto toUv = [&](const QPointF& w) {
+            const QPointF f = w - topLeft;
+            return glm::dvec2(f.x() / sz.width(), 1.0 - f.y() / sz.height());
+        };
+        brush.drawBackground(p, area, toScreen, toUv, false);
     }
 
     void paintEvent(QPaintEvent*) override
@@ -366,6 +472,9 @@ protected:
             p.drawText(rect(), Qt::AlignCenter, emptyText);
             return;
         }
+        p.translate(centre());
+        p.rotate(mAngle);
+        p.translate(-centre());
         p.setRenderHint(QPainter::SmoothPixmapTransform, mScale < 1.0);
         const QSizeF sz = QSizeF(image.size()) * mScale;
         const QPointF topLeft = origin() - QPointF(sz.width(), sz.height()) * 0.5;
@@ -373,6 +482,9 @@ protected:
         for (int ty = -reach; ty <= reach; ++ty)
             for (int tx = -reach; tx <= reach; ++tx)
                 p.drawImage(QRectF(topLeft + QPointF(tx * sz.width(), ty * sz.height()), sz), image);
+        // Only the set's evaluated channel stands in for the image; a set that isn't live would show its bare layer.
+        if ((mLive || paintsHere()) && liveMatches && texLive::channelImage(ctl().source.set, ctl().source.channel))
+            drawLive(p, topLeft, sz);
         texCompare::paint2D(p, QRectF(topLeft, sz));
         if (const QImage tint = quickMaskTint(); !tint.isNull())
         {
@@ -387,12 +499,13 @@ protected:
             p.setBrush(Qt::NoBrush);
             p.drawRect(QRectF(topLeft, sz));
         }
-        if (showUvs && !uvLines.isEmpty())
-            drawUvs(p, topLeft, sz);
+        if (uvsShown())
+            drawUvs(p, topLeft, sz, uvsDimmed());
+        p.resetTransform();
         if (histogram && !bins[0].empty())
             drawHistogram(p);
         if (paintsHere() && rect().contains(mMouse.toPoint()))
-            brush.drawCursor(p, mMouse);
+            brush.drawCursor(p, mMouse, toUvFn(), pxPerUv());
     }
 
     /** The quick mask's tint while it limits strokes on the set shown, kept per tint version. */
@@ -413,18 +526,18 @@ protected:
         return mTint;
     }
 
-    void drawUvs(QPainter& p, const QPointF& topLeft, const QSizeF& size)
+    void drawUvs(QPainter& p, const QPointF& topLeft, const QSizeF& size, bool dim = false)
     {
         p.save();
         p.translate(topLeft);
         p.scale(size.width(), size.height());
         p.setRenderHint(QPainter::Antialiasing, uvLines.size() < 20000);
         // Dark under light, so the edges read on any texture.
-        QPen under(gray(0, 110), 3.0);
+        QPen under(gray(0, dim ? 40 : 110), 3.0);
         under.setCosmetic(true);
         p.setPen(under);
         p.drawLines(uvLines);
-        QPen pen(gray(240, 200));
+        QPen pen(dim ? gray(200, 70) : gray(240, 200));
         pen.setCosmetic(true);
         p.setPen(pen);
         p.drawLines(uvLines);
@@ -463,7 +576,7 @@ protected:
     {
         const double f = std::pow(1.0015, e->angleDelta().y());
         const double next = std::clamp(mScale * f, 0.02, 64.0);
-        const QPointF c = e->position() - QPointF(width() * 0.5, height() * 0.5);
+        const QPointF c = unrotate(e->position()) - centre();
         mPan = c - (c - mPan) * (next / mScale);
         mScale = next;
         mUserView = true;
@@ -472,10 +585,18 @@ protected:
 
     void mousePressEvent(QMouseEvent* e) override
     {
-        // With Texture Paint on, the left button paints (Alt+left still pans); middle and right always pan.
-        if (paintsHere() && !(e->modifiers() & Qt::AltModifier) && brush.mousePress(e, toUvFn(), pxPerUv()))
+        if (e->button() == Qt::LeftButton && (e->modifiers() & Qt::AltModifier))
+        {
+            mRotating = true;
+            mRotateFrom = mAngle - angleAt(e->position());
+            mUserView = true;
+            return;
+        }
+        // With Texture Paint on, the left button paints; middle and right always pan.
+        if (paintsHere() && brush.mousePress(e, toUvFn(), pxPerUv()))
         {
             mStroking = true;
+            mLive = true;
             return;
         }
         mLast = e->position();
@@ -486,6 +607,15 @@ protected:
     void mouseMoveEvent(QMouseEvent* e) override
     {
         mMouse = e->position();
+        if (mRotating)
+        {
+            double a = mRotateFrom + angleAt(e->position());
+            if (e->modifiers() & Qt::ShiftModifier)
+                a = std::round(a / 15.0) * 15.0;
+            mAngle = std::remainder(a, 360.0);
+            update();
+            return;
+        }
         if (mStroking)
         {
             brush.mouseMove(e, toUvFn(), pxPerUv());
@@ -496,7 +626,7 @@ protected:
             update();
         if (mDragging && (e->buttons() & (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton)))
         {
-            mPan += e->position() - mLast;
+            mPan += unrotate(e->position()) - unrotate(mLast);
             mUserView = true;
             mLast = e->position();
             update();
@@ -518,10 +648,16 @@ protected:
 
     void mouseReleaseEvent(QMouseEvent* e) override
     {
+        if (mRotating)
+        {
+            mRotating = false;
+            return;
+        }
         if (mStroking)
         {
             brush.mouseRelease(e, toUvFn(), pxPerUv());
             mStroking = false;
+            mReleased.start();
             return;
         }
         mDragging = false;
@@ -554,6 +690,8 @@ protected:
     {
         if (!mUserView)
             fit();
+        if (ctl().skipped)
+            requestSoon();
     }
 
 private:
@@ -565,6 +703,14 @@ private:
     bool mUserView = false;
     bool mStroking = false;
     QPointF mMouse{-1e6, -1e6};
+    /** View rotation in degrees, clockwise; the drag's offset from the cursor angle while rotating. */
+    double mAngle = 0.0;
+    double mRotateFrom = 0.0;
+    bool mRotating = false;
+    /** The live paint shows over the image from a stroke's press until a settled image after its release. */
+    bool mLive = false;
+    QElapsedTimer mReleased;
+    QTimer mThrottle;
 };
 } // namespace
 
@@ -766,6 +912,7 @@ struct Texture2DView::Impl
         const texture2d::Source& s = ctl().source;
         const std::string name = !s.channel.empty() ? s.channel : s.socket.empty() ? s.node : s.socket;
         canvas->setImage(texPreview::toQImage(*data, type, texPreview::isColor(type, name), soloChannel - 1));
+        canvas->liveMatches = !s.channel.empty() && soloChannel == 0;
         // A tileable set shows tiled the first time it comes up, so strokes across its edges are seen wrapping.
         if (s.set != tiledFor)
         {
@@ -811,6 +958,8 @@ struct Texture2DView::Impl
             data = c.result.image;
             type = c.result.type;
             redisplay();
+            if (!c.result.stale)
+                canvas->settled();
         }
         QString text = describe(c.source);
         if (data)
@@ -900,6 +1049,7 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
     lay->addWidget(bar);
 
     d->canvas = new Canvas(this);
+    ctl().canvases.push_back(d->canvas);
     d->canvas->brush.setPainting(true);
     lay->addWidget(d->canvas, 1);
     auto* foot = new QWidget(this);
@@ -931,6 +1081,8 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
         if (on)
         {
             ctl().onMesh = true;
+            if (ctl().skipped)
+                requestSoon();
             viewportTools::requestRedraw();
         }
         else
@@ -977,6 +1129,7 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
 Texture2DView::~Texture2DView()
 {
     ctl().listeners.erase(d->listener);
+    std::erase_if(ctl().canvases, [this](const QPointer<QWidget>& w) { return !w || w == d->canvas; });
     scene::Graph::current().removeListener(d->sceneListener);
     viewportTools::removeListener(d->redrawListener);
 }

@@ -12,9 +12,12 @@
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
+#include "scene/Transform.h"
+#include "ui/CameraBookmarks.h"
 #include "ui/TexLive.h"
 #include "ui/TexturePaintTool.h"
 #include "ui/TextureSetPanel.h"
+#include "ui/ViewportWidget.h"
 
 #include <QMouseEvent>
 #include <QPainter>
@@ -23,6 +26,8 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <optional>
+#include <tuple>
 
 namespace lila::ui
 {
@@ -66,6 +71,67 @@ double areaUv(const tp::PaintMesh& m, uint32_t t)
     const glm::dvec2 a(u[1] - u[0]), b(u[2] - u[0]);
     return 0.5 * std::abs(a.x * b.y - a.y * b.x);
 }
+
+/** Object units per uv on a painted mesh: at one triangle, and over the whole mesh for uvs off it. */
+struct UvScale
+{
+    const tp::PaintMesh* mesh = nullptr;
+    glm::dvec3 centre{0.0};
+    double average = 1.0;
+
+    void update(const tp::PaintMesh& m)
+    {
+        if (mesh == &m)
+            return;
+        mesh = &m;
+        glm::dvec3 lo(1e300), hi(-1e300);
+        double a3 = 0.0, auv = 0.0;
+        for (uint32_t t = 0; t < m.triangleCount(); ++t)
+        {
+            if (!m.paintable[t])
+                continue;
+            a3 += area3(m, t);
+            auv += areaUv(m, t);
+            for (size_t k = 0; k < 3; ++k)
+            {
+                lo = glm::min(lo, glm::dvec3(m.positions[size_t(t) * 3 + k]));
+                hi = glm::max(hi, glm::dvec3(m.positions[size_t(t) * 3 + k]));
+            }
+        }
+        centre = lo.x <= hi.x ? (lo + hi) * 0.5 : glm::dvec3(0.0);
+        average = auv > 1e-18 ? std::sqrt(a3 / auv) : 1.0;
+    }
+
+    double at(uint32_t tri) const { return std::sqrt(area3(*mesh, tri) / std::max(areaUv(*mesh, tri), 1e-18)); }
+
+    double at(const glm::vec2& uv) const
+    {
+        uint32_t tri = 0;
+        float u = 0.0f, v = 0.0f;
+        return mesh->atUv(uv, tri, u, v) ? at(tri) : average;
+    }
+};
+
+/**
+ * The brush radius in the mesh's object space, the size the viewport paints: a screen radius goes through the active
+ * 3D view's scale at the mesh. Nullopt without a 3D view.
+ */
+std::optional<double> objectRadius(const brush::BrushSettings& b, const scene::Node& meshNode, const glm::dvec3& centre)
+{
+    const glm::dmat4 world = meshNode.as<glm::dmat4>(scene::Transform::kWorldMatrix);
+    const double scale = std::max(1e-12, glm::length(glm::dvec3(world[0])));
+    if (b.radiusUnit == brush::RadiusUnit::World)
+        return b.worldRadius / scale;
+    ViewportWidget* view = cameraBookmarks::activeView();
+    if (!view)
+    {
+        static bool told = false;
+        if (!std::exchange(told, true))
+            log::info("2D texture paint: no 3D view to size the brush from, so it keeps its screen size");
+        return std::nullopt;
+    }
+    return b.radius * view->viewInfo().unitsPerPixel(glm::dvec3(world * glm::dvec4(centre, 1.0))) / scale;
+}
 } // namespace
 
 struct UvTexturePaint::State
@@ -101,6 +167,32 @@ struct UvTexturePaint::State
     tp::PaintSymmetry sym;
     tp::Stroke record;
     QPointF cursor;
+    /** The stroke's radius in object space; nullopt paints at the screen radius. */
+    std::optional<double> radius;
+
+    UvScale scale;
+    /** The mesh the set paints, kept for the hover cursor; empty finds it again. */
+    std::string hoverPath;
+
+    /** The painted mesh node and its paint mesh, for the cursor and the stroke; nulls without one. */
+    std::pair<scene::Node*, std::shared_ptr<const tp::PaintMesh>> target()
+    {
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* s = tex::findSet(g, set);
+        if (!s)
+            return {};
+        scene::Node* n = hoverPath.empty() ? nullptr : g.find(hoverPath);
+        if (!n)
+        {
+            hoverPath = meshOf(g, *s);
+            n = hoverPath.empty() ? nullptr : g.find(hoverPath);
+        }
+        std::shared_ptr<const tp::PaintMesh> pm = n ? rp::paintMesh(g, hoverPath, rp::setMaterial(*s)) : nullptr;
+        if (!pm)
+            return {};
+        scale.update(*pm);
+        return {n, pm};
+    }
 };
 
 UvTexturePaint::UvTexturePaint() : m(std::make_unique<State>())
@@ -141,6 +233,7 @@ void UvTexturePaint::setChannel(const std::string& set, const std::string& chann
     m->set = set;
     m->channel = channel;
     m->tiles.clear();
+    m->hoverPath.clear();
     if (shown())
         m->poll.start();
     else
@@ -219,12 +312,15 @@ void UvTexturePaint::drawBackground(QPainter& p, const QRect& widget, const ToSc
         }
 }
 
-void UvTexturePaint::drawCursor(QPainter& p, QPointF at) const
+void UvTexturePaint::drawCursor(QPainter& p, QPointF at, const ToUv& toUv, double pxPerUv) const
 {
     if (!m->painting || !shown())
         return;
-    const json s = texturePaintSettings();
-    const double r = s["brush"].value("radius", 40.0);
+    const brush::BrushSettings b = brush::BrushSettings::fromJson(texturePaintSettings()["brush"]);
+    double r = b.radius;
+    if (auto [node, mesh] = m->target(); node)
+        if (std::optional<double> radius = objectRadius(b, *node, m->scale.centre))
+            r = *radius / m->scale.at(glm::vec2(toUv(at))) * pxPerUv;
     p.setPen(QPen(QColor(230, 230, 230), 1.0));
     p.setBrush(Qt::NoBrush);
     p.drawEllipse(at, r, r);
@@ -263,8 +359,10 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
         log::warn("UV editor: {}", ex.what());
         return true;
     }
-    m->meshPath = meshOf(g, *set);
-    m->mesh = m->meshPath.empty() ? nullptr : rp::paintMesh(g, m->meshPath, rp::setMaterial(*set));
+    m->hoverPath.clear();
+    scene::Node* meshNode = nullptr;
+    std::tie(meshNode, m->mesh) = m->target();
+    m->meshPath = m->mesh ? m->hoverPath : std::string();
     if (!m->mesh)
     {
         log::warn("UV editor: no mesh uses {}'s material", m->set);
@@ -315,9 +413,11 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
     header->occlusion = false;
     {
         // Mirrored and radial copies land on the surface (through the mesh's point pairs), wherever their uvs are.
-        const scene::Node* meshNode = g.find(m->meshPath);
         scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
-        m->sym = tp::brushSymmetry(m->brush, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+        // Mirrored whenever the mesh has symmetry, as viewport strokes are.
+        brush::BrushSettings b = m->brush;
+        b.mirror = scene::symmetrySpec(*meshNode).has_value();
+        m->sym = tp::brushSymmetry(b, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
         header->symmetry = m->sym.toJson();
     }
     header->seed = m->brush.seed;
@@ -333,7 +433,9 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
         return true;
     }
     m->stroking = true;
-    m->sampler.begin(m->brush, {{e->position().x(), e->position().y()}, 1.0}, m->brush.radius);
+    m->radius = objectRadius(m->brush, *meshNode, m->scale.centre);
+    const double screenRadius = m->radius ? *m->radius / m->scale.at(glm::vec2(toUv(e->position()))) * pxPerUv : m->brush.radius;
+    m->sampler.begin(m->brush, {{e->position().x(), e->position().y()}, 1.0}, screenRadius);
     mouseMove(e, toUv, pxPerUv);
     return true;
 }
@@ -354,17 +456,27 @@ bool UvTexturePaint::mouseMove(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
     for (const brush::StrokeSample& s : m->sampler.take())
     {
         const glm::vec2 uv(toUv(QPointF(s.position.x, s.position.y)));
-        const double radiusUv = m->brush.radius * m->brush.pressureSize.map(s.pressure) * s.size / std::max(pxPerUv, 1e-9);
         uint32_t tri = 0;
         float u = 0.0f, v = 0.0f;
-        if (!m->mesh->atUv(uv, tri, u, v, float(radiusUv)))
-            continue;
-        const double ratio = std::sqrt(area3(*m->mesh, tri) / std::max(areaUv(*m->mesh, tri), 1e-18));
         tp::Dab d;
+        if (m->radius)
+        {
+            // As the viewport sizes dabs: a light touch still leaves 5%.
+            const double radius = *m->radius * std::max(0.05, m->brush.pressureSize.map(s.pressure)) * s.size;
+            if (!m->mesh->atUv(uv, tri, u, v, float(radius / m->scale.average)))
+                continue;
+            d.radius = float(std::max(radius, 1e-6));
+        }
+        else
+        {
+            const double radiusUv = m->brush.radius * m->brush.pressureSize.map(s.pressure) * s.size / std::max(pxPerUv, 1e-9);
+            if (!m->mesh->atUv(uv, tri, u, v, float(radiusUv)))
+                continue;
+            d.radius = float(std::max(radiusUv * m->scale.at(tri), 1e-6));
+        }
         d.triangle = tri;
         d.u = u;
         d.v = v;
-        d.radius = float(std::max(radiusUv * ratio, 1e-6));
         d.pressure = float(s.pressure);
         d.opacity = float(std::clamp(m->brush.flow * m->brush.pressureOpacity.map(s.pressure) * s.opacity, 0.0, 1.0));
         for (const tp::Dab& c : m->sym.copies(*m->mesh, d))
