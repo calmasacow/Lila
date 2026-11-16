@@ -2,6 +2,8 @@
 # HEAD must be committed and pushed; this never pushes. -DryRun stops before publishing.
 param(
     [string]$Notes = "",
+    # Markdown notes for the GitHub release page; -Notes still goes into latest.json for the updater.
+    [string]$NotesFile = "",
     [string]$BuildDir = "build",
     [switch]$DryRun,
     [switch]$SkipBuild,
@@ -32,6 +34,7 @@ if (-not $DryRun) {
     git fetch --quiet origin
     if (-not (git branch -r --contains $head)) { throw "HEAD $head isn't on origin yet. Push it, then run this again." }
     if (git ls-remote --tags origin $tag) { throw "$tag already exists. Bump the version in CMakeLists.txt first." }
+    & "$repo\scripts\release\symbols.ps1" -Check
 }
 
 if (-not $SkipBuild) {
@@ -52,12 +55,14 @@ if ($DryRun) {
     return
 }
 
+& "$repo\scripts\release\symbols.ps1" -Config Release -BuildDir $BuildDir
+
 $gh = Find-Gh
-$notesArgs = if ($Notes) { @("--notes", $Notes) } else { @("--generate-notes") }
+$notesArgs = if ($NotesFile) { @("--notes-file", $NotesFile) } elseif ($Notes) { @("--notes", $Notes) } else { @("--generate-notes") }
 & $gh release create $tag $exe $manifest --target $head --title "Lila $version" @notesArgs
 if ($LASTEXITCODE -ne 0) { throw "gh release create failed. Run 'gh auth login' if you haven't." }
 
 if ($Steam) {
-    & "$repo\scripts\steam\upload.ps1" -Config Release -SkipBuild
+    & "$repo\scripts\steam\upload.ps1" -Config Release -BuildDir $BuildDir -SkipBuild -SkipSymbols
 }
 "Released $tag"
