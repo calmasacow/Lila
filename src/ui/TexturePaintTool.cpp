@@ -40,6 +40,8 @@
 #include "ui/ViewInfo.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportTool.h"
+#include "ui/HotkeyBindings.h"
+#include "ui/MaterialDraw.h"
 #include "ui/ViewportToast.h"
 #include "ui/FileDialog.h"
 
@@ -2248,6 +2250,16 @@ json viewJson(const ViewInfo& v)
     return {{"viewProj", m}, {"eye", {v.eye.x, v.eye.y, v.eye.z}}, {"lookAt", {at.x, at.y, at.z}}, {"width", v.width}, {"height", v.height}};
 }
 
+/** The toast for a stroke while textures are off, naming the key that turns them on when one does. */
+QString texturesOffText()
+{
+    const hotkeys::Snapshot keys = hotkeys::snapshot();
+    for (const hotkeys::Binding& b : keys.bindings)
+        if ((b.context == "viewport" || b.context == "global") && hotkeys::targets(b, "viewport.textured"))
+            return "Textures off: press " + hotkeys::displayText(b.chord) + " to see paint";
+    return "Textures off: Display > Textured to see paint";
+}
+
 /** The stroke view of a mesh (its object space). */
 tp::StrokeView strokeView(const ViewInfo& view, const glm::dmat4& world)
 {
@@ -3794,6 +3806,8 @@ private:
         mSegments.clear();
         mTileable = tex::readSettings(*set).tileable;
         mStrokeTemplate = std::make_shared<tp::Stroke>(mRecord);
+        if (!materialsShown())
+            viewportToast::showActive(texturesOffText(), 4000, viewportToast::Kind::Warning);
         try
         {
             rp::beginLive(g, *set, mLayer, header);
