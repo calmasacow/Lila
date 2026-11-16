@@ -79,7 +79,7 @@ struct GpuItem
     VkDeviceAddress dst[kMaxChannels]{};
     VkDeviceAddress src[kMaxChannels]{};
 };
-static_assert(sizeof(GpuItem) == 160);
+static_assert(sizeof(GpuItem) == 32 + 16 * kMaxChannels);
 
 /** A UDIM tile as the kernels see it: size and per channel a table of its pages before the stroke. */
 struct GpuTile
@@ -87,7 +87,7 @@ struct GpuTile
     uint32_t width = 0, height = 0, pagesX = 0, pagesY = 0;
     VkDeviceAddress tables[kMaxChannels]{};
 };
-static_assert(sizeof(GpuTile) == 80);
+static_assert(sizeof(GpuTile) == 16 + 8 * kMaxChannels);
 
 struct GpuParams
 {
@@ -121,16 +121,24 @@ struct GpuParams
     float gradA[2]{}, gradB[2]{};
     VkDeviceAddress ramp = 0;
     glm::mat4 gradToClip{1.0f};
+    /**
+     * Varied tiling of the source images (hex tiling): on, the channel whose value steers the blend (kNone: the cell
+     * weights alone), how far each cell turns (1 is up to a half turn), the blend's contrast and a per-cell brightness spread.
+     */
+    uint32_t hexOn = 0, hexWeight = kNone;
+    float hexRotate = 0.0f, hexContrast = 0.5f, hexJitter = 0.0f;
+    uint32_t hexColor = kNone;
 };
-static_assert(offsetof(GpuParams, items) == 288);
-static_assert(offsetof(GpuParams, valueImages) == 376);
-static_assert(offsetof(GpuParams, depthW) == 440);
-static_assert(offsetof(GpuParams, strength) == 520);
-static_assert(offsetof(GpuParams, stencilW) == 560);
-static_assert(offsetof(GpuParams, stencil) == 600);
-static_assert(offsetof(GpuParams, locked) == 672);
-static_assert(offsetof(GpuParams, ramp) == 728);
-static_assert(sizeof(GpuParams) == 800);
+static_assert(offsetof(GpuParams, items) == 160 + 16 * kMaxChannels);
+static_assert(offsetof(GpuParams, valueImages) == 248 + 16 * kMaxChannels);
+static_assert(offsetof(GpuParams, depthW) == 248 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, strength) == 328 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, stencilW) == 368 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, stencil) == 408 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, locked) == 480 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, ramp) == 536 + 24 * kMaxChannels);
+static_assert(offsetof(GpuParams, hexOn) == 608 + 24 * kMaxChannels);
+static_assert(sizeof(GpuParams) == 632 + 24 * kMaxChannels);
 constexpr int kRamp = 256;
 
 struct DabPush
@@ -525,6 +533,8 @@ struct Live
     /** Channel values from a texture graph, and its tiles per uv unit. */
     std::shared_ptr<const ValueImages> sourceImages;
     float valueScale = 1.0f;
+    /** The source's varied tiling (payload source "tiling"); null for a plain repeat. */
+    json tiling;
     /** The above on the device, made on the first batch. */
     bool uploaded = false;
     std::vector<compute::Buffer> uploads;
@@ -902,7 +912,12 @@ std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vecto
             channels.emplace_back(c, tex::PortType::Color);
     }
     const int res = std::clamp(src.value("resolution", 512), 16, 4096);
-    std::string key = src.dump() + "|" + std::to_string(res);
+    std::vector<tex::OutputRequest> requests;
+    std::optional<tex::Graph> g;
+    if (!channels.empty())
+        g = sourceGraph(src, channels, requests);
+    // Keyed on the graph itself, so a scene set or library file edited since the last stroke evaluates again.
+    std::string key = (g ? g->toJson().dump() : std::string()) + "|" + std::to_string(res);
     for (const auto& [c, t] : channels)
         key += "|" + c;
     {
@@ -912,14 +927,12 @@ std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vecto
     }
     auto out = std::make_shared<ValueImages>();
     out->width = out->height = res;
-    if (!channels.empty())
+    if (g)
     {
-        std::vector<tex::OutputRequest> requests;
-        const tex::Graph g = sourceGraph(src, channels, requests);
         tex::PlanRequest req;
         req.width = req.height = res;
         req.outputs = requests;
-        const tex::Plan plan = tex::buildPlan(g, req);
+        const tex::Plan plan = tex::buildPlan(*g, req);
         if (!plan.error.empty())
             throw std::runtime_error("brush source: " + plan.error);
         tex::EvalResult r = tex::evaluate(plan, {}, "");
@@ -928,6 +941,9 @@ std::shared_ptr<const ValueImages> valueImages(const json& src, const std::vecto
                 out->channels[name] = std::move(img.rgba);
     }
     std::scoped_lock lock(gGraphCacheMutex);
+    // Every graph edit makes a new key; drop the old images rather than keep each version.
+    if (gValueCache.size() >= 16)
+        gValueCache.clear();
     gValueCache[key] = out;
     return out;
 }
@@ -1117,6 +1133,7 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
     {
         live->sourceImages = valueImages(p.source, live->channels);
         live->valueScale = float(p.source.value("scale", 1.0));
+        live->tiling = p.source.value("tiling", json());
     }
     if (!p.gradient.is_null() && live->mode == kModeFill)
         live->ramp = gradientRamp(p, live->channels, live->values);
@@ -1423,6 +1440,21 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
     {
         params.valueW = uint32_t(live.sourceImages->width);
         params.valueH = uint32_t(live.sourceImages->height);
+        if (live.tiling.is_object())
+        {
+            params.hexOn = 1;
+            params.hexRotate = std::clamp(live.tiling.value("rotate", 1.0f), 0.0f, 1.0f);
+            params.hexContrast = std::clamp(live.tiling.value("contrast", 0.5f), 0.0f, 0.99f);
+            params.hexJitter = std::clamp(live.tiling.value("jitter", 0.0f), 0.0f, 1.0f);
+            // Height steers the blend where the source has one (the higher sample wins the seam), else base colour's brightness.
+            for (const char* steer : {"height", "baseColor"})
+                for (size_t c = 0; c < live.channels.size() && params.hexWeight == kNone; ++c)
+                    if (live.channels[c] == steer && live.valueAddr[c])
+                        params.hexWeight = uint32_t(c);
+            for (size_t c = 0; c < live.channels.size(); ++c)
+                if (live.channels[c] == "baseColor")
+                    params.hexColor = uint32_t(c);
+        }
     }
     if (live.rampAddr)
     {

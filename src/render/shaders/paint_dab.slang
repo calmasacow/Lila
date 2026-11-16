@@ -164,6 +164,12 @@ struct Params
     float2 gradB;
     float4* ramp;
     float4x4 gradToClip;
+    uint hexOn;
+    uint hexWeight;
+    float hexRotate;
+    float hexContrast;
+    float hexJitter;
+    uint hexColor;
 };
 
 static const uint kRamp = 256;
@@ -408,6 +414,116 @@ float3 decodeNormal(float3 e)
 {
     float3 n = e * 2.0 - 1.0;
     return dot(n, n) > 1e-12 ? normalize(n) : float3(0, 0, 1);
+}
+
+/**
+ * Varied tiling of a source image: hex tiling after Mikkelsen, "Practical Real-Time Hex-Tiling" (JCGT 2022). The plane
+ * is cut into hexagons, each takes the image at a random offset and turn, and the three around a point blend with
+ * weights sharpened toward the one whose steering value (height, or brightness) is highest, so seams follow the content.
+ */
+struct HexTiling
+{
+    float2 uv[3];
+    float angle[3];
+    float gain[3];
+    float3 w;
+};
+
+float2 hexHash(int2 v)
+{
+    float2 r = float2(dot(float2(v), float2(127.1, 311.7)), dot(float2(v), float2(269.5, 183.3)));
+    return frac(sin(r) * 43758.5453);
+}
+
+/** The three hexagon centres around st (one tile per uv unit) and st's barycentric weights between them. */
+void hexGrid(float2 st, out float3 w, out int2 v1, out int2 v2, out int2 v3)
+{
+    st *= 2.0 * sqrt(3.0);
+    float2 skewed = float2(st.x - 0.57735027 * st.y, 1.15470054 * st.y);
+    int2 base = int2(floor(skewed));
+    float3 t = float3(frac(skewed), 0.0);
+    t.z = 1.0 - t.x - t.y;
+    float s = step(0.0, -t.z);
+    float s2 = 2.0 * s - 1.0;
+    w = float3(-t.z * s2, s - t.y * s2, s - t.x * s2);
+    v1 = base + int2(int(s), int(s));
+    v2 = base + int2(int(s), int(1.0 - s));
+    v3 = base + int2(int(1.0 - s), int(s));
+}
+
+float2 hexCentre(int2 v)
+{
+    return float2(float(v.x) + 0.5 * float(v.y), float(v.y) / 1.15470054) / (2.0 * sqrt(3.0));
+}
+
+/** Where each of the three cells samples st (uv times the source's scale), and their turns and brightness gains. */
+HexTiling hexTiling(Params* p, float2 st)
+{
+    HexTiling h;
+    int2 v[3];
+    hexGrid(st, h.w, v[0], v[1], v[2]);
+    for (int i = 0; i < 3; ++i)
+    {
+        float2 r = hexHash(v[i]);
+        float2 r2 = hexHash(v[i] + int2(57, 113));
+        h.angle[i] = (r2.x * 2.0 - 1.0) * 3.14159265 * p.hexRotate;
+        float cs = cos(h.angle[i]), sn = sin(h.angle[i]);
+        float2 c = hexCentre(v[i]);
+        float2 d = st - c;
+        h.uv[i] = c + float2(cs * d.x - sn * d.y, sn * d.x + cs * d.y) + r;
+        h.gain[i] = 1.0 + (r2.y * 2.0 - 1.0) * p.hexJitter * 0.5;
+    }
+    return h;
+}
+
+float4 hexSample(Params* p, float4* img, float2 uv)
+{
+    return imageAt(img, p.valueW, p.valueH, float2(uv.x, 1.0 - uv.y), true);
+}
+
+/** The blend weights: the cells' barycentrics raised steeply, scaled by the steering value, then the contrast gain. */
+float3 hexWeights(Params* p, HexTiling h)
+{
+    float3 steer = float3(1.0);
+    if (p.hexWeight != 0xFFFFFFFFu && p.valueImages[p.hexWeight] != nullptr)
+    {
+        float4* img = p.valueImages[p.hexWeight];
+        float3 lum = float3(0.299, 0.587, 0.114);
+        for (int i = 0; i < 3; ++i)
+            steer[i] = dot(hexSample(p, img, h.uv[i]).rgb, lum);
+        steer = lerp(float3(1.0), steer, 0.6);
+    }
+    float3 w = steer * pow(max(h.w, float3(0.0)), float3(7.0));
+    w /= max(w.x + w.y + w.z, 1e-6);
+    if (abs(p.hexContrast - 0.5) > 1e-3)
+    {
+        float k = log(1.0 - p.hexContrast) / log(0.5);
+        float3 sel = 2.0 * step(float3(0.5), w);
+        float3 m = 2.0 * (1.0 - sel);
+        w = 0.5 * sel + 0.25 * m * pow(max(float3(0.0), sel + w * m), float3(k));
+        w /= max(w.x + w.y + w.z, 1e-6);
+    }
+    return w;
+}
+
+/** A channel's value through the hex tiling; normals turn with their cells, colour takes each cell's brightness gain. */
+float3 hexValue(Params* p, HexTiling h, float3 w, uint c, bool isNormal)
+{
+    float3 sum = float3(0.0);
+    for (int i = 0; i < 3; ++i)
+    {
+        float3 s = hexSample(p, p.valueImages[c], h.uv[i]).xyz;
+        if (isNormal)
+        {
+            float3 n = decodeNormal(s);
+            float cs = cos(h.angle[i]), sn = sin(h.angle[i]);
+            s = float3(cs * n.x + sn * n.y, -sn * n.x + cs * n.y, n.z);
+        }
+        else if (c == p.hexColor)
+            s *= h.gain[i];
+        sum += s * w[i];
+    }
+    return isNormal ? encodeNormal(normalize(sum)) : sum;
 }
 
 float3 encodeNormal(float3 n)
@@ -668,6 +784,14 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
         stencilRgb = st.rgb;
     }
     float2 here = float2(xy) + 0.5;
+    bool hex = p.hexOn != 0 && (p.flags & kFlagValueImages) != 0;
+    HexTiling hexCells;
+    float3 hexW = float3(0.0);
+    if (hex)
+    {
+        hexCells = hexTiling(p, uv * p.valueScale);
+        hexW = hexWeights(p, hexCells);
+    }
     for (uint c = 0; c < p.channels; ++c)
     {
         uint2* dst = item.dst[c];
@@ -734,6 +858,8 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
                 v = value;
             else if (p.mode == kModeProject && c == p.colorChannel)
                 v = projected;
+            else if (hex && p.valueImages[c] != nullptr)
+                v = hexValue(p, hexCells, hexW, c, isNormal);
             else if ((p.flags & kFlagValueImages) != 0 && p.valueImages[c] != nullptr)
                 v = imageAt(p.valueImages[c], p.valueW, p.valueH, float2(uv.x * p.valueScale, 1.0 - uv.y * p.valueScale), true).xyz;
             r = blendTexel(p, o, v, tc, mask);

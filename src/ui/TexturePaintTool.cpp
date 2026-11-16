@@ -72,6 +72,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <functional>
 
 namespace lila::ui
 {
@@ -169,6 +170,12 @@ struct TexturePaintSettings
     std::string sourceImage;
     /** Material or texture tiles per uv unit. */
     float materialScale = 1.0f;
+    /**
+     * Varied tiling of the material or texture: hex cells each take it at a random offset and turn, blended so the repeat
+     * does not show. Turn is how far a cell may turn (1: a half turn), blend the seams' contrast, brightness a per-cell spread.
+     */
+    bool varied = false;
+    float variedTurn = 0.5f, variedBlend = 0.5f, variedBrightness = 0.0f;
     /** The preset last applied, for the brush row and the library; empty once none was. */
     std::string presetId;
     json tip;
@@ -287,6 +294,8 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
         p.source = {{"library", s.material}, {"resolution", 512}, {"scale", s.materialScale}};
     else if (sourced && s.source == "texture" && !s.sourceImage.empty())
         p.source = {{"node", "layerImage"}, {"values", {{"file", s.sourceImage}}}, {"resolution", 1024}, {"scale", s.materialScale}};
+    if (s.varied && p.source.is_object())
+        p.source["tiling"] = {{"rotate", s.variedTurn}, {"contrast", s.variedBlend}, {"jitter", s.variedBrightness}};
     if (!s.tip.is_null())
         p.tip = s.tip;
     if (!s.quickMask)
@@ -383,6 +392,13 @@ void applyPreset(TexturePaintSettings& s, const tex::brushes::Preset& p)
     s.material = pay.contains("source") ? pay["source"].value("library", std::string()) : std::string();
     s.materialScale = pay.contains("source") ? pay["source"].value("scale", 1.0f) : 1.0f;
     s.source = s.material.empty() ? "values" : "material";
+    {
+        const json tiling = pay.contains("source") ? pay["source"].value("tiling", json()) : json();
+        s.varied = tiling.is_object();
+        s.variedTurn = s.varied ? tiling.value("rotate", 0.5f) : 0.5f;
+        s.variedBlend = s.varied ? tiling.value("contrast", 0.5f) : 0.5f;
+        s.variedBrightness = s.varied ? tiling.value("jitter", 0.0f) : 0.0f;
+    }
     s.presetId = p.id;
     s.tip = pay.contains("tip") ? pay["tip"] : json();
     s.limits = pay.contains("limits") && pay["limits"].is_object() ? pay["limits"] : json::object();
@@ -693,6 +709,20 @@ private:
     json mStrokes = json::array();
 };
 
+/** A combo that runs a callback before its list opens, so a list drawn from the scene is current when read. */
+class FreshCombo final : public QComboBox
+{
+public:
+    using QComboBox::QComboBox;
+    std::function<void()> beforePopup;
+    void showPopup() override
+    {
+        if (beforePopup)
+            beforePopup();
+        QComboBox::showPopup();
+    }
+};
+
 class TexturePaintPanel final : public QWidget
 {
 public:
@@ -855,12 +885,34 @@ public:
                 });
             }
         }
-        mMaterial = new QComboBox(this);
-        mMaterial->setToolTip("The library material the stroke paints");
-        for (const tex::library::Entry& e : tex::library::all())
-            if (e.tier != "scene")
-                mMaterial->addItem(QString::fromStdString(e.meta.name), QString::fromStdString(e.id));
-        mMaterialRow = addRow(form, "Material", mMaterial);
+        auto* materials = new FreshCombo(this);
+        materials->beforePopup = [this] { refreshMaterials(); };
+        mMaterial = materials;
+        mMaterial->setObjectName("brushMaterial");
+        mMaterial->setToolTip("The material the stroke paints: one from the library, or a texture set of this scene (Scene)");
+        mMaterial->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        mMaterial->setMinimumContentsLength(8);
+        mMaterial->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        refreshMaterials();
+        auto* editMaterial = new QToolButton(this);
+        editMaterial->setObjectName("editBrushMaterial");
+        editMaterial->setIcon(icon("node-editor"));
+        editMaterial->setAutoRaise(true);
+        editMaterial->setToolTip("Open the material's nodes: a scene texture set opens in the Texture Graph, a library material is "
+                                 "copied into the scene first");
+        auto* newMaterial = new QToolButton(this);
+        newMaterial->setObjectName("newBrushMaterial");
+        newMaterial->setIcon(icon("plus"));
+        newMaterial->setAutoRaise(true);
+        newMaterial->setToolTip("New brush material: a texture set of its own, opened in the Texture Graph to build from nodes");
+        auto* materialRow = new QHBoxLayout;
+        materialRow->setSpacing(2);
+        materialRow->addWidget(mMaterial, 1);
+        materialRow->addWidget(editMaterial);
+        materialRow->addWidget(newMaterial);
+        mMaterialRow = addRow(form, "Material", materialRow);
+        connect(editMaterial, &QToolButton::clicked, this, [this] { editBrushMaterial(); });
+        connect(newMaterial, &QToolButton::clicked, this, [this] { newBrushMaterial(); });
         mTexture = new QToolButton(this);
         mTexture->setObjectName("brushTexture");
         controls::setRole(mTexture, "row");
@@ -871,7 +923,28 @@ public:
         connect(mTexture, &QToolButton::clicked, this, [] { textureSets::showLibrary("textures"); });
         mTextureRow = addRow(form, "Texture", mTexture);
         mMaterialScale = settingSpin(this, 0.05, 64.0, 0.25, 2, "Tiles per uv unit");
-        mScaleRow = addRow(form, "Scale", mMaterialScale);
+        mTiling = new controls::Segmented(this);
+        mTiling->setObjectName("sourceTiling");
+        mTiling->add("Repeat", {}, "Repeat: the material or texture tiles as it is", 0);
+        mTiling->add("Varied", {}, "Varied: hex cells each take it at a random offset and turn, blended so the repeat does not show", 1);
+        auto* scaleRow = new QHBoxLayout;
+        scaleRow->addWidget(mMaterialScale, 1);
+        scaleRow->addWidget(mTiling);
+        mScaleRow = addRow(form, "Scale", scaleRow);
+        connect(mTiling, &controls::Segmented::picked, this, [this](int id) {
+            texturePaintState().varied = id == 1;
+            sync();
+            changed();
+        });
+        mVariedTurn = settingSpin(this, 0.0, 1.0, 0.05, 2, "How far each cell turns: 1 is up to a half turn either way");
+        mVariedBlend = settingSpin(this, 0.0, 0.95, 0.05, 2, "Seam contrast: low blends cells softly, high cuts between them");
+        mVariedBrightness = settingSpin(this, 0.0, 1.0, 0.05, 2, "Brightness spread of Base Color from cell to cell");
+        mVariedTurnRow = addRow(form, "Turn", mVariedTurn);
+        mVariedBlendRow = addRow(form, "Seams", mVariedBlend);
+        mVariedBrightRow = addRow(form, "Brightness", mVariedBrightness);
+        connect(mVariedTurn, &QDoubleSpinBox::valueChanged, this, [this](double v) { set(texturePaintState().variedTurn, float(v)); });
+        connect(mVariedBlend, &QDoubleSpinBox::valueChanged, this, [this](double v) { set(texturePaintState().variedBlend, float(v)); });
+        connect(mVariedBrightness, &QDoubleSpinBox::valueChanged, this, [this](double v) { set(texturePaintState().variedBrightness, float(v)); });
         mBlend = new QComboBox(this);
         mBlend->addItems({"Normal", "Erase", "Add", "Subtract", "Multiply"});
         form->addRow("Blend", mBlend);
@@ -1404,7 +1477,7 @@ public:
         const QSignalBlocker b1(mBlend), b2(mTilt), b3(mRadius), b4(mStrength), b5(mFalloff), b6(mOcclusion), b7(mMirror);
         const QSignalBlocker b8(mMaterial), b9(mMaterialScale), b10(mFlow), b11(mNormalMode), b12(mIntensity), b13(mStamp), b14(mFilterRadius);
         const QSignalBlocker b15(mAmount), b17(mParticles), b18(mBufferBrush), b19(mBufferScale), b20(mTransform), b21(mWarp);
-        const QSignalBlocker b22(mAuto), b23(mFacing);
+        const QSignalBlocker b22(mAuto), b23(mFacing), b24(mVariedTurn), b25(mVariedBlend), b26(mVariedBrightness);
         mBlend->setCurrentIndex(int(s.blend));
         mTilt->setValue(s.tilt);
         mFlow->setCurrentText(QString::fromStdString(s.flowChannel));
@@ -1418,6 +1491,10 @@ public:
                 mFillBy->setCurrent(int(f));
         mParticles->setCurrentIndex(std::max(0, mParticles->findData(QString::fromStdString(s.particles))));
         mMaterial->setCurrentIndex(std::max(0, mMaterial->findData(QString::fromStdString(s.material))));
+        mTiling->setCurrent(s.varied ? 1 : 0);
+        mVariedTurn->setValue(s.variedTurn);
+        mVariedBlend->setValue(s.variedBlend);
+        mVariedBrightness->setValue(s.variedBrightness);
         mMaterialScale->setValue(s.materialScale);
         mBufferBrush->setCurrentIndex(std::max(0, mBufferBrush->findData(QString::fromStdString(s.bufferBrush))));
         mBufferScale->setValue(s.bufferScale);
@@ -1571,6 +1648,10 @@ private:
         showRow(mMaterialRow, values && source == "material");
         showRow(mTextureRow, values && source == "texture");
         showRow(mScaleRow, values && source != "values");
+        const bool varied = values && source != "values" && texturePaintState().varied;
+        showRow(mVariedTurnRow, varied);
+        showRow(mVariedBlendRow, varied);
+        showRow(mVariedBrightRow, varied);
         showRow(mDirRow, t == "direction");
         showRow(mNormalRow, t == "normal");
         showRow(mStampRow, t == "normal" && texturePaintState().normalMode == "stamp");
@@ -1701,6 +1782,109 @@ private:
         mSwatchLayout->addStretch(1);
     }
 
+    /** The material list: the library's, then the scene's texture sets. Rebuilt only when the ids change. */
+    void refreshMaterials()
+    {
+        QStringList ids;
+        std::vector<std::pair<QString, QString>> items;
+        for (const tex::library::Entry& e : tex::library::all())
+        {
+            const QString name = QString::fromStdString(e.meta.name);
+            items.emplace_back(e.tier == "scene" ? "Scene: " + name : name, QString::fromStdString(e.id));
+            ids << items.back().second;
+        }
+        QStringList have;
+        for (int i = 0; i < mMaterial->count(); ++i)
+            have << mMaterial->itemData(i).toString();
+        if (have == ids)
+            return;
+        const QSignalBlocker block(mMaterial);
+        const QString current = QString::fromStdString(texturePaintState().material);
+        mMaterial->clear();
+        for (const auto& [label, id] : items)
+            mMaterial->addItem(label, id);
+        mMaterial->setCurrentIndex(std::max(0, mMaterial->findData(current)));
+    }
+
+    /** Picks a material as the brush's source and shows the Material source. */
+    void useMaterial(const std::string& id)
+    {
+        TexturePaintSettings& s = texturePaintState();
+        s.material = id;
+        s.source = "material";
+        refreshMaterials();
+        sync();
+        changed();
+    }
+
+    /** Creates a texture set named after base (made a valid, unused name). Returns its name. Throws. */
+    static std::string createSet(const std::string& base)
+    {
+        std::string name;
+        for (char c : base)
+            if (std::isalnum(static_cast<unsigned char>(c)) || c == '_')
+                name += c;
+        if (name.empty() || std::isdigit(static_cast<unsigned char>(name.front())))
+            name = "Brush" + name;
+        for (int i = 1;; ++i)
+        {
+            const std::string tryName = i == 1 ? name : name + std::to_string(i);
+            if (scene::Graph::current().find(tryName) == nullptr)
+                return ops::execute("texCreateSet", {{"args", {tryName}}}, CallSource::UI).get<std::string>();
+        }
+    }
+
+    /** A new texture set to build a brush material in from nodes, opened in the Texture Graph and picked as the source. */
+    void newBrushMaterial()
+    {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, "New Brush Material", "Name", QLineEdit::Normal, "BrushMaterial", &ok).trimmed();
+        if (!ok || name.isEmpty())
+            return;
+        try
+        {
+            const std::string made = createSet(name.toStdString());
+            useMaterial("scene/" + made);
+            openTextureSet(made);
+        }
+        catch (const std::exception& e)
+        {
+            log::error("New brush material: {}", e.what());
+        }
+    }
+
+    /** Opens the brush's material in the Texture Graph; a library material is copied into a scene set to edit. */
+    void editBrushMaterial()
+    {
+        const std::string id = texturePaintState().material;
+        if (id.empty())
+            return;
+        if (id.rfind("scene/", 0) == 0)
+        {
+            openTextureSet(id.substr(6));
+            return;
+        }
+        std::optional<tex::library::Entry> e = tex::library::find(id);
+        if (!e)
+        {
+            log::warn("Brush material {} isn't in the library any more", id);
+            return;
+        }
+        try
+        {
+            UndoChunk chunk("Edit Brush Material");
+            const std::string made = createSet(e->meta.name);
+            ops::execute("applyLibraryMaterial", {{"args", {id}}, {"set", made}, {"scale", false}}, CallSource::UI);
+            log::info("Copied {} into the scene as {} to edit its nodes; the brush paints the copy", e->meta.name, made);
+            useMaterial("scene/" + made);
+            openTextureSet(made);
+        }
+        catch (const std::exception& ex)
+        {
+            log::error("Edit brush material: {}", ex.what());
+        }
+    }
+
     template <class T> void set(T& field, T v)
     {
         field = v;
@@ -1755,6 +1939,9 @@ private:
     controls::Segmented* mSource = nullptr;
     QToolButton* mTexture = nullptr;
     QWidget *mSourceRow = nullptr, *mMaterialRow = nullptr, *mTextureRow = nullptr, *mScaleRow = nullptr;
+    controls::Segmented* mTiling = nullptr;
+    QDoubleSpinBox *mVariedTurn = nullptr, *mVariedBlend = nullptr, *mVariedBrightness = nullptr;
+    QWidget *mVariedTurnRow = nullptr, *mVariedBlendRow = nullptr, *mVariedBrightRow = nullptr;
     std::vector<QToolButton*> mTools;
     std::vector<QCheckBox*> mOn;
     std::vector<QDoubleSpinBox*> mValue;
@@ -3103,6 +3290,11 @@ private:
     /** Filters need channels to filter: the set's. */
     void filterChannels(tp::Payload& p, const scene::Node& set)
     {
+        if (p.source.is_object() && p.source.value("library", std::string()) == "scene/" + set.name())
+        {
+            log::warn("Texture paint: {} can't paint through itself; painting the channel values instead", set.name());
+            p.source = json();
+        }
         if (!p.filters())
             return;
         p.channels.clear();
