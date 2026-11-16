@@ -168,6 +168,16 @@ struct WorkerGuard
     }
 } gWorkerGuard;
 
+/** When paint last landed on any set, steady clock ns: slices stay frame sized while a stroke goes on. */
+std::atomic<int64_t> gPaintedAt{0};
+
+/** A slice's GPU budget, ms: short while paint is landing, so the viewport keeps drawing between slices. */
+double sliceBudgetMs()
+{
+    const int64_t now = std::chrono::steady_clock::now().time_since_epoch().count();
+    return now - gPaintedAt.load() < std::chrono::nanoseconds(std::chrono::milliseconds(500)).count() ? 4.0 : 40.0;
+}
+
 // Render task.
 std::mutex gTaskMutex;
 std::vector<Entry> gEntries;
@@ -341,7 +351,7 @@ public:
             if (!s || s->failed)
                 continue;
             if (!s->ev->pagesReady())
-                s->ev->step(vk, budgetMs / double(udims.size()));
+                s->ev->step(vk, std::min(budgetMs, sliceBudgetMs()) / double(udims.size()));
             any = any || s->ev->pagesReady();
         }
         return any;
@@ -585,7 +595,7 @@ bool runSlice(render::VulkanContext& vk)
         }
         try
         {
-            const bool finished = e.ev->step(vk, 40.0);
+            const bool finished = e.ev->step(vk, sliceBudgetMs());
             // A preview writes the tile's full-size images too, upsampled: the full size writes its texels back over
             // them, even when it has nothing of its own to redo there.
             if (std::array<float, 4> uv; e.full && e.ev->takeStored(uv))
@@ -1195,6 +1205,7 @@ void install()
         });
     });
     gPaintListener = render::paint::addChangeListener([](scene::NodeId set) {
+        gPaintedAt.store(std::chrono::steady_clock::now().time_since_epoch().count());
         auto it = gSets.find(set);
         if (it == gSets.end())
             return;
