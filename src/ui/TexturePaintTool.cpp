@@ -941,9 +941,21 @@ public:
         mRevealSpace->setObjectName("revealSpace");
         mRevealSpace->add("Screen", {}, "Screen: the picture is pinned to the view; paint it onto whatever is under it", 0);
         mRevealSpace->add("UV", {}, "UV: the picture lies on the uvs, tiled by Scale", 1);
+        auto* revealClear = new QToolButton(this);
+        revealClear->setObjectName("revealClear");
+        revealClear->setIcon(icon("x"));
+        revealClear->setAutoRaise(true);
+        revealClear->setToolTip("No reveal picture");
+        connect(revealClear, &QToolButton::clicked, this, [this] {
+            texturePaintState().revealImage.clear();
+            sync();
+            changed();
+        });
         auto* revealRow = new QHBoxLayout;
+        revealRow->setSpacing(2);
         revealRow->addWidget(mReveal, 1);
         revealRow->addWidget(mRevealSpace);
+        revealRow->addWidget(revealClear);
         mRevealRow = addRow(form, "Reveal", revealRow);
         connect(mReveal, &QToolButton::clicked, this, [this] {
             const QString f = ui::fileDialog::getOpenFileName(this, "Reveal Picture", {}, "Images (*.png *.jpg *.jpeg *.exr *.tga *.tif *.tiff *.psd)");
