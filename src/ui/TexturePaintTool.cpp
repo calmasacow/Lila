@@ -1235,7 +1235,7 @@ public:
         mStencilPick->setIcon(icon("photo"));
         mStencilPick->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         mStencilPick->setToolTip("Stencil: a picture pinned to the screen that strokes paint through. Hold S and drag to move it, "
-                                 "with Shift to rotate, with Ctrl to scale");
+                                 "with Shift to rotate (add Ctrl to snap to 15 degrees), with Ctrl to scale");
         auto* stencilClear = new QToolButton(this);
         stencilClear->setObjectName("stencilClear");
         stencilClear->setIcon(icon("x"));
@@ -2474,6 +2474,12 @@ public:
             const glm::vec2 c = glm::vec2(float(view.width), float(view.height)) * 0.5f + mStencilStart.offset / s.bufferScale;
             const glm::vec2 a(float(mStencilFrom.x()) - c.x, float(mStencilFrom.y()) - c.y), b(float(e->position().x()) - c.x, float(e->position().y()) - c.y);
             place.rotation = mStencilStart.rotation + (std::atan2(b.y, b.x) - std::atan2(a.y, a.x));
+            // The drag's kind is set at the press, so Ctrl is free here: it snaps the angle to 15 degree steps.
+            if (e->modifiers() & Qt::ControlModifier)
+            {
+                const float step = glm::radians(15.0f);
+                place.rotation = std::round(place.rotation / step) * step;
+            }
         }
         viewportTools::requestRedraw();
     }
@@ -2983,7 +2989,9 @@ public:
             else
                 status.keys = {{"click", "point"}, {"drag", "curve"}, {"Enter", "paint"}, {"Backspace", "undo point"}};
         }
-        if (st.stencil.active())
+        if (mStencilDrag == StencilDrag::Rotate)
+            status.keys = {{"Ctrl", "snap 15 degrees"}};
+        else if (st.stencil.active())
             status.keys.insert(status.keys.end(), {{"S+drag", "move stencil"}, {"S+Shift+drag", "rotate"}, {"S+Ctrl+drag", "scale"}});
         drawToolStatus(p, view, status);
         if (st.tool == "fill")
@@ -4598,7 +4606,7 @@ void registerTexturePaintUi()
                               actions::run({{"command", "texPaintStencil"}, {"args", {{"args", {f.toStdString()}}}}});
                       },
                   .doc = "Pin a picture to the screen for texture painting: every stroke paints through it, as a mask or in its colours. "
-                         "Hold S and drag to move it, with Shift to rotate, with Ctrl to scale.",
+                         "Hold S and drag to move it, with Shift to rotate (add Ctrl to snap to 15 degrees), with Ctrl to scale.",
                   .python = "texPaintStencil(\"<image file>\")",
                   .keywords = {"stencil", "mask", "overlay", "paint through"}});
     actions::add({.id = "tex.quickMaskOverlay",
