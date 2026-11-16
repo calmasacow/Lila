@@ -325,8 +325,14 @@ public:
     /** Bins per channel (R, G, B, A); empty before an image. */
     std::array<std::vector<int>, 4> bins;
     int histChannels = 3;
-    /** UV edges in the image's unit square, v down. */
+    /** UV edges in the image's unit square, v down; bump uvVersion when they change. */
     QList<QLineF> uvLines;
+    uint64_t uvVersion = 0;
+    /** The UV edges drawn at the canvas's size, redrawn only when the view, the edges or the dimming change. */
+    QImage uvCache;
+    QTransform uvCacheTransform;
+    uint64_t uvCacheVersion = 0;
+    bool uvCacheDim = false;
     bool showUvs = true;
     /** Shown in place of the image while there is none. */
     QString emptyText;
@@ -528,19 +534,36 @@ protected:
 
     void drawUvs(QPainter& p, const QPointF& topLeft, const QSizeF& size, bool dim = false)
     {
+        // Thousands of antialiased edges take milliseconds; repaints while paint lands reuse them.
+        QTransform t = p.worldTransform();
+        t.translate(topLeft.x(), topLeft.y());
+        t.scale(size.width(), size.height());
+        const qreal dpr = devicePixelRatioF();
+        const QSize pixels = (QSizeF(this->size()) * dpr).toSize();
+        if (uvCache.size() != pixels || uvCacheTransform != t || uvCacheVersion != uvVersion || uvCacheDim != dim)
+        {
+            uvCache = QImage(pixels, QImage::Format_ARGB32_Premultiplied);
+            uvCache.setDevicePixelRatio(dpr);
+            uvCache.fill(Qt::transparent);
+            QPainter c(&uvCache);
+            c.setWorldTransform(t);
+            c.setRenderHint(QPainter::Antialiasing, uvLines.size() < 20000);
+            // Dark under light, so the edges read on any texture.
+            QPen under(gray(0, dim ? 40 : 110), 3.0);
+            under.setCosmetic(true);
+            c.setPen(under);
+            c.drawLines(uvLines);
+            QPen pen(dim ? gray(200, 70) : gray(240, 200));
+            pen.setCosmetic(true);
+            c.setPen(pen);
+            c.drawLines(uvLines);
+            uvCacheTransform = t;
+            uvCacheVersion = uvVersion;
+            uvCacheDim = dim;
+        }
         p.save();
-        p.translate(topLeft);
-        p.scale(size.width(), size.height());
-        p.setRenderHint(QPainter::Antialiasing, uvLines.size() < 20000);
-        // Dark under light, so the edges read on any texture.
-        QPen under(gray(0, dim ? 40 : 110), 3.0);
-        under.setCosmetic(true);
-        p.setPen(under);
-        p.drawLines(uvLines);
-        QPen pen(dim ? gray(200, 70) : gray(240, 200));
-        pen.setCosmetic(true);
-        p.setPen(pen);
-        p.drawLines(uvLines);
+        p.resetTransform();
+        p.drawImage(QPointF(0.0, 0.0), uvCache);
         p.restore();
     }
 
@@ -875,6 +898,7 @@ struct Texture2DView::Impl
             }
         }
         canvas->uvLines = std::move(lines);
+        ++canvas->uvVersion;
         canvas->update();
     }
 
@@ -1092,6 +1116,7 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
         impl->canvas->showUvs = on;
         impl->uvMeshes.clear();
         impl->canvas->uvLines.clear();
+        ++impl->canvas->uvVersion;
         impl->rebuildUvs();
         impl->canvas->update();
     });
