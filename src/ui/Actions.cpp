@@ -154,6 +154,17 @@ std::string tooltip(const std::string& id)
     return tip;
 }
 
+std::string statusLine(const std::string& id)
+{
+    const Action* a = find(id);
+    if (!a)
+        return {};
+    const std::string key = Hotkeys::get().keyFor(id).toStdString();
+    if (key.empty())
+        return a->doc;
+    return a->doc.empty() ? key : a->doc + "  (" + key + ")";
+}
+
 const Action* find(const std::string& id)
 {
     return registry().find(id);

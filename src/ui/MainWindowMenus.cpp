@@ -32,6 +32,7 @@ QMenu* MainWindow::refreshKeysOnShow(QMenu* menu)
             QString key = Hotkeys::get().keyFor(id);
             qa->setText(QString::fromStdString(actions::displayLabel(id)) + qa->property(menus::kStatusSuffix).toString() + (key.isEmpty() ? "" : "	" + key));
             qa->setToolTip(QString::fromStdString(actions::tooltip(id)));
+            qa->setStatusTip(QString::fromStdString(actions::statusLine(id)));
             qa->setEnabled(actions::isEnabled(json(id)));
         }
     });

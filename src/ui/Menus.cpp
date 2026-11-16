@@ -227,9 +227,12 @@ QAction* addActionRow(QMenu* menu, const std::string& id)
     qa->setData(QString::fromStdString(id));
     qa->setToolTip(QString::fromStdString(actions::tooltip(id)));
     qa->setIcon(icon(QString::fromStdString(actions::iconFor(id))));
-    if (a)
-        qa->setStatusTip(QString::fromStdString(a->doc));
+    qa->setStatusTip(QString::fromStdString(actions::statusLine(id)));
+    // Hotkeys can be rebound while the menu exists, so the tooltip naming one is refreshed with the check state.
+    menu->setToolTipsVisible(true);
     auto syncCheck = [qa, id] {
+        qa->setToolTip(QString::fromStdString(actions::tooltip(id)));
+        qa->setStatusTip(QString::fromStdString(actions::statusLine(id)));
         const Action* now = actions::find(id);
         qa->setCheckable(now && now->checked);
         if (qa->isCheckable())
