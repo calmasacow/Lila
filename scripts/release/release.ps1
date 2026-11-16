@@ -9,7 +9,9 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipTests,
     # Also upload the staged build to Steam (scripts\steam\upload.ps1).
-    [switch]$Steam
+    [switch]$Steam,
+    # The Lila-3D checkout, whose download.json the site's Download button reads. Left for you to commit and push.
+    [string]$SiteDir = "$PSScriptRoot\..\..\..\Lila-3D"
 )
 $ErrorActionPreference = "Stop"
 $repo = Resolve-Path "$PSScriptRoot\..\.."
@@ -66,3 +68,24 @@ if ($Steam) {
     & "$repo\scripts\steam\upload.ps1" -Config Release -BuildDir $BuildDir -SkipBuild -SkipSymbols
 }
 "Released $tag"
+
+if (Test-Path "$SiteDir\index.html") {
+    $latest = Get-Content $manifest -Raw | ConvertFrom-Json
+    $site = [ordered]@{
+        version = $version
+        page = $latest.page
+        platforms = [ordered]@{
+            windows = [ordered]@{
+                label = "Windows"
+                requires = "Windows 10 or 11, 64-bit"
+                installer = $latest.installer
+                size = (Get-Item $exe).Length
+                sha256 = $latest.sha256
+            }
+        }
+    }
+    [IO.File]::WriteAllText("$SiteDir\download.json", ($site | ConvertTo-Json -Depth 4) + "`n")
+    "Wrote $SiteDir\download.json: commit and push Lila-3D so the site's Download button serves $version."
+} else {
+    "No Lila-3D checkout at $SiteDir: the site's Download button still serves the previous version."
+}
