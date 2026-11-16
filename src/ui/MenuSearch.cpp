@@ -56,7 +56,8 @@ QString plain(const QAction* a)
 QStringList keywordsOf(const QAction* a)
 {
     QStringList out;
-    if (const Action* action = actions::find(a->data().toString().toStdString()))
+    const QString own = a->data().toString();
+    if (const Action* action = actions::find((own.isEmpty() ? a->property(kSameAsProperty).toString() : own).toStdString()))
         for (const std::string& k : action->keywords)
             out << QString::fromStdString(k);
     // The Windows menu lists each dock's own toggle action, which carries no action id.
@@ -263,7 +264,47 @@ struct Item
     QPointer<QAction> action;
     QString label;
     QString path;
+    /** The label of the action a row stands in for ("Topology Toolkit" for the Topology dock toggle), matched too. */
+    QString alias;
 };
+
+/** The registered action a row runs: its own, or the one it does the same as (kSameAsProperty). */
+std::string actionOf(const QAction* a)
+{
+    const QString own = a->data().toString();
+    return (own.isEmpty() ? a->property(kSameAsProperty).toString() : own).toStdString();
+}
+
+/**
+ * One row per action: a command in several menus is listed once, from the row with a check box when one has it (its
+ * state shows), otherwise from the first menu it appears in.
+ */
+void dropDuplicates(std::vector<Item>& items)
+{
+    std::map<std::string, size_t> first;
+    std::vector<bool> keep(items.size(), true);
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        const std::string id = actionOf(items[i].action);
+        if (id.empty())
+            continue;
+        auto [it, added] = first.try_emplace(id, i);
+        if (added)
+            continue;
+        if (items[i].action->isCheckable() && !items[it->second].action->isCheckable())
+        {
+            keep[it->second] = false;
+            it->second = i;
+        }
+        else
+            keep[i] = false;
+    }
+    std::vector<Item> out;
+    for (size_t i = 0; i < items.size(); ++i)
+        if (keep[i])
+            out.push_back(std::move(items[i]));
+    items = std::move(out);
+}
 
 void collect(QMenu* menu, const QString& path, std::vector<Item>& out, int depth)
 {
@@ -286,7 +327,11 @@ void collect(QMenu* menu, const QString& path, std::vector<Item>& out, int depth
             // The rows a menu picks between (layouts) say what they are, so "Groom" the layout reads apart from the panel.
             if (a->isCheckable())
                 label += menu->property(kSearchSuffixProperty).toString();
-            out.push_back({a, label, path});
+            QString alias;
+            if (a->data().toString().isEmpty())
+                if (const Action* same = actions::find(a->property(kSameAsProperty).toString().toStdString()))
+                    alias = QString::fromStdString(same->label);
+            out.push_back({a, label, path, alias});
         }
     }
 }
@@ -570,9 +615,12 @@ public:
                 mSymbols = apiSymbols();
         }
         else if (mItems.empty() && mBar)
+        {
             for (QAction* a : mBar->actions())
                 if (QMenu* menu = a->menu(); menu && menuSets::reachable(a))
                     collect(menu, plain(a), mItems, 0);
+            dropDuplicates(mItems);
+        }
         mList->setItemDelegateForColumn(kLabel, scene ? mPathDelegate : nullptr);
         mList->setColumnHidden(kKey, scene || tearOffs);
         mList->setColumnHidden(kOptions, scene || tearOffs);
@@ -690,13 +738,13 @@ private:
         std::vector<std::pair<int, const Item*>> hits;
         for (const Item& it : mItems)
             if (it.action)
-                if (int s = score(it.label, it.path, q); s || keywordMatch(it.action, q))
+                if (int s = score(it.label, it.alias.isEmpty() ? it.path : it.path + ' ' + it.alias, q); s || keywordMatch(it.action, q))
                     hits.emplace_back(-std::max(s, 1), &it);
         std::stable_sort(hits.begin(), hits.end(), [](auto& a, auto& b) { return a.first < b.first; });
         QBrush dim = palette().brush(QPalette::Disabled, QPalette::Text);
         for (auto& [s, it] : hits)
         {
-            std::string id = it->action->data().toString().toStdString();
+            const std::string id = actionOf(it->action);
             QString key = id.empty() ? QString() : Hotkeys::get().keyFor(id);
             auto* row = new QTreeWidgetItem(mList, {it->label, it->path, key, QString()});
             row->setData(kLabel, kActionRole, QVariant::fromValue(static_cast<QObject*>(it->action.data())));

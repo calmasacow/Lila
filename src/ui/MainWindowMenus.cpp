@@ -1,5 +1,6 @@
 #include "ui/MainWindowDetail.h"
 #include "ui/MenuContext.h"
+#include "ui/MenuSearch.h"
 #include "ui/TopBar.h"
 #include "ui/Credits.h"
 #include "ui/CreditsDialog.h"
@@ -488,7 +489,11 @@ void MainWindow::fillEditorsMenu(QMenu* menu)
         for (QDockWidget* d : members)
         {
             if (const panels::Panel* p = panels::registry().find(d->objectName().toStdString()))
+            {
                 d->toggleViewAction()->setIcon(icon(QString::fromStdString(p->icon)));
+                const std::string toggle = p->toggleAction.empty() ? "window." + p->id : p->toggleAction;
+                d->toggleViewAction()->setProperty(menuSearch::kSameAsProperty, QString::fromStdString(toggle));
+            }
             menu->addAction(d->toggleViewAction());
         }
     };
