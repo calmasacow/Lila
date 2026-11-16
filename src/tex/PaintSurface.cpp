@@ -11,6 +11,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include <tbb/parallel_for.h>
+
 namespace lila::tex::paint
 {
 namespace
@@ -423,6 +425,26 @@ const std::vector<GeoTexel>& SurfaceAtlas::page(uint32_t index)
 {
     if (auto it = mPages.find(index); it != mPages.end())
         return it->second;
+    return mPages.emplace(index, rasterise(index)).first->second;
+}
+
+void SurfaceAtlas::preparePages(std::span<const uint32_t> pages)
+{
+    std::vector<uint32_t> missing;
+    for (uint32_t p : pages)
+        if (!mPages.contains(p))
+            missing.push_back(p);
+    if (missing.size() < 2)
+        return;
+    LILA_ZONE();
+    std::vector<std::vector<GeoTexel>> built(missing.size());
+    tbb::parallel_for(size_t(0), missing.size(), [&](size_t i) { built[i] = rasterise(missing[i]); });
+    for (size_t i = 0; i < missing.size(); ++i)
+        mPages.emplace(missing[i], std::move(built[i]));
+}
+
+std::vector<GeoTexel> SurfaceAtlas::rasterise(uint32_t index) const
+{
     LILA_ZONE();
     std::vector<GeoTexel> texels(size_t(kPageSize) * kPageSize);
     std::vector<double> best(texels.size(), 1e300);
@@ -469,7 +491,7 @@ const std::vector<GeoTexel>& SurfaceAtlas::page(uint32_t index)
                     }
                 }
         }
-    return mPages.emplace(index, std::move(texels)).first->second;
+    return texels;
 }
 
 std::vector<uint32_t> SurfaceAtlas::pagesWhere(const std::function<bool(uint32_t tri)>& keep) const

@@ -716,30 +716,44 @@ private:
         return true;
     }
 
-    /** Buffers a pass reads anywhere but at its own uv (see Pass::local). */
-    void nonLocalReads(const Ref& r, const std::string& rootKey, bool identity, std::set<std::pair<int, bool>>& seen, std::set<int>& out)
+    /**
+     * Buffers a pass reads anywhere but at its own uv (see Pass::local); those read only within a known texel distance of
+     * it (inputs with a reach, through nodes sampled at uv) go in near instead, with that distance.
+     */
+    void nonLocalReads(const Ref& r, const std::string& rootKey, bool identity, int reach, std::set<std::tuple<int, bool, int>>& seen,
+                       std::set<int>& out, std::map<int, int>& near)
     {
         if (r.constant())
             return;
         if (r.key() != rootKey && mBuffered.contains(r.key()))
         {
+            const int b = mBufferOf.at(r.key());
             if (!identity)
-                out.insert(mBufferOf.at(r.key()));
+                out.insert(b);
+            else if (reach > 0)
+                near[b] = std::max(near[b], reach);
             return;
         }
-        if (!seen.insert({r.node, identity}).second)
+        if (!seen.insert({r.node, identity, reach}).second)
             return;
         const FlatNode& n = mNodes[size_t(r.node)];
         if (n.def->kind == NodeKind::Buffer)
         {
-            nonLocalReads(n.inputs[0], rootKey, identity, seen, out);
+            nonLocalReads(n.inputs[0], rootKey, identity, reach, seen, out, near);
             return;
         }
         std::string text = expandCode(n, n.def->code);
         for (const auto& [id, body] : n.def->body)
             text += "\n" + expandCode(n, body);
         for (size_t k = 0; k < n.inputs.size(); ++k)
-            nonLocalReads(n.inputs[k], rootKey, identity && samplesAtUv(text, n.ports.inputs[k].id, n), seen, out);
+        {
+            const bool atUv = samplesAtUv(text, n.ports.inputs[k].id, n);
+            const int inputReach = n.ports.inputs[k].reach;
+            if (identity && !atUv && inputReach > 0)
+                nonLocalReads(n.inputs[k], rootKey, true, reach + inputReach, seen, out, near);
+            else
+                nonLocalReads(n.inputs[k], rootKey, identity && atUv, reach, seen, out, near);
+        }
         const std::string index = std::to_string(r.node);
         for (const ParamDecl& p : n.ports.params)
             if (p.type == ParamType::Image && !(identity && samplesAtUv(text, p.id, n)))
@@ -749,7 +763,8 @@ private:
                 out.insert(mExternalBuffer.at(e));
     }
 
-    std::string passSource(const Root& root, std::vector<int>& readsOut, std::vector<int>* slotsOut = nullptr, std::vector<int>* localOut = nullptr)
+    std::string passSource(const Root& root, std::vector<int>& readsOut, std::vector<int>* slotsOut = nullptr, std::vector<int>* localOut = nullptr,
+                           std::map<int, int>* reachOut = nullptr)
     {
         const std::string rootKey = root.fromBuffer ? std::string() : root.ref.key();
         std::set<int> nodes;
@@ -864,12 +879,22 @@ private:
         readsOut.erase(std::unique(readsOut.begin(), readsOut.end()), readsOut.end());
         if (localOut)
         {
-            std::set<std::pair<int, bool>> seen;
+            std::set<std::tuple<int, bool, int>> seen;
             std::set<int> far;
-            nonLocalReads(root.ref, rootKey, true, seen, far);
+            std::map<int, int> near;
+            nonLocalReads(root.ref, rootKey, true, 0, seen, far, near);
             localOut->clear();
+            if (reachOut)
+                reachOut->clear();
             for (int b : readsOut)
-                if (!far.contains(b))
+                if (far.contains(b))
+                    continue;
+                else if (auto it = near.find(b); it != near.end())
+                {
+                    if (reachOut)
+                        (*reachOut)[b] = it->second;
+                }
+                else
                     localOut->push_back(b);
         }
         return src.str();
@@ -953,7 +978,7 @@ private:
             else
             {
                 Root root{"", r, r.type, {}};
-                p.source = passSource(root, p.reads, &p.slots, &p.local);
+                p.source = passSource(root, p.reads, &p.slots, &p.local, &p.reach);
                 p.hash = hash64(p.source);
                 p.node = r.constant() ? "constant" : mNodes[size_t(r.node)].path;
                 p.cost = rootCost(r);
@@ -980,7 +1005,7 @@ private:
             Root converted = root;
             converted.fromBuffer = it != mBufferOf.end();
             Pass p;
-            p.source = passSource(converted, p.reads, &p.slots, &p.local);
+            p.source = passSource(converted, p.reads, &p.slots, &p.local, &p.reach);
             p.hash = hash64(p.source);
             p.node = root.ref.constant() ? "constant" : mNodes[size_t(root.ref.node)].path;
             p.cost = rootCost(root.ref);

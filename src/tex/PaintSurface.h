@@ -116,6 +116,8 @@ public:
     bool pageUsed(uint32_t page) const { return page < mPageTris.size() && !mPageTris[page].empty(); }
     /** The page's texels, row 0 at the top (v = 1), rasterised on first use. Not thread safe. */
     const std::vector<GeoTexel>& page(uint32_t page);
+    /** Rasterises the pages not yet rasterised, in parallel, so the page() calls after it are lookups. Not thread safe. */
+    void preparePages(std::span<const uint32_t> pages);
     size_t pagesRasterised() const { return mPages.size(); }
 
     /**
@@ -150,5 +152,7 @@ private:
     std::vector<uint32_t> mTriPages;
     std::vector<Box> mTriPageBoxes;
     std::map<uint32_t, std::vector<GeoTexel>> mPages;
+
+    std::vector<GeoTexel> rasterise(uint32_t page) const;
 };
 } // namespace lila::tex::paint

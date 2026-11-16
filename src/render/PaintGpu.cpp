@@ -766,6 +766,83 @@ void updateViews(VulkanContext& vk, Gpu& g, const Key& key, Layer& l)
     }
 }
 
+/**
+ * Pages (row-major ids on a grid pagesX wide) as a few texel rectangles: runs along each row, stacked when rows repeat
+ * them, then the closest pairs merged while there are too many. A stroke over distant uv islands stays several small
+ * regions instead of one box over the texture, which is what the texture set evaluates again.
+ */
+std::vector<std::array<int, 4>> pageRegions(std::span<const uint32_t> pages, int pagesX, int width, int height)
+{
+    constexpr size_t kMaxRegions = 12;
+    std::vector<uint32_t> sorted(pages.begin(), pages.end());
+    std::sort(sorted.begin(), sorted.end());
+    // Runs of consecutive pages in a row: {x0, x1, y} in pages.
+    std::vector<std::array<int, 3>> runs;
+    for (uint32_t p : sorted)
+    {
+        const int x = int(p % uint32_t(pagesX)), y = int(p / uint32_t(pagesX));
+        if (!runs.empty() && runs.back()[2] == y && runs.back()[1] == x)
+            ++runs.back()[1];
+        else
+            runs.push_back({x, x + 1, y});
+    }
+    // Page rectangles {x0, y0, x1, y1}: a run extends the rectangle above it when it spans the same columns.
+    std::vector<std::array<int, 4>> rects;
+    for (const auto& [x0, x1, y] : runs)
+    {
+        auto above = std::find_if(rects.begin(), rects.end(), [&](const std::array<int, 4>& r) { return r[0] == x0 && r[2] == x1 && r[3] == y; });
+        if (above != rects.end())
+            (*above)[3] = y + 1;
+        else
+            rects.push_back({x0, y, x1, y + 1});
+    }
+    auto area = [](const std::array<int, 4>& r) { return int64_t(r[2] - r[0]) * int64_t(r[3] - r[1]); };
+    auto unite = [](const std::array<int, 4>& a, const std::array<int, 4>& b) {
+        return std::array<int, 4>{std::min(a[0], b[0]), std::min(a[1], b[1]), std::max(a[2], b[2]), std::max(a[3], b[3])};
+    };
+    // Many rectangles: first one per cell of an 8 x 8 grid, so the pairwise merging below stays cheap.
+    if (rects.size() > 64)
+    {
+        const int pagesY = (height + kPageSize - 1) / kPageSize;
+        std::map<int, std::array<int, 4>> cells;
+        for (const std::array<int, 4>& r : rects)
+        {
+            const int cell = std::min(7, (r[0] + r[2]) * 4 / std::max(pagesX, 1)) + 8 * std::min(7, (r[1] + r[3]) * 4 / std::max(pagesY, 1));
+            auto [it, fresh] = cells.try_emplace(cell, r);
+            if (!fresh)
+                it->second = unite(it->second, r);
+        }
+        rects.clear();
+        for (const auto& [cell, r] : cells)
+            rects.push_back(r);
+    }
+    // Merge the pair that adds the least area until few enough remain, and merge freely while it adds nothing.
+    while (rects.size() > 1)
+    {
+        int64_t best = INT64_MAX;
+        size_t bi = 0, bj = 0;
+        for (size_t i = 0; i < rects.size(); ++i)
+            for (size_t j = i + 1; j < rects.size(); ++j)
+            {
+                const int64_t waste = area(unite(rects[i], rects[j])) - area(rects[i]) - area(rects[j]);
+                if (waste < best)
+                {
+                    best = waste;
+                    bi = i;
+                    bj = j;
+                }
+            }
+        if (best > 0 && rects.size() <= kMaxRegions)
+            break;
+        rects[bi] = unite(rects[bi], rects[bj]);
+        rects.erase(rects.begin() + std::ptrdiff_t(bj));
+    }
+    std::vector<std::array<int, 4>> out;
+    for (const std::array<int, 4>& r : rects)
+        out.push_back({r[0] * kPageSize, r[1] * kPageSize, std::min(r[2] * kPageSize, width), std::min(r[3] * kPageSize, height)});
+    return out;
+}
+
 /** Copies stale pages into the images the graph reads (render thread, inside a recording). */
 void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& key, Layer& l, std::vector<compute::Buffer>& temps)
 {
@@ -803,6 +880,8 @@ void recordResolve(VulkanContext& vk, VkCommandBuffer cmd, Gpu& g, const Key& ke
         img->beginWrite(cmd);
         compute::memoryBarrier(cmd);
         const int pagesX = (img->width() + kPageSize - 1) / kPageSize;
+        if (!full)
+            img->noteWriteRegions(pageRegions(pages, pagesX, img->width(), img->height()));
         for (uint32_t p : pages)
         {
             const int x0 = int(p % uint32_t(pagesX)) * kPageSize, y0 = int(p / uint32_t(pagesX)) * kPageSize;
@@ -1319,7 +1398,13 @@ Batch prepareBatch(Layer& l, Live& live, std::span<const Dab> dabs)
     for (const auto& [udim, size] : l.sizes)
     {
         std::shared_ptr<Surface> s = surface(live.mesh, udim, size.first, size.second);
-        for (auto& [page, list] : s->atlas->pagesFor(reach))
+        const std::map<uint32_t, std::vector<uint32_t>> reached = s->atlas->pagesFor(reach);
+        // A brush entering unpainted parts reaches many new pages at once; rasterised one by one they stall the stroke.
+        std::vector<uint32_t> pages;
+        for (const auto& [page, list] : reached)
+            pages.push_back(page);
+        s->atlas->preparePages(pages);
+        for (auto& [page, list] : reached)
         {
             b.add(s, page, queued);
             b.items.push_back({s, udim, page, uint32_t(b.index.size()), uint32_t(list.size())});
@@ -1367,7 +1452,9 @@ Batch prepareWhole(Layer& l, Live& live)
     for (const auto& [udim, size] : l.sizes)
     {
         std::shared_ptr<Surface> s = surface(live.mesh, udim, size.first, size.second);
-        for (uint32_t page : s->atlas->pagesWhere([&](uint32_t t) { return reached[t] != 0; }))
+        const std::vector<uint32_t> pages = s->atlas->pagesWhere([&](uint32_t t) { return reached[t] != 0; });
+        s->atlas->preparePages(pages);
+        for (uint32_t page : pages)
         {
             b.add(s, page, queued);
             b.items.push_back({s, udim, page, 0, 0});

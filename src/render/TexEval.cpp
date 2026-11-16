@@ -717,6 +717,8 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
         std::scoped_lock lock(st.mutex);
         return st.pending != nullptr;
     };
+    if (st.cur && !st.anyWork() && !st.regionQueue.empty())
+        st.nextRegion();
     if (!st.cur || !st.anyWork())
     {
         st.done = !pendingNow();
@@ -783,6 +785,8 @@ bool Evaluator::step(VulkanContext& vk, double budgetMs)
         st.stats.texelsComputed += st.sliceComputed;
         st.stats.texelsStored += st.sliceStored;
     }
+    if (!st.anyWork() && !st.regionQueue.empty())
+        st.nextRegion();
     st.done = !st.anyWork() && !pendingNow();
     return st.done;
 }

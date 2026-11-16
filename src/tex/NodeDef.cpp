@@ -64,6 +64,7 @@ PortDecl portFromJson(const json& j, const std::string& type)
     p.label = j.value("label", std::string());
     p.doc = j.value("doc", std::string());
     p.taps = std::max(1, j.value("taps", 1));
+    p.reach = std::max(0, j.value("reach", 0));
     return p;
 }
 
@@ -78,6 +79,8 @@ json portJson(const PortDecl& p, bool input)
         o["doc"] = p.doc;
     if (input && p.taps != 1)
         o["taps"] = p.taps;
+    if (input && p.reach != 0)
+        o["reach"] = p.reach;
     return o;
 }
 

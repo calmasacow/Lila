@@ -269,10 +269,13 @@ void Evaluator::State::adopt(VkDeviceSize maxBytes)
         storeRect.assign(next->stores.size(), Rect::full());
         loadTarget.assign(nBuffers, 0);
         loadedVersion.assign(nBuffers, 0);
+        regionQueue.clear();
+        regionTargets.clear();
         uniformsDirty = true;
     }
     else
     {
+        flushRegions();
         // Value slots that changed; descriptor slots are the evaluator's own.
         std::set<int> descriptors;
         for (const BufferDesc& b : np.buffers)
@@ -468,13 +471,141 @@ void Evaluator::State::markExternals()
     if (packed)
         dirtyAll();
     else
+    {
+        splitRegions();
         propagate({}, false);
+    }
     maskPages();
     passIndex = 0;
     passRow = 0;
     passStarted = false;
     std::scoped_lock lock(mutex);
     stats.passesDirty = size_t(std::count(dirty.begin(), dirty.end(), uint8_t(1)));
+}
+
+namespace
+{
+/** Rectangles merged where they overlap, then the pair adding the least area while more than maxCount remain. */
+std::vector<Rect> mergeRegions(std::vector<Rect> rects, size_t maxCount)
+{
+    auto area = [](const Rect& r) { return double(r.x1 - r.x0) * double(r.y1 - r.y0); };
+    auto overlap = [](const Rect& a, const Rect& b) { return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1; };
+    std::erase_if(rects, [](const Rect& r) { return r.empty(); });
+    for (bool merged = true; merged;)
+    {
+        merged = false;
+        for (size_t i = 0; i < rects.size() && !merged; ++i)
+            for (size_t j = i + 1; j < rects.size() && !merged; ++j)
+                if (overlap(rects[i], rects[j]))
+                {
+                    rects[i] = rects[i].unite(rects[j]);
+                    rects.erase(rects.begin() + std::ptrdiff_t(j));
+                    merged = true;
+                }
+    }
+    while (rects.size() > maxCount)
+    {
+        double best = std::numeric_limits<double>::max();
+        size_t bi = 0, bj = 1;
+        for (size_t i = 0; i < rects.size(); ++i)
+            for (size_t j = i + 1; j < rects.size(); ++j)
+                if (const double waste = area(rects[i].unite(rects[j])) - area(rects[i]) - area(rects[j]); waste < best)
+                {
+                    best = waste;
+                    bi = i;
+                    bj = j;
+                }
+        rects[bi] = rects[bi].unite(rects[bj]);
+        rects.erase(rects.begin() + std::ptrdiff_t(bj));
+    }
+    return rects;
+}
+} // namespace
+
+void Evaluator::State::splitRegions()
+{
+    std::vector<Rect> parts = regionQueue;
+    for (const BufferDesc& b : cur->plan.buffers)
+    {
+        const size_t id = size_t(b.id);
+        if (b.kind != BufferKind::External || !load[id])
+            continue;
+        auto g = cur->inputs.gpuExternals.find(b.name);
+        if (g == cur->inputs.gpuExternals.end() || !g->second)
+            continue;
+        std::optional<std::vector<std::array<int, 4>>> rects;
+        if (loadTarget[id] != 0 && loadedImage.size() == loadedVersion.size() && loadedImage[id].first == g->second->key())
+            rects = g->second->rectsSince(loadedImage[id].second);
+        // A whole load, or changes not known one by one: one box over everything.
+        if (!rects)
+        {
+            flushRegions();
+            return;
+        }
+        for (const std::array<int, 4>& r : *rects)
+            parts.push_back(Rect::texels(r, g->second->width(), g->second->height()));
+        regionTargets[id] = loadTarget[id];
+    }
+    Rect box;
+    for (const Rect& r : parts)
+        box = box.unite(r);
+    const std::vector<Rect> regions = mergeRegions(std::move(parts), 4);
+    double split = 0.0;
+    for (const Rect& r : regions)
+        split += double(r.x1 - r.x0) * double(r.y1 - r.y0);
+    // Each region costs a pass over the graph of its own: worth it only when it leaves much of the box out.
+    if (regions.size() <= 1 || split > 0.6 * double(box.x1 - box.x0) * double(box.y1 - box.y0))
+    {
+        flushRegions();
+        return;
+    }
+    for (const auto& [id, target] : regionTargets)
+    {
+        load[id] = 1;
+        loadRect[id] = regions.front();
+        loadTarget[id] = target;
+    }
+    regionQueue.assign(regions.begin() + 1, regions.end());
+}
+
+void Evaluator::State::nextRegion()
+{
+    const Rect r = regionQueue.front();
+    regionQueue.erase(regionQueue.begin());
+    for (const auto& [id, target] : regionTargets)
+    {
+        load[id] = 1;
+        loadRect[id] = r;
+        loadTarget[id] = target;
+    }
+    if (regionQueue.empty())
+        regionTargets.clear();
+    propagate({}, false);
+    maskPages();
+    passIndex = 0;
+    passRow = 0;
+    passStarted = false;
+}
+
+void Evaluator::State::flushRegions()
+{
+    if (regionQueue.empty())
+    {
+        regionTargets.clear();
+        return;
+    }
+    Rect all;
+    for (const Rect& r : regionQueue)
+        all = all.unite(r);
+    for (const auto& [id, target] : regionTargets)
+    {
+        loadRect[id] = load[id] ? loadRect[id].unite(all) : all;
+        load[id] = 1;
+        if (loadTarget[id] != 0)
+            loadTarget[id] = target;
+    }
+    regionQueue.clear();
+    regionTargets.clear();
 }
 
 void Evaluator::State::propagate(const std::set<int>& changed, bool moved)
@@ -509,11 +640,13 @@ void Evaluator::State::propagate(const std::set<int>& changed, bool moved)
             if (!srcDirty)
                 continue;
             any = true;
-            if (pass.kind == PassKind::Fused && std::find(pass.local.begin(), pass.local.end(), b) != pass.local.end())
+            const auto near = pass.reach.find(b);
+            if (pass.kind == PassKind::Fused && (near != pass.reach.end() || std::find(pass.local.begin(), pass.local.end(), b) != pass.local.end()))
             {
-                // Bilinear reads reach a texel of the source either side, plus the output texel's own extent.
+                // Bilinear reads reach a texel of the source either side, plus the output texel's own extent and any neighbour taps.
                 const auto [bw, bh] = cur->sizes[size_t(b)];
-                r = r.unite(src.grow(1.5f / float(bw) + 1.0f / float(ow), 1.5f / float(bh) + 1.0f / float(oh)));
+                const float taps = near != pass.reach.end() ? float(near->second) : 0.0f;
+                r = r.unite(src.grow((1.5f + taps) / float(bw) + 1.0f / float(ow), (1.5f + taps) / float(bh) + 1.0f / float(oh)));
             }
             else
                 whole = true;
