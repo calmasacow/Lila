@@ -65,6 +65,9 @@ PortDecl portFromJson(const json& j, const std::string& type)
     p.doc = j.value("doc", std::string());
     p.taps = std::max(1, j.value("taps", 1));
     p.reach = std::max(0, j.value("reach", 0));
+    p.implicit = j.value("implicit", std::string());
+    if (!p.implicit.empty() && p.implicit != "uv")
+        throw std::invalid_argument(type + "." + p.id + ": unknown implicit " + p.implicit);
     return p;
 }
 
@@ -81,6 +84,8 @@ json portJson(const PortDecl& p, bool input)
         o["taps"] = p.taps;
     if (input && p.reach != 0)
         o["reach"] = p.reach;
+    if (input && !p.implicit.empty())
+        o["implicit"] = p.implicit;
     return o;
 }
 

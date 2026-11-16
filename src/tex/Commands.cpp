@@ -118,8 +118,10 @@ json portStateJson(const PortDecl& p, const GNode* n, const Graph* g, bool input
         {
             j["linked"] = !g->linksInto(n->name, p.id).empty();
             auto it = n->values.find(p.id);
-            j["value"] = it != n->values.end() ? *it : p.defaultValue;
+            j["value"] = it != n->values.end() ? *it : p.implicit.empty() ? p.defaultValue : json();
         }
+        if (!p.implicit.empty())
+            j["implicit"] = p.implicit;
         if (p.taps != 1)
             j["taps"] = p.taps;
     }

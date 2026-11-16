@@ -1731,7 +1731,8 @@ void NodeEditor::rebuildSidePanel()
             json value = s.value("value", json());
             if (value.is_null() && s.contains("implicit"))
             {
-                auto* l = new QLabel("implicit " + qs(s["implicit"].get<std::string>()), row);
+                const std::string implicit = s["implicit"].get<std::string>();
+                auto* l = new QLabel(implicit == "uv" ? QString("Mesh UV") : "implicit " + qs(implicit), row);
                 l->setStyleSheet("color: rgb(150,150,150);");
                 h->addWidget(l, 1);
             }

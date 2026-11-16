@@ -77,6 +77,8 @@ struct PortDecl
      * an unknown reach. A changed region of the input then changes only that region grown by it.
      */
     int reach = 0;
+    /** What an unlinked input without a set value reads instead of its default: "uv" is the texture coordinate. */
+    std::string implicit;
 };
 
 struct ParamDecl

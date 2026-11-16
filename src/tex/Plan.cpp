@@ -32,10 +32,17 @@ struct Ref
     PortType type = PortType::Float;
     /** Constants: the gU slot holding the value (-1 for a material, which reads as the default material). */
     int slot = -1;
+    /** An unlinked input reading the texture coordinate (PortDecl::implicit). */
+    bool uv = false;
 
     bool constant() const { return node < 0; }
     /** Identifies what a buffer would hold. */
-    std::string key() const { return constant() ? "c" + std::to_string(slot) : std::to_string(node) + "." + socket; }
+    std::string key() const
+    {
+        if (uv)
+            return "uv";
+        return constant() ? "c" + std::to_string(slot) : std::to_string(node) + "." + socket;
+    }
 };
 
 struct FlatNode
@@ -177,7 +184,8 @@ private:
         return fallback;
     }
 
-    Ref resolveInput(Scope& s, const GNode& n, const PortDecl& in)
+    /** implicitUv: the reader is a fused Slang node, which can read the coordinate in place of a constant. */
+    Ref resolveInput(Scope& s, const GNode& n, const PortDecl& in, bool implicitUv = false)
     {
         std::vector<GLink> links = s.g->linksInto(n.name, in.id);
         if (!links.empty())
@@ -187,7 +195,15 @@ private:
                 throw std::invalid_argument(s.prefix + n.name + "." + in.id + ": can't take a " + portTypeName(r.type));
             return r;
         }
-        return constantRef(s.prefix + n.name, in.id, in.type, valueFor(s, n, in.id, in.defaultValue));
+        const json value = valueFor(s, n, in.id, json());
+        if (implicitUv && in.implicit == "uv" && value.is_null())
+        {
+            Ref r;
+            r.type = in.type;
+            r.uv = true;
+            return r;
+        }
+        return constantRef(s.prefix + n.name, in.id, in.type, value.is_null() ? in.defaultValue : value);
     }
 
     Scope& childScope(Scope& s, const GNode& n, const NodePorts& ports)
@@ -270,7 +286,7 @@ private:
         f.def = ports.def;
         f.ports = ports;
         for (const PortDecl& in : ports.inputs)
-            f.inputs.push_back(resolveInput(s, n, in));
+            f.inputs.push_back(resolveInput(s, n, in, ports.def && ports.def->kind == NodeKind::Slang));
         for (const ParamDecl& p : ports.params)
         {
             json v = valueFor(s, n, p.id, p.defaultValue);
@@ -599,6 +615,8 @@ private:
     /** Expression for a ref's value at `uv` inside a pass whose own root is root. */
     std::string refExpr(const Ref& r, const std::string& rootKey)
     {
+        if (r.uv)
+            return r.type == PortType::Vector ? "float3(uv, 0.0)" : r.type == PortType::Color ? "float4(uv, 0.0, 1.0)" : "uv.x";
         if (r.constant())
             return r.type == PortType::Material ? std::string("texDefaultMaterial()") : "gU[" + std::to_string(r.slot) + "]" + swizzle(r.type);
         if (r.key() != rootKey && mBuffered.contains(r.key()))
@@ -745,6 +763,12 @@ private:
         std::string text = expandCode(n, n.def->code);
         for (const auto& [id, body] : n.def->body)
             text += "\n" + expandCode(n, body);
+        // An unlinked coordinate input reads the node's own uv, so what is sampled through it stays local.
+        for (size_t k = 0; k < n.inputs.size(); ++k)
+            if (n.inputs[k].uv)
+                for (const std::string& read : {n.ports.inputs[k].id + ".sample(uv).xy", n.ports.inputs[k].id + ".sample(uv)"})
+                    for (size_t at = text.find(read); at != std::string::npos; at = text.find(read, at))
+                        text.replace(at, read.size(), "uv");
         for (size_t k = 0; k < n.inputs.size(); ++k)
         {
             const bool atUv = samplesAtUv(text, n.ports.inputs[k].id, n);
