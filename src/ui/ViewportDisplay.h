@@ -79,6 +79,8 @@ inline constexpr const char* kToolbar = "/viewport/toolbar";
 inline constexpr const char* kHideUnusedItems = "/viewport/toolbar/hideUnused";
 /** Smooth preview draws the subdivided mesh's own edges; off, only the cage edges, following the smooth surface. */
 inline constexpr const char* kSmoothSubdivisions = "/viewport/smoothPreview/subdivisions";
+/** Component editing on a mesh with modifiers also draws the edges the modifiers add, faintly. */
+inline constexpr const char* kModifierEdges = "/viewport/modifierEdgesWhileEditing";
 /** Smooth preview keeps normals split along hard edges; off, it shades smooth across them, like Maya. */
 inline constexpr const char* kSmoothHardEdges = "/viewport/smoothPreview/hardEdges";
 inline constexpr const char* kVertexColors = "/viewport/vertexColors"; // "off", "shaded" (multiplied in) or "unlit"

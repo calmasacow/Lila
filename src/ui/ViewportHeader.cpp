@@ -1268,6 +1268,7 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
 
     m->addSection("Shading");
     row("viewport.wireOnShaded");
+    row("viewport.modifierEdges");
     for (const char* id : {"viewport.defaultMaterial", "viewport.greyBaseColor"})
         if (hdrRelevant(vc::Materials, id, mView))
             row(id);

@@ -870,6 +870,8 @@ void registerBuiltins()
                "Key hints on screen: the active tool's keys in its readout and corner list, and the layout's keys in the corner.");
     togglePref("viewport.smoothSubdivisions", "Show Smooth Subdivisions", vd::kSmoothSubdivisions, false,
                "Smooth preview draws the edges of every subdivided face, not just the edges of the mesh.");
+    togglePref("viewport.modifierEdges", "Show Modifier Edges", vd::kModifierEdges, false,
+               "Editing components on a mesh with modifiers (bevel, subdivide) also draws the edges the modifiers add, faintly.");
     togglePref("viewport.defaultMaterial", "Use Default Material", vd::kDefaultMaterial, false, "Shades every mesh with the plain default material.");
     togglePref("viewport.greyBaseColor", "Grey Base Color", vd::kGreyBaseColor, false,
                "Materials shade with a 50% grey base color, keeping their normal, packed and other maps, opacity and shading model.");

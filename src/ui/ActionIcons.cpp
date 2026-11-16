@@ -1027,6 +1027,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"display.smoothCage", "square-rounded"},
     {"display.smoothOn", "circle"},
     {"viewport.smoothSubdivisions", "grid-4x4"},
+    {"viewport.modifierEdges", "border-corner-rounded"},
     {"viewport.show.curve", "vector-bezier"},
     {"viewport.show.mesh", "cube"},
     {"viewport.show.joint", "bone"},

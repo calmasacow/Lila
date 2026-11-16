@@ -527,7 +527,8 @@ void MainWindow::buildPanelMenus()
                               "referenceOverlay.bindView", "referenceOverlay.goToView", "referenceOverlay.park"});
     menus::addActions("panel.Shading", {"viewport.wireframe", "viewport.shaded", "viewport.textured", "viewport.wireOnShaded", "", "viewport.toggleAO",
                                  "viewport.aid.twoSidedLighting", "viewport.aid.backfaceTint",
-                                 "", "display.smoothOff", "display.smoothCage", "display.smoothOn", "viewport.smoothSubdivisions"});
+                                 "", "display.smoothOff", "display.smoothCage", "display.smoothOn", "viewport.smoothSubdivisions",
+                                 "viewport.modifierEdges"});
     menus::addActions("panel.Show", {"display.hide", "display.show", "display.showLastHidden", "display.showAll", "", "viewport.isolate", "viewport.isolateAdd",
                               "viewport.isolateRemove", "viewport.show.curve", "viewport.show.mesh", "viewport.show.joint", "viewport.show.light",
                               "viewport.show.locator", "rig.xrayJoints", "measure.toggleShow",

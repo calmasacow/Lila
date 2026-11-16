@@ -840,6 +840,7 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         toggleField(viewport, "Panel toolbar", vd::kToolbar, true);
         toggleField(viewport, "Smooth preview shows the subdivided edges", vd::kSmoothSubdivisions, false);
         toggleField(viewport, "Smooth preview keeps hard edges", vd::kSmoothHardEdges, false);
+        toggleField(viewport, "Modifier edges while editing (faint)", vd::kModifierEdges, false);
         toggleField(viewport, "Hiding a parent hides its children", scene::kInheritVisibilityPref, true);
         sectionHeader(viewport, "Deformers");
         toggleField(viewport, "Evaluate deformers on the GPU (exports always use the CPU)", "/deformers/gpu", true);
