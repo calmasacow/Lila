@@ -262,14 +262,38 @@ public:
     QImage mTint;
     uint64_t mTintVersion = 0;
 
+    /** The selected meshes' UVs (the set's meshes when none is selected), in the unit square with v down; fit frames them. */
+    QRectF focus;
+    /** Frames the focus, else the whole image; the view then follows resizes and new focus until zoomed or panned. */
     void fit()
     {
+        mUserView = false;
         if (image.isNull())
             return;
-        const double span = double(std::max(image.width(), image.height())) * (tiled ? 3.0 : 1.0);
-        mScale = 0.92 * std::min(width(), height()) / span;
-        mPan = {};
+        const QSizeF size(image.size());
+        if (!tiled && focus.isValid() && !focus.isEmpty())
+        {
+            QRectF r(focus.x() * size.width(), focus.y() * size.height(), focus.width() * size.width(), focus.height() * size.height());
+            r = r.marginsAdded(QMarginsF(r.width(), r.height(), r.width(), r.height()) * 0.04);
+            mScale = std::clamp(0.92 * std::min(width() / r.width(), height() / r.height()), 0.02, 64.0);
+            mPan = (QPointF(size.width(), size.height()) * 0.5 - r.center()) * mScale;
+        }
+        else
+        {
+            const double span = std::max(size.width(), size.height()) * (tiled ? 3.0 : 1.0);
+            mScale = 0.92 * std::min(width(), height()) / span;
+            mPan = {};
+        }
         update();
+    }
+
+    void setFocus(const QRectF& r)
+    {
+        if (r == focus)
+            return;
+        focus = r;
+        if (!mUserView)
+            fit();
     }
 
     void setImage(QImage next)
@@ -406,6 +430,7 @@ protected:
         const QPointF c = e->position() - QPointF(width() * 0.5, height() * 0.5);
         mPan = c - (c - mPan) * (next / mScale);
         mScale = next;
+        mUserView = true;
         update();
     }
 
@@ -421,6 +446,7 @@ protected:
         if (mDragging && (e->buttons() & (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton)))
         {
             mPan += e->position() - mLast;
+            mUserView = true;
             mLast = e->position();
             update();
         }
@@ -457,11 +483,14 @@ protected:
 
     void resizeEvent(QResizeEvent*) override
     {
-        if (!mFitted && !image.isNull())
-        {
-            mFitted = true;
+        if (!mUserView)
             fit();
-        }
+    }
+
+    void showEvent(QShowEvent*) override
+    {
+        if (!mUserView)
+            fit();
     }
 
 private:
@@ -469,7 +498,8 @@ private:
     QPointF mPan;
     QPointF mLast;
     bool mDragging = false;
-    bool mFitted = false;
+    /** Zoomed or panned by hand: resizes and focus changes leave the view alone until the next fit. */
+    bool mUserView = false;
 };
 } // namespace
 
@@ -549,9 +579,32 @@ struct Texture2DView::Impl
     std::string shownSet;
     texture2d::Source shownSource;
     std::vector<const geo::Mesh*> uvMeshes;
+    bool showing = true;
     int sceneListener = 0;
     int redrawListener = 0;
     bool uvsQueued = false;
+
+    /** The UV bounds of a mesh's faces in the slots, in the unit square with v down; empty without UVs. */
+    static QRectF uvBounds(const geo::Mesh& mesh, const std::vector<int32_t>& slots)
+    {
+        const std::span<const glm::vec2> uv = mesh.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
+        const std::span<const int32_t> material = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
+        glm::vec2 lo(1e30f), hi(-1e30f);
+        if (!uv.empty())
+            for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
+            {
+                if (!mesh.faceValid(f) || std::find(slots.begin(), slots.end(), material.empty() ? 0 : material[f]) == slots.end())
+                    continue;
+                for (geo::Index c : mesh.faceCorners(f))
+                {
+                    lo = glm::min(lo, uv[c]);
+                    hi = glm::max(hi, uv[c]);
+                }
+            }
+        if (lo.x > hi.x)
+            return {};
+        return QRectF(QPointF(lo.x, 1.0 - hi.y), QPointF(hi.x, 1.0 - lo.y));
+    }
 
     /** The UV edges of the faces the shown set textures, on every mesh whose material it drives. */
     void rebuildUvs()
@@ -560,7 +613,8 @@ struct Texture2DView::Impl
         scene::Graph& g = scene::Graph::current();
         std::vector<std::pair<scene::MeshPtr, std::vector<int32_t>>> bound;
         std::vector<const geo::Mesh*> meshes;
-        if (canvas->showUvs && !set.empty())
+        std::vector<bool> selected;
+        if (!set.empty())
             for (scene::NodeId id : g.nodes())
             {
                 scene::Node* n = g.node(id);
@@ -578,12 +632,20 @@ struct Texture2DView::Impl
                     continue;
                 meshes.push_back(mesh.get());
                 bound.emplace_back(std::move(mesh), std::move(slots));
+                selected.push_back(g.isSelected(id) || g.isSelected(g.parent(id)));
             }
-        if (meshes == uvMeshes)
+        const bool anySelected = std::find(selected.begin(), selected.end(), true) != selected.end();
+        QRectF box;
+        for (size_t m = 0; m < bound.size(); ++m)
+            if (selected[m] || !anySelected)
+                box = box.united(uvBounds(*bound[m].first, bound[m].second));
+        canvas->setFocus(box);
+        if (meshes == uvMeshes && showing == canvas->showUvs)
             return;
         uvMeshes = std::move(meshes);
+        showing = canvas->showUvs;
         QList<QLineF> lines;
-        for (const auto& [mesh, slots] : bound)
+        for (const auto& [mesh, slots] : canvas->showUvs ? bound : decltype(bound){})
         {
             const std::span<const glm::vec2> uv = mesh->cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
             if (uv.empty())
@@ -828,9 +890,9 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
         if (self && self->isVisible() && (!quickMaskSet().empty() || !self->d->canvas->mTint.isNull()))
             self->d->canvas->update();
     });
-    // Mesh edits and material assignments change the UVs drawn without touching the set.
-    d->sceneListener = scene::Graph::current().addListener([self](scene::Change change, scene::NodeId) {
-        if (!self || change == scene::Change::Selection || self->d->uvsQueued || !self->isVisible())
+    // Mesh edits and material assignments change the UVs drawn without touching the set; selection changes what fit frames.
+    d->sceneListener = scene::Graph::current().addListener([self](scene::Change, scene::NodeId) {
+        if (!self || self->d->uvsQueued || !self->isVisible())
             return;
         self->d->uvsQueued = true;
         QTimer::singleShot(0, self, [self] {
