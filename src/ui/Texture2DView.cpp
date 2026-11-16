@@ -2,6 +2,7 @@
 
 #include "core/Profile.h"
 #include "geo/Mesh.h"
+#include "render/PaintGpu.h"
 #include "render/RenderMesh.h"
 #include "scene/Graph.h"
 #include "scene/Materials.h"
@@ -22,6 +23,7 @@
 #include "ui/TexturePaintTool.h"
 #include "ui/Theme.h"
 #include "ui/UiCommon.h"
+#include "ui/UvTexturePaint.h"
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportTool.h"
 
@@ -63,6 +65,7 @@ struct Controller
     std::map<int, std::function<void()>> listeners;
     int nextListener = 1;
     int sceneListener = 0;
+    int paintListener = 0;
     bool queued = false;
     /** Slot name -> bound set, rebuilt after scene edits. */
     std::map<std::string, std::string> bindings;
@@ -117,6 +120,21 @@ void installSceneListener()
     Controller& c = ctl();
     if (c.sceneListener)
         return;
+    // Paint shows once the strokes settle: each update reads the painted tiles back, too much for every dab.
+    c.paintListener = render::paint::addChangeListener([](scene::NodeId id) {
+        static QTimer* settle = nullptr;
+        const scene::Node* set = tex::findSet(scene::Graph::current(), ctl().source.set);
+        if (!set || set->id() != id || !QCoreApplication::instance())
+            return;
+        if (!settle)
+        {
+            settle = new QTimer(QCoreApplication::instance());
+            settle->setSingleShot(true);
+            settle->setInterval(250);
+            QObject::connect(settle, &QTimer::timeout, [] { requestSoon(); });
+        }
+        settle->start();
+    });
     c.sceneListener = scene::Graph::current().addListener([](scene::Change change, scene::NodeId id) {
         Controller& c = ctl();
         if (change == scene::Change::Selection || change == scene::Change::Connection || change == scene::Change::Reparented)
@@ -171,7 +189,7 @@ void request()
             c.result.error = "no texture set named '" + c.source.set + "'";
     }
     else
-        c.result = texPreview::get({c.source.set, c.source.node, c.source.socket, c.source.channel, c.size}, [] { requestSoon(); });
+        c.result = texPreview::get({c.source.set, c.source.node, c.source.socket, c.source.channel, c.size, true}, [] { requestSoon(); });
     updateMeshTexture();
     notify();
 }
@@ -264,6 +282,22 @@ public:
 
     /** The selected meshes' UVs (the set's meshes when none is selected), in the unit square with v down; fit frames them. */
     QRectF focus;
+    /** The texture paint brush in uv space, as the UV editor paints: on while Texture Paint is the active tool. */
+    UvTexturePaint brush;
+
+    /** Texture Paint is the active tool and there is an image to paint over. */
+    bool paintsHere() const { return !image.isNull() && brush.shown() && texturePaintActive(); }
+
+    double pxPerUv() const { return double(image.width()) * mScale; }
+
+    UvTexturePaint::ToUv toUvFn() const
+    {
+        return [this](const QPointF& w) {
+            const QPointF t = toTexel(w);
+            return glm::dvec2(t.x() / image.width(), 1.0 - t.y() / image.height());
+        };
+    }
+
     /** Frames the focus, else the whole image; the view then follows resizes and new focus until zoomed or panned. */
     void fit()
     {
@@ -357,6 +391,8 @@ protected:
             drawUvs(p, topLeft, sz);
         if (histogram && !bins[0].empty())
             drawHistogram(p);
+        if (paintsHere() && rect().contains(mMouse.toPoint()))
+            brush.drawCursor(p, mMouse);
     }
 
     /** The quick mask's tint while it limits strokes on the set shown, kept per tint version. */
@@ -436,6 +472,12 @@ protected:
 
     void mousePressEvent(QMouseEvent* e) override
     {
+        // With Texture Paint on, the left button paints (Alt+left still pans); middle and right always pan.
+        if (paintsHere() && !(e->modifiers() & Qt::AltModifier) && brush.mousePress(e, toUvFn(), pxPerUv()))
+        {
+            mStroking = true;
+            return;
+        }
         mLast = e->position();
         mDragging = true;
         setCursor(Qt::ClosedHandCursor);
@@ -443,6 +485,15 @@ protected:
 
     void mouseMoveEvent(QMouseEvent* e) override
     {
+        mMouse = e->position();
+        if (mStroking)
+        {
+            brush.mouseMove(e, toUvFn(), pxPerUv());
+            update();
+            return;
+        }
+        if (paintsHere())
+            update();
         if (mDragging && (e->buttons() & (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton)))
         {
             mPan += e->position() - mLast;
@@ -465,10 +516,22 @@ protected:
         }
     }
 
-    void mouseReleaseEvent(QMouseEvent*) override
+    void mouseReleaseEvent(QMouseEvent* e) override
     {
+        if (mStroking)
+        {
+            brush.mouseRelease(e, toUvFn(), pxPerUv());
+            mStroking = false;
+            return;
+        }
         mDragging = false;
         unsetCursor();
+    }
+
+    void leaveEvent(QEvent*) override
+    {
+        mMouse = QPointF(-1e6, -1e6);
+        update();
     }
 
     void mouseDoubleClickEvent(QMouseEvent*) override { fit(); }
@@ -500,6 +563,8 @@ private:
     bool mDragging = false;
     /** Zoomed or panned by hand: resizes and focus changes leave the view alone until the next fit. */
     bool mUserView = false;
+    bool mStroking = false;
+    QPointF mMouse{-1e6, -1e6};
 };
 } // namespace
 
@@ -737,6 +802,8 @@ struct Texture2DView::Impl
             shownSet = c.source.set;
             shownSource = c.source;
             rebuildSources();
+            // The brush paints the set shown; a node output shown still paints its set's channels.
+            canvas->brush.setChannel(c.source.set, c.source.channel.empty() ? std::string("baseColor") : c.source.channel);
         }
         rebuildUvs();
         if (c.result.image != data || c.result.type != type)
@@ -833,6 +900,7 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
     lay->addWidget(bar);
 
     d->canvas = new Canvas(this);
+    d->canvas->brush.setPainting(true);
     lay->addWidget(d->canvas, 1);
     auto* foot = new QWidget(this);
     auto* fl = new QVBoxLayout(foot);

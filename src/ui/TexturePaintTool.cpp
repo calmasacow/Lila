@@ -4482,6 +4482,8 @@ std::optional<std::pair<std::string, std::string>> actionTarget()
 
 void startTexturePaint() { viewportTools::set(std::make_unique<TexturePaintTool>()); }
 
+bool texturePaintActive() { return dynamic_cast<TexturePaintTool*>(viewportTools::active()) != nullptr; }
+
 QWidget* texturePaintPage(QWidget* parent)
 {
     TexturePaintPanel* page = brushPage();

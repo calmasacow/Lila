@@ -25,6 +25,9 @@ namespace lila::ui
  */
 LILA_UI_API void startTexturePaint();
 
+/** Texture Paint is the active viewport tool (the 2D View paints with it then). */
+LILA_UI_API bool texturePaintActive();
+
 /**
  * The texture paint tool's current stroke settings, for other surfaces that paint with them (the UV editor):
  * {"brush": brush::BrushSettings JSON, "payload": tex::paint::Payload JSON, "particles": spec or null}.
