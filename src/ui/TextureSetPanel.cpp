@@ -2608,6 +2608,8 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->sets = new QComboBox(this);
     d->sets->setObjectName("setPicker");
     d->sets->setToolTip("The texture set shown");
+    d->sets->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    d->sets->setMinimumContentsLength(10);
     d->follow = new QToolButton(this);
     d->follow->setText("Follow");
     d->follow->setToolTip("Follow: show the set of the selected mesh's material");
@@ -2623,7 +2625,8 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->variants->setObjectName("variantPicker");
     d->variants->setToolTip("Variant: the set's look shown and edited. A variant overrides layer settings (visibility, opacity, "
                             "materials, seeds) over the base; Export with variants writes them all");
-    d->variants->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    d->variants->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    d->variants->setMinimumContentsLength(6);
     top->addWidget(d->sets, 1);
     top->addWidget(d->variants);
     top->addWidget(d->follow);
@@ -2633,9 +2636,9 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     {
         auto* mode = new controls::Segmented(this);
         mode->setObjectName("viewMode");
-        mode->add("3D", {}, "3D: the viewport alone", int(ViewportLayout::TextureView::View3D));
-        mode->add("Split", {}, "Split: the viewport beside the texture laid out in UV space", int(ViewportLayout::TextureView::Split));
-        mode->add("2D", {}, "2D: the texture laid out in UV space, in place of the viewport", int(ViewportLayout::TextureView::View2D));
+        mode->add({}, "box", "3D: the viewport alone", int(ViewportLayout::TextureView::View3D));
+        mode->add({}, "layout-columns", "Split: the viewport beside the texture laid out in UV space", int(ViewportLayout::TextureView::Split));
+        mode->add({}, "texture", "2D: the texture laid out in UV space, in place of the viewport", int(ViewportLayout::TextureView::View2D));
         mode->setCurrent(int(views->textureView()));
         mode->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Fixed);
         connect(mode, &controls::Segmented::picked, views, [views](int id) { views->setTextureView(ViewportLayout::TextureView(id)); });

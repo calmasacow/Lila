@@ -520,6 +520,7 @@ QString appStyleSheet(const themes::Theme& t)
         QToolButton[role="overflow"]::menu-indicator { image: none; width: 0; }
         QWidget[role="segmented"] { background: $chrome; border-radius: 5px; }
         QToolButton[role="segment"] { background: transparent; color: $dim; padding: 3px 10px; border-radius: 3px; font-weight: 500; }
+        QToolButton[role="segment"][iconOnly="true"] { padding: 3px 4px; }
         QToolButton[role="segment"]:hover { background: $hover; color: $text; }
         QToolButton[role="segment"]:checked { background: $sel; color: $selText; }
         QToolButton[role="segment"]:disabled { color: $disabled; }

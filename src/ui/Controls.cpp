@@ -313,6 +313,12 @@ QToolButton* Segmented::add(const QString& text, const QString& iconName, const 
     b->setToolTip(tip);
     b->setAccessibleName(text.isEmpty() ? tip : text);
     b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    // Qt squashes the icon's pixmap into whatever width is left inside the padding, so an icon-only segment keeps its icon's width.
+    if (text.isEmpty() && !iconName.isEmpty())
+    {
+        b->setProperty("iconOnly", true);
+        b->setMinimumWidth(b->iconSize().width() + 8);
+    }
     setRole(b, "segment");
     mGroup->addButton(b, id);
     mRow->addWidget(b, 1);
