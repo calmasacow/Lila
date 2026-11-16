@@ -87,5 +87,5 @@ if (Test-Path "$SiteDir\index.html") {
     [IO.File]::WriteAllText("$SiteDir\download.json", ($site | ConvertTo-Json -Depth 4) + "`n")
     "Wrote $SiteDir\download.json: commit and push Lila-3D so the site's Download button serves $version."
 } else {
-    "No Lila-3D checkout at $SiteDir: the site's Download button still serves the previous version."
+    "No Lila-3D checkout at ${SiteDir}: the site's Download button still serves the previous version."
 }
