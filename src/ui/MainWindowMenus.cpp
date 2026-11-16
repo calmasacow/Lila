@@ -362,8 +362,9 @@ void MainWindow::buildMenus()
     menus::addActions("Animation", {"#Offsets", "anim.createOffset", "anim.bakeOffset", "anim.deleteOffset", "window.offsets"});
     menus::addActions("Animation", {"#Retarget", "anim.retarget", "anim.characterize", "window.retargeter"});
 
-    menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Level", "Animate", "Effects"});
-    menus::addActions("Render", {"#Render", "render.frame", "render.sequence", "render.turntable", "window.renderOutput", "window.renderSettings", "#Look",
+    menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Render", "Level", "Animate", "Effects"});
+    menus::addActions("Render", {"window.renderToolkit", "#Output", "render.frame", "render.sequence", "render.turntable", "render.openLast", "render.showFolder",
+                                 "window.renderSettings", "#Look",
                                  "render.postProcess", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "camera.pickFocus"});
     addSubmenu("Render", "Reflections", syncChecks);
     menus::addActions("Render/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
@@ -378,8 +379,8 @@ void MainWindow::buildMenus()
     });
     addItem({.id = "Windows/layouts", .menu = "Windows", .kind = Kind::Custom, .setup = [this](QMenu* m) { m->addMenu(mLayouts->menu()); }});
     menus::addActions("Windows", {"window.resetLayout", "window.expandPanels", "window.toggleMaximizePanel", "#Menu Set", "menuSet.follow", "menuSet.model",
-                                  "menuSet.uv", "menuSet.sculpt", "menuSet.texture", "menuSet.rig", "menuSet.animate", "menuSet.level", "#Tools",
-                                  "window.modelingToolkit", "window.topologyToolkit", "window.curveToolkit", "window.uvToolkit", "window.levelToolkit",
+                                  "menuSet.uv", "menuSet.sculpt", "menuSet.texture", "menuSet.render", "menuSet.rig", "menuSet.animate", "menuSet.level", "#Tools",
+                                  "window.modelingToolkit", "window.topologyToolkit", "window.curveToolkit", "window.uvToolkit", "window.levelToolkit", "window.renderToolkit",
                                   "#Show", "window.toggleToolBox",
                            "window.toggleChannelBox", "window.toggleUvEditor", "window.commandPalette", "view.presenter", "reference.addImages", "reference.clickable", "#Customize",
                            "viewport.customizeHeader", "window.customizeToolBox", "window.markingMenuEditor", "window.userMenuEditor", "window.extensionManager"});
@@ -429,7 +430,7 @@ void MainWindow::buildMenus()
 void MainWindow::raiseToolsFor(const std::string& set)
 {
     // The tools column follows the work too: its tab for the set comes forward when that panel is open.
-    static const std::map<std::string, const char*> kTools = {{"Model", kModelingToolkitDock}, {"Level", kLevelToolkitDock}, {"Texture", "textureSets"}, {"Cloth", "tailorToolkit"}};
+    static const std::map<std::string, const char*> kTools = {{"Model", kModelingToolkitDock}, {"Level", kLevelToolkitDock}, {"Render", kRenderToolkitDock}, {"Texture", "textureSets"}, {"Cloth", "tailorToolkit"}};
     auto it = kTools.find(set);
     if (it == kTools.end())
         return;

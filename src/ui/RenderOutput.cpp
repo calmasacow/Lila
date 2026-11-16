@@ -229,9 +229,33 @@ std::string defaultPattern()
     return (dir / (stem + ".####.png")).generic_string();
 }
 
+std::string defaultVideo()
+{
+    std::string p = defaultPattern();
+    const size_t hash = p.find('#');
+    if (hash != std::string::npos)
+        p.erase(hash > 0 && p[hash - 1] == '.' ? hash - 1 : hash);
+    return p + ".mp4";
+}
+
+std::string withSuffix(std::string path, const std::string& suffix)
+{
+    if (suffix.empty() || path.empty())
+        return path;
+    const size_t slash = path.find_last_of("/\\");
+    const size_t name = slash == std::string::npos ? 0 : slash + 1;
+    const size_t hash = path.find('#', name);
+    const size_t dot = path.find_last_of('.');
+    size_t at = hash != std::string::npos ? hash : dot != std::string::npos && dot > name ? dot : path.size();
+    if (hash != std::string::npos && at > name && (path[at - 1] == '.' || path[at - 1] == '_'))
+        --at;
+    path.insert(at, suffix);
+    return path;
+}
+
 namespace
 {
-/** A flag's value, else the Render Output window's setting for it (saved with the scene), else fallback. */
+/** A flag's value, else the Render panel's setting for it (saved with the scene), else fallback. */
 json setting(const Args& a, const char* key, const json& fallback)
 {
     if (a.has(key))
@@ -240,6 +264,20 @@ json setting(const Args& a, const char* key, const json& fallback)
     if (auto it = o.find(key); it != o.end() && !it->is_null() && (!it->is_string() || !it->get<std::string>().empty()))
         return *it;
     return fallback;
+}
+
+/** Where a run of frames goes: path and video when the call names either, else the Render panel's by its Write choice. */
+std::pair<std::string, std::string> targets(const Args& a, const std::string& suffix)
+{
+    if (a.has("path") || a.has("video"))
+        return {a.get<std::string>("path", ""), a.get<std::string>("video", "")};
+    const std::string what = setting(a, "write", "video").get<std::string>();
+    std::pair<std::string, std::string> out;
+    if (what != "video")
+        out.first = withSuffix(setting(a, "path", defaultPattern()).get<std::string>(), suffix);
+    if (what != "images")
+        out.second = withSuffix(setting(a, "video", defaultVideo()).get<std::string>(), suffix);
+    return out;
 }
 } // namespace
 
@@ -908,7 +946,7 @@ void registerCommands()
 
     std::vector<FlagDef> single = renderFlags();
     single.push_back({"path", "p", T::String, nullptr,
-                      "Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render Output images, numbered, when left out."});
+                      "Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render panel's images, numbered, when left out."});
     single.push_back({"frame", "f", T::Float, nullptr, "Frame to render; the current one when left out."});
     ops::registerCommand({
         .name = "render",
@@ -935,9 +973,13 @@ void registerCommands()
     });
 
     std::vector<FlagDef> seq = renderFlags();
-    seq.push_back({"path", "p", T::String, nullptr,
-                   "Images to write, #### standing for the frame number (added when missing). The Render Output images when left out."});
+    const FlagDef writeFlag{"write", "wr", T::String, nullptr,
+                            "With path and video left out: images, video or both, at the Render panel's paths. The Render panel's choice "
+                            "by default, else video.",
+                            {"images", "video", "both"}};
+    seq.push_back({"path", "p", T::String, nullptr, "Images to write, #### standing for the frame number (added when missing)."});
     seq.push_back({"video", "v", T::String, nullptr, "An .mp4 to encode the frames into."});
+    seq.push_back(writeFlag);
     seq.push_back({"codec", "", T::String, nullptr, "Video codec: h264 (default) or hevc.", {"h264", "hevc"}});
     seq.push_back({"quality", "q", T::Float, nullptr, "Video quality, 0 to 1 (0.6 by default).", {}, {}, 0.0, 1.0});
     seq.push_back({"start", "st", T::Float, nullptr, "First frame; the playback range's when left out."});
@@ -949,8 +991,7 @@ void registerCommands()
         .flags = seq,
         .undoable = false,
         .run = [optionsFrom](const Args& a) -> json {
-            const std::string videoPath = setting(a, "video", "").get<std::string>();
-            const std::string pattern = setting(a, "path", videoPath.empty() ? defaultPattern() : "").get<std::string>();
+            const auto [pattern, videoPath] = targets(a, "");
             if (pattern.empty() && videoPath.empty())
                 throw CommandError("renderSequence: give path= (images), video= (.mp4) or both");
             Options o = optionsFrom(a);
@@ -980,19 +1021,20 @@ void registerCommands()
     });
 
     std::vector<FlagDef> tt = renderFlags();
-    tt.push_back({"path", "p", T::String, nullptr, "Images to write, #### standing for the frame number. Left out with video= given, video only."});
+    tt.push_back({"path", "p", T::String, nullptr, "Images to write, #### standing for the frame number."});
     tt.push_back({"video", "v", T::String, nullptr, "An .mp4 to encode the turntable into."});
+    tt.push_back(writeFlag);
     tt.push_back({"codec", "", T::String, nullptr, "Video codec: h264 (default) or hevc.", {"h264", "hevc"}});
     tt.push_back({"quality", "q", T::Float, nullptr, "Video quality, 0 to 1 (0.6 by default).", {}, {}, 0.0, 1.0});
-    tt.push_back({"frames", "fr", T::Int, 120, "Frames for the whole turn.", {}, {}, 2.0, 10000.0});
-    tt.push_back({"turns", "", T::Float, 1.0, "Turns over the frames.", {}, {}, 0.01, 100.0});
-    tt.push_back({"spin", "", T::String, "object",
+    tt.push_back({"frames", "fr", T::Int, nullptr, "Frames for the whole turn; 120 by default.", {}, {}, 2.0, 10000.0});
+    tt.push_back({"turns", "", T::Float, nullptr, "Turns over the frames; 1 by default.", {}, {}, 0.01, 100.0});
+    tt.push_back({"spin", "", T::String, nullptr,
                   "object (the model turns in fixed light), camera (the camera circles, the light stays), lights, or turntable (a "
                   "turntable node turns its members through the view's own camera).",
                   {"object", "camera", "lights", "turntable"}});
     tt.push_back({"turntable", "tt", T::String, nullptr, "With spin=turntable: the turntable; the selected one or the first by default."});
-    tt.push_back({"pitch", "", T::Float, -15.0, "Camera elevation, degrees (negative looks down).", {}, {}, -89.0, 89.0});
-    tt.push_back({"yaw", "", T::Float, 35.0, "Starting angle around the up axis, degrees.", {}, {}, -360.0, 360.0});
+    tt.push_back({"pitch", "", T::Float, nullptr, "Camera elevation, degrees (negative looks down); -15 by default.", {}, {}, -89.0, 89.0});
+    tt.push_back({"yaw", "", T::Float, nullptr, "Starting angle around the up axis, degrees; 35 by default.", {}, {}, -360.0, 360.0});
     ops::registerCommand({
         .name = "renderTurntable",
         .doc = "Render a loop turning around the selection (or everything shown), framed to fit, into images, an .mp4, or both. The last frame stops "
@@ -1000,25 +1042,18 @@ void registerCommands()
         .flags = tt,
         .undoable = false,
         .run = [optionsFrom](const Args& a) -> json {
-            const std::string videoPath = a.get<std::string>("video", "");
-            std::string pattern = a.get<std::string>("path", "");
+            // The Render panel's paths get their own turntable names, so a turntable never overwrites the shot.
+            const auto [pattern, videoPath] = targets(a, "_turntable");
             if (pattern.empty() && videoPath.empty())
-            {
-                // The Render Output images, as their own turntable sequence.
-                pattern = setting(a, "path", defaultPattern()).get<std::string>();
-                const size_t hash = pattern.find('#');
-                const size_t dot = pattern.find_last_of('.');
-                const size_t at = hash != std::string::npos ? hash : dot != std::string::npos ? dot : pattern.size();
-                pattern.insert(at > 0 && pattern[at - 1] == '.' ? at - 1 : at, "_turntable");
-            }
+                throw CommandError("renderTurntable: give path= (images), video= (.mp4) or both");
             Options o = optionsFrom(a);
             o.hdr = !pattern.empty() && lower(paths::fromUtf8(pattern).extension().string()) == ".exr";
             o.orbit = true;
-            o.orbitPitch = a.get<double>("pitch", -15.0);
-            const int frames = a.get<int>("frames", 120);
-            const double turns = a.get<double>("turns", 1.0);
-            const std::string spin = a.get<std::string>("spin", "object");
-            const double yaw0 = a.get<double>("yaw", 35.0);
+            o.orbitPitch = setting(a, "pitch", -15.0).get<double>();
+            const int frames = std::max(setting(a, "frames", 120).get<int>(), 2);
+            const double turns = setting(a, "turns", 1.0).get<double>();
+            const std::string spin = setting(a, "spin", "object").get<std::string>();
+            const double yaw0 = setting(a, "yaw", 35.0).get<double>();
             Sequence seq;
             seq.command = "renderTurntable";
             seq.pattern = pattern;

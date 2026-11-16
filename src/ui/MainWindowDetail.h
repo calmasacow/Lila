@@ -65,6 +65,7 @@
 #include "ui/TopologyToolkit.h"
 #include "ui/CurveToolkit.h"
 #include "ui/LevelToolkit.h"
+#include "ui/RenderToolkit.h"
 #include "ui/ModifierStack.h"
 #include "ui/OptionBox.h"
 #include "ui/NodeEditor.h"

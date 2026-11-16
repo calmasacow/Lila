@@ -55,7 +55,7 @@ using nlohmann::json;
 namespace
 {
 /** The layouts that always have a tab; the rest are one click away in the tab strip's + menu. */
-const std::vector<std::string> kTabLayouts = {"Model", "Sculpt", "UV", "Bake", "Texture", "Rig", "Animate", "Level"};
+const std::vector<std::string> kTabLayouts = {"Model", "Sculpt", "UV", "Bake", "Texture", "Render", "Rig", "Animate", "Level"};
 
 std::map<std::string, std::function<QDockWidget*()>>& lazyDocks()
 {

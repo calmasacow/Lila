@@ -7818,7 +7818,7 @@ def render(camera: str | None = None, width: int | None = None, height: int | No
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
         passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
-        path: Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render Output images, numbered, when left out. Short form p.
+        path: Image to write: png, jpg, tga, tif, exr (linear light) or psd. The Render panel's images, numbered, when left out. Short form p.
         frame: Frame to render; the current one when left out. Short form f.
     """
 
@@ -7835,7 +7835,7 @@ def renderMaterialThumbnail(*objects: Any, size: int | None = None, mesh: str | 
         all: Every library material (the scene's sets excluded). Default False.
     """
 
-def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
+def renderSequence(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, write: str | None = None, codec: str | None = None, quality: float | None = None, start: float | None = None, end: float | None = None, step: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, wr: str | None = None, q: float | None = None, st: float | None = None, en: float | None = None, by: float | None = None) -> Any:
     """Render a frame range through a camera into an image sequence, an .mp4, or both. Returns {frames, path, video}.
 
     Args:
@@ -7848,8 +7848,9 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
         passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
-        path: Images to write, #### standing for the frame number (added when missing). The Render Output images when left out. Short form p.
+        path: Images to write, #### standing for the frame number (added when missing). Short form p.
         video: An .mp4 to encode the frames into. Short form v.
+        write: With path and video left out: images, video or both, at the Render panel's paths. The Render panel's choice by default, else video. Short form wr. One of 'images', 'video', 'both'.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.
         quality: Video quality, 0 to 1 (0.6 by default). Short form q.
         start: First frame; the playback range's when left out. Short form st.
@@ -7857,7 +7858,7 @@ def renderSequence(camera: str | None = None, width: int | None = None, height: 
         step: Frames between renders (1 by default). Short form by.
     """
 
-def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
+def renderTurntable(camera: str | None = None, width: int | None = None, height: int | None = None, scale: float | None = None, samples: int | None = None, motionBlur: bool | None = None, transparent: bool | None = None, renderPass: str | None = None, passes: str | None = None, path: str | None = None, video: str | None = None, write: str | None = None, codec: str | None = None, quality: float | None = None, frames: int | None = None, turns: float | None = None, spin: str | None = None, turntable: str | None = None, pitch: float | None = None, yaw: float | None = None, *, c: str | None = None, w: int | None = None, h: int | None = None, s: int | None = None, mb: bool | None = None, tr: bool | None = None, rp: str | None = None, ps: str | None = None, p: str | None = None, v: str | None = None, wr: str | None = None, q: float | None = None, fr: int | None = None, tt: str | None = None) -> Any:
     """Render a loop turning around the selection (or everything shown), framed to fit, into images, an .mp4, or both. The last frame stops one step short of the first, so the video loops. Returns {frames, path, video}.
 
     Args:
@@ -7870,16 +7871,17 @@ def renderTurntable(camera: str | None = None, width: int | None = None, height:
         transparent: No backdrop: alpha is coverage (png, tif, exr, psd). Short form tr.
         renderPass: beauty; wireframe (beauty with every edge drawn, for breakdowns); or id (each object a flat colour from its path, for compositing mattes). Short form rp. One of 'beauty', 'wireframe', 'id'. Default 'beauty'.
         passes: Compositing passes beside the beauty in a multilayer EXR, comma separated: depth, normal, motion, cryptoObject, cryptoMaterial, or all. Short form ps.
-        path: Images to write, #### standing for the frame number. Left out with video= given, video only. Short form p.
+        path: Images to write, #### standing for the frame number. Short form p.
         video: An .mp4 to encode the turntable into. Short form v.
+        write: With path and video left out: images, video or both, at the Render panel's paths. The Render panel's choice by default, else video. Short form wr. One of 'images', 'video', 'both'.
         codec: Video codec: h264 (default) or hevc. One of 'h264', 'hevc'.
         quality: Video quality, 0 to 1 (0.6 by default). Short form q.
-        frames: Frames for the whole turn. Short form fr. Default 120.
-        turns: Turns over the frames. Default 1.0.
-        spin: object (the model turns in fixed light), camera (the camera circles, the light stays), lights, or turntable (a turntable node turns its members through the view's own camera). One of 'object', 'camera', 'lights', 'turntable'. Default 'object'.
+        frames: Frames for the whole turn; 120 by default. Short form fr.
+        turns: Turns over the frames; 1 by default.
+        spin: object (the model turns in fixed light), camera (the camera circles, the light stays), lights, or turntable (a turntable node turns its members through the view's own camera). One of 'object', 'camera', 'lights', 'turntable'.
         turntable: With spin=turntable: the turntable; the selected one or the first by default. Short form tt.
-        pitch: Camera elevation, degrees (negative looks down). Default -15.0.
-        yaw: Starting angle around the up axis, degrees. Default 35.0.
+        pitch: Camera elevation, degrees (negative looks down); -15 by default.
+        yaw: Starting angle around the up axis, degrees; 35 by default.
     """
 
 def reorderAnimLayer(*objects: Any, index: int | None = None, by: int | None = None, i: int | None = None, b: int | None = None) -> Any:

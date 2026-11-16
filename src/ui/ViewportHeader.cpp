@@ -1404,9 +1404,28 @@ void ViewportHeader::fillLightingMenu(QMenu* m)
     hdrSubmenu(m, "HDRI", [](QMenu* s) { fillEnvironmentMenu(s); });
     actionRow(m, "viewport.toggleEnvBackground");
 
-    m->addSection("Shadows");
+    m->addSection("Shadows and Reflections");
     actionRow(m, "viewport.toggleShadows", lilaDraws);
+    actionRow(m, "viewport.toggleRtShadows", lilaDraws);
     actionRow(m, "viewport.toggleAO", lilaDraws);
+    QHBoxLayout* reflRow = hdrRow(m, "Reflections", &holder);
+    auto* reflections = new controls::Segmented(holder);
+    static constexpr const char* kReflections[] = {"off", "screenSpace", "rayTraced"};
+    static constexpr const char* kReflectionLabels[] = {"Off", "Screen", "Traced"};
+    const std::string reflection = PrefStore::get().value<std::string>("general", vd::kReflections, "off");
+    for (int i = 0; i < 3; ++i)
+    {
+        const std::string id = std::string("viewport.reflections.") + kReflections[i];
+        reflections->add(kReflectionLabels[i], {}, hdrTip(id), i);
+        if (reflection == kReflections[i])
+            reflections->setCurrent(i);
+    }
+    reflections->setEnabled(lilaDraws);
+    reflRow->addWidget(reflections, 1);
+    connect(reflections, &controls::Segmented::picked, this, [this](int i) {
+        activateView();
+        actions::run(std::string("viewport.reflections.") + kReflections[i]);
+    });
 
     m->addSection("Exposure");
     QHBoxLayout* r = hdrRow(m, "Exposure", &holder);

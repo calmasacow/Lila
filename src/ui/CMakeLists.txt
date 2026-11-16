@@ -18,7 +18,7 @@ lila_module(lila_ui UI
     AgentCapture.cpp AgentCapture.h
     HeightfieldDisplay.cpp HeightfieldDisplay.h
     RenderOutput.cpp RenderOutput.h
-    RenderOutputDialog.cpp RenderOutputDialog.h
+    RenderToolkit.cpp RenderToolkit.h
     AgentSetup.cpp AgentSetup.h
     Animation.cpp Animation.h
     ApiReference.cpp ApiReference.h

@@ -66,6 +66,10 @@ LILA_UI_API QImage lastImage();
 
 /** Where renders go when nothing says: renders/<scene>.####.png beside the scene, or a Lila Renders folder at home. */
 LILA_UI_API std::string defaultPattern();
+/** The video defaultPattern() goes with: renders/<scene>.mp4. */
+LILA_UI_API std::string defaultVideo();
+/** path with suffix before its frame number run, or before its extension: "a.####.png" + "_tt" is "a_tt.####.png". */
+LILA_UI_API std::string withSuffix(std::string path, const std::string& suffix);
 /** pattern with its run of # replaced by the frame number, zero padded to the run's length; added before the extension if missing. */
 LILA_UI_API std::string framePath(const std::string& pattern, int frame);
 

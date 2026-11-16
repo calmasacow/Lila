@@ -9,7 +9,7 @@
 #include "ui/AudioUi.h"
 #include "ui/MediaLane.h"
 #include "ui/MenuContext.h"
-#include "ui/RenderOutputDialog.h"
+#include "ui/RenderToolkit.h"
 #include "ui/PerfTrace.h"
 #include "ui/ReferenceOverlay.h"
 #include "ui/ReferenceSet.h"
@@ -365,32 +365,20 @@ void MainWindow::registerActions()
     actions::add({"viewport.cameraSettings", "Camera Settings...", "View",
                   [this] { RenderSettingsDialog::open(this, mViewports->active()->viewName()); }, nullptr,
                   "The active view's camera gates, film fit, overscan and gate mask."});
-    actions::add({"window.renderOutput", "Render Output...", "Render", [this] {
-                      if (!closeShownWindow<RenderOutputDialog>())
-                          RenderOutputDialog::open(this);
-                  }, nullptr,
-                  "Camera, samples, motion blur, frame range, images and video for renders.",
-                  "lila.ops.renderSequence(video=\"shot.mp4\", samples=64)"});
-    actions::add({"render.frame", "Render Frame", "Render", [] { RenderOutputDialog::renderFrame(); }, nullptr,
-                  "Renders the current frame with the Render Output settings: post process, depth of field and motion blur included.",
-                  "lila.ops.render(path=\"frame.png\", samples=64)"});
-    actions::add({"render.sequence", "Render Sequence", "Render", [] { RenderOutputDialog::renderSequence(); }, nullptr,
-                  "Renders the frame range into images and video with the Render Output settings.",
-                  "lila.ops.renderSequence(path=\"shot.####.png\")"});
-    actions::add({"render.turntable", "Render Turntable", "Render", [] {
-                      try
-                      {
-                          nlohmann::json r = ops::execute("renderTurntable", nlohmann::json::object(), CallSource::UI);
-                          if (r.contains("path") && r["path"].is_array() && !r["path"].empty())
-                              log::info("Rendered a turntable to {}", r["path"].back().get<std::string>());
-                      }
-                      catch (const CommandError& e)
-                      {
-                          log::error("{}", e.what());
-                      }
-                  }, nullptr,
-                  "Renders a looping turn around the selection (or everything shown) with the Render Output settings.",
-                  "lila.ops.renderTurntable(video=\"turntable.mp4\", frames=120)"});
+    actions::add({"render.frame", "Render Frame", "Render", [] { renderRun::run(renderRun::Shot::Frame); }, nullptr,
+                  "Renders the current frame with the Render panel's settings: post process, depth of field and motion blur included.",
+                  "render(path=\"frame.png\", samples=64)"});
+    actions::add({"render.sequence", "Render Range", "Render", [] { renderRun::run(renderRun::Shot::Range); }, nullptr,
+                  "Renders the frame range into images, a video or both, as the Render panel's Write says.",
+                  "renderSequence(write=\"video\")"});
+    actions::add({"render.turntable", "Render Turntable", "Render", [] { renderRun::run(renderRun::Shot::Turntable); }, nullptr,
+                  "Renders a looping turn around the selection (or everything shown) with the Render panel's settings.",
+                  "renderTurntable(write=\"video\", frames=120)"});
+    actions::add({.id = "render.openLast", .label = "Open Last Render", .category = "Render", .run = [] { renderRun::openLast(); },
+                  .enabled = [] { return !renderRun::last().file.empty(); },
+                  .doc = "Opens the last render in the system's viewer: the video, or the last image."});
+    actions::add({.id = "render.showFolder", .label = "Show Render Folder", .category = "Render", .run = [] { renderRun::showFolder(); },
+                  .doc = "Shows the last render selected in its folder, or the scene's renders folder before any."});
     for (const auto& [preset, label] : {std::pair{"threePoint", "Three-Point Light Rig"}, std::pair{"rim", "Rim Light Rig"}, std::pair{"product", "Product Light Rig"}})
     {
         const std::string p = preset;
