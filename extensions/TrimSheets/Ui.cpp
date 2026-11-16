@@ -13,6 +13,7 @@
 #include <lila/Log.h>
 #include <lila/Menus.h>
 #include <lila/Panels.h>
+#include <lila/UvToolkit.h>
 
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -483,5 +484,16 @@ void registerUi(ext::Context& ctx)
         else
             menus::addItem(ctx, {.id = std::string("trims.menu.") + a, .menu = "Level/Trim Sheets", .action = a});
     }
+
+    // The mapping tools work on uvs, so the UV editor has them too; making and baking sheets stays under Level.
+    const std::vector<uvToolkit::Item> mapping = {{"trims.auto", "wand", "Auto Trim"},     {"trims.cycle", "refresh", "Next Best"},
+                                                  {"trims.shiftUp", "arrow-up", "Shift Up"}, {"trims.shiftDown", "arrow-down", "Shift Down"},
+                                                  {"trims.live", "bolt", "Live Trim"},       {"trims.check", "checklist", "Check Trims"}};
+    uvToolkit::add(ctx, {.id = "trims", .title = "Trim Sheets", .items = mapping, .rare = {"trims.editor", "trims.export"}, .order = 60});
+    menus::addItem(ctx, {.id = "trims.uvMenu", .menu = "UV", .kind = menus::Kind::Submenu, .label = "Trim Sheets"});
+    for (const uvToolkit::Item& item : mapping)
+        menus::addItem(ctx, {.id = "trims.uvMenu." + item.action, .menu = "UV/Trim Sheets", .action = item.action});
+    menus::addItem(ctx, {.id = "trims.uvMenu.sep", .menu = "UV/Trim Sheets", .kind = menus::Kind::Separator});
+    menus::addItem(ctx, {.id = "trims.uvMenu.editor", .menu = "UV/Trim Sheets", .action = "trims.editor"});
 }
 } // namespace trims
