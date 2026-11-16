@@ -68,8 +68,9 @@ Name: "{autoprograms}\Lila"; Filename: "{app}\lila.exe"
 Name: "{autodesktop}\Lila"; Filename: "{app}\lila.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\lila.exe"; Description: "{cm:LaunchProgram,Lila}"; Flags: nowait postinstall skipifsilent
-Filename: "{app}\lila.exe"; Flags: nowait; Check: RelaunchRequested
+; Setup still holds its mutex here, which would make Lila think an install is under way and quit.
+Filename: "{app}\lila.exe"; Parameters: "--from-setup"; Description: "{cm:LaunchProgram,Lila}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\lila.exe"; Parameters: "--from-setup"; Flags: nowait; Check: RelaunchRequested
 
 [UninstallRun]
 ; Hands back the import formats ticked in Preferences, which only Lila knows about.
