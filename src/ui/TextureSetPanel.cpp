@@ -2952,12 +2952,13 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
             bool ok = false;
             const QString name = QInputDialog::getText(this, "New Variant", "Name", QLineEdit::Normal, "Variant", &ok).trimmed();
             if (ok && !name.isEmpty())
-                call = {{"command", "texAddVariant"}, {"args", {set, name.toStdString()}}};
+                call = {{"command", "texAddVariant"}, {"args", {{"args", {set, name.toStdString()}}}}};
         }
         else if (data == QString("\x01remove"))
-            call = {{"command", "texRemoveVariant"}, {"args", {set, d->view.is_object() ? d->view.value("variant", std::string()) : std::string()}}};
+            call = {{"command", "texRemoveVariant"},
+                    {"args", {{"args", {set, d->view.is_object() ? d->view.value("variant", std::string()) : std::string()}}}}};
         else
-            call = {{"command", "texSwitchVariant"}, {"args", {set, data.toStdString()}}};
+            call = {{"command", "texSwitchVariant"}, {"args", {{"args", {set, data.toStdString()}}}}};
         if (!call.is_null())
             actions::run(call);
         d->refresh();
