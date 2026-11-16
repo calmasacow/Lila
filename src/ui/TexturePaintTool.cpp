@@ -2938,6 +2938,7 @@ public:
         ToolStatus status{.tool = "Texture Paint"};
         if (st.tool == "project")
         {
+            syncProjectionUndo();
             ensureBuffer(view);
             status.mode = "projection";
             status.flags = {{"transform", st.transform}, {"warp", st.warp}};
@@ -3720,7 +3721,8 @@ private:
         if (!samePaintView(view, mBufferView))
         {
             // Moving the camera leaves the buffer on the screen: project it first when asked to, else it stays to project later.
-            if (texturePaintState().autoProject && !mBuffer.empty() && mBufferDrag == BufferDrag::None)
+            // A buffer an undo put back stays until painted again, or projecting would undo the undo.
+            if (texturePaintState().autoProject && !mBuffer.empty() && mBufferDrag == BufferDrag::None && !bufferRestored())
                 commitBuffer();
             if (mBuffer.empty())
                 mBufferView = view;
@@ -3903,6 +3905,68 @@ private:
         }
     }
 
+    /** A projected buffer kept so undoing its stroke puts the paint back on the screen. */
+    struct Projected
+    {
+        NodeId set = kNoNode;
+        std::string layer;
+        uint64_t stroke = 0;
+        tp::ProjectionBuffer buffer;
+        ViewInfo view;
+    };
+
+    bool projectionStrokeExists(const Projected& p) const
+    {
+        const scene::Node* set = scene::Graph::current().node(p.set);
+        const tex::paint::Buffer* b = set ? tex::paint::readPaint(*set)->buffer(p.layer) : nullptr;
+        return b && std::any_of(b->strokes.begin(), b->strokes.end(), [&](const auto& st) { return st->id == p.stroke; });
+    }
+
+    void rememberProjection(NodeId set, const std::string& layer, uint64_t stroke)
+    {
+        // A new projection ends redo: projections undone before it can't come back.
+        while (!mProjected.empty() && !projectionStrokeExists(mProjected.back()))
+            mProjected.pop_back();
+        mRestored = -1;
+        if (stroke == 0)
+            return;
+        mProjected.push_back({set, layer, stroke, mBuffer, mBufferView});
+        // Each keeps a screen-sized buffer; the oldest go first.
+        while (mProjected.size() > 8)
+            mProjected.erase(mProjected.begin());
+    }
+
+    /** The buffer still holds exactly what an undo put back. */
+    bool bufferRestored() const { return mRestored >= 0 && mBuffer.version() == mRestoredVersion; }
+
+    /**
+     * Follows undo and redo of projections: while the newest projections' strokes are undone, the buffer shows what the
+     * oldest of them projected; when they come back it clears. Paint added to the buffer since is left alone.
+     */
+    void syncProjectionUndo()
+    {
+        if (mProjected.empty() || !(mBuffer.empty() || bufferRestored()))
+            return;
+        int want = -1;
+        for (int i = int(mProjected.size()) - 1; i >= 0 && !projectionStrokeExists(mProjected[size_t(i)]); --i)
+            want = i;
+        if (want == mRestored)
+            return;
+        if (want < 0)
+        {
+            mBuffer.clear();
+            mRestored = -1;
+        }
+        else
+        {
+            mBuffer = mProjected[size_t(want)].buffer;
+            mBufferView = mProjected[size_t(want)].view;
+            mRestored = want;
+            mRestoredVersion = mBuffer.version();
+        }
+        viewportTools::requestRedraw();
+    }
+
     void commitBuffer()
     {
         if (mBuffer.empty())
@@ -3925,7 +3989,9 @@ private:
         {
             payload["image"] = tp::PaintImage::fromRgba(img.width, img.height, img.rgba)->toJson();
             json stroke = {{"mesh", t->meshPath}, {"brush", texturePaintState().stroke.toJson()}, {"payload", payload}, {"occlusion", texturePaintState().occlusion}};
-            ops::execute("texPaintStroke", {{"args", {set->name(), layer}}, {"stroke", stroke}, {"view", projectionViewJson(mBufferView)}}, CallSource::Script);
+            const json r = ops::execute("texPaintStroke", {{"args", {set->name(), layer}}, {"stroke", stroke}, {"view", projectionViewJson(mBufferView)}},
+                                        CallSource::Script);
+            rememberProjection(set->id(), r.value("layer", layer), r.value("stroke", uint64_t(0)));
             mBuffer.clear();
             mBufferView = mLastView;
         }
@@ -4421,6 +4487,9 @@ private:
     ViewInfo mLastView;
 
     tp::ProjectionBuffer mBuffer;
+    std::vector<Projected> mProjected;
+    int mRestored = -1;
+    uint64_t mRestoredVersion = 0;
     ViewInfo mBufferView;
     render::GpuImageRef mBufferImage, mStencilImage, mRevealShown;
     std::string mRevealShownPath;
