@@ -666,6 +666,7 @@ void MaterialEditor::scheduleRefresh()
 
 void MaterialEditor::refreshList()
 {
+    LILA_ZONE();
     scene::Graph& g = scene::Graph::current();
     std::vector<std::string> names;
     for (scene::Node* n : scene::materials::all(g))
@@ -1264,6 +1265,7 @@ void MaterialEditor::rebuild()
 
 void MaterialEditor::updateValues()
 {
+    LILA_ZONE();
     scene::Node* n = current();
     if (!n)
         return;

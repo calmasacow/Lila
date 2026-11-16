@@ -1085,6 +1085,7 @@ struct TextureSetPanel::Impl
 
     void updateThumbs()
     {
+        LILA_ZONE();
         thumbsQueued = false;
         QPointer<TextureSetPanel> guard(self);
         for (Thumb& t : thumbs)
@@ -1403,6 +1404,7 @@ struct TextureSetPanel::Impl
 
     void rebuildTree()
     {
+        LILA_ZONE();
         building = true;
         const int scroll = tree->verticalScrollBar()->value();
         thumbs.clear();
@@ -1432,6 +1434,7 @@ struct TextureSetPanel::Impl
 
     void rebuildSettings()
     {
+        LILA_ZONE();
         delete settingsBox->layout();
         // Children of nested layouts too, which taking the top layout's items would miss.
         for (QWidget* w : settingsBox->findChildren<QWidget*>(Qt::FindDirectChildrenOnly))
@@ -1724,6 +1727,7 @@ struct TextureSetPanel::Impl
 
     void rebuildChannelPicker()
     {
+        LILA_ZONE();
         const QString keep = channel->currentData().toString();
         channel->blockSignals(true);
         channel->clear();
@@ -1736,6 +1740,7 @@ struct TextureSetPanel::Impl
 
     void rebuildBanner()
     {
+        LILA_ZONE();
         if (!graphMode())
         {
             bannerBox->hide();
@@ -1776,6 +1781,7 @@ struct TextureSetPanel::Impl
     /** Every kind's items, filtered to one by the switch: smart materials and masks, brush presets, alphas, textures. */
     void rebuildShelf()
     {
+        LILA_ZONE();
         std::vector<tex::SmartMaterial> list;
         try
         {
@@ -1863,6 +1869,7 @@ struct TextureSetPanel::Impl
     /** Shows the kind the switch picks, narrowed by the search; masks need a layer to go on, so without one the shelf says so. */
     void filterShelf()
     {
+        LILA_ZONE();
         const int kind = shelfKindIndex();
         const QString want = kShelfKindNames[kind];
         const QString needle = shelfSearch ? shelfSearch->text().trimmed().toLower() : QString();
@@ -2343,6 +2350,7 @@ struct TextureSetPanel::Impl
 
     void rebuildProps()
     {
+        LILA_ZONE();
         std::string key = selLayer + "|" + selMask + "|";
         if (const json* l = layer(selLayer))
             key += selMask.empty() ? l->dump() : (mask(selLayer, selMask) ? mask(selLayer, selMask)->dump() : std::string());
@@ -2372,6 +2380,7 @@ struct TextureSetPanel::Impl
 
     void refreshVariants()
     {
+        LILA_ZONE();
         if (!variants)
             return;
         variants->blockSignals(true);
@@ -2392,6 +2401,7 @@ struct TextureSetPanel::Impl
 
     void refreshSets()
     {
+        LILA_ZONE();
         std::vector<std::string> names = tex::setNames(scene::Graph::current());
         sets->blockSignals(true);
         sets->clear();
@@ -2405,6 +2415,7 @@ struct TextureSetPanel::Impl
 
     void refresh()
     {
+        LILA_ZONE();
         refreshSets();
         texture2d::showSet(set);
         scene::Node* n = setNode();
@@ -3078,6 +3089,7 @@ std::string TextureSetPanel::textureSet() const { return d->set; }
 
 void TextureSetPanel::refresh()
 {
+    LILA_ZONE();
     d->refreshTimer->stop();
     d->refresh();
 }

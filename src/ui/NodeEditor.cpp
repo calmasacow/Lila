@@ -454,7 +454,15 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
     mRefresh = new QTimer(this);
     mRefresh->setSingleShot(true);
     mRefresh->setInterval(0);
-    connect(mRefresh, &QTimer::timeout, this, [this] { refresh(std::exchange(mPanelDirty, false)); });
+    connect(mRefresh, &QTimer::timeout, this, [this] {
+        // A hidden editor (a tab behind another) catches up when it shows: paint strokes change the graph's set each time.
+        if (!isVisible())
+        {
+            mStaleHidden = true;
+            return;
+        }
+        refresh(std::exchange(mPanelDirty, false));
+    });
 
     setProperty("hotkeyContext", "nodeEditor");
     deletion::claim(this, [this] { deleteSelected(); });
@@ -1000,6 +1008,13 @@ void NodeEditor::showError(const QString& message)
 {
     log::warn("{}", message.toStdString());
     QToolTip::showText(QCursor::pos(), message, mCanvas, QRect(), 8000);
+}
+
+void NodeEditor::showEvent(QShowEvent* e)
+{
+    QWidget::showEvent(e);
+    if (std::exchange(mStaleHidden, false))
+        scheduleRefresh();
 }
 
 void NodeEditor::scheduleRefresh(bool panel)

@@ -189,6 +189,13 @@ private:
     int mPrefsListener = 0;
     bool mRefreshing = false;
     bool mPanelDirty = false;
+    /** A refresh came while hidden: it runs when the editor shows. */
+    bool mStaleHidden = false;
+
+protected:
+    void showEvent(QShowEvent* e) override;
+
+private:
 };
 
 /**
