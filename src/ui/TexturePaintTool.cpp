@@ -770,8 +770,8 @@ public:
             mTools.push_back(b);
             tiles.push_back(b);
         }
-        // One icon strip: the brush row above names the current tool, the tooltips name the rest.
-        col->addWidget(controls::grid(tiles, int(std::size(kTools)), this));
+        // Two icon rows: the brush row above names the current tool, the tooltips name the rest.
+        col->addWidget(controls::grid(tiles, int(std::size(kTools) + 1) / 2, this));
         mSource = new controls::Segmented(this);
         mSource->setObjectName("brushSource");
         mSource->add("Values", {}, "Paint the channel values below", 0);
