@@ -2965,6 +2965,8 @@ public:
         }
         if (st.tool != "project")
             drawStencil(fs, view);
+        if (st.tool == "reveal")
+            drawReveal(fs, view);
         if (st.tool == "gradient")
         {
             drawSelection(p);
@@ -4312,6 +4314,32 @@ private:
             }
     }
 
+    /** Reveal on the screen: the picture shown faintly where it sits (the view's height, centred), so strokes can be aimed. */
+    void drawReveal(render::FrameState& fs, const ViewInfo& view)
+    {
+        const TexturePaintSettings& s = texturePaintState();
+        if (s.revealSpace != "screen" || s.revealImage.empty())
+            return;
+        if (mRevealShownPath != s.revealImage)
+        {
+            mRevealShownPath = s.revealImage;
+            std::string err;
+            const image::Image img = image::read(paths::fromUtf8(s.revealImage), &err);
+            mRevealShown = img.width > 0 ? toGpu(img.rgba, img.width, img.height, nullptr, 1.0f, false) : nullptr;
+            mRevealAspect = img.width > 0 ? float(img.width) / float(img.height) : 1.0f;
+        }
+        if (!mRevealShown)
+            return;
+        const float hw = mRevealAspect * float(view.height) / float(view.width);
+        const glm::vec2 ndc[4] = {{-hw, -1.0f}, {hw, -1.0f}, {hw, 1.0f}, {-hw, 1.0f}};
+        render::ImagePlaneDraw d;
+        screenQuad(view, ndc, d.corners);
+        d.image = mRevealShown->asTexture();
+        d.opacity = 0.35f;
+        d.depth = render::ImagePlaneDraw::Depth::Front;
+        fs.imagePlanes.push_back(d);
+    }
+
     void drawBuffer(render::FrameState& fs, OverlayPainter& p, const ViewInfo& view)
     {
         if (mBuffer.width() <= 0)
@@ -4394,7 +4422,9 @@ private:
 
     tp::ProjectionBuffer mBuffer;
     ViewInfo mBufferView;
-    render::GpuImageRef mBufferImage, mStencilImage;
+    render::GpuImageRef mBufferImage, mStencilImage, mRevealShown;
+    std::string mRevealShownPath;
+    float mRevealAspect = 1.0f;
     uint64_t mStencilImageVersion = ~0ull, mStencilPictureVersion = ~0ull;
     std::shared_ptr<const tp::PaintImage> mStencilPicture, mRevealPicture;
     std::string mRevealPath;
