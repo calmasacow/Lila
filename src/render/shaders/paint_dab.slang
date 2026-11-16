@@ -10,7 +10,7 @@
 
 static const uint kPage = 128;
 static const uint kTexels = kPage * kPage;
-static const uint kMaxChannels = 8;
+static const uint kMaxChannels = 24;
 static const uint kNoTriangle = 0xFFFFFFFF;
 
 static const uint kBlendNormal = 0;

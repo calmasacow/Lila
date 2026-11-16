@@ -332,6 +332,35 @@ TEST_CASE("texture paint tools: varied tiling breaks the repeat; a scene set pai
     CHECK(changed / m > 0.02);
 }
 
+TEST_CASE("texture paint tools: one stroke paints every shading channel of a set")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    scene::Node& set = makeSet("Panel", 128);
+    run("texAddShadingChannels", {{"args", {"Panel"}}});
+    // Past the first eight: every channel of the set but the two directions.
+    json channels = {{"baseColor", {0.9, 0.2, 0.1}}, {"roughness", 0.3}, {"metallic", 0.0}, {"height", 0.7}, {"emissive", {0.0, 0.0, 0.0}},
+                     {"sheenColor", {0.2, 0.4, 0.6}}, {"sheenRoughness", 0.4}, {"coat", 0.8}, {"coatRoughness", 0.1},
+                     {"subsurfaceColor", {0.8, 0.3, 0.2}}, {"subsurfaceRadius", 0.6}, {"anisotropy", 0.5}, {"transmission", 0.25},
+                     {"ior", 0.25}, {"specularWeight", 0.9}, {"specularColor", {0.7, 0.8, 0.9}}};
+    json s = surfaceStroke({{-25, 0, 0}}, 12.0, {{"channels", channels}});
+    s["brush"]["falloff"] = "constant";
+    paintStroke("Panel", "All", s);
+    const glm::vec2 uv = seamUv(0, -25.0, 0.0);
+    for (const auto& [name, v] : channels.items())
+    {
+        const image::Image img = gp::readChannel(set.id(), "All", name);
+        INFO(name);
+        REQUIRE(img.width > 0);
+        const float* t = at(img, uv);
+        CHECK(t[3] > 0.99f);
+        const float want = v.is_array() ? v[0].get<float>() : v.get<float>();
+        CHECK(std::abs(t[0] - want) < 0.01f);
+    }
+}
+
 TEST_CASE("texture paint tools: normal bumps, flat normals and direction flow maps")
 {
     if (!gpu())

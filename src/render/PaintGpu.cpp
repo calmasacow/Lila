@@ -43,7 +43,7 @@ constexpr VkDeviceSize kTexels = VkDeviceSize(kPageSize) * kPageSize;
 constexpr VkDeviceSize kHalfPage = kTexels * 8;
 /** A geometry page (GeoTexel) or a stroke's build-up page (float4). */
 constexpr VkDeviceSize kWidePage = kTexels * 16;
-constexpr uint32_t kMaxChannels = 8;
+constexpr uint32_t kMaxChannels = 24;
 constexpr uint32_t kItemsPerDispatch = 4096;
 constexpr uint32_t kDabsPerBatch = 512;
 constexpr int kMaxDepthSize = 1024;
@@ -1076,7 +1076,10 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
     for (const std::string& c : p.written())
     {
         if (live->channels.size() >= kMaxChannels)
+        {
+            log::warn("paint stroke: paints the first {} channels; {} and the rest are left out", kMaxChannels, c);
             break;
+        }
         live->channels.push_back(c);
         auto it = p.channels.find(c);
         live->values.push_back(it != p.channels.end() ? it->second : glm::vec3(1.0f));

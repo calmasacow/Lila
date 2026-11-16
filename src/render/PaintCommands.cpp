@@ -1101,8 +1101,9 @@ Stroke strokeFromArgs(const Args& a, Node& set, std::shared_ptr<const PaintImage
         s.anchors.push_back(pm->point(d));
     s.meshSignature = pm->signature;
     s.brush = bs.toJson();
-    if (s.payload.channels.size() > 7)
-        throw CommandError("texPaintStroke: a stroke paints at most 7 channels and the mask");
+    // The dab kernel takes 24 channels a stroke, the mask among them.
+    if (s.payload.channels.size() > 23)
+        throw CommandError("texPaintStroke: a stroke paints at most 23 channels and the mask");
     if (s.dabs.empty() && kind != "fill" && kind != "project")
         throw CommandError("texPaintStroke: the stroke has no dabs on the surface");
     return s;

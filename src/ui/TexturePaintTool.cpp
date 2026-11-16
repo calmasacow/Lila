@@ -7,6 +7,7 @@
 #include "tex/PaintBuffer.h"
 #include "tex/PaintParticles.h"
 #include "tex/PatchFill.h"
+#include "tex/ShadingChannels.h"
 #include "tex/PaintSymmetry.h"
 #include "tex/TextureSet.h"
 
@@ -85,6 +86,8 @@ namespace tp = tex::paint;
 namespace rp = render::paint;
 
 constexpr const char* kTexturePaintPrefix = "/texturePaint";
+/** Base colour, roughness, metallic, height and emissive: always in the brush page. The rest show when the set has them. */
+constexpr size_t kMainChannels = 5;
 
 struct ChannelValue
 {
@@ -148,11 +151,21 @@ struct TexturePaintSettings
         return b;
     }();
     std::string tool = "paint";
-    std::vector<ChannelValue> channels = {{"baseColor", "Base Color", true, true, {0.8f, 0.1f, 0.08f}},
-                                          {"roughness", "Roughness", false, false, glm::vec3(0.5f)},
-                                          {"metallic", "Metallic", false, false, glm::vec3(0.0f)},
-                                          {"height", "Height", false, false, glm::vec3(1.0f)},
-                                          {"emissive", "Emissive", true, false, glm::vec3(1.0f)}};
+    /** The five every set has, then the ones a set may add (opacity, AO, shading channels), shown when the set has them. */
+    std::vector<ChannelValue> channels = [] {
+        std::vector<ChannelValue> out = {{"baseColor", "Base Color", true, true, {0.8f, 0.1f, 0.08f}},
+                                         {"roughness", "Roughness", false, false, glm::vec3(0.5f)},
+                                         {"metallic", "Metallic", false, false, glm::vec3(0.0f)},
+                                         {"height", "Height", false, false, glm::vec3(1.0f)},
+                                         {"emissive", "Emissive", true, false, glm::vec3(1.0f)},
+                                         {"opacity", "Opacity", false, false, glm::vec3(1.0f)},
+                                         {"ao", "AO", false, false, glm::vec3(1.0f)}};
+        // Coat normal and anisotropy direction are directions: the Normal and Direction tools paint those.
+        for (const tex::shading::ChannelInfo& c : tex::shading::channels())
+            if (std::string_view(c.name) != "coatNormal" && std::string_view(c.name) != "anisotropyDirection")
+                out.push_back({c.name, c.label, c.type == tex::PortType::Color, false, glm::vec3(c.fallback[0], c.fallback[1], c.fallback[2])});
+        return out;
+    }();
     tp::Blend blend = tp::Blend::Normal;
     float tilt = 0.5f;
     std::string flowChannel = "normal";
@@ -821,9 +834,14 @@ public:
         sourceBox->setContentsMargins(0, 0, 0, 0);
         sourceBox->addWidget(mSource, 1);
         col->addWidget(mSourceRow);
+        auto* extraBox = new QWidget(this);
+        auto* extraForm = new QFormLayout(extraBox);
+        extraForm->setContentsMargins(0, 0, 0, 0);
+        extraForm->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
         for (size_t i = 0; i < texturePaintState().channels.size(); ++i)
         {
             ChannelValue& c = texturePaintState().channels[i];
+            QFormLayout* rowForm = i < kMainChannels ? form : extraForm;
             // The label in the right-aligned column like every row; the box leads the field so the boxes line up.
             auto* on = new QCheckBox(this);
             on->setObjectName(QString("channel:") + c.name);
@@ -856,7 +874,7 @@ public:
                     sync();
                     changed();
                 }, bright), 1);
-                form->addRow(c.label, field);
+                mChannelRow.push_back(addRow(rowForm, c.label, field));
                 mSwatch.push_back(swatch);
                 mBright.push_back(bright);
                 mValue.push_back(nullptr);
@@ -874,18 +892,25 @@ public:
             }
             else
             {
-                auto* v = settingSpin(this, 0.0, 1.0, 0.05, 3);
+                // IOR shows as the index itself; the channel stores (ior - 1) / 2.
+                const bool ior = std::string_view(c.name) == "ior";
+                auto* v = ior ? settingSpin(this, 1.0, 3.0, 0.05, 3, "Index of refraction: 1.5 for glass and plastic, 1.33 for water")
+                              : settingSpin(this, 0.0, 1.0, 0.05, 3);
                 fieldRow->addWidget(v, 1);
-                form->addRow(c.label, field);
+                mChannelRow.push_back(addRow(rowForm, c.label, field));
                 mValue.push_back(v);
                 mSwatch.push_back(nullptr);
                 mBright.push_back(nullptr);
-                connect(v, &QDoubleSpinBox::valueChanged, this, [this, i](double x) {
-                    texturePaintState().channels[i].value = glm::vec3(float(x));
+                connect(v, &QDoubleSpinBox::valueChanged, this, [this, i, ior](double x) {
+                    texturePaintState().channels[i].value = glm::vec3(ior ? tex::shading::channelFromIor(float(x)) : float(x));
                     changed();
                 });
             }
         }
+        mMoreChannels = controls::section("More Channels", extraBox, this, "/texturePaint/moreChannels", true);
+        mMoreChannels->setObjectName("moreChannels");
+        form->addRow(mMoreChannels);
+        setSetChannels({});
         auto* materials = new FreshCombo(this);
         materials->beforePopup = [this] { refreshMaterials(); };
         mMaterial = materials;
@@ -1465,6 +1490,21 @@ public:
 
     void setTarget(const QString& text) { mTarget->setText(text); }
 
+    /** Shows the More Channels rows of the channels the set under the brush has; none when there is no set. */
+    void setSetChannels(const std::set<std::string>& names)
+    {
+        bool any = false;
+        for (size_t i = kMainChannels; i < mChannelRow.size(); ++i)
+        {
+            const bool has = names.contains(texturePaintState().channels[i].name);
+            showRow(mChannelRow[i], has);
+            any |= has;
+        }
+        if (mMoreChannels)
+            mMoreChannels->setVisible(any);
+    }
+
+
     void syncTools()
     {
         for (size_t i = 0; i < mTools.size(); ++i)
@@ -1587,7 +1627,8 @@ public:
             if (mValue[i])
             {
                 const QSignalBlocker bv(mValue[i]);
-                mValue[i]->setValue(s.channels[i].value.x);
+                const bool ior = std::string_view(s.channels[i].name) == "ior";
+                mValue[i]->setValue(ior ? tex::shading::iorFromChannel(s.channels[i].value.x) : s.channels[i].value.x);
             }
             if (mSwatch[i])
             {
@@ -1945,6 +1986,9 @@ private:
     QWidget *mVariedTurnRow = nullptr, *mVariedBlendRow = nullptr, *mVariedBrightRow = nullptr;
     std::vector<QToolButton*> mTools;
     std::vector<QCheckBox*> mOn;
+    /** Each channel's row; past kMainChannels they sit under More Channels and show when the set has the channel. */
+    std::vector<QWidget*> mChannelRow;
+    QWidget* mMoreChannels = nullptr;
     std::vector<QDoubleSpinBox*> mValue;
     std::vector<QPushButton*> mSwatch;
     std::vector<colorPopup::ValueSlider*> mBright;
@@ -2171,6 +2215,17 @@ public:
         warmTargets();
         mAlive = std::make_shared<bool>(true);
         watchTab();
+        mChannelsDirty = true;
+        mSettingsListener = scene::Graph::current().addListener([this](scene::Change change, NodeId id) {
+            if (change == scene::Change::Value && id == mChannelsSet)
+            {
+                mChannelsDirty = true;
+                QTimer::singleShot(0, [alive = std::weak_ptr<bool>(mAlive), this] {
+                    if (alive.lock())
+                        updatePanel();
+                });
+            }
+        });
         mControls.activate();
         mActiveListener = textureSets::addActiveLayerListener([this](const std::string& setName, const std::string& layer) {
             if (scene::Node* set = tex::findSet(scene::Graph::current(), setName))
@@ -2213,6 +2268,8 @@ public:
             cancelStroke();
         mKeyWatch.reset();
         mTabWatch.reset();
+        scene::Graph::current().removeListener(mSettingsListener);
+        mSettingsListener = 0;
         mTabDown = false;
         endSweep();
         mStencilKey = false;
@@ -3329,6 +3386,18 @@ private:
     }
 
     /** Filters need channels to filter: the set's. */
+    /** The More Channels ticked for another set that this one doesn't have: the page hides them here, so they don't paint. */
+    static void dropMissingChannels(tp::Payload& p, const scene::Node& set)
+    {
+        std::set<std::string> names;
+        for (const tex::Channel& c : tex::readSettings(set).channels)
+            names.insert(c.name);
+        const auto& all = texturePaintState().channels;
+        for (size_t i = kMainChannels; i < all.size(); ++i)
+            if (!names.contains(all[i].name))
+                p.channels.erase(all[i].name);
+    }
+
     void filterChannels(tp::Payload& p, const scene::Node& set)
     {
         if (p.source.is_object() && p.source.value("library", std::string()) == "scene/" + set.name())
@@ -3336,6 +3405,7 @@ private:
             log::warn("Texture paint: {} can't paint through itself; painting the channel values instead", set.name());
             p.source = json();
         }
+        dropMissingChannels(p, set);
         if (!p.filters())
             return;
         p.channels.clear();
@@ -3459,7 +3529,9 @@ private:
         if (!set)
             return;
         const std::string layer = layerFor(*set);
-        json payload = payloadFor(texturePaintState(), false).toJson();
+        tp::Payload boxed = payloadFor(texturePaintState(), false);
+        dropMissingChannels(boxed, *set);
+        json payload = boxed.toJson();
         payload["triangles"] = tris;
         try
         {
@@ -3531,6 +3603,7 @@ private:
             return;
         const std::string layer = layerFor(*set);
         tp::Payload p = payloadFor(texturePaintState(), false);
+        dropMissingChannels(p, *set);
         json payload = p.toJson();
         payload.erase("triangles");
         payload["triangle"] = t.hit.triangle;
@@ -3769,6 +3842,37 @@ private:
                                                it != gLayers.end() ? QString::fromStdString(it->second) : QString("new paint layer"));
         }
         mPanel->setTarget(text);
+        syncSetChannels();
+    }
+
+    /**
+     * The brush page's More Channels follow the set last under the brush (kept while the cursor is over the panel, so the
+     * rows stay put), else the Texture Set panel's set, and that set's settings as they change.
+     */
+    void syncSetChannels()
+    {
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* set = g.node(mStroking ? mTarget.set : (mOver ? mOver->set : kNoNode));
+        if (!set)
+            set = g.node(mChannelsSet);
+        if (!set)
+            set = tex::findSet(g, currentTextureSet());
+        const NodeId id = set ? set->id() : kNoNode;
+        if (id == mChannelsSet && !mChannelsDirty)
+            return;
+        mChannelsSet = id;
+        mChannelsDirty = false;
+        std::set<std::string> names;
+        if (set)
+            try
+            {
+                for (const tex::Channel& c : tex::readSettings(*set).channels)
+                    names.insert(c.name);
+            }
+            catch (const std::exception&)
+            {
+            }
+        mPanel->setSetChannels(names);
     }
 
     // ------------------------------------------------------------------------------------------- projection buffer
@@ -4581,6 +4685,9 @@ private:
     bool mStencilKey = false;
     std::unique_ptr<QObject> mKeyWatch, mTabWatch;
     bool mTabDown = false, mSweeping = false;
+    int mSettingsListener = 0;
+    NodeId mChannelsSet = kNoNode;
+    bool mChannelsDirty = true;
     std::set<std::string> mSwept;
     enum class StencilDrag
     {
