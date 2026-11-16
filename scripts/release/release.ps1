@@ -2,6 +2,7 @@
 # HEAD must be committed and pushed; this never pushes. -DryRun stops before publishing.
 param(
     [string]$Notes = "",
+    [string]$BuildDir = "build",
     [switch]$DryRun,
     [switch]$SkipBuild,
     [switch]$SkipTests,
@@ -34,15 +35,15 @@ if (-not $DryRun) {
 }
 
 if (-not $SkipBuild) {
-    cmd /c "scripts\env.cmd && cmake --build build --config Release"
-    if ($LASTEXITCODE -ne 0) { throw "Release build failed. If Lila is running from build\bin\Release, close it." }
+    cmd /c "scripts\env.cmd && cmake --build $BuildDir --config Release"
+    if ($LASTEXITCODE -ne 0) { throw "Release build failed. If Lila is running from $BuildDir\bin\Release, close it." }
 }
 if (-not $SkipTests) {
-    cmd /c "scripts\env.cmd >nul 2>&1 && python scripts\quiet.py test build Release -LE known_failing"
-    if ($LASTEXITCODE -ne 0) { throw "Tests failed, full log in build\last_test.log" }
+    cmd /c "scripts\env.cmd >nul 2>&1 && python scripts\quiet.py test $BuildDir Release -LE known_failing"
+    if ($LASTEXITCODE -ne 0) { throw "Tests failed, full log in $BuildDir\last_test.log" }
 }
 
-& "$repo\scripts\installer\build.ps1" -Config Release -Notes $Notes
+& "$repo\scripts\installer\build.ps1" -Config Release -BuildDir $BuildDir -Notes $Notes
 $exe = "$repo\build-installer\Lila-$version-Setup.exe"
 $manifest = "$repo\build-installer\latest.json"
 

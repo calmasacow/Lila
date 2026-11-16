@@ -2,6 +2,7 @@
 # Release.cmd publishes both to the GitHub release v<version>; the updater reads latest.json from the newest release.
 param(
     [string]$Config = "Release",
+    [string]$BuildDir = "build",
     [string]$Notes = "",
     [string]$Iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
 )
@@ -15,7 +16,7 @@ if (-not (Test-Path $Iscc)) {
 }
 
 $version = (Select-String -Path "$repo\CMakeLists.txt" -Pattern 'project\(Lila VERSION ([0-9.]+)').Matches[0].Groups[1].Value
-& "$repo\scripts\steam\stage.ps1" -Config $Config -Destination $stage -AppLocalCrt
+& "$repo\scripts\steam\stage.ps1" -Config $Config -BuildDir $BuildDir -Destination $stage -AppLocalCrt
 
 & $Iscc /Q "/DAppVersion=$version" "/DSourceDir=$stage" "/DRepoDir=$repo" "/DOutputDir=$output" "$PSScriptRoot\Lila.iss"
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
