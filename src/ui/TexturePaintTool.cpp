@@ -2551,6 +2551,7 @@ public:
             json r = ops::execute("texEditPath", {{"args", {set->name(), mPath.layer}}, {"stroke", mPath.stroke}, {"points", pathPointsJson()}},
                                   CallSource::UI);
             mPath.stroke = r.value("stroke", mPath.stroke);
+            mPath.ids.push_back(mPath.stroke);
         }
         catch (const std::exception& ex)
         {
@@ -2589,6 +2590,8 @@ public:
         {
             json r = ops::execute("texPaintPath", call, CallSource::UI);
             mPath.stroke = r.value("stroke", uint64_t(0));
+            if (mPath.stroke)
+                mPath.ids.push_back(mPath.stroke);
         }
         catch (const std::exception& ex)
         {
@@ -2597,8 +2600,52 @@ public:
         viewportTools::requestRedraw();
     }
 
+    /**
+     * Follows undo and redo: the painted path takes the points of whichever of its strokes the layer holds now, and goes
+     * away with the last of them.
+     */
+    void syncPathToLayer()
+    {
+        if (mPath.stroke == 0 || mPathDrag >= 0)
+            return;
+        const scene::Node* set = scene::Graph::current().node(mPath.set);
+        const tex::paint::Buffer* buf = set ? tex::paint::readPaint(*set)->buffer(mPath.layer) : nullptr;
+        auto find = [buf](uint64_t id) -> const tp::Stroke* {
+            if (buf)
+                for (const auto& st : buf->strokes)
+                    if (st->id == id)
+                        return st.get();
+            return nullptr;
+        };
+        if (find(mPath.stroke))
+            return;
+        for (auto it = mPath.ids.rbegin(); it != mPath.ids.rend(); ++it)
+            if (const tp::Stroke* st = find(*it); st && st->path.is_object())
+            {
+                mPath.stroke = *it;
+                mPath.pts.clear();
+                mPath.in.clear();
+                mPath.out.clear();
+                mPath.manual.clear();
+                for (const json& o : st->path.value("points", json::array()))
+                {
+                    auto v = [&o](const char* k) {
+                        const json& a = o.at(k);
+                        return glm::dvec3(a[0].get<double>(), a[1].get<double>(), a[2].get<double>());
+                    };
+                    mPath.pts.push_back(v("position"));
+                    mPath.in.push_back(o.contains("in") ? v("in") : mPath.pts.back());
+                    mPath.out.push_back(o.contains("out") ? v("out") : mPath.pts.back());
+                    mPath.manual.push_back(o.contains("in") && o.contains("out"));
+                }
+                return;
+            }
+        mPath = {};
+    }
+
     void drawPath(OverlayPainter& p, const ViewInfo& view)
     {
+        syncPathToLayer();
         if (mPath.pts.empty() || mPath.mesh == kNoNode)
             return;
         const std::vector<QPointF> line = pathOnScreen(view);
@@ -4179,6 +4226,8 @@ private:
         std::vector<glm::dvec3> pts, in, out;
         std::vector<bool> manual;
         uint64_t stroke = 0;
+        /** Every id the painted path has had (each edit gives it a new one), so undo and redo can find it again. */
+        std::vector<uint64_t> ids;
     } mPath;
     int mPathDrag = -1;
     std::vector<QPointF> mSelect;
