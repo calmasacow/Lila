@@ -163,5 +163,6 @@ private:
     lila::ui::ImagePicker* mAlpha = nullptr;
     /** Each field's refresh from the settings, without reporting a change. */
     std::vector<std::function<void()>> mSync;
+    std::function<void()> mResetAlpha;
 };
 } // namespace lila::brush::ui

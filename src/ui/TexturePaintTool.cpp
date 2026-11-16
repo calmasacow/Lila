@@ -32,6 +32,7 @@
 #include "ui/Icons.h"
 #include "ui/QuickMaskOverlay.h"
 #include "ui/SculptTool.h"
+#include "ui/SpinScrub.h"
 #include "sculpt/SculptSession.h"
 #include "ui/TexLive.h"
 #include "ui/TextureGraphUi.h"
@@ -1545,7 +1546,39 @@ public:
             texturePaintState().occlusion = v;
             changed();
         });
+        recordDefaults();
         sync();
+    }
+
+    /** Gives each setting field the built-in value as its default, for middle-click reset and Reset All. */
+    void recordDefaults()
+    {
+        TexturePaintSettings& s = texturePaintState();
+        TexturePaintSettings kept = std::move(s);
+        s = TexturePaintSettings{};
+        sync();
+        // The Strokes list shows a picked stroke's values, which have no default.
+        auto setting = [this](QWidget* w) {
+            if (w->property(kDefaultProperty).isValid())
+                return false;
+            for (QWidget* p = w->parentWidget(); p && p != this; p = p->parentWidget())
+                if (dynamic_cast<StrokeList*>(p))
+                    return false;
+            return true;
+        };
+        for (QDoubleSpinBox* box : findChildren<QDoubleSpinBox*>())
+            if (setting(box))
+                setSpinDefault(box, box->value());
+        for (QSpinBox* box : findChildren<QSpinBox*>())
+            if (setting(box))
+                setSpinDefault(box, box->value());
+        for (QCheckBox* box : findChildren<QCheckBox*>())
+            if (setting(box))
+                setCheckDefault(box, box->isChecked());
+        for (QComboBox* box : {mBlend, mNormalMode, mFalloff, mParticles, mBufferBrush})
+            if (setting(box))
+                setComboDefault(box, box->currentIndex());
+        s = std::move(kept);
     }
 
     void setTarget(const QString& text) { mTarget->setText(text); }

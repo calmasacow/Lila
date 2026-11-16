@@ -10,6 +10,7 @@
 #include "ui/FileDialog.h"
 #include "ui/FlagFields.h"
 #include "ui/ImagePicker.h"
+#include "ui/PanelDefaults.h"
 #include "ui/SpinScrub.h"
 
 #include "brush/Alphas.h"
@@ -478,8 +479,12 @@ const lila::ui::imagePicker::Library* alphaLibrary()
     return ip::library("alphas");
 }
 
-/** A header button over a body that it shows and hides, collapsed by default; the state is kept in the pref. */
-QWidget* collapsible(QWidget* parent, QVBoxLayout* into, const char* title, const char* tip, const char* pref)
+/**
+ * A header button over a body that it shows and hides, collapsed by default; the state is kept in the pref. Right-click
+ * on the header resets the body's fields, plus whatever resetExtra resets.
+ */
+QWidget* collapsible(QWidget* parent, QVBoxLayout* into, const char* title, const char* tip, const char* pref,
+                     std::function<void()> resetExtra = {})
 {
     auto* header = new QToolButton(parent);
     header->setText(title);
@@ -498,6 +503,7 @@ QWidget* collapsible(QWidget* parent, QVBoxLayout* into, const char* title, cons
         header->setIcon(lila::ui::icon(show ? "chevron-down" : "chevron-right"));
         PrefStore::get().set("general", pref, show);
     });
+    lila::ui::panelDefaults::addResetMenu(header, body, std::move(resetExtra));
     return body;
 }
 } // namespace
@@ -508,7 +514,7 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
     auto* col = new QVBoxLayout(this);
     col->setContentsMargins(0, 0, 0, 0);
     mBody = collapsible(this, col, "Stroke", "Stabiliser, line strokes, jitter, tip shape, radial symmetry and pen pressure, shared by every brush",
-                        kOpenPref);
+                        kOpenPref, [this] { mResetAlpha(); });
     auto* bodyCol = new QVBoxLayout(mBody);
     bodyCol->setContentsMargins(8, 0, 0, 0);
     auto* form = new QFormLayout;
@@ -603,7 +609,8 @@ StrokeOptions::StrokeOptions(QWidget* parent, SettingsRef settings, std::functio
         mAlpha->setValue(path);
         edited();
     };
-    lila::ui::onMiddleClickReset(alphaLabel, [setAlpha] { setAlpha({}); }, "none", mAlpha);
+    mResetAlpha = [setAlpha] { setAlpha({}); };
+    lila::ui::onMiddleClickReset(alphaLabel, mResetAlpha, "none", mAlpha);
     connect(mAlpha, &lila::ui::ImagePicker::chosen, this, [setAlpha](const QString& v) { setAlpha(v.toStdString()); });
     mSync.push_back([this] { mAlpha->setValue(mSettings().alphaPath); });
 

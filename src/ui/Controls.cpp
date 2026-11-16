@@ -4,6 +4,7 @@
 #include "ui/Actions.h"
 #include "ui/Icons.h"
 #include "ui/OptionBox.h"
+#include "ui/PanelDefaults.h"
 #include "ui/Theme.h"
 
 #include <QButtonGroup>
@@ -180,6 +181,7 @@ QWidget* section(const QString& title, QWidget* content, QWidget* parent, const 
         header->setIcon(icon(on ? "chevron-down" : "chevron-right"));
         PrefStore::get().set("general", key, !on);
     });
+    panelDefaults::addResetMenu(header, content);
     v->addWidget(header);
     v->addWidget(content, 1);
     // Keeps a collapsed header at the top when the section is given extra height.
