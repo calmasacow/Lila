@@ -506,7 +506,7 @@ void ExtensionManager::loadInfo(const ExtensionInfo& found, std::set<std::string
     mLoaded[found.name] = std::move(rec);
     mOrder.push_back(found.name);
     if (kind == ExtensionKind::Native)
-        refreshPythonCommands();
+        commandsChanged();
     log::info("loaded extension {} ({})", found.name, found.path.string());
     events::send({.type = events::Event::ExtensionLoaded, .path = found.path, .name = found.name});
 }
@@ -560,6 +560,8 @@ void ExtensionManager::loadPython(Loaded& rec, const fs::path& module)
     const std::string& name = rec.info.name;
     if (!python::initialized())
         throw ExtensionError("can't load the Python part of " + name + ": Python is not running");
+    // Its import-time code may call commands a native extension earlier in the batch registered.
+    flushCommands();
     owners::OwnerScope attribute(name);
     python::Result r = python::run("__import__('lila.extension', fromlist=['_load'])._load(" + pyString(name) + ", " +
                                        pyString(module.string()) + ")",
@@ -653,7 +655,7 @@ void ExtensionManager::unload(const std::string& name)
     mLoaded.erase(it);
     mOrder.erase(std::remove(mOrder.begin(), mOrder.end(), name), mOrder.end());
     if (kind == ExtensionKind::Native)
-        refreshPythonCommands();
+        commandsChanged();
     log::info("unloaded extension {}", name);
     events::send({.type = events::Event::ExtensionUnloaded, .path = path, .name = name});
 }
@@ -686,6 +688,7 @@ std::string ExtensionManager::reload(const std::string& name)
 void ExtensionManager::unloadAll()
 {
     std::vector<std::string> names = mOrder;
+    ++mBatchDepth;
     for (auto n = names.rbegin(); n != names.rend(); ++n)
     {
         try
@@ -697,6 +700,23 @@ void ExtensionManager::unloadAll()
             log::warn("{}", e.what());
         }
     }
+    --mBatchDepth;
+    flushCommands();
+}
+
+void ExtensionManager::commandsChanged()
+{
+    mCommandsPending = true;
+    if (mBatchDepth == 0)
+        flushCommands();
+}
+
+void ExtensionManager::flushCommands()
+{
+    if (!mCommandsPending)
+        return;
+    mCommandsPending = false;
+    refreshPythonCommands();
 }
 
 bool ExtensionManager::isLoaded(const std::string& name) const
@@ -803,6 +823,7 @@ void ExtensionManager::loadAutoload()
                     out.push_back(d.id);
         return out;
     };
+    ++mBatchDepth;
     for (const std::string& name : ext::dependencyOrder(ids, depsOf))
     {
         try
@@ -814,6 +835,8 @@ void ExtensionManager::loadAutoload()
             log::error("autoload: {}", e.what());
         }
     }
+    --mBatchDepth;
+    flushCommands();
 }
 
 void ExtensionManager::addWatch(const std::string& name, WatchOptions options)

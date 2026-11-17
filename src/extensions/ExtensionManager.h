@@ -147,11 +147,16 @@ private:
     void watchLoop();
     void packageChanged(const std::string& name, std::vector<fs::path> paths);
     void saveWatches() const;
+    /** Rebuilds lila.ops after native registrations change, or marks it pending while a batch of loads or unloads runs. */
+    void commandsChanged();
+    void flushCommands();
 
     std::map<std::string, std::unique_ptr<Loaded>> mLoaded;
     std::vector<std::string> mOrder; // load order
     std::map<std::string, std::string> mErrors;
     std::vector<fs::path> mExtraPaths;
+    int mBatchDepth = 0;
+    bool mCommandsPending = false;
 
     mutable std::mutex mWatchMutex;
     std::map<std::string, std::unique_ptr<Watch>> mWatches;
