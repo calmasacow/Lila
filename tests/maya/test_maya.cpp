@@ -12,6 +12,7 @@
 #include "scene/Anim.h"
 #include "scene/AnimCurve.h"
 #include "scene/Camera.h"
+#include "scene/Diagnostics.h"
 #include "scene/DisplayLayers.h"
 #include "scene/Graph.h"
 #include "scene/ImagePlane.h"
@@ -1287,4 +1288,48 @@ TEST_CASE("maya import: light linking bakes into lighting channels")
     REQUIRE(plain.ok);
     CHECK(plain.lightingChannels.empty());
     CHECK(lc::nodesWithChannels(again).empty());
+}
+
+TEST_CASE("maya import: delete, separate, extract, combine and merge history are replayed")
+{
+    Graph& g = fresh();
+    scene::diagnostics::clear("mayaImport");
+    maya::ImportResult r = load("history_replay.ma");
+
+    // Deleting the middle face leaves two shells; separate gives one each, numbered so the tweak lands on point 2.
+    MeshPtr a = outMesh(g, "partA");
+    CHECK(a->numFaces() == 1);
+    CHECK(a->numPoints() == 4);
+    MeshPtr b = outMesh(g, "partB");
+    CHECK(b->numFaces() == 1);
+    REQUIRE(b->numPoints() == 4);
+    checkVec(b->position(0), {2, 0, 1});
+
+    // Extract: the chipped face first, then the rest, each matching the face count Maya recorded after it.
+    CHECK(outMesh(g, "chip")->numFaces() == 1);
+    CHECK(outMesh(g, "chip")->numPoints() == 4);
+    CHECK(outMesh(g, "rest")->numFaces() == 2);
+    CHECK(outMesh(g, "rest")->numPoints() == 6);
+
+    // Combine moves each input by its world matrix; merging the shared edge leaves 6 points on one shell.
+    MeshPtr joined = outMesh(g, "joined");
+    CHECK(joined->numFaces() == 2);
+    CHECK(joined->numPoints() == 6);
+    double maxX = 0.0;
+    for (geo::Index p = 0; p < joined->pointCapacity(); ++p)
+        if (joined->pointValid(p))
+            maxX = std::max(maxX, joined->position(p).x);
+    CHECK(maxX == doctest::Approx(2.0));
+
+    // What can't be replayed is flagged on the mesh and summed up once.
+    CHECK(contains(r.warnings, "polySplitRing 'polySplitRing1' not replayed"));
+    CHECK(contains(r.warnings, "1 mesh came in as an earlier shape"));
+    size_t flagged = 0;
+    for (const scene::diagnostics::Issue& i : scene::diagnostics::issues())
+        if (i.source == "mayaImport")
+        {
+            ++flagged;
+            CHECK(i.target.find("ringed") != std::string::npos);
+        }
+    CHECK(flagged == 1);
 }
