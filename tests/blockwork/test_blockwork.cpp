@@ -11,6 +11,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <filesystem>
 
 using namespace lila;
 using namespace lila::scene;
@@ -524,4 +525,88 @@ TEST_CASE("blockwork: a block becomes a volume and back")
     CHECK(n->type().attrIndex("entityClass") < 0);
     CHECK(n->type().attrIndex("DamagePerSec") < 0);
     CHECK_THROWS(run("blockworkVolume", {{"args", {b}}, {"class", "PlayerStart"}}));
+}
+
+TEST_CASE("blockwork: merge leaves tool faces out and hulls convex blocks")
+{
+    fresh();
+    run("blockworkToolMaterials");
+    const std::string a = box({0, 0, 0}, {256, 128, 256}, "a");
+    const std::string b = box({512, 0, 0}, {128, 128, 128}, "b");
+    const Index bottom = faceFacing(out(a), {0, -1, 0});
+    run("blockworkMaterial", {{"args", {a}}, {"material", "ToolNodraw"}, {"faces", {bottom}}});
+    json r = run("blockworkMerge", {{"args", {"Level"}}});
+    CHECK(r["collision"] == "hulls");
+    CHECK(r["hulls"] == 2);
+    geo::Mesh m = out(r["mesh"].get<std::string>());
+    CHECK(m.numFaces() == 11);
+    CHECK(m.cornerAttrs().has("uv0"));
+
+    // A hollow room is concave: auto collides as the mesh itself and says so.
+    run("blockworkHollow", {{"args", {a}}, {"thickness", 16}});
+    r = run("blockworkMerge", {{"args", {"Level"}}});
+    CHECK(r["collision"] == "mesh");
+    CHECK(r["concave"].size() == 1);
+    CHECK(r["hulls"] == 0);
+}
+
+TEST_CASE("blockwork: visgroups hide members while any of their groups is hidden")
+{
+    fresh();
+    const std::string a = box({0, 0, 0}, {64, 64, 64}, "a");
+    const std::string b = box({128, 0, 0}, {64, 64, 64}, "b");
+    run("blockworkVisgroup", {{"args", {"Upstairs"}}, {"add", {a, b}}});
+    run("blockworkVisgroup", {{"args", {"Props"}}, {"add", {b}}});
+    run("blockworkVisgroup", {{"args", {"Upstairs"}}, {"hidden", true}});
+    CHECK_FALSE(g().find(a)->as<bool>(Transform::kVisibility));
+    CHECK_FALSE(g().find(b)->as<bool>(Transform::kVisibility));
+    run("blockworkVisgroup", {{"args", {"Upstairs"}}, {"hidden", false}});
+    run("blockworkVisgroup", {{"args", {"Props"}}, {"hidden", true}});
+    CHECK(g().find(a)->as<bool>(Transform::kVisibility));
+    CHECK_FALSE(g().find(b)->as<bool>(Transform::kVisibility));
+    json all = run("blockworkVisgroup");
+    CHECK(all.size() == 2);
+}
+
+TEST_CASE("blockwork: prefabs save, place on a surface and update every copy")
+{
+    fresh();
+    const auto dir = std::filesystem::temp_directory_path() / "lila_blockwork_prefabs";
+    std::filesystem::remove_all(dir);
+    run("blockworkPrefabs", {{"folder", dir.generic_string()}});
+    const std::string a = box({0, 0, 0}, {128, 64, 32}, "base");
+    run("blockworkEntity", {{"class", "PlayerStart"}, {"position", {64, 32, 32}}});
+    const std::string file = run("blockworkPrefabSave", {{"args", {a, "PlayerStart1"}}, {"name", "Spawn"}}).get<std::string>();
+    CHECK(std::filesystem::exists(file));
+
+    run("newScene");
+    run("blockworkPrefabs", {{"folder", dir.generic_string()}});
+    const std::string p1 = run("blockworkPrefabPlace", {{"args", {"Spawn"}}, {"position", {1000, 0, 0}}}).get<std::string>();
+    const std::string p2 = run("blockworkPrefabPlace", {{"args", {"Spawn"}}, {"position", {0, 0, 0}}, {"normal", {1, 0, 0}}}).get<std::string>();
+    CHECK(g().children(g().find(p1)->id()).size() == 2);
+    // The first copy stands where it was put; the pivot was the base's centre.
+    std::string base1;
+    for (NodeId c : g().children(g().find(p1)->id()))
+        if (blockwork::isBlock(*g().node(c)))
+            base1 = g().fullPath(c);
+    REQUIRE(!base1.empty());
+    geo::Bounds bb = worldBounds(base1);
+    CHECK(bb.center().x == Approx(1000));
+    // The second stands on a wall facing +x: its height runs along x.
+    std::string base2;
+    for (NodeId c : g().children(g().find(p2)->id()))
+        if (blockwork::isBlock(*g().node(c)))
+            base2 = g().fullPath(c);
+    CHECK(worldBounds(base2).size().x == Approx(32));
+    CHECK(worldBounds(base2).size().y == Approx(128));
+
+    // Grow the first copy's block and update: the second follows.
+    const Index top = faceFacing(out(base1), {0, 1, 0});
+    run("blockworkExtend", {{"args", {base1}}, {"faces", {top}}, {"distance", 64}});
+    json rebuilt = run("blockworkPrefabUpdate", {{"args", {base1}}});
+    CHECK(rebuilt.size() == 1);
+    for (NodeId c : g().children(g().find(p2)->id()))
+        if (blockwork::isBlock(*g().node(c)))
+            base2 = g().fullPath(c);
+    CHECK(worldBounds(base2).size().x == Approx(96));
 }

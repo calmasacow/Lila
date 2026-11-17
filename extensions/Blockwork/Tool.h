@@ -10,6 +10,8 @@ namespace blockwork
 inline constexpr const char* kToolId = "blockwork.tool";
 inline constexpr const char* kPaletteId = "blockwork.palette";
 inline constexpr const char* kTexturePanelId = "blockwork.textures";
+inline constexpr const char* kVisgroupPanelId = "blockwork.visgroups";
+inline constexpr const char* kPrefabPanelId = "blockwork.prefabs";
 
 enum class Mode
 {
@@ -20,6 +22,7 @@ enum class Mode
     Paint,
     Align,
     Entity,
+    Prefab,
 };
 
 /** What the tool draws and builds, kept in prefs between sessions. */
@@ -36,6 +39,10 @@ struct Settings
     std::string material;
     /** The class the Entity tool places. */
     std::string entityClass = "PlayerStart";
+    /** The prefab file the Prefab tool places. */
+    std::string prefab;
+    /** Placed prefabs turn their up to the surface they land on. */
+    bool prefabFollowsNormal = true;
 };
 
 Settings& settings();
@@ -51,4 +58,8 @@ const char* shapeLabel(Shape s);
 void registerTool(lila::ext::Context& ctx);
 void registerPalette(lila::ext::Context& ctx);
 void registerTexturePanel(lila::ext::Context& ctx);
+void registerOrganise(lila::ext::Context& ctx);
+void registerOrganisePanels(lila::ext::Context& ctx);
+/** Shows and hides visgroup members to match their groups. */
+void visgroupsChanged();
 } // namespace blockwork

@@ -38,7 +38,7 @@ struct TileDef
     const char* tip;
 };
 
-constexpr std::array<TileDef, 7> kModeTiles = {{
+constexpr std::array<TileDef, 8> kModeTiles = {{
     {"Block", "box", "draw a block on the grid: click a corner, the opposite corner, then the height"},
     {"Carve", "shovel", "draw a shape the same way and cut it out of every block it overlaps"},
     {"Clip", "slice", "click a line across blocks to cut them along it; Tab picks the side kept"},
@@ -46,6 +46,7 @@ constexpr std::array<TileDef, 7> kModeTiles = {{
     {"Paint", "brush", "click or drag over faces to put the picked texture on them; Ctrl+click a face to take its texture"},
     {"Align", "align-box-bottom-center", "click near a face edge to line the texture up with it; W A S D pick the side, Q and E fit"},
     {"Entity", "map-pin", "place a player start, light, trigger or any class from the entity definitions; volumes are drawn like blocks"},
+    {"Prefab", "packages", "click to place the prefab picked in the Prefabs panel, stood on the surface; Tab turns it"},
 }};
 
 constexpr std::array<TileDef, 6> kShapeTiles = {{
@@ -310,12 +311,13 @@ void registerUi(ext::Context& ctx)
     registerTool(ctx);
     registerPalette(ctx);
     registerTexturePanel(ctx);
+    registerOrganisePanels(ctx);
 
     const std::vector<std::string> keywords = {"blockout", "greybox", "graybox", "brush", "hammer", "trenchbroom", "level design", "csg"};
     for (int i = 0; i < int(kModeTiles.size()); ++i)
     {
         const Mode m = Mode(i);
-        static const char* const ids[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.entity"};
+        static const char* const ids[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.entity", "blockwork.prefab"};
         actions::add(ctx, {.id = ids[i],
                            .label = std::string(m == Mode::Block ? "Block" : modeLabel(m)) + " Tool",
                            .category = "Blockwork",
@@ -403,6 +405,10 @@ void registerUi(ext::Context& ctx)
                                       {"blockwork.entity", "map-pin", "Entity", {}, "Entities"},
                                       {"blockwork.makeVolume", "box", "Volume", {}, "Entities"},
                                       {"blockwork.sendEntities", "send", "Send", {}, "Entities"},
+                                      {"blockwork.prefabs", "packages", "Prefabs", {}, "Organise"},
+                                      {"blockwork.visgroups", "eye", "Visgroups", {}, "Organise"},
+                                      {"blockwork.merge", "box-multiple", "Merge", {}, "Organise"},
+                                      {"blockwork.toolMaterials", "texture", "Tool Faces", {}, "Organise", true},
                                       {"blockwork.hollow", "box-multiple", "Hollow"},
                                       {"blockwork.join", "box", "Join"},
                                       {"blockwork.flip", "arrows-exchange", "Flip", {}, {}, true}},
@@ -410,7 +416,7 @@ void registerUi(ext::Context& ctx)
                             .docs = "blockwork"});
     menus::addItem(ctx, {.id = "blockwork.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Blockwork",
                          .before = levelToolkit::kDressSection});
-    for (const char* a : {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.textures", "blockwork.entity", "blockwork.makeVolume", "blockwork.sendEntities"})
+    for (const char* a : {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.textures", "blockwork.entity", "blockwork.makeVolume", "blockwork.sendEntities", "blockwork.prefabs", "blockwork.visgroups", "blockwork.merge", "blockwork.toolMaterials"})
         menus::addItem(ctx, {.id = std::string("blockwork.menu.") + a, .menu = "Level/Blockwork", .action = a});
     menus::addItem(ctx, {.id = "blockwork.menu.sep1", .menu = "Level/Blockwork", .kind = menus::Kind::Separator});
     for (const std::string& s : shapeNames())

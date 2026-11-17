@@ -2,6 +2,7 @@
 
 #include "Blockwork.h"
 #include "Entities.h"
+#include "Tool.h"
 
 LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
 {
@@ -10,6 +11,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     blockwork::registerCommands(ctx);
     blockwork::registerTextureCommands(ctx);
     blockwork::registerEntities(ctx);
+    blockwork::registerOrganise(ctx);
     blockwork::registerUi(ctx);
     return 0;
 }

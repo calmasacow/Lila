@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <set>
 
 namespace blockwork
@@ -31,7 +32,7 @@ namespace
 constexpr const char* kSettingsPref = "/blockwork/tool";
 constexpr int kGridCells = 10;
 
-const char* const kModeIds[] = {"block", "carve", "clip", "extend", "paint", "align", "entity"};
+const char* const kModeIds[] = {"block", "carve", "clip", "extend", "paint", "align", "entity", "prefab"};
 
 json toJson(const Settings& s)
 {
@@ -48,7 +49,9 @@ json toJson(const Settings& s)
             {"removeOverlap", s.removeOverlap},
             {"hollowThickness", s.hollowThickness},
             {"material", s.material},
-            {"entityClass", s.entityClass}};
+            {"entityClass", s.entityClass},
+            {"prefab", s.prefab},
+            {"prefabFollowsNormal", s.prefabFollowsNormal}};
 }
 
 Settings fromJson(const json& j)
@@ -56,7 +59,7 @@ Settings fromJson(const json& j)
     Settings s;
     if (!j.is_object())
         return s;
-    for (int i = 0; i < 7; ++i)
+    for (int i = 0; i < 8; ++i)
         if (j.value("mode", std::string()) == kModeIds[i])
             s.mode = Mode(i);
     if (auto sh = shapeFromName(j.value("shape", std::string("box"))))
@@ -73,6 +76,8 @@ Settings fromJson(const json& j)
     s.hollowThickness = std::max(0.01, j.value("hollowThickness", 16.0));
     s.material = j.value("material", std::string());
     s.entityClass = j.value("entityClass", std::string("PlayerStart"));
+    s.prefab = j.value("prefab", std::string());
+    s.prefabFollowsNormal = j.value("prefabFollowsNormal", true);
     return s;
 }
 
@@ -235,6 +240,12 @@ public:
         {
         case Mode::Block:
         case Mode::Carve: pressDraw(e->modifiers()); break;
+        case Mode::Prefab:
+            if (!settings().prefab.empty())
+                run("blockworkPrefabPlace", {{"args", {settings().prefab}}, {"position", {mCursor.x, mCursor.y, mCursor.z}},
+                                             {"normal", settings().prefabFollowsNormal ? json{mPlane.normal.x, mPlane.normal.y, mPlane.normal.z} : json{0, 1, 0}},
+                                             {"turn", mEntityTurn}});
+            break;
         case Mode::Entity:
             if (isPointEntity())
                 placeEntity();
@@ -366,7 +377,7 @@ private:
         case Qt::Key_Tab:
             if (s.mode == Mode::Clip && mStep == Step::ClipReady)
                 mClipKeep = (mClipKeep + 1) % 3;
-            else if (s.mode == Mode::Entity && isPointEntity())
+            else if (s.mode == Mode::Prefab || (s.mode == Mode::Entity && isPointEntity()))
                 mEntityTurn = std::fmod(mEntityTurn + ((mods & Qt::ShiftModifier) ? 315.0 : 45.0), 360.0);
             else if (s.mode == Mode::Block || s.mode == Mode::Carve)
             {
@@ -963,6 +974,13 @@ private:
             }
             if (s.mode == Mode::Align)
                 st.keys.insert(st.keys.begin(), {{"W A S D", "side on the edge"}, {"Q E", "fit height, width"}, {"R", "reset"}});
+            if (s.mode == Mode::Prefab)
+            {
+                st.mode = QString("Prefab %1").arg(QString::fromStdString(std::filesystem::path(s.prefab).stem().string()));
+                st.prompt = s.prefab.empty() ? "pick a prefab in the Prefabs panel" : "click where it stands";
+                st.fields.push_back({"turn", QString("%1\xc2\xb0").arg(mEntityTurn)});
+                st.keys.insert(st.keys.begin(), {"Tab", "turn 45\xc2\xb0"});
+            }
             if (s.mode == Mode::Entity)
             {
                 st.mode = QString("Entity %1").arg(QString::fromStdString(s.entityClass));
@@ -1052,7 +1070,7 @@ void saveSettings() { PrefStore::get().set("general", kSettingsPref, toJson(sett
 
 const char* modeLabel(Mode m)
 {
-    static const char* const k[] = {"Block", "Carve", "Clip", "Extend", "Paint", "Align", "Entity"};
+    static const char* const k[] = {"Block", "Carve", "Clip", "Extend", "Paint", "Align", "Entity", "Prefab"};
     return k[int(m)];
 }
 
