@@ -790,7 +790,7 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
     // Object space: the source keeps one size on the surface (valueSize cm a tile), whatever the uvs' density.
     bool objectSpace = p.valueSpace != 0;
     float3 triW = float3(0.0);
-    float2 planes[3];
+    float2 planes[3] = { float2(0.0), float2(0.0), float2(0.0) };
     if (objectSpace)
     {
         float3 q = pos * (p.valueScale / max(p.valueSize, 1e-3));
@@ -803,7 +803,7 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
     float2 hexSt = uv * p.valueScale;
     if (objectSpace)
         hexSt = triW.x >= triW.y && triW.x >= triW.z ? planes[0] : triW.y >= triW.z ? planes[1] : planes[2];
-    HexTiling hexCells;
+    HexTiling hexCells = {};
     float3 hexW = float3(0.0);
     if (hex)
     {
