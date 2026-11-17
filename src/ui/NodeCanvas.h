@@ -97,6 +97,8 @@ inline constexpr const char* kPrefWireStyle = "/nodeEditor/wireStyle";
 inline constexpr const char* kPrefDimUnrelated = "/nodeEditor/dimUnrelated";
 /** In a grey theme, draw every wire one grey rather than in its socket type's shade. */
 inline constexpr const char* kPrefGreyWires = "/nodeEditor/greyWiresInMonotone";
+/** Image previews on the nodes that have one; off hides them on every node. */
+inline constexpr const char* kPrefPreviews = "/nodeEditor/previews";
 
 enum class WireStyle : uint8_t
 {
@@ -112,6 +114,7 @@ struct CanvasPrefs
     WireStyle wires = WireStyle::Curved;
     bool dimUnrelated = false;
     bool greyWires = false;
+    bool previews = true;
 };
 
 inline CanvasPrefs readCanvasPrefs()
@@ -124,6 +127,7 @@ inline CanvasPrefs readCanvasPrefs()
     p.wires = style == "straight" ? WireStyle::Straight : style == "rightAngle" ? WireStyle::RightAngle : WireStyle::Curved;
     p.dimUnrelated = s.value<bool>("general", kPrefDimUnrelated, false);
     p.greyWires = s.value<bool>("general", kPrefGreyWires, false);
+    p.previews = s.value<bool>("general", kPrefPreviews, true);
     return p;
 }
 
@@ -289,7 +293,33 @@ struct SocketInfo
     json value;
     std::string implicit;
     std::string doc;
+    /** An input's min, max, softMin, softMax and step, and an enum's names, where the backend gives them. */
+    json limits = json::object();
 };
+
+/** How an input row edits its value on the node: a slider to drag, a check to click, a swatch that opens the colour picker. */
+enum class FieldKind : uint8_t
+{
+    None,
+    Number,
+    Toggle,
+    Color,
+};
+
+/** The range a slider fill spans: soft limits first, then hard ones. Nullopt unless both ends are known. */
+inline std::optional<std::pair<double, double>> fieldRange(const json& limits)
+{
+    auto end = [&](const char* soft, const char* hard) -> std::optional<double> {
+        for (const char* k : {soft, hard})
+            if (auto it = limits.find(k); it != limits.end() && it->is_number())
+                return it->get<double>();
+        return std::nullopt;
+    };
+    std::optional<double> lo = end("softMin", "min"), hi = end("softMax", "max");
+    if (!lo || !hi || *hi <= *lo)
+        return std::nullopt;
+    return std::pair{*lo, *hi};
+}
 
 class NodeItem final : public QGraphicsItem
 {
@@ -307,6 +337,8 @@ public:
     bool viewer = false;
     bool viewerActive = false;
     std::string groupRef; // the group a Group node runs
+    /** The backend's preview size for the type; thumbSize is what is drawn, 0 while previews are hidden. */
+    int previewSize = 0;
     int thumbSize = 0;
     QImage thumb;
 
@@ -335,11 +367,24 @@ public:
     bool collapsed = false;
     bool hideUnused = false;
     bool muted = false;
+    bool hidePreview = false;
     /** The socket rows drawn: indices into outputs and inputs. */
     std::vector<int> shownOut, shownIn;
 
-    /** Picks the rows to draw from the flags and what is linked; call after either changes. */
+    /**
+     * Picks the rows to draw from the flags and what is linked; call after either changes. Hiding unused sockets keeps
+     * the backend's primary ones, and a node with neither links nor primary sockets shows every row so it can be wired.
+     */
     void layoutRows();
+
+    /** How input i edits on the node; None when it is linked, valueless, implicit, or a type the side panel edits. */
+    FieldKind fieldKind(int i) const;
+    /** Input i's drawn field in item coordinates; empty when the row isn't drawn. */
+    QRectF fieldRect(int i) const;
+    /** The editable input under a scene point, -1 for none. */
+    int fieldAt(QPointF scenePos) const;
+    /** The input the cursor is over, drawn lit. */
+    int hotField = -1;
 
     /** Where the socket rows start: under the header and the thumbnail. */
     double top() const { return kHeader + (thumbSize > 0 ? thumbSize + 8.0 : 0.0); }
@@ -715,6 +760,17 @@ public:
      * Flips a node flag ("muted", "collapsed", "hideUnused") on the selection: on for all when any lacks it, else off.
      */
     void toggleFlag(const char* flag);
+    /** True when every selected node the flag applies to has it on; false when none does. */
+    bool flagOn(const char* flag) const;
+
+    /** Image previews on every node that has one; kept as a pref. */
+    void setPreviews(bool on);
+    bool previews() const { return mPrefs.previews; }
+    /** Whether any node (or any selected one) draws an image preview when previews show. */
+    bool hasPreviews(bool selectedOnly) const;
+
+    /** After a value edited on a node lands: the editor brings its side panel up to date. */
+    std::function<void()> onValuesEdited;
 
     /** The nodes as (name, what shows on the header), for the find popup. */
     std::vector<std::pair<std::string, QString>> nodeList() const;
@@ -867,6 +923,8 @@ private:
 
     /** Wires n into the link, then (with the auto-offset pref) slides what is downstream right to make room. */
     void insertOnLink(LinkItem* l);
+    /** With the auto-offset pref, slides `to` and what it feeds right to clear n. */
+    void offsetDownstream(NodeItem* n, NodeItem* to);
 
     /** A wire's colour: its socket type's, or one grey in a grey theme when the pref asks. */
     QColor wireColor(const std::string& type) const;
@@ -920,6 +978,37 @@ public:
 private:
 
     void commitMoves();
+
+    /** A number field held by the mouse; kept by name, since every edit rebuilds the items (NodeCanvasFields.cpp). */
+    struct FieldDrag
+    {
+        std::string node;
+        std::string socket;
+        bool integer = false;
+        json limits;
+        double value = 0.0;
+        double sent = 0.0;
+        QPoint press, last;
+        double pxPerField = 1.0; // the field's width on screen, for a bounded slider's scale
+        bool dragging = false;
+    };
+    std::optional<FieldDrag> mField;
+    QPointer<QLineEdit> mFieldEdit;
+    NodeItem* mHotFieldNode = nullptr;
+    bool mFieldCursor = false; // the viewport cursor is a field's, so leaving the field resets it
+
+    /** A left press on an editable row: a toggle flips, a swatch opens the picker, a number arms a scrub. */
+    void pressField(NodeItem* n, int input, QMouseEvent* e);
+    /** Scrubs the armed number by the mouse's travel: Shift ten times as fast, Ctrl a tenth. One undo step per drag. */
+    void dragField(QMouseEvent* e);
+    void releaseField();
+    /** A box over the field to type a number in; Enter or leaving it sets it, Esc cancels. */
+    void editFieldText(NodeItem* n, int input);
+    void pickFieldColor(NodeItem* n, int input, QPoint global);
+    /** Lights the field under the cursor and sets the cursor its kind uses. */
+    void hoverField(QPointF sp);
+    /** Sets one input as the side panel does; live edits during a drag leave the panel alone until the drag ends. */
+    void setFieldValue(const std::string& node, const std::string& socket, const json& value, bool live);
 
     void updateGrab(QPointF sp, Qt::KeyboardModifiers mods);
     void endGrab(bool keep);

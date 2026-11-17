@@ -1036,3 +1036,81 @@ TEST_CASE("I opens a Group node's group, U and the path bar lead back out")
     CHECK(editor->group() == "Outer");
     CHECK(editor->parentGroup().isEmpty());
 }
+
+TEST_CASE("a number on a node scrubs in one undo step, Ctrl scrubs finer, and a double-click types it")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnMoveNodes", {{"args", {"G"}}, {"positions", {{"GroupOutput", {700, 0}}, {"GroupInput", {-300, 0}}}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 0}}, {"name", "M"}});
+    run("gnSetValue", {{"args", {"G", "M.a", 1.0}}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    // The a row: under the header, the outputs, the props, then the inputs in order.
+    QPointF a;
+    json info = run("gnGroupInfo", {{"args", {"G"}}});
+    for (const json& n : info["nodes"])
+        if (n["name"] == "M")
+            for (size_t i = 0; i < n["inputs"].size(); ++i)
+                if (n["inputs"][i]["id"] == "a")
+                    a = QPointF(85, 24 + 20.0 * double(n["outputs"].size() + n["props"].size() + i) + 10);
+    REQUIRE(a != QPointF());
+    auto value = [] { return gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M")->values.value("a", 0.0); };
+    const double px = 1.0 / view->transform().m11();
+
+    dragInView(view, a, a + QPointF(100, 0) * px);
+    const double scrubbed = value();
+    CHECK(scrubbed > 1.5);
+    CHECK(gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M")->position.x == doctest::Approx(0.0));
+    run("undo");
+    pump();
+    CHECK(value() == doctest::Approx(1.0));
+
+    mouse(view, QEvent::MouseButtonPress, a, Qt::LeftButton);
+    for (int i = 1; i <= 4; ++i)
+        mouse(view, QEvent::MouseMove, a + QPointF(25.0 * i, 0) * px, Qt::LeftButton, Qt::ControlModifier);
+    mouse(view, QEvent::MouseButtonRelease, a + QPointF(100, 0) * px, Qt::NoButton, Qt::ControlModifier);
+    CHECK(value() - 1.0 == doctest::Approx((scrubbed - 1.0) * 0.1).epsilon(0.05));
+    run("undo");
+    pump();
+
+    mouse(view, QEvent::MouseButtonPress, a, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, a, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, a, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, a, Qt::NoButton);
+    auto* edit = view->viewport()->findChild<QLineEdit*>();
+    REQUIRE(edit);
+    edit->setText("3.5");
+    press(edit, Qt::Key_Return);
+    CHECK(value() == doctest::Approx(3.5));
+    run("undo");
+    pump();
+    CHECK(value() == doctest::Approx(1.0));
+}
+
+TEST_CASE("a node with nothing linked shows its sockets even with unused ones hidden")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 400}}, {"name", "M"}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    const double open = itemAt(view, {0, 400})->boundingRect().height();
+    run("gnSetNodeFlags", {{"args", {"G", "M"}}, {"hideUnused", true}});
+    pump();
+    CHECK(itemAt(view, {0, 400})->boundingRect().height() == doctest::Approx(open));
+
+    // The menu's flag items show their state for the selection.
+    view->scene()->clearSelection();
+    itemAt(view, {0, 400})->setSelected(true);
+    pump();
+    const ui::Action* hide = ui::actions::find("nodeEditor.toggleUnusedSockets");
+    REQUIRE(hide);
+    REQUIRE(hide->checked);
+    CHECK(hide->checked());
+    ui::actions::run(json("nodeEditor.toggleUnusedSockets"));
+    pump();
+    CHECK_FALSE(hide->checked());
+}

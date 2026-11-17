@@ -119,6 +119,7 @@ void NodeCanvas::keyReleaseEvent(QKeyEvent* e)
 void NodeCanvas::focusOutEvent(QFocusEvent* e)
 {
     endGrab(false);
+    releaseField();
     QGraphicsView::focusOutEvent(e);
 }
 
@@ -246,6 +247,13 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
                 return;
             }
         }
+    if (e->button() == Qt::LeftButton && !(e->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::ShiftModifier)))
+        if (NodeItem* n = nodeAt(sp))
+            if (int f = n->fieldAt(sp); f >= 0)
+            {
+                pressField(n, f, e);
+                return;
+            }
     if (e->button() == Qt::LeftButton && !nodeAt(sp) && tieAt(sp) < 0)
         if (int f = frameAt(sp, false); f >= 0)
         {
@@ -304,6 +312,11 @@ void NodeCanvas::mouseMoveEvent(QMouseEvent* e)
         updateGrab(sp, e->modifiers());
         return;
     }
+    if (mField)
+    {
+        dragField(e);
+        return;
+    }
     if (mPanning)
     {
         QPoint d = e->pos() - mLast;
@@ -345,6 +358,7 @@ void NodeCanvas::mouseMoveEvent(QMouseEvent* e)
     if (e->buttons() == Qt::NoButton)
     {
         hoverTie(tieAt(sp));
+        hoverField(sp);
         NodeItem* over = nodeAt(sp);
         if (over != mHoverNode)
         {
@@ -388,6 +402,11 @@ void NodeCanvas::mouseReleaseEvent(QMouseEvent* e)
     QPointF sp = mapToScene(e->pos());
     if (grabRelease(e))
         return;
+    if (mField)
+    {
+        releaseField();
+        return;
+    }
     if (mPanning)
     {
         mPanning = false;
@@ -469,6 +488,16 @@ void NodeCanvas::mouseDoubleClickEvent(QMouseEvent* e)
 {
     QPointF sp = mapToScene(e->pos());
     NodeItem* n = nodeAt(sp);
+    if (n && e->button() == Qt::LeftButton)
+        if (int f = n->fieldAt(sp); f >= 0)
+        {
+            // The second click of a double-click: a number opens for typing, a check flips back as a checkbox would.
+            if (n->fieldKind(f) == FieldKind::Number)
+                editFieldText(n, f);
+            else if (n->fieldKind(f) == FieldKind::Toggle)
+                pressField(n, f, e);
+            return;
+        }
     if (!n)
         if (int f = frameAt(sp, true); f >= 0)
         {

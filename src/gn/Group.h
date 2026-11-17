@@ -30,9 +30,11 @@ struct GNode
     bool collapsed = false;
     /** Drawn with only its linked sockets. */
     bool hideUnused = false;
+    /** Drawn without its image preview, where the editor draws one. */
+    bool hidePreview = false;
 };
 
-/** Writes a node's flags into its JSON object ("muted", "collapsed", "hideUnused"), leaving out the ones that are off. */
+/** Writes a node's flags into its JSON object ("muted", "collapsed", "hideUnused", "hidePreview"), leaving out the ones that are off. */
 LILA_SCENE_API void putNodeFlags(const GNode& n, json& o);
 LILA_SCENE_API void getNodeFlags(GNode& n, const json& o);
 template <class Json> void putNodeFlagsTo(const GNode& n, Json& o)
@@ -43,6 +45,8 @@ template <class Json> void putNodeFlagsTo(const GNode& n, Json& o)
         o["collapsed"] = true;
     if (n.hideUnused)
         o["hideUnused"] = true;
+    if (n.hidePreview)
+        o["hidePreview"] = true;
 }
 
 struct GLink

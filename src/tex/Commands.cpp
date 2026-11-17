@@ -764,11 +764,13 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "texSetNodeFlags",
-        .doc = "Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused. Flags left out stay as they are.",
+        .doc = "Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused, hidePreview. Flags left out stay as "
+               "they are.",
         .positionalDoc = "set nodes...",
         .flags = {{"muted", "", T::Bool, nullptr, "Bypass the nodes."},
                   {"collapsed", "", T::Bool, nullptr, "Draw only their headers."},
-                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."}},
+                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."},
+                  {"hidePreview", "", T::Bool, nullptr, "Draw them without their image previews."}},
         .run = [](const Args& a) -> json {
             return editGraph(a, "texSetNodeFlags", [&](Graph& g, const SetSettings&) -> json {
                 for (size_t i = 1; i < a.positional.size(); ++i)
@@ -785,6 +787,8 @@ void registerCommands()
                         n.collapsed = a.get<bool>("collapsed", false);
                     if (a.has("hideUnused"))
                         n.hideUnused = a.get<bool>("hideUnused", false);
+                    if (a.has("hidePreview"))
+                        n.hidePreview = a.get<bool>("hidePreview", false);
                 }
                 return nullptr;
             });

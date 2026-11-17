@@ -52,6 +52,7 @@ void getNodeFlags(GNode& n, const json& o)
     n.muted = o.value("muted", false);
     n.collapsed = o.value("collapsed", false);
     n.hideUnused = o.value("hideUnused", false);
+    n.hidePreview = o.value("hidePreview", false);
 }
 
 json tiesToJson(const std::vector<GTie>& ties)

@@ -48,6 +48,11 @@ inline constexpr const char* kGeometryNodesBackend = "gn";
  * hides what a verb drives when supports() says the backend lacks it. GroupInfo lists the group's owners under "owners"
  * (geometry nodes says "modifiers").
  *
+ * InsertNode (group, node, "from.socket", "to.socket") lets a backend wire a node dropped on a link its own way; it returns
+ * true when it did, false to have the editor wire the node through matching sockets. It is the one verb supports() leaves
+ * out by default; a backend opting in also takes
+ * insert=False on AddNode, sent when the new node is about to be wired to a dragged wire.
+ *
  * Open an editor on a backend with NodeEditor(parent, id), for instance from a panel an extension registers.
  */
 class LILA_UI_API GraphBackend
@@ -201,6 +206,8 @@ public:
     virtual QString wireSummary(const nlohmann::json& info, const std::string& node, const std::string& socket) const;
     /** Sockets that carry data but no editable value (geometry): no value text, no side-panel field. */
     virtual bool valueless(const std::string&) const { return false; }
+    /** The backend's main data (meshes in the scene graph): drawn even on a node hiding its unused sockets. */
+    virtual bool primarySocket(const std::string&) const { return false; }
     virtual QColor headerColor(const std::string& type, const std::string& category) const;
     /** Types offered for a new exposed input. */
     virtual std::vector<std::string> inputTypes() const { return {"float", "int", "bool", "vector", "color", "string"}; }

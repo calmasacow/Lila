@@ -4062,7 +4062,7 @@ def gnMoveNodes(*objects: Any, positions: Any | None = None) -> Any:
     """
 
 def gnNodeTypes(linkType: str | None = None, linkInput: bool | None = None, group: str | None = None, detail: bool | None = None) -> Any:
-    """The node library: type, label, category and description of each node. With linkType, only nodes that can take a link from (or, with linkInput, give one to) a socket of that type, each with the socket it would use.
+    """The node library: type, label, category and description of each node, and for a node with an operation its options as variants ({label, values} to set on the new node). With linkType, only nodes that can take a link from (or, with linkInput, give one to) a socket of that type, each with the socket it would use.
 
     Args:
         linkType: Socket type of a dragged link's loose end.
@@ -4191,14 +4191,15 @@ def gnSetItems(*objects: Any, renames: Any | None = None) -> Any:
         renames: {old: new} item names, so their links and values carry over.
     """
 
-def gnSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None) -> Any:
-    """Set how nodes draw and run: gnSetNodeFlags(group, 'Math', 'Noise', muted=True). muted bypasses a node (its first input of a matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets. Flags left out stay as they are.
+def gnSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None, hidePreview: bool | None = None) -> Any:
+    """Set how nodes draw and run: gnSetNodeFlags(group, 'Math', 'Noise', muted=True). muted bypasses a node (its first input of a matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets; hidePreview leaves out its image preview. Flags left out stay as they are.
 
     Args:
         objects: group nodes...
         muted: Bypass the nodes.
         collapsed: Draw only their headers.
         hideUnused: Draw only their linked sockets.
+        hidePreview: Draw them without their image previews.
     """
 
 def gnSetTies(*objects: Any) -> Any:
@@ -8084,7 +8085,7 @@ def retopoDrawMove(mesh: str | None = None, points: Sequence[Any] | None = None,
 
     Args:
         mesh: Retopo mesh.
-        points: Point ids.
+        points: Point ids. With symmetry, a point that is an earlier listed point's mirror image follows that point.
         positions: World [x, y, z] per point.
         weld: Merge a moved point into another point closer than this, cm. Default 0.0.
     """
@@ -8515,13 +8516,14 @@ def sceneData(*objects: Any, value: Any | None = None, remove: bool | None = Non
         remove: Delete the key. Short form rm. Default False.
     """
 
-def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str | None = None) -> Any:
-    """Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path.
+def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str | None = None, insert: bool | None = None) -> Any:
+    """Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path. A modifier added with a mesh (or one of its modifiers) selected goes on top of that mesh's stack, as addModifier puts it, and is laid out in the stack's columns rather than at position.
 
     Args:
         objects: view type.
         position: [x, y] on the canvas.
         name: Wanted name; made unique.
+        insert: Put a modifier into the selected mesh's stack; off leaves it unlinked. Default True.
     """
 
 def sceneGraphConnect(*objects: Any) -> Any:
@@ -8560,6 +8562,13 @@ def sceneGraphInfo(*objects: Any, depth: int | None = None, all: bool | None = N
         sceneGraphInfo("Upstream", depth=3)
     """
 
+def sceneGraphInsertNode(*objects: Any) -> Any:
+    """Drop an unlinked modifier into a link of a mesh's stack from the node editor: sceneGraphInsertNode(view, 'bevel1', 'polyCube1.outMesh', 'Cube.inMesh') wires it in as addModifier does. Returns False, changing nothing, for any other node or link; the editor then wires the node through its matching sockets.
+
+    Args:
+        objects: view node from to.
+    """
+
 def sceneGraphMoveNodes(*objects: Any, positions: Any | None = None) -> Any:
     """Move nodes on the node editor's canvas: sceneGraphMoveNodes(view, positions={'Box': [0, 100]}). Kept per view with the scene.
 
@@ -8577,12 +8586,12 @@ def sceneGraphNodeTypes(linkType: str | None = None, linkInput: bool | None = No
     """
 
 def sceneGraphSetNodeFlags(*objects: Any, collapsed: bool | None = None, hideUnused: bool | None = None, muted: bool | None = None) -> Any:
-    """Show nodes collapsed, or with every plug (hideUnused=False) rather than only the connected ones. Kept with the scene.
+    """Show nodes collapsed, or with every plug (hideUnused=False) rather than only the connected ones and their meshes. A node with neither shows every plug. Kept with the scene.
 
     Args:
         objects: view nodes...
         collapsed: Only the header.
-        hideUnused: Only the connected plugs; on for every node until turned off.
+        hideUnused: Only the connected plugs and meshes; on for every node but modifiers until turned off.
         muted: Accepted for the editor's mute key; scene nodes don't mute.
     """
 
@@ -10657,7 +10666,7 @@ def texMoveStroke(*objects: Any, stroke: int | None = None, index: int | None = 
     """
 
 def texNodeTypes(linkType: str | None = None, linkInput: bool | None = None, detail: bool | None = None, reload: bool | None = None) -> Any:
-    """The texture node library: type, label, category, kind, tier and description of each. With linkType, only nodes that can take a link from (or, with linkInput, give one to) a port of that type, each with the socket it would use.
+    """The texture node library: type, label, category, kind, tier, description, search keywords and variants (an operation's options, each {label, values} to set on the new node) of each. With linkType, only nodes that can take a link from (or, with linkInput, give one to) a port of that type, each with the socket it would use.
 
     Args:
         linkType: Port type of a dragged link's loose end.
@@ -10892,14 +10901,15 @@ def texSetMask(*objects: Any) -> Any:
         objects: set layer mask props.
     """
 
-def texSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None) -> Any:
-    """Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused. Flags left out stay as they are.
+def texSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | None = None, hideUnused: bool | None = None, hidePreview: bool | None = None) -> Any:
+    """Set how nodes draw and run, as gnSetNodeFlags does: muted, collapsed, hideUnused, hidePreview. Flags left out stay as they are.
 
     Args:
         objects: set nodes...
         muted: Bypass the nodes.
         collapsed: Draw only their headers.
         hideUnused: Draw only their linked sockets.
+        hidePreview: Draw them without their image previews.
     """
 
 def texSetSettings(*objects: Any) -> Any:

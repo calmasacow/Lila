@@ -10,7 +10,7 @@ namespace lila::ui
 {
 GraphBackend::~GraphBackend() = default;
 
-bool GraphBackend::supports(std::string_view) const { return true; }
+bool GraphBackend::supports(std::string_view verb) const { return verb != "InsertNode"; }
 
 bool GraphBackend::isQuery(std::string_view verb) const { return verb == "GroupInfo" || verb == "NodeTypes"; }
 

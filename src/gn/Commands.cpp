@@ -668,12 +668,13 @@ void registerCommands()
     ops::registerCommand({
         .name = "gnSetNodeFlags",
         .doc = "Set how nodes draw and run: gnSetNodeFlags(group, 'Math', 'Noise', muted=True). muted bypasses a node (its first input of a "
-               "matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets. "
-               "Flags left out stay as they are.",
+               "matching type passes through to each output); collapsed draws only its header; hideUnused draws only its linked sockets; "
+               "hidePreview leaves out its image preview. Flags left out stay as they are.",
         .positionalDoc = "group nodes...",
         .flags = {{"muted", "", T::Bool, nullptr, "Bypass the nodes."},
                   {"collapsed", "", T::Bool, nullptr, "Draw only their headers."},
-                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."}},
+                  {"hideUnused", "", T::Bool, nullptr, "Draw only their linked sockets."},
+                  {"hidePreview", "", T::Bool, nullptr, "Draw them without their image previews."}},
         .run = [](const Args& a) -> json {
             return editGroup(a, "gnSetNodeFlags", [&](Group& grp) -> json {
                 for (size_t i = 1; i < a.positional.size(); ++i)
@@ -690,6 +691,8 @@ void registerCommands()
                         n.collapsed = a.get<bool>("collapsed", false);
                     if (a.has("hideUnused"))
                         n.hideUnused = a.get<bool>("hideUnused", false);
+                    if (a.has("hidePreview"))
+                        n.hidePreview = a.get<bool>("hidePreview", false);
                 }
                 return nullptr;
             });

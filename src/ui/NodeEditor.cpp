@@ -516,6 +516,7 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
         mSelectedNode = qs(n);
         rebuildSidePanel();
     };
+    mCanvas->onValuesEdited = [this] { QTimer::singleShot(0, this, [this] { rebuildSidePanel(); }); };
 
     mListener = scene::Graph::current().addListener([this](scene::Change c, scene::NodeId id) {
         scene::Graph& g = scene::Graph::current();
@@ -755,6 +756,7 @@ NodeEditor::~NodeEditor()
     // The canvas outlives this body; its scene emits selectionChanged as it clears on destruction.
     mCanvas->onSelect = nullptr;
     mCanvas->onFocused = nullptr;
+    mCanvas->onValuesEdited = nullptr;
     scene::Graph::current().removeListener(mListener);
     graphBackends::registry().removeListener(mBackendListener);
     PrefStore::get().removeOnChanged(mPrefsListener);
@@ -859,7 +861,10 @@ void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
         UndoChunk chunk("Add Node");
         if (drag && drag->detached)
             runVerb(*backend, "Disconnect", {{"args", {group, drag->detached->second}}, {"source", drag->detached->first}});
-        json r = runVerb(*backend, "AddNode", {{"args", {group, type}}, {"position", {pos.x(), pos.y()}}});
+        json call = {{"args", {group, type}}, {"position", {pos.x(), pos.y()}}};
+        if (drag && backend->supports("InsertNode"))
+            call["insert"] = false;
+        json r = runVerb(*backend, "AddNode", call);
         if (!r.is_string())
             return;
         std::string name = r.get<std::string>();
@@ -1669,6 +1674,12 @@ void NodeEditor::swapInputs()
 
 void NodeEditor::toggleNodeFlag(const char* flag) { mCanvas->toggleFlag(flag); }
 
+bool NodeEditor::nodeFlagOn(const char* flag) const { return mCanvas->flagOn(flag); }
+
+void NodeEditor::setPreviews(bool on) { mCanvas->setPreviews(on); }
+
+bool NodeEditor::previews() const { return mCanvas->previews(); }
+
 void NodeEditor::alignSelected(int how) { mCanvas->align(NodeCanvas::Align(how)); }
 
 void NodeEditor::distributeSelected(bool horizontal) { mCanvas->distribute(horizontal); }
@@ -1767,10 +1778,14 @@ void NodeEditor::showCanvasMenu(QPoint global)
     item(&menu, "nodeEditor.toggleMute");
     item(&menu, "nodeEditor.toggleCollapse");
     item(&menu, "nodeEditor.toggleUnusedSockets");
+    if (mCanvas->hasPreviews(true))
+        item(&menu, "nodeEditor.toggleNodePreview");
     menu.addSeparator();
     item(&menu, "nodeEditor.toggleFlow");
     item(&menu, "nodeEditor.toggleSelectedWires");
     item(&menu, "nodeEditor.toggleMinimap");
+    if (mCanvas->hasPreviews(false))
+        item(&menu, "nodeEditor.togglePreviews");
     item(&menu, "nodeEditor.find");
     item(&menu, "nodeEditor.portalSource");
     item(&menu, "nodeEditor.portalReaders");
@@ -2117,14 +2132,26 @@ void registerEditActions()
                                            "Bypass the selected nodes: each passes its first input of a matching type straight to its outputs."},
                                 FlagAction{"nodeEditor.toggleCollapse", "Collapse Nodes", "collapsed", "Draw the selected nodes as their headers only, or open them again."},
                                 FlagAction{"nodeEditor.toggleUnusedSockets", "Hide Unused Sockets", "hideUnused",
-                                           "Draw only the linked sockets of the selected nodes, or all of them again."}})
+                                           "Draw only the linked sockets of the selected nodes (and their meshes in the scene graph), or "
+                                           "all of them again."},
+                                FlagAction{"nodeEditor.toggleNodePreview", "Hide Preview", "hidePreview",
+                                           "Draw the selected nodes without their image previews, or with them again."}})
         actions::add({.id = f.id, .label = f.label, .category = "Node Editor",
                       .run =
                           [flag = f.flag] {
                               if (NodeEditor* e = NodeEditor::active())
                                   e->toggleNodeFlag(flag);
                           },
-                      .doc = f.doc});
+                      .doc = f.doc,
+                      .checked = [flag = f.flag] { return NodeEditor::active() && NodeEditor::active()->nodeFlagOn(flag); }});
+    actions::add({.id = "nodeEditor.togglePreviews", .label = "Node Previews", .category = "Node Editor",
+                  .run =
+                      [] {
+                          if (NodeEditor* e = NodeEditor::active())
+                              e->setPreviews(!e->previews());
+                      },
+                  .doc = "Show image previews on the nodes that have one, such as texture graph nodes. Hide Preview turns one node's off.",
+                  .checked = [] { return NodeEditor::active() && NodeEditor::active()->previews(); }});
     add("nodeEditor.swapInputs", "Swap Inputs", &NodeEditor::swapInputs,
         "Trade the links and values of the selected node's first two inputs of one type, such as a Math node's operands.");
     add("nodeEditor.frameNodes", "Frame Selected Nodes", &NodeEditor::frameSelection,
@@ -2172,6 +2199,8 @@ void registerNodeEditorActions()
     prefPages::add({.id = "nodeEditor", .title = "Node Editor", .build = [](prefPages::PageBuilder& b) {
                         b.section("Editing");
                         b.toggle("Slide downstream nodes aside when a node drops into a wire", kPrefAutoOffset, true);
+                        b.section("Nodes");
+                        b.toggle("Node previews", kPrefPreviews, true);
                         b.section("Wires");
                         b.choice("Wire style", kPrefWireStyle, {{"Curved", "curved"}, {"Straight", "straight"}, {"Right angle", "rightAngle"}}, "curved");
                         b.toggle("Dim wires away from the hovered and selected nodes", kPrefDimUnrelated, false);

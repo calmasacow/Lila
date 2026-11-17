@@ -108,8 +108,13 @@ public:
     void showCanvasMenu(QPoint global);
     /** Trades the links and values of the selected node's first two inputs of one type. */
     void swapInputs();
-    /** Flips "muted", "collapsed" or "hideUnused" on the selected nodes. */
+    /** Flips "muted", "collapsed", "hideUnused" or "hidePreview" on the selected nodes. */
     void toggleNodeFlag(const char* flag);
+    /** True when every selected node the flag applies to has it on. */
+    bool nodeFlagOn(const char* flag) const;
+    /** Image previews on every node that has one; remembered as a pref. */
+    void setPreviews(bool on);
+    bool previews() const;
     /** A frame around the selected nodes, or an empty one at the cursor. */
     void frameSelection();
     /** Lights the selection's upstream and downstream and dims the rest: hold true for the held key, else the toggle. */
