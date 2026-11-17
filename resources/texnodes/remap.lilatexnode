@@ -4,21 +4,13 @@
   "type": "remap",
   "label": "Remap",
   "category": "Utility",
-  "doc": "Maps a value from one range to another: fromLow to toLow, fromHigh to toHigh, clamped to the new range when clamp is on.",
+  "doc": "Maps a value from one range to another: From Low to To Low, From High to To High, clamped to the new range when clamp is on. Each bound takes a value or a link.",
   "inputs": [
     {
       "id": "input",
       "type": "float",
       "default": 0.0
-    }
-  ],
-  "outputs": [
-    {
-      "id": "out",
-      "type": "float"
-    }
-  ],
-  "params": [
+    },
     {
       "id": "fromLow",
       "type": "float",
@@ -38,15 +30,23 @@
       "id": "toHigh",
       "type": "float",
       "default": 1.0
-    },
+    }
+  ],
+  "outputs": [
+    {
+      "id": "out",
+      "type": "float"
+    }
+  ],
+  "params": [
     {
       "id": "clamp",
       "type": "bool",
       "default": true
     }
   ],
-  "cost": 1,
+  "cost": 2,
   "body": {
-    "out": "float span = abs(p.fromHigh - p.fromLow) < 1e-9 ? 1e-9 : p.fromHigh - p.fromLow;\nfloat x = (input.sample(uv) - p.fromLow) / span;\nif (p.clamp)\n    x = saturate(x);\nreturn p.toLow + x * (p.toHigh - p.toLow);"
+    "out": "float lo = fromLow.sample(uv);\nfloat hi = fromHigh.sample(uv);\nfloat span = abs(hi - lo) < 1e-9 ? 1e-9 : hi - lo;\nfloat x = (input.sample(uv) - lo) / span;\nif (p.clamp)\n    x = saturate(x);\nfloat to0 = toLow.sample(uv);\nreturn to0 + x * (toHigh.sample(uv) - to0);"
   }
 }

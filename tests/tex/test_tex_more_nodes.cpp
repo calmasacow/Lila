@@ -84,3 +84,40 @@ TEST_CASE("tex more nodes: remap, condition and color mask values")
     link(m, "C.out", "M.input");
     CHECK(texel(eval(into(m, "M.out"), "Output", "baseColor", 4, PortType::Gray), 1, 1)[0] == doctest::Approx(1.0));
 }
+
+TEST_CASE("tex more nodes: Separate and Combine route channels, Remap bounds take links")
+{
+    Graph rgb;
+    add(rgb, "C", "color", {{"color", {0.2, 0.4, 0.6, 1.0}}});
+    add(rgb, "S", "separateRgb");
+    add(rgb, "J", "combineRgb");
+    link(rgb, "C.out", "S.input");
+    link(rgb, "S.b", "J.r");
+    link(rgb, "S.r", "J.b");
+    link(rgb, "S.g", "J.g");
+    const float* swapped = texel(eval(into(rgb, "J.out"), "Output", "baseColor", 4), 1, 1);
+    CHECK(swapped[0] == doctest::Approx(0.6).epsilon(1e-4));
+    CHECK(swapped[1] == doctest::Approx(0.4).epsilon(1e-4));
+    CHECK(swapped[2] == doctest::Approx(0.2).epsilon(1e-4));
+
+    // Separate XYZ reads the uvs unlinked; Math doubles u and Combine XYZ rebuilds the vector.
+    Graph xyz;
+    add(xyz, "S", "separateXyz");
+    add(xyz, "M", "math", {{"operation", "multiply"}, {"b", 2.0}});
+    add(xyz, "J", "combineXyz");
+    link(xyz, "S.x", "M.a");
+    link(xyz, "M.out", "J.x");
+    link(xyz, "S.y", "J.y");
+    image::Image img = eval(into(xyz, "J.out"), "Output", "baseColor", 16);
+    const float u = 9.5f / 16.0f, v = 1.0f - 4.5f / 16.0f;
+    CHECK(texel(img, 9, 4)[0] == doctest::Approx(u * 2.0f).epsilon(1e-4));
+    CHECK(texel(img, 9, 4)[1] == doctest::Approx(v).epsilon(1e-4));
+
+    Graph r;
+    add(r, "C", "constant", {{"value", 0.6}});
+    add(r, "H", "constant", {{"value", 4.0}});
+    add(r, "R", "remap", {{"fromLow", 0.5}, {"fromHigh", 1.0}});
+    link(r, "C.out", "R.input");
+    link(r, "H.out", "R.toHigh");
+    CHECK(texel(eval(into(r, "R.out"), "Output", "baseColor", 4), 1, 1)[0] == doctest::Approx(0.8).epsilon(1e-3));
+}
