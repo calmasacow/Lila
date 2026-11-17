@@ -574,3 +574,19 @@ TEST_CASE("texture paint: the graph a first stroke makes is compiled ahead, so a
     CHECK_FALSE(gp::wiredGraph(set, layer, channels));
     ui::texLive::shutdown();
 }
+
+TEST_CASE("texture paint: a new layer never takes the id of paint left behind")
+{
+    if (!gpu())
+        return;
+    newScene();
+    addMesh("PanelMesh", seamPanel());
+    makeSet("Panel", 128);
+    // Paint under L1 with no layer of that id, as an undone layer leaves it.
+    paintStroke("Panel", "L1", redStroke({{0, 0, 0}}, 15.0, json::object()));
+    REQUIRE(run("texStrokes", {{"args", {"Panel", "L1"}}}).size() == 1);
+    const std::string id = run("texAddLayer", {{"args", {"Panel", "paint"}}})["id"];
+    CHECK(id != "L1");
+    // The new layer starts with no paint of its own.
+    CHECK_FALSE(run("texPaintInfo", {{"args", {"Panel"}}})["layers"].contains(id));
+}

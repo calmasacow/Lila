@@ -50,6 +50,17 @@ struct Session
 
     LayerStack& stack() { return state.stack; }
 
+    /** A fresh layer or mask id. Paint left under an id (a layer undone or removed keeps its buffer) never passes to a new one. */
+    std::string newId(char prefix)
+    {
+        std::set<std::string> painted;
+        if (set)
+            if (paint::PaintPtr p = paint::readPaint(*set))
+                for (const auto& [id, b] : p->buffers)
+                    painted.insert(id);
+        return state.stack.newId(prefix, painted);
+    }
+
     Layer& layer(const std::string& id)
     {
         Layer* l = state.stack.find(id);
@@ -101,7 +112,7 @@ Session open(const Args& a, const char* cmd, bool edit = true)
     // A graph made by hand joins the stack as its bottom layer.
     json base = json::object();
     Layer l = graphAsLayer(s.graph, s.settings, &base);
-    l.id = s.state.stack.newId('L');
+    l.id = s.newId('L');
     s.state.stack.layers.insert(s.state.stack.layers.begin(), std::move(l));
     s.state.stack.base = base;
     s.state.graphMode = false;
@@ -251,7 +262,7 @@ Mask maskFromArgs(Session& s, const Args& a, MaskKind kind, const Layer& l)
 {
     Mask m;
     m.kind = kind;
-    m.id = s.stack().newId('M');
+    m.id = s.newId('M');
     m.name = a.get<std::string>("name", "");
     const bool first = std::none_of(l.masks.begin(), l.masks.end(), [](const Mask& x) { return x.enabled; });
     const bool combines = kind == MaskKind::Fill || kind == MaskKind::Generator || kind == MaskKind::Paint || kind == MaskKind::Anchor;
@@ -671,7 +682,7 @@ json flattenLayers(const Args& a)
     std::vector<std::string> warnings;
     const std::map<std::string, image::Image> images = flattenedImages(s, ids, &warnings);
     Layer merged;
-    merged.id = s.stack().newId('L');
+    merged.id = s.newId('L');
     merged.kind = LayerKind::Paint;
     merged.name = a.get<std::string>("name", ids.size() > 1 ? std::string("Merged") : s.layer(ids.front()).name + " flattened");
     const std::filesystem::path folder = bake::resolveFolder(a.get<std::string>("folder", "textures/" + s.set->name() + "/flattened"));
@@ -900,7 +911,7 @@ void registerLayerCommands()
             Layer l;
             if (!parseLayerKind(positional(a, 1, "texAddLayer", "kind"), &l.kind))
                 throw CommandError("texAddLayer: kind is fill, paint, procedural, folder, instance, filter, decal, text or scatter");
-            l.id = s.stack().newId('L');
+            l.id = s.newId('L');
             l.name = a.get<std::string>("name", std::string(layerKindName(l.kind)) + " " + l.id.substr(1));
             if (l.kind == LayerKind::Fill || l.kind == LayerKind::Paint)
                 l.material = flagJson(a, "material", defaultMaterial(s.settings));

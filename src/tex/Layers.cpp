@@ -1222,9 +1222,9 @@ const Layer* LayerStack::find(std::string_view id) const { return findIn(const_c
 
 std::vector<Layer>* LayerStack::listOf(std::string_view id, size_t* index) { return listIn(layers, id, index); }
 
-std::string LayerStack::newId(char prefix)
+std::string LayerStack::newId(char prefix, const std::set<std::string>& taken)
 {
-    std::set<std::string> used;
+    std::set<std::string> used = taken;
     eachLayer(layers, [&](const Layer& l) {
         used.insert(l.id);
         for (const Mask& m : l.masks)

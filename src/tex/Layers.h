@@ -7,6 +7,7 @@
 
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -192,8 +193,8 @@ struct LILA_SCENE_API LayerStack
     const Layer* find(std::string_view id) const;
     /** The list holding the layer and its index there; null when there is no such layer. */
     std::vector<Layer>* listOf(std::string_view id, size_t* index);
-    /** "L<n>" or "M<n>", unique in the stack. */
-    std::string newId(char prefix);
+    /** A fresh id: prefix and a number, used by no layer or mask nor in taken (ids that still hold paint, say). */
+    std::string newId(char prefix, const std::set<std::string>& taken = {});
     /** Every anchor name and the layer carrying it. */
     std::map<std::string, std::string> anchors() const;
 
