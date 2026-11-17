@@ -10,5 +10,6 @@
         "linux": "Blockwork.so",
         "macos": "Blockwork.dylib"
     },
-    "enabledByDefault": true
+    "enabledByDefault": true,
+    "resources": "resources"
 }

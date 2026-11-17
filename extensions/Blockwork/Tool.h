@@ -19,6 +19,7 @@ enum class Mode
     Extend,
     Paint,
     Align,
+    Entity,
 };
 
 /** What the tool draws and builds, kept in prefs between sessions. */
@@ -33,6 +34,8 @@ struct Settings
     double hollowThickness = 16.0;
     /** The material Paint puts on faces (picked in Block Textures or from a face). */
     std::string material;
+    /** The class the Entity tool places. */
+    std::string entityClass = "PlayerStart";
 };
 
 Settings& settings();

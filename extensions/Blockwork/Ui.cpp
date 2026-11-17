@@ -1,4 +1,5 @@
 #include "Tool.h"
+#include "Entities.h"
 
 #include <lila/Controls.h>
 #include <lila/Icons.h>
@@ -8,9 +9,11 @@
 #include <lila/ViewportTool.h>
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <QHBoxLayout>
 #include <QLineEdit>
 #include <QPointer>
 #include <QSignalBlocker>
@@ -35,13 +38,14 @@ struct TileDef
     const char* tip;
 };
 
-constexpr std::array<TileDef, 6> kModeTiles = {{
+constexpr std::array<TileDef, 7> kModeTiles = {{
     {"Block", "box", "draw a block on the grid: click a corner, the opposite corner, then the height"},
     {"Carve", "shovel", "draw a shape the same way and cut it out of every block it overlaps"},
     {"Clip", "slice", "click a line across blocks to cut them along it; Tab picks the side kept"},
     {"Extend", "arrow-bar-up", "drag a block's face to move it in grid steps; Shift extrudes, Ctrl copies it as a new block"},
     {"Paint", "brush", "click or drag over faces to put the picked texture on them; Ctrl+click a face to take its texture"},
     {"Align", "align-box-bottom-center", "click near a face edge to line the texture up with it; W A S D pick the side, Q and E fit"},
+    {"Entity", "map-pin", "place a player start, light, trigger or any class from the entity definitions; volumes are drawn like blocks"},
 }};
 
 constexpr std::array<TileDef, 6> kShapeTiles = {{
@@ -104,6 +108,30 @@ public:
         }
         mShapeSection = controls::section("Shapes", controls::grid(shapes, 3, this), this, kSections);
         v->addWidget(mShapeSection);
+
+        auto* entBox = new QWidget(this);
+        auto* entForm = form(entBox);
+        mClass = new QComboBox(entBox);
+        mClass->setToolTip("Class: what the Entity tool places, from the entity definition files");
+        connect(mClass, &QComboBox::activated, this, [this](int) {
+            settings().entityClass = mClass->currentData().toString().toStdString();
+            saveSettings();
+            startTool(Mode::Entity);
+        });
+        entForm->addRow("Class", mClass);
+        auto* entRow = new QWidget(entBox);
+        auto* er = new QHBoxLayout(entRow);
+        er->setContentsMargins(0, 0, 0, 0);
+        er->setSpacing(2);
+        for (const char* id : {"blockwork.makeVolume", "blockwork.sendEntities"})
+        {
+            QToolButton* b = controls::push(id, entRow);
+            b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+            er->addWidget(b);
+        }
+        entForm->addRow("", entRow);
+        mEntitySection = controls::section("Entities", entBox, this, kSections);
+        v->addWidget(mEntitySection);
 
         auto* gridBox = new QWidget(this);
         auto* gridForm = form(gridBox);
@@ -192,6 +220,14 @@ public:
         for (size_t i = 0; i < mShapes.size(); ++i)
             mShapes[i]->setChecked(shaped && int(s.shape) == int(i));
         mShapeSection->setEnabled(shaped);
+        mEntitySection->setVisible(s.mode == Mode::Entity);
+        {
+            const QSignalBlocker b(mClass);
+            mClass->clear();
+            for (const EntityClass& c : entityClasses())
+                mClass->addItem(QString("%1  (%2)").arg(QString::fromStdString(c.name), c.kind == "volume" ? "volume" : "point"), QString::fromStdString(c.name));
+            mClass->setCurrentIndex(std::max(0, mClass->findData(QString::fromStdString(s.entityClass))));
+        }
         for (auto [box, value] : {std::pair<QDoubleSpinBox*, double>{mGrid, gridStep()}, {mSides, double(s.options.sides)},
                                   {mSteps, double(s.options.steps)}, {mThickness, s.options.thickness}, {mHollow, s.hollowThickness}})
         {
@@ -229,6 +265,8 @@ private:
     controls::Segmented* mSnap = nullptr;
     QCheckBox *mCorners = nullptr, *mCaps = nullptr, *mFlip = nullptr, *mOverlap = nullptr;
     QLineEdit* mSuffix = nullptr;
+    QComboBox* mClass = nullptr;
+    QWidget* mEntitySection = nullptr;
 };
 
 QPointer<Palette> gPalette;
@@ -277,7 +315,7 @@ void registerUi(ext::Context& ctx)
     for (int i = 0; i < int(kModeTiles.size()); ++i)
     {
         const Mode m = Mode(i);
-        static const char* const ids[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align"};
+        static const char* const ids[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.entity"};
         actions::add(ctx, {.id = ids[i],
                            .label = std::string(m == Mode::Block ? "Block" : modeLabel(m)) + " Tool",
                            .category = "Blockwork",
@@ -321,6 +359,23 @@ void registerUi(ext::Context& ctx)
                        .call = json::object(),
                        .icon = "arrows-exchange",
                        .keywords = {"invert", "reverse normals"}});
+    actions::add(ctx, {.id = "blockwork.makeVolume",
+                       .label = "Make Volume",
+                       .category = "Blockwork",
+                       .run = [] { runSelected("blockworkVolume", {{"class", settings().entityClass}}); },
+                       .doc = "Turn the selected blocks into volumes of the Entity tool's class (a volume class such as Trigger).",
+                       .python = "blockworkVolume('block3', class='Trigger')",
+                       .icon = "box",
+                       .keywords = {"trigger", "volume", "brush entity"}});
+    actions::add(ctx, {.id = "blockwork.sendEntities",
+                       .label = "Send Entities",
+                       .category = "Blockwork",
+                       .doc = "Send the selected entities, or every entity, to the open Unreal level as their classes' actors.",
+                       .python = "blockworkSendEntities()",
+                       .command = "blockworkSendEntities",
+                       .call = json::object(),
+                       .icon = "send",
+                       .keywords = {"unreal", "actors", "spawn"}});
     actions::add(ctx, {.id = "blockwork.gridFiner",
                        .label = "Finer Grid",
                        .category = "Blockwork",
@@ -345,6 +400,9 @@ void registerUi(ext::Context& ctx)
                                       {"blockwork.paint", "brush", "Paint", {}, "Texture"},
                                       {"blockwork.align", "align-box-bottom-center", "Align", {}, "Texture"},
                                       {"blockwork.textures", "texture", "Textures", {}, "Texture"},
+                                      {"blockwork.entity", "map-pin", "Entity", {}, "Entities"},
+                                      {"blockwork.makeVolume", "box", "Volume", {}, "Entities"},
+                                      {"blockwork.sendEntities", "send", "Send", {}, "Entities"},
                                       {"blockwork.hollow", "box-multiple", "Hollow"},
                                       {"blockwork.join", "box", "Join"},
                                       {"blockwork.flip", "arrows-exchange", "Flip", {}, {}, true}},
@@ -352,7 +410,7 @@ void registerUi(ext::Context& ctx)
                             .docs = "blockwork"});
     menus::addItem(ctx, {.id = "blockwork.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Blockwork",
                          .before = levelToolkit::kDressSection});
-    for (const char* a : {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.textures"})
+    for (const char* a : {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.textures", "blockwork.entity", "blockwork.makeVolume", "blockwork.sendEntities"})
         menus::addItem(ctx, {.id = std::string("blockwork.menu.") + a, .menu = "Level/Blockwork", .action = a});
     menus::addItem(ctx, {.id = "blockwork.menu.sep1", .menu = "Level/Blockwork", .kind = menus::Kind::Separator});
     for (const std::string& s : shapeNames())

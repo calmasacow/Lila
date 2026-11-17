@@ -467,3 +467,61 @@ TEST_CASE("blockwork: a placeholder image becomes a material mapped at the texel
     CHECK(hi.x - lo.x == Approx(10.24));
     CHECK(m.materialNames().size() >= 1);
 }
+
+TEST_CASE("blockwork: entity classes load and place")
+{
+    fresh();
+    json classes = run("blockworkEntityClasses", {{"reload", true}});
+    REQUIRE(classes.size() >= 10);
+    const std::string ps = run("blockworkEntity", {{"class", "PlayerStart"}, {"position", {100, 0, 50}}, {"turn", 90}}).get<std::string>();
+    Node* n = g().find(ps);
+    REQUIRE(n);
+    CHECK(n->type().isA("locator"));
+    CHECK(n->as<std::string>(n->type().attrIndex("entityClass")) == "PlayerStart");
+    CHECK(n->type().attrIndex("PlayerStartTag") >= 0);
+
+    const std::string t = run("blockworkEntity", {{"class", "Trigger"}, {"origin", {0, 0, 0}}, {"size", {256, 128, 512}}}).get<std::string>();
+    CHECK(blockwork::isBlock(*g().find(t)));
+    geo::Bounds b = worldBounds(t);
+    CHECK(b.max.x == Approx(256));
+    CHECK(b.max.y == Approx(128));
+    CHECK(b.max.z == Approx(512));
+
+    g().select({});
+    json sent = run("blockworkSendEntities", {{"dryRun", true}});
+    REQUIRE(sent["entities"].size() == 2);
+    for (const json& e : sent["entities"])
+    {
+        if (e["name"] == "Trigger1")
+        {
+            // A 256 x 128 x 512 Lila box is 512 x 256 x 128 in Unreal: forward is Lila z, right Lila x, up Lila y.
+            std::vector<double> s = e["scale"];
+            std::sort(s.begin(), s.end());
+            CHECK(s[0] == Approx(0.64));
+            CHECK(s[1] == Approx(1.28));
+            CHECK(s[2] == Approx(2.56));
+        }
+        else
+            CHECK(e["class"] == "/Script/Engine.PlayerStart");
+        CHECK(!e["id"].get<std::string>().empty());
+    }
+    // A second send keeps the same ids.
+    json again = run("blockworkSendEntities", {{"dryRun", true}});
+    CHECK(again["entities"][0]["id"] == sent["entities"][0]["id"]);
+}
+
+TEST_CASE("blockwork: a block becomes a volume and back")
+{
+    fresh();
+    const std::string b = box({0, 0, 0}, {128, 128, 128});
+    run("blockworkVolume", {{"args", {b}}, {"class", "KillZone"}});
+    Node* n = g().find(b);
+    CHECK(n->as<std::string>(n->type().attrIndex("entityClass")) == "KillZone");
+    CHECK(n->type().attrIndex("DamagePerSec") >= 0);
+    CHECK(out(b).numFaces() == 6);
+    run("blockworkVolume", {{"args", {b}}, {"clear", true}});
+    n = g().find(b);
+    CHECK(n->type().attrIndex("entityClass") < 0);
+    CHECK(n->type().attrIndex("DamagePerSec") < 0);
+    CHECK_THROWS(run("blockworkVolume", {{"args", {b}}, {"class", "PlayerStart"}}));
+}

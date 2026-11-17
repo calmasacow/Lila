@@ -1,4 +1,5 @@
 #include "Tool.h"
+#include "Entities.h"
 
 #include <lila/Components.h>
 #include <lila/Prefs.h>
@@ -30,7 +31,7 @@ namespace
 constexpr const char* kSettingsPref = "/blockwork/tool";
 constexpr int kGridCells = 10;
 
-const char* const kModeIds[] = {"block", "carve", "clip", "extend", "paint", "align"};
+const char* const kModeIds[] = {"block", "carve", "clip", "extend", "paint", "align", "entity"};
 
 json toJson(const Settings& s)
 {
@@ -46,7 +47,8 @@ json toJson(const Settings& s)
             {"flip", s.flip},
             {"removeOverlap", s.removeOverlap},
             {"hollowThickness", s.hollowThickness},
-            {"material", s.material}};
+            {"material", s.material},
+            {"entityClass", s.entityClass}};
 }
 
 Settings fromJson(const json& j)
@@ -54,7 +56,7 @@ Settings fromJson(const json& j)
     Settings s;
     if (!j.is_object())
         return s;
-    for (int i = 0; i < 6; ++i)
+    for (int i = 0; i < 7; ++i)
         if (j.value("mode", std::string()) == kModeIds[i])
             s.mode = Mode(i);
     if (auto sh = shapeFromName(j.value("shape", std::string("box"))))
@@ -70,6 +72,7 @@ Settings fromJson(const json& j)
     s.removeOverlap = j.value("removeOverlap", false);
     s.hollowThickness = std::max(0.01, j.value("hollowThickness", 16.0));
     s.material = j.value("material", std::string());
+    s.entityClass = j.value("entityClass", std::string("PlayerStart"));
     return s;
 }
 
@@ -232,6 +235,12 @@ public:
         {
         case Mode::Block:
         case Mode::Carve: pressDraw(e->modifiers()); break;
+        case Mode::Entity:
+            if (isPointEntity())
+                placeEntity();
+            else
+                pressDraw(e->modifiers());
+            break;
         case Mode::Clip: pressClip(); break;
         case Mode::Extend: pressExtend(); break;
         case Mode::Paint: pressPaint(e->modifiers()); break;
@@ -302,7 +311,7 @@ public:
         if (auto at = view.project(mCursor))
             p.rect(QRectF(at->x() - 3, at->y() - 3, 6, 6), ink);
 
-        if (set.mode == Mode::Block || set.mode == Mode::Carve)
+        if (set.mode == Mode::Block || set.mode == Mode::Carve || (set.mode == Mode::Entity && !isPointEntity()))
             drawShape(s, p, view, ink);
         else if (set.mode == Mode::Clip)
             drawClip(s, ink);
@@ -357,6 +366,8 @@ private:
         case Qt::Key_Tab:
             if (s.mode == Mode::Clip && mStep == Step::ClipReady)
                 mClipKeep = (mClipKeep + 1) % 3;
+            else if (s.mode == Mode::Entity && isPointEntity())
+                mEntityTurn = std::fmod(mEntityTurn + ((mods & Qt::ShiftModifier) ? 315.0 : 45.0), 360.0);
             else if (s.mode == Mode::Block || s.mode == Mode::Carve)
             {
                 s.options.direction = (s.options.direction + ((mods & Qt::ShiftModifier) ? 3 : 1)) % 4;
@@ -570,13 +581,33 @@ private:
         return call;
     }
 
+    bool isPointEntity() const
+    {
+        const EntityClass* c = findEntityClass(settings().entityClass);
+        return !c || c->kind != "volume";
+    }
+
+    void placeEntity()
+    {
+        const Settings& s = settings();
+        run("blockworkEntity", {{"class", s.entityClass}, {"position", {mCursor.x, mCursor.y, mCursor.z}}, {"turn", mEntityTurn}});
+    }
+
     void build()
     {
         const Settings& s = settings();
         const Frame f = frame();
         try
         {
-            if (s.mode == Mode::Carve)
+            if (s.mode == Mode::Entity)
+            {
+                // Volumes are boxes along the world axes, filling what was drawn.
+                const geo::Bounds b = buildShape(Shape::Box, f, {}).bounds();
+                if (b.valid())
+                    ops::execute("blockworkEntity", {{"class", s.entityClass}, {"origin", {b.min.x, b.min.y, b.min.z}},
+                                                     {"size", {b.max.x - b.min.x, b.max.y - b.min.y, b.max.z - b.min.z}}}, CallSource::UI);
+            }
+            else if (s.mode == Mode::Carve)
             {
                 UndoChunk chunk("Carve");
                 const std::string cutter = ops::execute("blockworkBlock", blockCall(f, true), CallSource::UI).get<std::string>();
@@ -932,6 +963,16 @@ private:
             }
             if (s.mode == Mode::Align)
                 st.keys.insert(st.keys.begin(), {{"W A S D", "side on the edge"}, {"Q E", "fit height, width"}, {"R", "reset"}});
+            if (s.mode == Mode::Entity)
+            {
+                st.mode = QString("Entity %1").arg(QString::fromStdString(s.entityClass));
+                st.prompt = isPointEntity() ? "click where it stands" : "click a corner of the volume";
+                if (isPointEntity())
+                {
+                    st.fields.push_back({"turn", QString("%1\xc2\xb0").arg(mEntityTurn)});
+                    st.keys.insert(st.keys.begin(), {"Tab", "turn 45\xc2\xb0"});
+                }
+            }
             if (s.mode == Mode::Block || s.mode == Mode::Carve)
                 st.keys.insert(st.keys.begin(), {"Shift+click", "start an angled edge"});
             if (s.mode == Mode::Extend)
@@ -997,6 +1038,7 @@ private:
     std::string mAlignNode, mAlignFit = "none";
     Index mAlignFace = 0;
     int mAlignEdge = 0, mAlignSide = 0;
+    double mEntityTurn = 0.0;
 };
 } // namespace
 
@@ -1010,7 +1052,7 @@ void saveSettings() { PrefStore::get().set("general", kSettingsPref, toJson(sett
 
 const char* modeLabel(Mode m)
 {
-    static const char* const k[] = {"Block", "Carve", "Clip", "Extend", "Paint", "Align"};
+    static const char* const k[] = {"Block", "Carve", "Clip", "Extend", "Paint", "Align", "Entity"};
     return k[int(m)];
 }
 
