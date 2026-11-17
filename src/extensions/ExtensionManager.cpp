@@ -136,16 +136,22 @@ fs::path shadowRoot()
     return fs::temp_directory_path(ec) / "lila-extension-shadow";
 }
 
-/** Copies left by earlier sessions. Ones another running Lila has loaded are locked and stay. */
+/**
+ * Copies left by earlier sessions. Ones another running Lila has loaded are locked and stay; recent ones are left too,
+ * since another process may have copied them and not loaded them yet.
+ */
 void clearOldShadows()
 {
     static bool done = false;
     if (std::exchange(done, true))
         return;
     std::error_code ec;
+    const fs::file_time_type cutoff = fs::file_time_type::clock::now() - std::chrono::minutes(10);
     for (const fs::directory_entry& e : fs::directory_iterator(shadowRoot(), ec))
     {
         std::error_code rm;
+        if (const fs::file_time_type made = e.last_write_time(rm); !rm && made > cutoff)
+            continue;
         fs::remove_all(e.path(), rm);
     }
 }
