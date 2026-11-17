@@ -232,12 +232,9 @@ struct UvTexturePaint::State
                 top = std::max(top, st->id);
         h->id = top + 1;
         h->mesh = path;
-        // Mirrored and radial copies land on the surface (through the mesh's point pairs), wherever their uvs are, and
-        // whenever the mesh has symmetry, as viewport strokes are.
-        brush::BrushSettings b = brush;
-        b.mirror = scene::symmetrySpec(*node).has_value();
+        // Mirrored and radial copies land on the surface (through the mesh's point pairs), wherever their uvs are, as viewport strokes do.
         scene::MeshPtr outMesh = node->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
-        sym = tp::brushSymmetry(b, outMesh.get(), scene::paintSymmetrySpec(*node));
+        texturePaintSymmetryFor(*node, outMesh.get(), sym);
         h->symmetry = sym.toJson();
         try
         {

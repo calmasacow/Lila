@@ -5,9 +5,23 @@
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class QWidget;
+
+namespace lila::geo
+{
+class Mesh;
+}
+namespace lila::scene
+{
+class Node;
+}
+namespace lila::tex::paint
+{
+struct PaintSymmetry;
+}
 
 namespace lila::ui
 {
@@ -34,6 +48,11 @@ LILA_UI_API void startTexturePaint();
  * groups, else every mesh. Ids are scene::NodeId.
  */
 LILA_UI_API std::vector<uint64_t> texturePaintTargets();
+
+/** Painting's own symmetry, apart from the mesh's: off, x, y, z, or mesh (the mesh's setting, radial included). */
+LILA_UI_API std::string texturePaintSymmetry();
+/** The symmetry a stroke on the mesh (surface: what it paints, its evaluated or sculpted mesh) paints with, into out. */
+LILA_UI_API void texturePaintSymmetryFor(const scene::Node& mesh, const geo::Mesh* surface, tex::paint::PaintSymmetry& out);
 
 /** Texture Paint is the active viewport tool (the 2D View paints with it then). */
 LILA_UI_API bool texturePaintActive();

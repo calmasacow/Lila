@@ -92,6 +92,8 @@ namespace rp = render::paint;
 
 constexpr const char* kTexturePaintPrefix = "/texturePaint";
 constexpr const char* kDimWirePref = "/texturePaint/dimWire";
+constexpr const char* kPaintSymmetryPref = "/texturePaint/symmetry";
+constexpr const char* kShownSetOnlyPref = "/texturePaint/shownSetOnly";
 
 void ensureTexturePaint();
 /** Base colour, roughness, metallic, height and emissive: always in the brush page. The rest show when the set has them. */
@@ -354,25 +356,36 @@ json gradientPayload(const TexturePaintSettings& s, const json& start, const jso
     return pay;
 }
 
-/** The brush settings a stroke on mesh uses: it mirrors whenever the mesh has symmetry, as sculpt strokes do. */
-brush::BrushSettings meshSymmetryBrush(const scene::Node& mesh)
+} // namespace
+
+/** The set the Texture Set dock shows, else the one the graph or 2D View shows. */
+std::string shownTextureSet()
+{
+    if (TextureSetPanel* p = TextureSetPanel::active())
+        return p->textureSet();
+    return currentTextureSet();
+}
+
+std::string texturePaintSymmetry() { return PrefStore::get().value<std::string>("general", kPaintSymmetryPref, "off"); }
+
+void texturePaintSymmetryFor(const scene::Node& mesh, const geo::Mesh* surface, tex::paint::PaintSymmetry& out)
 {
     brush::BrushSettings b = texturePaintState().stroke;
-    b.mirror = scene::symmetrySpec(mesh).has_value();
-    return b;
+    const std::string s = texturePaintSymmetry();
+    if (s == "x" || s == "y" || s == "z")
+    {
+        const int axis = s == "x" ? 0 : s == "y" ? 1 : 2;
+        b.mirror = true;
+        out = tp::brushSymmetry(b, surface, axis, scene::symmetryOffset(mesh, axis));
+        return;
+    }
+    // Mesh: whatever symmetry the mesh has, radial included. Off: none, whatever the mesh has.
+    b.mirror = s == "mesh" && scene::symmetrySpec(mesh).has_value();
+    out = tp::brushSymmetry(b, surface, scene::paintSymmetrySpec(mesh));
 }
 
-/** The meshes the Symmetry strip shows and sets: the selected ones. */
-std::vector<scene::Node*> symmetryMeshes()
+namespace
 {
-    scene::Graph& g = scene::Graph::current();
-    std::vector<scene::Node*> out;
-    for (scene::NodeId id : g.selection())
-        if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
-            out.push_back(n);
-    return out;
-}
-
 /** The brush's uv mirror on top of its spatial symmetry. */
 void addUvMirror(tp::PaintSymmetry& sym)
 {
@@ -849,36 +862,31 @@ public:
         symRow->addWidget(symLabel);
         mSymmetry = new controls::Segmented(this);
         mSymmetry->setObjectName("paintSymmetry");
-        // Segment ids are the mesh's symmetry values: off, x, y, z, radial.
-        mSymmetry->add("Off", {}, "No symmetry", 0);
+        // Painting's own symmetry: the mesh's setting (for modelling and UVs) only applies with Mesh.
+        mSymmetry->add("Off", {}, "No symmetry, whatever the mesh's is", 0);
         mSymmetry->add("X", {}, "Mirror strokes across X", 1);
         mSymmetry->add("Y", {}, "Mirror strokes across Y", 2);
         mSymmetry->add("Z", {}, "Mirror strokes across Z", 3);
-        mSymmetry->add("Radial", {}, "Repeat strokes round the mesh's radial axis", 4);
-        mSymmetry->setToolTip("Symmetry: the selected mesh's symmetry setting, shared with Sculpt and the viewport header");
+        mSymmetry->add("Mesh", {}, "The mesh's own symmetry, radial included", 4);
+        mSymmetry->setToolTip("Symmetry: how strokes mirror. Separate from the mesh's symmetry unless Mesh is picked");
         symRow->addWidget(mSymmetry, 1);
         col->addLayout(symRow);
+        auto* setsRow = new QHBoxLayout;
+        auto* setsLabel = new QLabel("Sets", this);
+        controls::setRole(setsLabel, "dim");
+        setsRow->addWidget(setsLabel);
+        mSets = new controls::Segmented(this);
+        mSets->setObjectName("paintSets");
+        mSets->add("All", {}, "Strokes paint every texture set under the brush", 0);
+        mSets->add("Shown", {}, "Strokes paint only the texture set shown in the Texture Set dock", 1);
+        mSets->setCurrent(PrefStore::get().value<bool>("general", kShownSetOnlyPref, false) ? 1 : 0);
+        connect(mSets, &controls::Segmented::picked, this, [](int id) { PrefStore::get().set("general", kShownSetOnlyPref, id == 1); });
+        setsRow->addWidget(mSets, 1);
+        col->addLayout(setsRow);
         connect(mSymmetry, &controls::Segmented::picked, this, [](int id) {
-            static constexpr std::array<const char*, 5> kAxes = {"off", "x", "y", "z", "radial"};
-            json targets = json::array();
-            for (scene::Node* n : symmetryMeshes())
-                targets.push_back(n->path());
-            if (targets.empty())
-                return;
-            try
-            {
-                ops::execute("setSymmetry", {{"args", targets}, {"axis", kAxes[size_t(std::clamp(id, 0, 4))]}}, CallSource::UI);
-            }
-            catch (const std::exception& e)
-            {
-                log::warn("Texture paint: {}", e.what());
-            }
+            static constexpr std::array<const char*, 5> kNames = {"off", "x", "y", "z", "mesh"};
+            PrefStore::get().set("general", kPaintSymmetryPref, std::string(kNames[size_t(std::clamp(id, 0, 4))]));
         });
-        mSymmetryListener = scene::Graph::current().addListener([this](scene::Change change, scene::NodeId) {
-            if (change == scene::Change::Selection || change == scene::Change::Value)
-                syncSymmetry();
-        });
-        connect(this, &QObject::destroyed, [id = mSymmetryListener] { scene::Graph::current().removeListener(id); });
         mSource = new controls::Segmented(this);
         mSource->setObjectName("brushSource");
         mSource->add("Values", {}, "Paint the channel values below", 0);
@@ -1593,13 +1601,11 @@ public:
     }
 
 
-    /** The strip shows the selected mesh's symmetry, off and disabled without one. */
     void syncSymmetry()
     {
-        const std::vector<scene::Node*> meshes = symmetryMeshes();
+        const std::string s = texturePaintSymmetry();
         const QSignalBlocker block(mSymmetry);
-        mSymmetry->setEnabled(!meshes.empty());
-        mSymmetry->setCurrent(meshes.empty() ? 0 : int(std::clamp<int64_t>(meshes.back()->as<int64_t>(scene::MeshNode::kSymmetry), 0, scene::kSymmetryRadial)));
+        mSymmetry->setCurrent(s == "x" ? 1 : s == "y" ? 2 : s == "z" ? 3 : s == "mesh" ? 4 : 0);
     }
 
     void syncTools()
@@ -2138,7 +2144,7 @@ private:
     QComboBox* mFalloff = nullptr;
     QCheckBox* mOcclusion = nullptr;
     controls::Segmented* mSymmetry = nullptr;
-    int mSymmetryListener = 0;
+    controls::Segmented* mSets = nullptr;
     controls::Segmented* mUvMirror = nullptr;
     QCheckBox* mUvIsland = nullptr;
     brush::ui::StrokeOptions* mStrokeOptions = nullptr;
@@ -3149,7 +3155,7 @@ public:
             drawBuffer(fs, p, view);
         }
         else if (!t)
-            status.prompt = "hover a mesh with a texture set";
+            status.prompt = reachLabel() == "all" ? "hover a mesh with a texture set" : "hover a selected mesh with a texture set";
         else if (t->set == kNoNode)
         {
             status.subject = QString::fromStdString(t->meshPath);
@@ -3230,6 +3236,7 @@ private:
         double nearest = 1e300;
         std::optional<Target> unpaintable;
         double nearestUnpaintable = 1e300;
+        const std::string shownSet = PrefStore::get().value<bool>("general", kShownSetOnlyPref, false) ? shownTextureSet() : std::string();
         for (NodeId id : candidates)
         {
             scene::Node* n = g.node(id);
@@ -3252,7 +3259,11 @@ private:
             t.world = w;
             t.hit = hit;
             scene::MeshPtr mesh = rp::paintSurface(*n);
-            if (scene::Node* set = mesh ? setForFace(g, *mesh, hit.face) : nullptr)
+            scene::Node* set = mesh ? setForFace(g, *mesh, hit.face) : nullptr;
+            // Sets: Shown leaves every other set's surfaces to the brush as if they had none.
+            if (set && !shownSet.empty() && set->name() != shownSet)
+                set = nullptr;
+            if (set)
             {
                 t.set = set->id();
                 t.setName = set->name();
@@ -3336,7 +3347,8 @@ private:
         header->payload.locked = lockedTriangles(*set, t.meshPath, *t.paint);
         const scene::Node* meshNode = g.node(t.mesh);
         scene::MeshPtr outMesh = rp::paintSurface(*meshNode);
-        tp::PaintSymmetry sym = tp::brushSymmetry(meshSymmetryBrush(*meshNode), outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+        tp::PaintSymmetry sym;
+        texturePaintSymmetryFor(*meshNode, outMesh.get(), sym);
         addUvMirror(sym);
         header->symmetry = sym.toJson();
         header->view = strokeView(view, t.world);
@@ -3786,7 +3798,7 @@ private:
         {
             const scene::Node* meshNode = g.node(t.mesh);
             scene::MeshPtr outMesh = rp::paintSurface(*meshNode);
-            mSym = tp::brushSymmetry(meshSymmetryBrush(*meshNode), outMesh.get(), scene::paintSymmetrySpec(*meshNode));
+            texturePaintSymmetryFor(*meshNode, outMesh.get(), mSym);
             addUvMirror(mSym);
             header->symmetry = mSym.toJson();
         }
@@ -3996,7 +4008,7 @@ private:
         if (!mPanel)
             return;
         scene::Graph& g = scene::Graph::current();
-        QString text = "No texture set under the brush";
+        QString text = reachLabel() == "all" ? "No texture set under the brush" : "No texture set under the brush; only the selected meshes take paint";
         if (scene::Node* set = g.node(mStroking ? mTarget.set : (mOver ? mOver->set : kNoNode)))
         {
             auto it = gLayers.find(set->id());
