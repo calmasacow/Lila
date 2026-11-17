@@ -801,6 +801,7 @@ struct TextureSetPanel::Impl
     json view;
     tex::SetSettings settings;
     std::string viewKey, settingsKey, shelfKey;
+    bool shelfStale = false;
     std::string selLayer, selMask;
     std::map<std::string, bool> expanded;
     bool building = false;
@@ -2463,7 +2464,11 @@ struct TextureSetPanel::Impl
         else
             updateThumbs();
         rebuildBanner();
-        rebuildShelf();
+        // A hidden panel (a closed dock) scans the libraries and draws their thumbnails when it shows.
+        if (self->isVisible())
+            rebuildShelf();
+        else
+            shelfStale = true;
         filterShelf();
         if (!std::exchange(keepProps, false))
             rebuildProps();
@@ -3353,6 +3358,13 @@ void TextureSetPanel::showLibrary(const std::string& kind)
     for (int k = 0; k < int(std::size(kShelfKindNames)); ++k)
         if (kind == kShelfKindNames[k] || kind == std::string(kShelfKindNames[k]) + (k == kShelfBrushes ? "es" : "s"))
             d->setShelfKind(k);
+}
+
+void TextureSetPanel::showEvent(QShowEvent* e)
+{
+    QWidget::showEvent(e);
+    if (std::exchange(d->shelfStale, false))
+        d->rebuildShelf();
 }
 
 void TextureSetPanel::refreshLibrary()

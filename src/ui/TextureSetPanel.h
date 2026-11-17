@@ -118,6 +118,7 @@ public:
 
 protected:
     void resizeEvent(QResizeEvent* e) override;
+    void showEvent(QShowEvent* e) override;
 
 private:
     struct Impl;
