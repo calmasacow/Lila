@@ -9,6 +9,7 @@ namespace blockwork
 /** The viewport tool's id and its palette panel's. */
 inline constexpr const char* kToolId = "blockwork.tool";
 inline constexpr const char* kPaletteId = "blockwork.palette";
+inline constexpr const char* kTexturePanelId = "blockwork.textures";
 
 enum class Mode
 {
@@ -16,6 +17,8 @@ enum class Mode
     Carve,
     Clip,
     Extend,
+    Paint,
+    Align,
 };
 
 /** What the tool draws and builds, kept in prefs between sessions. */
@@ -28,6 +31,8 @@ struct Settings
     bool flip = false;
     bool removeOverlap = false;
     double hollowThickness = 16.0;
+    /** The material Paint puts on faces (picked in Block Textures or from a face). */
+    std::string material;
 };
 
 Settings& settings();
@@ -42,4 +47,5 @@ const char* shapeLabel(Shape s);
 
 void registerTool(lila::ext::Context& ctx);
 void registerPalette(lila::ext::Context& ctx);
+void registerTexturePanel(lila::ext::Context& ctx);
 } // namespace blockwork

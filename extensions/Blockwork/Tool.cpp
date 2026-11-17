@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace blockwork
 {
@@ -29,7 +30,7 @@ namespace
 constexpr const char* kSettingsPref = "/blockwork/tool";
 constexpr int kGridCells = 10;
 
-const char* const kModeIds[] = {"block", "carve", "clip", "extend"};
+const char* const kModeIds[] = {"block", "carve", "clip", "extend", "paint", "align"};
 
 json toJson(const Settings& s)
 {
@@ -44,7 +45,8 @@ json toJson(const Settings& s)
             {"suffix", s.suffix},
             {"flip", s.flip},
             {"removeOverlap", s.removeOverlap},
-            {"hollowThickness", s.hollowThickness}};
+            {"hollowThickness", s.hollowThickness},
+            {"material", s.material}};
 }
 
 Settings fromJson(const json& j)
@@ -52,7 +54,7 @@ Settings fromJson(const json& j)
     Settings s;
     if (!j.is_object())
         return s;
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < 6; ++i)
         if (j.value("mode", std::string()) == kModeIds[i])
             s.mode = Mode(i);
     if (auto sh = shapeFromName(j.value("shape", std::string("box"))))
@@ -67,6 +69,7 @@ Settings fromJson(const json& j)
     s.flip = j.value("flip", false);
     s.removeOverlap = j.value("removeOverlap", false);
     s.hollowThickness = std::max(0.01, j.value("hollowThickness", 16.0));
+    s.material = j.value("material", std::string());
     return s;
 }
 
@@ -231,6 +234,8 @@ public:
         case Mode::Carve: pressDraw(e->modifiers()); break;
         case Mode::Clip: pressClip(); break;
         case Mode::Extend: pressExtend(); break;
+        case Mode::Paint: pressPaint(e->modifiers()); break;
+        case Mode::Align: pressAlign(); break;
         }
         viewportTools::requestRedraw();
         return true;
@@ -239,8 +244,10 @@ public:
     bool mouseMove(QMouseEvent* e, const ViewInfo& view) override
     {
         hover(e->position(), view, e->modifiers());
+        if (mPainting)
+            paintHover();
         viewportTools::requestRedraw();
-        return mStep != Step::Idle || mDragging;
+        return mStep != Step::Idle || mDragging || mPainting;
     }
 
     bool mouseRelease(QMouseEvent* e, const ViewInfo& view) override
@@ -255,6 +262,12 @@ public:
             mStep = Step::Height, mBase = mCursor;
         if (mDragging)
             releaseExtend(e->modifiers());
+        if (mPainting)
+        {
+            mPainting = false;
+            mStroke.reset();
+            mPainted.clear();
+        }
         viewportTools::requestRedraw();
         return true;
     }
@@ -276,9 +289,9 @@ public:
         return true;
     }
 
-    bool hotkey(const QKeyEvent& e, std::string_view) override { return key(e.key(), e.modifiers()); }
+    bool hotkey(const QKeyEvent& e, std::string_view) override { return alignKey(e.key()) || key(e.key(), e.modifiers()); }
 
-    bool keyPress(QKeyEvent* e, const ViewInfo&) override { return key(e->key(), e->modifiers()); }
+    bool keyPress(QKeyEvent* e, const ViewInfo&) override { return alignKey(e->key()) || key(e->key(), e->modifiers()); }
 
     void draw(render::FrameState& s, OverlayPainter& p, const ViewInfo& view) override
     {
@@ -293,8 +306,10 @@ public:
             drawShape(s, p, view, ink);
         else if (set.mode == Mode::Clip)
             drawClip(s, ink);
-        else if (set.mode == Mode::Extend)
+        else if (set.mode == Mode::Extend || set.mode == Mode::Paint)
             drawExtend(s, p, view, ink);
+        else if (set.mode == Mode::Align)
+            drawAlign(s, ink);
         drawToolStatus(p, view, status());
     }
 
@@ -406,7 +421,7 @@ private:
                 if (auto hit = surfaceSnap::underCursor(px, view))
                 {
                     mPlane = makePlane(hit->position, hit->normal);
-                    if (s.mode == Mode::Extend)
+                    if (s.mode == Mode::Extend || s.mode == Mode::Paint || s.mode == Mode::Align)
                         pickFace(*hit);
                 }
                 else
@@ -670,6 +685,117 @@ private:
         }
     }
 
+    void pressPaint(Qt::KeyboardModifiers mods)
+    {
+        if (mHoverFace.node == kNoNode)
+            return;
+        if (mods & Qt::ControlModifier)
+        {
+            // Pick: the face's texture becomes what Paint lays down.
+            mPickNode = graph().fullPath(mHoverFace.node);
+            mPickFace = mHoverFace.face;
+            if (Node* n = graph().node(mHoverFace.node))
+                if (const MeshPtr& m = n->as<MeshPtr>(MeshNode::kOutMesh))
+                    if (std::span<const int32_t> ids = m->faceAttrs().get<int32_t>(geo::attr::kMaterial);
+                        mPickFace < ids.size() && ids[mPickFace] >= 0 && size_t(ids[mPickFace]) < m->materialNames().size())
+                    {
+                        settings().material = m->materialNames()[size_t(ids[mPickFace])];
+                        saveSettings();
+                    }
+            return;
+        }
+        mPainting = true;
+        mStroke.emplace("Paint Texture");
+        mPainted.clear();
+        paintHover();
+    }
+
+    void paintHover()
+    {
+        if (mHoverFace.node == kNoNode || !mPainted.insert({mHoverFace.node, mHoverFace.face}).second)
+            return;
+        const std::string block = graph().fullPath(mHoverFace.node);
+        if (!mPickNode.empty() && graph().find(mPickNode))
+            run("blockworkCopyTexture", {{"args", {block}}, {"source", mPickNode}, {"sourceFace", mPickFace}, {"faces", {mHoverFace.face}}});
+        else if (!settings().material.empty())
+            run("blockworkMaterial", {{"args", {block}}, {"material", settings().material}, {"faces", {mHoverFace.face}}});
+        else
+            log::warn("Paint: pick a texture in Block Textures, or Ctrl+click a face to take its texture");
+    }
+
+    /** The hovered face's edge nearest the cursor, counted round the face. */
+    int nearestEdge() const
+    {
+        const auto& o = mHoverFace.outline;
+        int best = -1;
+        double bestD = 1e300;
+        for (size_t i = 0; i < o.size(); ++i)
+        {
+            const glm::dvec3 a = o[i], b = o[(i + 1) % o.size()], ab = b - a;
+            const double t = std::clamp(glm::dot(mHoverFace.point - a, ab) / std::max(1e-12, glm::dot(ab, ab)), 0.0, 1.0);
+            const double d = glm::length(mHoverFace.point - (a + ab * t));
+            if (d < bestD)
+                bestD = d, best = int(i);
+        }
+        return best;
+    }
+
+    void pressAlign()
+    {
+        const int edge = nearestEdge();
+        if (mHoverFace.node == kNoNode || edge < 0)
+            return;
+        mAlignNode = graph().fullPath(mHoverFace.node);
+        mAlignFace = mHoverFace.face;
+        mAlignEdge = edge;
+        mAlignFit = "none";
+        applyAlign();
+    }
+
+    void applyAlign()
+    {
+        if (mAlignNode.empty() || !graph().find(mAlignNode))
+            return;
+        static const char* const sides[] = {"bottom", "left", "top", "right"};
+        run("blockworkAlignEdge", {{"args", {mAlignNode}}, {"face", mAlignFace}, {"edge", mAlignEdge}, {"side", sides[mAlignSide]}, {"fit", mAlignFit}});
+    }
+
+    /** In Align: W A S D pick the texture side laid on the edge, Q and E fit, R resets. */
+    bool alignKey(int k)
+    {
+        if (settings().mode != Mode::Align)
+            return false;
+        switch (k)
+        {
+        case Qt::Key_S: mAlignSide = 0; break;
+        case Qt::Key_A: mAlignSide = 1; break;
+        case Qt::Key_W: mAlignSide = 2; break;
+        case Qt::Key_D: mAlignSide = 3; break;
+        case Qt::Key_Q: mAlignFit = "height"; break;
+        case Qt::Key_E: mAlignFit = "width"; break;
+        case Qt::Key_R:
+            if (!mAlignNode.empty() && graph().find(mAlignNode))
+                run("blockworkTexture", {{"args", {mAlignNode}}, {"faces", {mAlignFace}}, {"reset", true}});
+            viewportTools::requestRedraw();
+            return true;
+        default: return false;
+        }
+        applyAlign();
+        viewportTools::requestRedraw();
+        return true;
+    }
+
+    void drawAlign(render::FrameState& s, const glm::vec4& ink) const
+    {
+        const auto& o = mHoverFace.outline;
+        if (mHoverFace.node == kNoNode || o.empty())
+            return;
+        const glm::vec4 dim(glm::vec3(ink), 0.4f);
+        const int edge = nearestEdge();
+        for (size_t i = 0; i < o.size(); ++i)
+            addLine(s, o[i], o[(i + 1) % o.size()], int(i) == edge ? ink : dim, int(i) == edge ? ink : dim);
+    }
+
     /** Grid lines on the plane under the cursor, fading out from it. */
     void drawGrid(render::FrameState& s) const
     {
@@ -792,7 +918,20 @@ private:
         switch (mStep)
         {
         case Step::Idle:
-            st.prompt = s.mode == Mode::Clip ? "click the cut line's start" : s.mode == Mode::Extend ? "drag a block's face" : s.shape == Shape::Prism ? "click the outline's first point" : "click a corner";
+            st.prompt = s.mode == Mode::Clip     ? "click the cut line's start"
+                        : s.mode == Mode::Extend ? "drag a block's face"
+                        : s.mode == Mode::Paint  ? (s.material.empty() && mPickNode.empty() ? "Ctrl+click a face to take its texture" : "click or drag over faces")
+                        : s.mode == Mode::Align  ? "click near the face edge to line the texture up with"
+                        : s.shape == Shape::Prism ? "click the outline's first point"
+                                                  : "click a corner";
+            if (s.mode == Mode::Paint)
+            {
+                st.keys.insert(st.keys.begin(), {"Ctrl+click", "take a face's texture"});
+                if (!s.material.empty())
+                    st.fields.push_back({"texture", QString::fromStdString(s.material)});
+            }
+            if (s.mode == Mode::Align)
+                st.keys.insert(st.keys.begin(), {{"W A S D", "side on the edge"}, {"Q E", "fit height, width"}, {"R", "reset"}});
             if (s.mode == Mode::Block || s.mode == Mode::Carve)
                 st.keys.insert(st.keys.begin(), {"Shift+click", "start an angled edge"});
             if (s.mode == Mode::Extend)
@@ -850,6 +989,14 @@ private:
     glm::dvec3 mDragStart{0.0}, mDragNormal{0.0};
     double mDistance = 0.0;
     std::string mLastBuilt;
+    bool mPainting = false;
+    std::optional<UndoChunk> mStroke;
+    std::set<std::pair<NodeId, Index>> mPainted;
+    std::string mPickNode;
+    Index mPickFace = 0;
+    std::string mAlignNode, mAlignFit = "none";
+    Index mAlignFace = 0;
+    int mAlignEdge = 0, mAlignSide = 0;
 };
 } // namespace
 
@@ -863,7 +1010,7 @@ void saveSettings() { PrefStore::get().set("general", kSettingsPref, toJson(sett
 
 const char* modeLabel(Mode m)
 {
-    static const char* const k[] = {"Block", "Carve", "Clip", "Extend"};
+    static const char* const k[] = {"Block", "Carve", "Clip", "Extend", "Paint", "Align"};
     return k[int(m)];
 }
 

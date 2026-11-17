@@ -35,11 +35,13 @@ struct TileDef
     const char* tip;
 };
 
-constexpr std::array<TileDef, 4> kModeTiles = {{
+constexpr std::array<TileDef, 6> kModeTiles = {{
     {"Block", "box", "draw a block on the grid: click a corner, the opposite corner, then the height"},
     {"Carve", "shovel", "draw a shape the same way and cut it out of every block it overlaps"},
     {"Clip", "slice", "click a line across blocks to cut them along it; Tab picks the side kept"},
     {"Extend", "arrow-bar-up", "drag a block's face to move it in grid steps; Shift extrudes, Ctrl copies it as a new block"},
+    {"Paint", "brush", "click or drag over faces to put the picked texture on them; Ctrl+click a face to take its texture"},
+    {"Align", "align-box-bottom-center", "click near a face edge to line the texture up with it; W A S D pick the side, Q and E fit"},
 }};
 
 constexpr std::array<TileDef, 6> kShapeTiles = {{
@@ -91,7 +93,7 @@ public:
             connect(mModes[i], &QToolButton::clicked, this, [i] { startTool(Mode(i)); });
             modes.push_back(mModes[i]);
         }
-        v->addWidget(controls::section("Tools", controls::grid(modes, 4, this), this, kSections));
+        v->addWidget(controls::section("Tools", controls::grid(modes, 3, this), this, kSections));
 
         std::vector<QWidget*> shapes;
         for (size_t i = 0; i < kShapeTiles.size(); ++i)
@@ -269,12 +271,13 @@ void registerUi(ext::Context& ctx)
 {
     registerTool(ctx);
     registerPalette(ctx);
+    registerTexturePanel(ctx);
 
     const std::vector<std::string> keywords = {"blockout", "greybox", "graybox", "brush", "hammer", "trenchbroom", "level design", "csg"};
-    for (int i = 0; i < 4; ++i)
+    for (int i = 0; i < int(kModeTiles.size()); ++i)
     {
         const Mode m = Mode(i);
-        static const char* const ids[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend"};
+        static const char* const ids[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align"};
         actions::add(ctx, {.id = ids[i],
                            .label = std::string(m == Mode::Block ? "Block" : modeLabel(m)) + " Tool",
                            .category = "Blockwork",
@@ -339,6 +342,9 @@ void registerUi(ext::Context& ctx)
                                       {"blockwork.carve", "shovel", "Carve"},
                                       {"blockwork.clip", "slice", "Clip"},
                                       {"blockwork.extend", "arrow-bar-up", "Extend"},
+                                      {"blockwork.paint", "brush", "Paint", {}, "Texture"},
+                                      {"blockwork.align", "align-box-bottom-center", "Align", {}, "Texture"},
+                                      {"blockwork.textures", "texture", "Textures", {}, "Texture"},
                                       {"blockwork.hollow", "box-multiple", "Hollow"},
                                       {"blockwork.join", "box", "Join"},
                                       {"blockwork.flip", "arrows-exchange", "Flip", {}, {}, true}},
@@ -346,7 +352,7 @@ void registerUi(ext::Context& ctx)
                             .docs = "blockwork"});
     menus::addItem(ctx, {.id = "blockwork.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Blockwork",
                          .before = levelToolkit::kDressSection});
-    for (const char* a : {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend"})
+    for (const char* a : {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.textures"})
         menus::addItem(ctx, {.id = std::string("blockwork.menu.") + a, .menu = "Level/Blockwork", .action = a});
     menus::addItem(ctx, {.id = "blockwork.menu.sep1", .menu = "Level/Blockwork", .kind = menus::Kind::Separator});
     for (const std::string& s : shapeNames())
