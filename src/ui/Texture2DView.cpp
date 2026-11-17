@@ -22,6 +22,7 @@
 #include "ui/TexLive.h"
 #include "ui/TexPreview.h"
 #include "ui/TexturePaintTool.h"
+#include "ui/TextureSetPanel.h"
 #include "ui/Theme.h"
 #include "ui/UiCommon.h"
 #include "ui/UvTexturePaint.h"
@@ -46,6 +47,7 @@
 #include <glm/gtc/constants.hpp>
 
 #include <algorithm>
+#include <numeric>
 #include <array>
 #include <cmath>
 #include <cstring>
@@ -756,8 +758,9 @@ Source current() { return ctl().source; }
 void showSet(const std::string& set)
 {
     Controller& c = ctl();
-    if (set.empty() || c.source.set == set)
+    if (c.source.set == set)
         return;
+    // No set shows nothing, rather than the last set picked.
     c.source = {set, {}, {}, c.source.channel.empty() ? std::string("baseColor") : c.source.channel};
     // With no view open the next one renders it.
     if (!c.listeners.empty())
@@ -820,7 +823,7 @@ struct Texture2DView::Impl
         return QRectF(QPointF(lo.x, 1.0 - hi.y), QPointF(hi.x, 1.0 - lo.y));
     }
 
-    /** The UV edges of the faces the shown set textures, on every mesh whose material it drives. */
+    /** The UV edges of the faces the shown set textures, on every mesh whose material uses it; with no set, the selected meshes'. */
     void rebuildUvs()
     {
         const std::string& set = ctl().source.set;
@@ -828,6 +831,18 @@ struct Texture2DView::Impl
         std::vector<std::pair<scene::MeshPtr, std::vector<int32_t>>> bound;
         std::vector<const geo::Mesh*> meshes;
         std::vector<bool> selected;
+        if (set.empty() && !g.selection().empty())
+            for (scene::NodeId id : texturePaintTargets())
+            {
+                scene::MeshPtr mesh = g.node(id)->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+                if (!mesh)
+                    continue;
+                std::vector<int32_t> slots(std::max<size_t>(mesh->materialNames().size(), 1));
+                std::iota(slots.begin(), slots.end(), 0);
+                meshes.push_back(mesh.get());
+                bound.emplace_back(std::move(mesh), std::move(slots));
+                selected.push_back(true);
+            }
         if (!set.empty())
             for (scene::NodeId id : g.nodes())
             {
@@ -1125,8 +1140,10 @@ Texture2DView::Texture2DView(QWidget* parent) : QWidget(parent), d(std::make_uni
             self->d->rebuildUvs();
         });
     });
+    // The Texture Set dock's set when there is one, even none; else the set the graph or last view showed.
+    TextureSetPanel* panel = TextureSetPanel::active();
     if (c.source.set.empty())
-        if (std::string set = currentTextureSet(); !set.empty())
+        if (std::string set = panel ? panel->textureSet() : currentTextureSet(); !set.empty())
             c.source = {set, {}, {}, "baseColor"};
     request();
 }
