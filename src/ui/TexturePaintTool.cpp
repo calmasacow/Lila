@@ -426,7 +426,11 @@ void applyPreset(TexturePaintSettings& s, const tex::brushes::Preset& p)
     s.stroke = brush::BrushSettings::fromJson(p.brush, s.stroke);
     const json& pay = p.payload;
     const std::string kind = pay.value("kind", std::string("paint"));
-    s.tool = kind;
+    // A plain paint preset is a brush shape: a stroke tool keeps it. A preset made for one tool switches to that tool.
+    static constexpr std::string_view kStrokeTools[] = {"paint", "direction", "normal", "smudge", "blur", "sharpen", "clone", "heal", "path", "reveal"};
+    const bool keepTool = kind == "paint" && std::ranges::find(kStrokeTools, std::string_view(s.tool)) != std::end(kStrokeTools);
+    if (!keepTool)
+        s.tool = kind;
     if (pay.contains("blend"))
         s.blend = tp::blendFromName(pay["blend"].get<std::string>()).value_or(tp::Blend::Normal);
     else
