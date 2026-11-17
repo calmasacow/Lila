@@ -2633,8 +2633,12 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->follow->setCheckable(true);
     d->follow->setChecked(true);
     controls::setRole(d->follow, "push");
-    auto* newSet = toolButton(this, "plus", "New Texture Set");
+    auto* newSet = toolButton(this, "plus", "New Texture Set, with a paint layer, for the selected meshes. The arrow makes one per material.");
     QObject::connect(newSet, &QToolButton::clicked, this, [] { actions::run(json("texture.newSet")); });
+    newSet->setPopupMode(QToolButton::MenuButtonPopup);
+    auto* newMenu = new QMenu(newSet);
+    newMenu->addAction("New Texture Set per Material", newSet, [] { actions::run(json("texture.newSetPerMaterial")); });
+    newSet->setMenu(newMenu);
     auto* openGraph = toolButton(this, "node-editor", "Texture Graph: open this set's nodes");
     openGraph->setObjectName("openGraph");
     connect(openGraph, &QToolButton::clicked, this, [this] { openSelectedAsNodes(); });
@@ -2753,9 +2757,7 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     eh->setContentsMargins(0, 4, 0, 4);
     d->emptyText = dim(d->empty, "No texture set. Click New Texture Set to make one for the selected meshes.");
     eh->addWidget(d->emptyText);
-    auto* make = new QPushButton("New Texture Set", d->empty);
-    connect(make, &QPushButton::clicked, this, [] { actions::run(json("texture.newSet")); });
-    eh->addWidget(make);
+    eh->addWidget(controls::split("texture.newSet", {"texture.newSetPerMaterial"}, d->empty));
     v->addWidget(d->empty);
 
     auto* split = new QSplitter(Qt::Vertical, this);
