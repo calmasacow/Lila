@@ -506,6 +506,25 @@ std::vector<Index> coveredFaces(const Mesh& a, const Mesh& b, double tolerance)
     return out;
 }
 
+Index faceAt(const Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, double tolerance)
+{
+    Index best = kInvalid;
+    double bestGap = tolerance;
+    for (Index f = 0; f < mesh.faceCapacity(); ++f)
+    {
+        if (!mesh.faceValid(f))
+            continue;
+        const glm::dvec3 n = mesh.faceNormal(f);
+        if (glm::dot(n, normal) < 0.98)
+            continue;
+        const std::vector<glm::dvec3> pts = facePositions(mesh, f);
+        const double gap = std::abs(glm::dot(point - pts[0], n));
+        if (gap <= bestGap && insidePolygon(pts, n, point - n * glm::dot(point - pts[0], n), tolerance))
+            best = f, bestGap = gap;
+    }
+    return best;
+}
+
 double snap(double value, double step) { return step > 0.0 ? std::round(value / step) * step : value; }
 
 glm::dvec3 snapPoint(const glm::dvec3& p, double step) { return {snap(p.x, step), snap(p.y, step), snap(p.z, step)}; }

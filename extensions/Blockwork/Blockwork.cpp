@@ -7,5 +7,6 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     if (!blockwork::registerTypes(ctx))
         return 1;
     blockwork::registerCommands(ctx);
+    blockwork::registerUi(ctx);
     return 0;
 }
