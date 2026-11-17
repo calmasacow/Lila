@@ -455,6 +455,8 @@ void MainWindow::registerActions()
                   }, nullptr, "Puts the newest crash report on the clipboard, ready to paste into a bug report."});
     actions::add({"help.checkUpdates", "Check for Updates...", "Help", [this] { updater::checkNow(this); }, nullptr,
                   "Looks for a newer Lila and offers to install it when Lila closes."});
+    actions::add({"help.reinstall", "Reinstall Lila...", "Help", [this] { updater::reinstall(this); }, nullptr,
+                  "Downloads the full installer and replaces every Lila program file, keeping preferences and scenes. Fixes a damaged install."});
     actions::add({.id = "help.reportIssue", .label = "Report a Bug...", .category = "Help", .run = [this] { issueReport::showBug(this); },
                   .doc = "Sends a bug, crash or performance report to the Lila issue tracker, with your support bundle attached privately. No GitHub account needed.",
                   .keywords = {"issue", "feedback", "crash", "problem", "support"}});

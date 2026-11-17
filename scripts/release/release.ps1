@@ -61,7 +61,8 @@ if ($DryRun) {
 
 $gh = Find-Gh
 $notesArgs = if ($NotesFile) { @("--notes-file", $NotesFile) } elseif ($Notes) { @("--notes", $Notes) } else { @("--generate-notes") }
-& $gh release create $tag $exe $manifest --target $head --title "Lila $version" @notesArgs
+$assets = @($exe, $manifest, "$repo\build-installer\files-$version.json") + @(Get-ChildItem "$repo\build-installer\Lila-$version-Patch-*.exe" | ForEach-Object FullName)
+& $gh release create $tag @assets --target $head --title "Lila $version" @notesArgs
 if ($LASTEXITCODE -ne 0) { throw "gh release create failed. Run 'gh auth login' if you haven't." }
 
 if ($Steam) {
