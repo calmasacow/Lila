@@ -8072,7 +8072,7 @@ def retopoDrawDelete(mesh: str | None = None, faces: Sequence[Any] | None = None
     """
 
 def retopoDrawInsertLoop(mesh: str | None = None, edge: int | None = None, fraction: float | None = None) -> Any:
-    """Retopo Draw: insert an edge loop across the ring through an edge (base mesh id), mirrored with symmetry.
+    """Retopo Draw: insert an edge loop across the ring through an edge (base mesh id), mirrored with symmetry. The new points land on the reference surface.
 
     Args:
         mesh: Retopo mesh.
