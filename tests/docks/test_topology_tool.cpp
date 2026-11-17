@@ -11,6 +11,7 @@
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
 #include "scene/SceneCommands.h"
+#include "ui/RetopoDrawTool.h"
 #include "ui/TopologyTool.h"
 #include "ui/TopologyToolkit.h"
 #include "ui/ViewportTool.h"
@@ -534,5 +535,76 @@ TEST_CASE("topology toolkit lists the constructs and follows the active one")
     auto* list = kit.findChild<QListWidget*>();
     REQUIRE(list);
     CHECK(list->count() == 1);
+    ui::viewportTools::set(nullptr);
+}
+
+TEST_CASE("retopo draw: drag moves an edge or a face, Ctrl middle-drag moves a loop, a click still places a dot")
+{
+    setup();
+    meshNode("ref", plane());
+    scene::Graph& g = scene::Graph::current();
+    // A 2x2 grid of 40 cm quads centred on the origin.
+    auto P = [](double x, double z) { return json::array({x, 0.0, z}); };
+    for (double x : {-40.0, 0.0})
+        for (double z : {-40.0, 0.0})
+            ops::execute("retopoDrawAddFace", {{"mesh", "retopo"}, {"reference", "ref"}, {"create", true}, {"weld", 0.5},
+                                               {"points", {P(x, z), P(x, z + 40), P(x + 40, z + 40), P(x + 40, z)}}});
+    auto mesh = [&]() -> const geo::Mesh& {
+        g.evaluate();
+        return *g.find("retopo")->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+    };
+    REQUIRE(mesh().numFaces() == 4);
+    REQUIRE(mesh().numPoints() == 9);
+    auto at = [&](double x, double z) {
+        const geo::Mesh& m = mesh();
+        for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+            if (m.pointValid(p) && glm::length(m.position(p) - glm::dvec3(x, 0.0, z)) < 1e-6)
+                return true;
+        return false;
+    };
+    ui::viewportTools::set(std::make_unique<ui::RetopoDrawTool>(g.find("ref")->id(), "retopo"));
+    auto* draw = ui::activeRetopoDraw();
+    REQUIRE(draw);
+    const ui::ViewInfo view = topView();
+    // World +Z is up the screen in this view.
+    auto spx = [](double x, double z) { return px(x, -z); };
+    auto dragWith = [&](Qt::MouseButton button, QPointF from, QPointF to, Qt::KeyboardModifiers mods) {
+        QMouseEvent press(QEvent::MouseButtonPress, from, from, button, button, mods);
+        draw->mousePress(&press, view);
+        for (int k = 1; k <= 5; ++k)
+        {
+            QPointF p = from + (to - from) * (k / 5.0);
+            QMouseEvent move(QEvent::MouseMove, p, p, Qt::NoButton, button, mods);
+            draw->mouseMove(&move, view);
+        }
+        QMouseEvent release(QEvent::MouseButtonRelease, to, to, button, Qt::NoButton, mods);
+        draw->mouseRelease(&release, view);
+    };
+
+    // The right border's upper edge, grabbed at its middle.
+    dragWith(Qt::LeftButton, spx(40, -20), spx(46, -20), Qt::NoModifier);
+    CHECK(at(46, -40));
+    CHECK(at(46, 0));
+    CHECK(at(40, 40));
+
+    // The lower left face, grabbed inside.
+    dragWith(Qt::MiddleButton, spx(-20, 20), spx(-20, 26), Qt::NoModifier);
+    CHECK(at(-40, 6));
+    CHECK(at(-40, 46));
+    CHECK(at(0, 46));
+    CHECK(at(40, 40));
+
+    // The middle column, through its upper edge.
+    dragWith(Qt::MiddleButton, spx(0, -20), spx(-8, -20), Qt::ControlModifier);
+    CHECK(at(-8, -40));
+    CHECK(at(-8, 6));
+    CHECK(at(-8, 46));
+    CHECK(mesh().numPoints() == 9);
+
+    // A click inside a face places a dot and moves nothing.
+    dragWith(Qt::LeftButton, spx(20, 20), spx(20, 20), Qt::NoModifier);
+    CHECK(mesh().numPoints() == 9);
+    CHECK(at(40, 40));
+    CHECK(retopo::retopoDrawDots(*g.find("retopo")).size() == 1);
     ui::viewportTools::set(nullptr);
 }

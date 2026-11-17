@@ -236,6 +236,34 @@ TEST_CASE("commands: retopo draw edits")
     UndoStack::get().clear();
 }
 
+TEST_CASE("commands: retopo draw move keeps a face across the symmetry plane mirrored")
+{
+    scene::Graph& g = scene::Graph::current();
+    g.clear();
+    UndoStack::get().clear();
+    auto P = [](double x, double y) { return json::array({x, y, 0.0}); };
+    ops::execute("retopoDrawAddFace", {{"mesh", "sym"}, {"create", true}, {"points", {P(-10, 0), P(10, 0), P(10, 10), P(-10, 10)}}});
+    g.setValue({g.find("sym")->id(), scene::MeshNode::kSymmetry, -1}, int64_t(1));
+
+    // Every corner shifted +5 in x, the grabbed left side listed first: the right side mirrors it instead.
+    const geo::Mesh before = toolOutMesh("sym");
+    json points = json::array(), positions = json::array();
+    for (double side : {-10.0, 10.0})
+        for (geo::Index p = 0; p < before.pointCapacity(); ++p)
+            if (before.pointValid(p) && before.position(p).x == side)
+            {
+                points.push_back(p);
+                positions.push_back(P(side + 5.0, before.position(p).y));
+            }
+    ops::execute("retopoDrawMove", {{"mesh", "sym"}, {"points", points}, {"positions", positions}});
+    const geo::Mesh& m = toolOutMesh("sym");
+    for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p))
+            CHECK(std::abs(m.position(p).x) == doctest::Approx(5.0));
+    g.clear();
+    UndoStack::get().clear();
+}
+
 TEST_CASE("commands: retopo draw dots undo, and fill consumes dots in one step")
 {
     scene::Graph& g = scene::Graph::current();

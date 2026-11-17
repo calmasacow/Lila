@@ -1005,7 +1005,8 @@ void registerCommands()
         .name = "retopoDrawMove",
         .doc = "Retopo Draw: move points (base mesh ids) to world positions; mirror partners follow with symmetry.",
         .flags = {nodeFlag({"mesh", "", T::String, nullptr, "Retopo mesh."}, "mesh"),
-                  {"points", "", T::List, json::array(), "Point ids."},
+                  {"points", "", T::List, json::array(),
+                   "Point ids. With symmetry, a point that is an earlier listed point's mirror image follows that point."},
                   {"positions", "", T::List, json::array(), "World [x, y, z] per point."},
                   {"weld", "", T::Float, 0.0, "Merge a moved point into another point closer than this, cm.", {}, {}, 0.0}},
         .run = [](const Args& a) -> json {
@@ -1021,18 +1022,24 @@ void registerCommands()
             if (auto spec = scene::symmetrySpec(n))
                 map = geo::SymmetryMap::buildFor(m, *spec, symmetryTolerance(m));
             glm::dmat4 toLocal = glm::inverse(worldOf(n));
+            std::vector<uint8_t> placed(m.pointCapacity(), 0);
             for (size_t i = 0; i < points.size(); ++i)
             {
                 Index p = points[i];
-                if (!m.pointValid(p))
+                // Already placed as an earlier point's mirror image: the earlier point wins, so a loop crossing the plane stays symmetric.
+                if (!m.pointValid(p) || placed[p])
                     continue;
                 glm::dvec3 at(toLocal * glm::dvec4(world[i], 1.0));
                 if (map)
                     at = map->constrain(p, at);
                 m.setPosition(p, at);
+                placed[p] = 1;
                 for (int k = 1; map && k < map->order(); ++k)
                     if (Index q = map->image(k, p); q != geo::kInvalid && q != p)
+                    {
                         m.setPosition(q, map->transform(k, at));
+                        placed[q] = 1;
+                    }
             }
             if (double weld = a.get<double>("weld"); weld > 0.0)
             {
