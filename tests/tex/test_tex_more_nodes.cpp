@@ -121,3 +121,19 @@ TEST_CASE("tex more nodes: Separate and Combine route channels, Remap bounds tak
     link(r, "H.out", "R.toHigh");
     CHECK(texel(eval(into(r, "R.out"), "Output", "baseColor", 4), 1, 1)[0] == doctest::Approx(0.8).epsilon(1e-3));
 }
+
+TEST_CASE("tex more nodes: Vector Math works on UV coordinates")
+{
+    Graph g;
+    add(g, "U", "uv");
+    add(g, "M", "vectorMath", {{"operation", "scale"}, {"scale", 3.0}});
+    link(g, "U.uv", "M.a");
+    image::Image scaled = eval(into(g, "M.out"), "Output", "baseColor", 16);
+    const float u = 5.5f / 16.0f, v = 1.0f - 10.5f / 16.0f;
+    CHECK(texel(scaled, 5, 10)[0] == doctest::Approx(u * 3.0f).epsilon(1e-4));
+    CHECK(texel(scaled, 5, 10)[1] == doctest::Approx(v * 3.0f).epsilon(1e-4));
+
+    g.node("M")->values["operation"] = "length";
+    image::Image len = eval(into(g, "M.value"), "Output", "baseColor", 16, PortType::Gray);
+    CHECK(texel(len, 5, 10)[0] == doctest::Approx(std::sqrt(u * u + v * v)).epsilon(1e-4));
+}
