@@ -15,6 +15,7 @@ lila_module(lila_ui UI
     MenuSearch.cpp MenuSearch.h
     CommandPalette.cpp CommandPalette.h CommandHistory.h
     TexturePicker.cpp TexturePicker.h
+    Favourites.cpp Favourites.h
     AgentCapture.cpp AgentCapture.h
     HeightfieldDisplay.cpp HeightfieldDisplay.h
     RenderOutput.cpp RenderOutput.h

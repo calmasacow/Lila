@@ -41,6 +41,7 @@
 #include "ui/TexProjectionTool.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
+#include "ui/Favourites.h"
 #include "ui/TexturePaintTool.h"
 #include "ui/FileDialog.h"
 #include "ui/Theme.h"
@@ -1764,6 +1765,29 @@ struct TextureSetPanel::Impl
         it->setToolTip(tags.isEmpty() ? tip : tip + (Qt::mightBeRichText(tip) ? "<br>" : "\n") + "Tags: " + tags.join(", "));
     }
 
+    /** The favourites list a shelf item stars into, and its id; none for the Default and Round tiles. */
+    static std::pair<std::string, std::string> shelfFavourite(const QString& kind, const QString& id)
+    {
+        if (id.isEmpty())
+            return {};
+        return {"textureShelf/" + kind.toStdString(), id.toStdString()};
+    }
+
+    /** Favourites move to the front of the shelf, after the Default and Round tiles, in shelf order; the rest keep theirs. */
+    void favouritesFirst()
+    {
+        std::vector<QListWidgetItem*> fixed, fav, rest;
+        while (shelf->count() > 0)
+        {
+            QListWidgetItem* it = shelf->takeItem(0);
+            const auto [list, id] = shelfFavourite(it->data(Qt::UserRole + 1).toString(), it->data(Qt::UserRole).toString());
+            (list.empty() ? fixed : favourites::has(list, id) ? fav : rest).push_back(it);
+        }
+        for (const auto* group : {&fixed, &fav, &rest})
+            for (QListWidgetItem* it : *group)
+                shelf->addItem(it);
+    }
+
     static QStringList qtags(const std::vector<std::string>& tags)
     {
         QStringList out;
@@ -1851,6 +1875,7 @@ struct TextureSetPanel::Impl
         for (const std::filesystem::path& t : textures)
             addShelfItem(imageTile(t, 64), QString::fromStdWString(t.stem().wstring()), QString::fromStdWString(t.wstring()), "texture",
                          QString::fromStdWString(t.filename().wstring()) + "\nClick to paint through it", QString::fromStdWString(t.stem().wstring()));
+        favouritesFirst();
         filterShelf();
     }
 
@@ -2872,6 +2897,13 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
             d->rebuildShelf();
         }
     };
+    favourites::attach(
+        d->shelf,
+        [](const QModelIndex& i) { return Impl::shelfFavourite(i.data(Qt::UserRole + 1).toString(), i.data(Qt::UserRole).toString()); },
+        [this] {
+            d->favouritesFirst();
+            d->filterShelf();
+        });
     d->shelf->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(d->shelf, &QWidget::customContextMenuRequested, this, [this](const QPoint& p) {
         QListWidgetItem* it = d->shelf->itemAt(p);

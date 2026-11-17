@@ -795,6 +795,7 @@ void pickBrushMaterial(QComboBox* combo)
 {
     texturePicker::Options o;
     o.title = "Material";
+    o.favourites = "brushMaterials";
     o.current = combo->currentData().toString().toStdString();
     o.projectTextures = false;
     o.none = false;

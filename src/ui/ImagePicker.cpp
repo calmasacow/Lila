@@ -480,6 +480,7 @@ void ImagePicker::open()
     texturePicker::Options o;
     o.current = mValue;
     o.title = mTitle;
+    o.favourites = "images/" + (mLibrary ? mLibrary->title : QString("Texture")).toStdString();
     if (mLibrary)
     {
         if (mLibrary->entries)
