@@ -590,3 +590,62 @@ TEST_CASE("texture paint: a new layer never takes the id of paint left behind")
     // The new layer starts with no paint of its own.
     CHECK_FALSE(run("texPaintInfo", {{"args", {"Panel"}}})["layers"].contains(id));
 }
+
+namespace
+{
+/** Two 100 cm quads side by side; the second's uv island is a fifth the size of the first's. */
+geo::Mesh unevenPanel()
+{
+    const std::vector<glm::dvec3> pts = {{-100, 0, -50}, {0, 0, -50}, {100, 0, -50}, {-100, 0, 50}, {0, 0, 50}, {100, 0, 50}};
+    const std::vector<geo::Index> sizes = {4, 4}, idx = {0, 3, 4, 1, 1, 4, 5, 2};
+    geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+    auto uv = m.cornerAttrs().getOrAdd<glm::vec2>(geo::attr::uvName(0));
+    for (geo::Index f = 0; f < 2; ++f)
+        for (geo::Index c : m.faceCorners(f))
+        {
+            const glm::dvec3 p = m.position(m.cornerPoint(c));
+            const double u = (p.x - (f == 0 ? -100.0 : 0.0)) / 100.0, v = (p.z + 50.0) / 100.0;
+            uv[c] = f == 0 ? glm::vec2(float(0.05 + 0.4 * u), float(0.05 + 0.4 * v)) : glm::vec2(float(0.6 + 0.08 * u), float(0.6 + 0.08 * v));
+        }
+    return m;
+}
+
+/** How often the base colour crosses its mean along a row of a uv box, per uv unit. */
+double crossingsPerUv(const image::Image& img, float u0, float u1, float v)
+{
+    std::vector<float> row;
+    for (float u = u0; u < u1; u += 1.0f / float(img.width))
+        row.push_back(at(img, {u, v})[0]);
+    float mean = 0.0f;
+    for (float x : row)
+        mean += x / float(row.size());
+    int n = 0;
+    for (size_t i = 1; i < row.size(); ++i)
+        n += (row[i - 1] - mean) * (row[i] - mean) < 0.0f ? 1 : 0;
+    return n / double(u1 - u0);
+}
+
+double islandRatio(const std::string& space)
+{
+    newScene();
+    addMesh("PanelMesh", unevenPanel());
+    scene::Node& set = makeSet("Panel", 1024);
+    json stroke = redStroke({{-50, 0, 0}, {50, 0, 0}}, 80.0, {{"baseColor", {1.0, 1.0, 1.0}}});
+    stroke["payload"]["source"] = {{"node", "perlin"}, {"values", {{"scale", 8}}}, {"resolution", 256}, {"space", space}, {"size", 50.0}};
+    paintStroke("Panel", "P", stroke);
+    const image::Image img = gp::readChannel(set.id(), "P", "baseColor");
+    return crossingsPerUv(img, 0.6f, 0.68f, 0.64f) / crossingsPerUv(img, 0.05f, 0.45f, 0.25f);
+}
+} // namespace
+
+TEST_CASE("texture paint: a material source keeps its size on the surface, however dense the uvs")
+{
+    if (!gpu())
+        return;
+    // The second island is 5x denser in uv: the same pattern on the surface packs 5x more changes into each uv unit.
+    const double object = islandRatio("object");
+    const double uv = islandRatio("uv");
+    INFO("object " << object << ", uv " << uv);
+    CHECK(object > 3.0);
+    CHECK(uv < 2.0);
+}

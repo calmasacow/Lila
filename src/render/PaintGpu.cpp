@@ -130,6 +130,9 @@ struct GpuParams
     uint32_t hexOn = 0, hexWeight = kNone;
     float hexRotate = 0.0f, hexContrast = 0.5f, hexJitter = 0.0f;
     uint32_t hexColor = kNone;
+    /** Where the source images map: 0 the uvs (valueScale tiles a uv unit), 1 object space, triplanar, valueSize cm a tile. */
+    uint32_t valueSpace = 0;
+    float valueSize = 100.0f;
 };
 static_assert(offsetof(GpuParams, items) == 160 + 16 * kMaxChannels);
 static_assert(offsetof(GpuParams, valueImages) == 248 + 16 * kMaxChannels);
@@ -140,7 +143,7 @@ static_assert(offsetof(GpuParams, stencil) == 408 + 24 * kMaxChannels);
 static_assert(offsetof(GpuParams, locked) == 480 + 24 * kMaxChannels);
 static_assert(offsetof(GpuParams, ramp) == 536 + 24 * kMaxChannels);
 static_assert(offsetof(GpuParams, hexOn) == 608 + 24 * kMaxChannels);
-static_assert(sizeof(GpuParams) == 632 + 24 * kMaxChannels);
+static_assert(sizeof(GpuParams) == 640 + 24 * kMaxChannels);
 constexpr int kRamp = 256;
 
 struct DabPush
@@ -546,6 +549,9 @@ struct Live
     /** Channel values from a texture graph, and its tiles per uv unit. */
     std::shared_ptr<const ValueImages> sourceImages;
     float valueScale = 1.0f;
+    /** The source maps in object space (payload source space "object"), valueSize cm a tile; else on the uvs. */
+    bool valueObject = false;
+    float valueSize = 100.0f;
     /** The source's varied tiling (payload source "tiling"); null for a plain repeat. */
     json tiling;
     /** The above on the device, made on the first batch. */
@@ -1259,6 +1265,8 @@ std::unique_ptr<Live> makeLive(StrokePtr header, std::shared_ptr<const PaintMesh
     {
         live->sourceImages = valueImages(p.source, live->channels);
         live->valueScale = float(p.source.value("scale", 1.0));
+        live->valueObject = p.source.value("space", std::string("uv")) == "object";
+        live->valueSize = float(p.source.value("size", 100.0));
         live->tiling = p.source.value("tiling", json());
     }
     if (!p.gradient.is_null() && live->mode == kModeFill)
@@ -1580,6 +1588,8 @@ size_t runBatch(VulkanContext& vk, Gpu& g, const Key& key, Layer& l, Live& live,
     params.facingFade = pay.facingFade;
     params.intensity = pay.intensity;
     params.valueScale = live.valueScale;
+    params.valueSpace = live.valueObject ? 1u : 0u;
+    params.valueSize = live.valueSize;
     for (size_t c = 0; c < live.channels.size(); ++c)
     {
         params.values[c] = glm::vec4(live.values[c], 1.0f);

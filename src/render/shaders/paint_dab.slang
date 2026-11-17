@@ -170,6 +170,8 @@ struct Params
     float hexContrast;
     float hexJitter;
     uint hexColor;
+    uint valueSpace;
+    float valueSize;
 };
 
 static const uint kRamp = 256;
@@ -785,11 +787,27 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
     }
     float2 here = float2(xy) + 0.5;
     bool hex = p.hexOn != 0 && (p.flags & kFlagValueImages) != 0;
+    // Object space: the source keeps one size on the surface (valueSize cm a tile), whatever the uvs' density.
+    bool objectSpace = p.valueSpace != 0;
+    float3 triW = float3(0.0);
+    float2 planes[3];
+    if (objectSpace)
+    {
+        float3 q = pos * (p.valueScale / max(p.valueSize, 1e-3));
+        planes[0] = q.yz;
+        planes[1] = q.xz;
+        planes[2] = q.xy;
+        float3 a = pow(abs(nrm), float3(4.0));
+        triW = a / max(a.x + a.y + a.z, 1e-6);
+    }
+    float2 hexSt = uv * p.valueScale;
+    if (objectSpace)
+        hexSt = triW.x >= triW.y && triW.x >= triW.z ? planes[0] : triW.y >= triW.z ? planes[1] : planes[2];
     HexTiling hexCells;
     float3 hexW = float3(0.0);
     if (hex)
     {
-        hexCells = hexTiling(p, uv * p.valueScale);
+        hexCells = hexTiling(p, hexSt);
         hexW = hexWeights(p, hexCells);
     }
     for (uint c = 0; c < p.channels; ++c)
@@ -860,6 +878,13 @@ void paintDabCS(uint3 gid: SV_GroupID, uint3 local: SV_GroupThreadID)
                 v = projected;
             else if (hex && p.valueImages[c] != nullptr)
                 v = hexValue(p, hexCells, hexW, c, isNormal);
+            else if ((p.flags & kFlagValueImages) != 0 && p.valueImages[c] != nullptr && objectSpace)
+            {
+                v = float3(0.0);
+                for (int k = 0; k < 3; ++k)
+                    if (triW[k] > 0.0)
+                        v += triW[k] * imageAt(p.valueImages[c], p.valueW, p.valueH, float2(planes[k].x, 1.0 - planes[k].y), true).xyz;
+            }
             else if ((p.flags & kFlagValueImages) != 0 && p.valueImages[c] != nullptr)
                 v = imageAt(p.valueImages[c], p.valueW, p.valueH, float2(uv.x * p.valueScale, 1.0 - uv.y * p.valueScale), true).xyz;
             r = blendTexel(p, o, v, tc, mask);

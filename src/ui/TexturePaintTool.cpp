@@ -316,10 +316,14 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
         if (!p.channels.contains("baseColor"))
             p.channels["baseColor"] = glm::vec3(1.0f);
     }
+    // A material or texture keeps one size on the surface, its real-world size, however dense each part's uvs are.
     if (sourced && s.source == "material" && !s.material.empty())
-        p.source = {{"library", s.material}, {"resolution", 512}, {"scale", s.materialScale}};
+    {
+        const std::optional<tex::library::Entry> e = tex::library::find(s.material);
+        p.source = {{"library", s.material}, {"resolution", 512}, {"scale", s.materialScale}, {"space", "object"}, {"size", e ? e->meta.scaleCm : 100.0}};
+    }
     else if (sourced && s.source == "texture" && !s.sourceImage.empty())
-        p.source = {{"node", "layerImage"}, {"values", {{"file", s.sourceImage}}}, {"resolution", 1024}, {"scale", s.materialScale}};
+        p.source = {{"node", "layerImage"}, {"values", {{"file", s.sourceImage}}}, {"resolution", 1024}, {"scale", s.materialScale}, {"space", "object"}, {"size", 100.0}};
     if (s.varied && p.source.is_object())
         p.source["tiling"] = {{"rotate", s.variedTurn}, {"contrast", s.variedBlend}, {"jitter", s.variedBrightness}};
     if (!s.tip.is_null())
@@ -1070,7 +1074,7 @@ public:
         mTexture->setToolTip("The image the stroke paints: pick another in the library's Textures");
         connect(mTexture, &QToolButton::clicked, this, [] { textureSets::showLibrary("textures"); });
         mTextureRow = addRow(form, "Texture", mTexture);
-        mMaterialScale = settingSpin(this, 0.05, 64.0, 0.25, 2, "Tiles per uv unit");
+        mMaterialScale = settingSpin(this, 0.05, 64.0, 0.25, 2, "Repeats over the material's own size: 2 paints it at half size. The same on every part, whatever its UVs");
         mTiling = new controls::Segmented(this);
         mTiling->setObjectName("sourceTiling");
         mTiling->add("Repeat", {}, "Repeat: the material or texture tiles as it is", 0);
