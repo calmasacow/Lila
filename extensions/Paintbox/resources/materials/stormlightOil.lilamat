@@ -4,8 +4,9 @@
  "name": "StormlightOil",
  "meta": {
   "name": "Stormlight Oil",
-  "category": "Brushwork/Stormlight Oil",
+  "category": "Paintbox/Stormlight Oil",
   "tags": [
+   "paintbox",
    "brushwork",
    "painterly",
    "stylised",

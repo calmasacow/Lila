@@ -4,8 +4,9 @@
  "name": "WashAndBloom",
  "meta": {
   "name": "Wash and Bloom",
-  "category": "Brushwork/Wash and Bloom",
+  "category": "Paintbox/Wash and Bloom",
   "tags": [
+   "paintbox",
    "brushwork",
    "painterly",
    "stylised",

@@ -1,4 +1,4 @@
-"""Brushwork: twelve painterly looks for the Painterly shading model.
+"""Paintbox: twelve painterly looks for the Painterly shading model.
 
 Each look is a palette, a stroke sheet and stroke settings tuned together. meta.shading holds the material node settings
 that drive the live Painterly model; the graph bakes the same look into plain channels (palette into base colour, the
@@ -13,7 +13,7 @@ SHEETS = {"soft": "strokes_soft", "bristle": "strokes_bristle", "dabs": "strokes
 
 def look(ident, name, description, tags, sheet, tiles, palette, shadow, light, accent, contrast=0.5, spread=0.35, bands=5.0,
          relief=0.3, tilt=0.6, rough=0.8, layer_ratio=2.7, broken=0.0, extra=None):
-    @material(ident, name, f"Brushwork/{name}", "stylised", 50, description, ["brushwork", "painterly", "stylised", "strokes"] + tags)
+    @material(ident, name, f"Paintbox/{name}", "stylised", 50, description, ["paintbox", "brushwork", "painterly", "stylised", "strokes"] + tags)
     def build(m):
         P = std(m, wear=relief, age=0.0, var=0.6, wear_doc="Stroke relief: how thick the paint stands.", age_doc="Aged varnish: warmer, duller.")
         sheet_file = f"strokes/{SHEETS[sheet]}.png"
