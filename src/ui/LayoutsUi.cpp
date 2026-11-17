@@ -20,6 +20,7 @@
 #include "ui/ViewportLayout.h"
 #include "ui/ViewportWidget.h"
 
+#include <algorithm>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
@@ -371,7 +372,7 @@ json LayoutController::capture() const
             {"state", mWindow->saveState().toBase64().toStdString()},
             {"docks", std::move(docks)},
             {"collapsed", std::move(collapsed)}, {"collapsedGroups", std::move(collapsedGroups)},
-            {"viewport", {{"quad", mViewports->quad()}, {"camera", mViewports->active()->viewName()}}},
+            {"viewport", {{"quad", mViewports->quad()}, {"camera", mViewports->active()->viewName()}, {"textureView", int(mViewports->textureView())}}},
             {"shelf", {{"visible", shelf && shelf->toggleViewAction()->isChecked()}, {"current", currentShelf()}}}};
 }
 
@@ -583,6 +584,7 @@ void LayoutController::apply(const json& layout)
     if (view.is_object())
     {
         mViewports->setQuad(view.value("quad", mViewports->quad()));
+        mViewports->setTextureView(ViewportLayout::TextureView(std::clamp(view.value("textureView", 0), 0, 2)));
         std::string camera = view.value("camera", "");
         if (!mViewports->quad() && !camera.empty())
             mViewports->active()->setView(camera);
