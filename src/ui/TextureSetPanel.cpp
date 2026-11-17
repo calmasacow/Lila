@@ -140,6 +140,15 @@ protected:
     }
 };
 
+/** The layer stack column. It asks only for its minimum height, so the settings above it get their full height before it
+ *  grows; a tall stack hint would otherwise take an equal share of any shortfall from the settings. */
+class StackColumn final : public QWidget
+{
+public:
+    using QWidget::QWidget;
+    QSize sizeHint() const override { return {QWidget::sizeHint().width(), minimumSizeHint().height()}; }
+};
+
 /** A middle click picks item `index` and commits it as a user pick does (these combos act on activated). */
 void texComboDefaultIndex(QComboBox* c, int index)
 {
@@ -2678,7 +2687,7 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     settingsScroll->setWidget(controls::section("Channels and Resolution", d->settingsBox, this, "/textureSets/collapsed", false, &d->settingsToggle));
     d->sideLayout->addWidget(settingsScroll);
     d->columns->addWidget(d->side);
-    auto* main = new QWidget(this);
+    auto* main = new StackColumn(this);
     d->columns->addWidget(main, 1);
     v = new QVBoxLayout(main);
     v->setContentsMargins(0, 0, 0, 0);
