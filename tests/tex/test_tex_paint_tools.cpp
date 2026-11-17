@@ -594,6 +594,12 @@ TEST_CASE("texture paint tools: every starter brush preset paints")
             continue;
         CAPTURE(p->id);
         json payload = p->payload;
+        // Raise and Lower are the paint tool's: it paints them as height.
+        if (const std::string mode = payload.value("normalMode", std::string()); mode == "raise" || mode == "lower")
+        {
+            const double h = payload.value("intensity", 0.2);
+            payload = {{"kind", "paint"}, {"channels", {{"height", mode == "lower" ? -h : h}}}};
+        }
         const std::string kind = payload.value("kind", std::string("paint"));
         if ((kind == "paint" || kind == "fill") && !payload.contains("channels") && !payload.contains("source"))
             payload["channels"] = {{"baseColor", {0.2, 0.4, 0.8}}};
