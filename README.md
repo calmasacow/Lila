@@ -33,13 +33,16 @@ scripts\installer\build.cmd            # writes build-installer\Lila-<version>-S
 
 Tests: `scripts\t.cmd build RelWithDebInfo -LE slow`. `-L slow` runs the slow suites (every shipped material evaluated and linted, about 20 minutes).
 
-### Linux (untested)
+### Linux (experimental)
 
-Experimental: nobody has built Lila on Linux yet, and Ubuntu LTS is the only supported distro. Needs CMake 3.28+, Ninja, a C++20 compiler and a [vcpkg](https://github.com/microsoft/vcpkg) clone after its `bootstrap-vcpkg.sh`. Qt comes from vcpkg and Python 3.14 is downloaded into `.deps`, so the distro's Qt and Python aren't used. USD is off.
+Linux builds are experimental; Ubuntu LTS is the upstream target. Needs CMake 3.28+, Ninja, GCC 13+ (C++20 with `<format>`), pkg-config, nasm, autoconf, autoconf-archive, automake, libtool and a [vcpkg](https://github.com/microsoft/vcpkg) clone after its `bootstrap-vcpkg.sh`. Qt's build also needs the system X11/xcb, xkbcommon and OpenGL development libraries. Qt comes from vcpkg and Python 3.14 is downloaded into `.deps`, so the distro's Qt and Python aren't used. USD is off.
 
 ```
 VCPKG_ROOT=<vcpkg clone> bash build.sh       # or: bash build.sh <dir> <config>
+QT_QPA_PLATFORM=xcb build/bin/RelWithDebInfo/lila
 ```
+
+The viewport uses X11; Wayland desktops need XWayland. A full build, Python scene save/reopen and Vulkan capture were verified locally on x86_64 Omarchy/Arch with GCC 16.2.1, Qt 6.11.2 and an NVIDIA RTX 5080, with `LILA_USD=OFF` and `LILA_VOLUMES=OFF`.
 
 ### Unreal
 

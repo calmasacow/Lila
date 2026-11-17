@@ -10,8 +10,17 @@
 #include "ui/Shelf.h"
 
 #include <QAction>
+#include <QEvent>
+#include <QGuiApplication>
 #include <QMenu>
+#include <QMenuBar>
 #include <QPointer>
+#include <QScreen>
+#include <QScopedValueRollback>
+#include <QStyle>
+#include <QStyleOption>
+#include <QWidgetAction>
+#include <QWindow>
 #include <QTimer>
 #include <QWidget>
 
@@ -23,6 +32,137 @@ namespace lila::ui::menus
 namespace
 {
 constexpr const char* kBuilt = "lilaMenuBuilt";
+constexpr const char* kColumnPadding = "lilaMenuColumnPadding";
+
+QMenuBar* menuBarFor(const QMenu* menu)
+{
+    for (const QMenu* current = menu; current; current = qobject_cast<QMenu*>(current->parentWidget()))
+        for (QObject* object : current->menuAction()->associatedObjects())
+            if (auto* bar = qobject_cast<QMenuBar*>(object); bar && bar->isVisible())
+                return bar;
+    return nullptr;
+}
+
+/** Keep sections together using Qt's native menu columns; padding finishes the preceding column. */
+void wrapSections(QMenu* menu)
+{
+    for (QAction* action : menu->actions())
+        if (action->property(kColumnPadding).toBool())
+            delete action;
+
+    QScreen* screen = menu->screen();
+    if (!screen || menu->style()->styleHint(QStyle::SH_Menu_Scrollable, nullptr, menu))
+        return;
+    const QRect available = screen->availableGeometry();
+    QStyleOption option;
+    option.initFrom(menu);
+    const auto metric = [&](QStyle::PixelMetric value) { return menu->style()->pixelMetric(value, &option, menu); };
+    const int edge = metric(QStyle::PM_MenuVMargin) + metric(QStyle::PM_MenuPanelWidth);
+    const int top = edge + menu->contentsMargins().top() + (menu->isTearOffEnabled() ? metric(QStyle::PM_MenuTearoffHeight) : 0);
+    // ponytail: matches Qt 6's native column budget; custom menu layouts need their own column placement.
+    const int nativeCapacity = available.height() - 2 * metric(QStyle::PM_MenuDesktopFrameWidth) - edge - menu->contentsMargins().bottom() - top;
+    QMenuBar* bar = menuBarFor(menu);
+    const int floor = bar ? std::max(available.top(), bar->mapToGlobal(QPoint(0, bar->height())).y()) : available.top();
+    const int capacity = nativeCapacity - (floor - available.top());
+    if (capacity <= 0)
+        return;
+
+    QList<QAction*> rows;
+    std::vector<int> heights;
+    for (QAction* action : menu->actions())
+        if (const int height = menu->actionGeometry(action).height(); action->isVisible() && height > 0)
+        {
+            rows.push_back(action);
+            heights.push_back(height);
+        }
+    int used = 0;
+    auto breakBefore = [&](QAction* next) {
+        // Qt's wrapping threshold is still the full screen: finish that native column, then trim its padding in sizeHint().
+        auto* padding = new QWidgetAction(menu);
+        padding->setProperty(kColumnPadding, true);
+        padding->setEnabled(false);
+        auto* blank = new QWidget;
+        blank->setFixedSize(1, nativeCapacity - used);
+        blank->setFocusPolicy(Qt::NoFocus);
+        padding->setDefaultWidget(blank);
+        menu->insertAction(next, padding);
+        used = 0;
+    };
+    for (qsizetype begin = 0; begin < rows.size();)
+    {
+        qsizetype end = begin + 1;
+        int height = heights[begin];
+        while (end < rows.size() && !rows[end]->isSeparator())
+            height += heights[end++];
+        if (used > 0 && height <= capacity && used + height > capacity)
+            breakBefore(rows[begin]);
+        // A section taller than the remaining screen must break between rows.
+        for (qsizetype i = begin; i < end; ++i)
+        {
+            if (used > 0 && used + heights[i] > capacity)
+                breakBefore(rows[i]);
+            used += heights[i];
+        }
+        begin = end;
+    }
+}
+
+/** Keep native menu input and horizontal placement, with columns confined below the menu bar. */
+class SectionMenu : public QMenu
+{
+public:
+    SectionMenu(const QString& title, QWidget* parent) : QMenu(title, parent)
+    {
+        // Keep XWayland taskbars from advertising a menu as another application window.
+        if (QGuiApplication::platformName() == "xcb")
+            setWindowFlag(Qt::BypassWindowManagerHint);
+    }
+
+    QSize sizeHint() const override
+    {
+        if (mSizing)
+            return QMenu::sizeHint();
+        QScopedValueRollback<bool> sizing(mSizing, true);
+        wrapSections(const_cast<SectionMenu*>(this));
+        QSize size = QMenu::sizeHint();
+        int bottom = 0, contentBottom = 0;
+        for (QAction* action : actions())
+        {
+            const int end = actionGeometry(action).bottom() + 1;
+            bottom = std::max(bottom, end);
+            if (!action->property(kColumnPadding).toBool())
+                contentBottom = std::max(contentBottom, end);
+        }
+        // Padding determines column breaks, but never enlarges the visible menu below its last real row.
+        size.rheight() -= bottom - contentBottom;
+        return size;
+    }
+
+protected:
+    bool event(QEvent* event) override
+    {
+        const bool result = QMenu::event(event);
+        if (event->type() == QEvent::Show)
+            if (QMenuBar* bar = menuBarFor(this))
+            {
+                const QRect available = screen()->availableGeometry();
+                const int floor = std::max(available.top(), bar->mapToGlobal(QPoint(0, bar->height())).y());
+                const int bottom = available.bottom();
+                const bool submenu = qobject_cast<QMenu*>(parentWidget()) != nullptr;
+                const bool fromBar = !submenu && bar->activeAction() == menuAction();
+                const int y = fromBar ? floor : std::max(floor, std::min(geometry().y(), bottom - height() + 1));
+                // QMenu otherwise forces every multi-column popup to screen.top(), above its trigger.
+                setGeometry(QRect(QPoint(geometry().x(), y), size()));
+                QWidget* owner = submenu ? parentWidget() : bar->window();
+                windowHandle()->setTransientParent(owner->windowHandle());
+                raise();
+            }
+        return result;
+    }
+
+private:
+    mutable bool mSizing = false;
+};
 
 std::string uniqueItemId(std::string base)
 {
@@ -306,7 +446,7 @@ void MenuBuilder::rebuild()
         QMenu*& q = mMenus[m->id];
         if (!q)
         {
-            q = new QMenu(QString::fromStdString(m->title), mParent);
+            q = new SectionMenu(QString::fromStdString(m->title), mParent);
             if (mDecorate)
                 mDecorate(q, true);
             if (m->setup)
@@ -392,7 +532,7 @@ void MenuBuilder::fill(QMenu* menu, const std::string& path, std::vector<std::st
             QMenu*& q = mMenus[sub];
             if (!q)
             {
-                q = new QMenu(QString::fromStdString(item->label), menu);
+                q = new SectionMenu(QString::fromStdString(item->label), menu);
                 if (mDecorate)
                     mDecorate(q, false);
                 if (item->setup)

@@ -49,6 +49,7 @@ namespace
 {
 constexpr const char* kEnabled = "lilaTearOff"; // Theme.cpp's style reads both
 constexpr const char* kHotSection = "lilaHotSection";
+constexpr const char* kColumnPadding = "lilaMenuColumnPadding";
 
 std::function<QDockWidget*(const QString&, const QString&, QWidget*)>& dockHook()
 {
@@ -791,6 +792,8 @@ void TearOffPanel::rebuild()
     if (mMenu)
         for (QAction* a : mMenu->actions())
         {
+            if (a->property(kColumnPadding).toBool())
+                continue;
             bool titled = a->isSeparator() && !a->text().isEmpty();
             if (!mSection.isEmpty() && titled)
             {

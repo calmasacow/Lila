@@ -7,6 +7,7 @@
 #include <nlohmann/json.hpp>
 
 #include <functional>
+#include <optional>
 
 #include <QTimer>
 #include <QWidget>
@@ -188,6 +189,9 @@ private:
     qint64 mOpenedAt = 0;
     int mPrefListener = 0;
     int mWheelAccum = 0;
+    std::optional<QPoint> mDragOffset;
+    Qt::Edges mResizeEdges;
+    QRect mResizeGeometry;
     QTimer mPositionTimer;
 };
 

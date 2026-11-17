@@ -1080,7 +1080,9 @@ StartupDialog::StartupDialog(Hooks hooks, bool welcome, QWidget* parent) : QDial
 {
     setObjectName("startupDialog");
     // A tool window rather than a popup: popups close whenever the app loses focus.
-    setWindowFlags(Qt::Tool | Qt::FramelessWindowHint);
+    setWindowFlags(QGuiApplication::platformName() == "xcb" ? Qt::Tool | Qt::WindowTitleHint | Qt::WindowSystemMenuHint | Qt::WindowCloseButtonHint
+                                                               : Qt::Tool | Qt::FramelessWindowHint);
+    setWindowTitle(welcome ? "Welcome to Lila" : "Recent Scenes");
     setAttribute(Qt::WA_DeleteOnClose);
     setStyleSheet(QString("QDialog#startupDialog { background: %1; border: 1px solid %2; }"
                           "QLabel#startupTitle { color: %3; font-size: 13pt; }"

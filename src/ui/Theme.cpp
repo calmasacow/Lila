@@ -256,11 +256,12 @@ QIcon appIcon(bool mono)
 /**
  * Gives every top-level window (dialogs, floating docks, tool windows) the dark native title bar, and the grey icon in
  * it. The taskbar keeps the colour icon (the window's big icon) unless the UI is monotone.
+ * On XCB, Qt-managed frameless tools bypass the window manager's placement and stacking.
  */
-class DarkTitleBars : public QObject
+class NativeWindowHints : public QObject
 {
 public:
-    explicit DarkTitleBars(QObject* parent) : QObject(parent), mMono(viewportDisplay::monotone()) {}
+    explicit NativeWindowHints(QObject* parent) : QObject(parent), mMono(viewportDisplay::monotone()) {}
 
     /** Follows the monotone pref: the app icon and every window's big icon go grey or back to colour. */
     void setMonotone(bool mono)
@@ -280,7 +281,7 @@ public:
     }
 
 #ifdef _WIN32
-    ~DarkTitleBars() override
+    ~NativeWindowHints() override
     {
         if (mSmallIcon)
             DestroyIcon(mSmallIcon);
@@ -303,8 +304,17 @@ protected:
                 applyIcons(hwnd);
             }
 #else
-        (void)e;
-        (void)obj;
+        if (QGuiApplication::platformName() == "xcb" && (e->type() == QEvent::Polish || e->type() == QEvent::ParentChange || e->type() == QEvent::Show))
+            if (auto* w = qobject_cast<QWidget*>(obj); w && w->isWindow() &&
+                w->windowType() == Qt::Tool && !qobject_cast<QDialog*>(w) && w->windowFlags().testFlag(Qt::FramelessWindowHint) &&
+                !w->windowFlags().testFlag(Qt::BypassWindowManagerHint))
+            {
+                // Tool geometry/stacking belongs to Qt: tiling WMs can animate moves and cover transient tools.
+                const bool visible = w->isVisible();
+                w->setWindowFlag(Qt::BypassWindowManagerHint);
+                if (visible)
+                    w->show();
+            }
 #endif
         return false;
     }
@@ -1142,9 +1152,9 @@ void applyTheme(QApplication& app)
     applyColors(app);
     app.installEventFilter(new StyleSheetThemer(&app));
 
-    auto* titleBars = new DarkTitleBars(&app);
+    auto* titleBars = new NativeWindowHints(&app);
     app.installEventFilter(titleBars);
-    QPointer<DarkTitleBars> bars(titleBars);
+    QPointer<NativeWindowHints> bars(titleBars);
     PrefStore::get().onChanged([bars](const std::string& file) {
         if (file != "general")
             return;

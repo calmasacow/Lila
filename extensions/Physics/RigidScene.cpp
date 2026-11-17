@@ -250,7 +250,14 @@ struct Runtime
         delete JPH::Factory::sInstance;
         JPH::Factory::sInstance = nullptr;
     }
-} gRuntime;
+};
+
+Runtime& runtime()
+{
+    // Construct after Jolt's global references so shutdown releases them before their static destructors run.
+    static Runtime instance;
+    return instance;
+}
 
 JPH::Vec3 toJ(const glm::dvec3& v) { return JPH::Vec3(float(v.x), float(v.y), float(v.z)); }
 JPH::Quat toJ(const glm::dquat& q) { return JPH::Quat(float(q.x), float(q.y), float(q.z), float(q.w)).Normalized(); }
@@ -436,10 +443,10 @@ JPH::RefConst<JPH::Shape> shapeOf(const BodyDesc& b)
     // Density lives in the convex shapes; static meshes and heightfields have none.
     if (s.kind != Shape::Kind::Heightfield && (s.kind != Shape::Kind::Mesh || dynamicMesh))
         key = mix(key, bits(b.density));
-    if (JPH::RefConst<JPH::Shape> hit = gRuntime.shapes.find(key))
+    if (JPH::RefConst<JPH::Shape> hit = runtime().shapes.find(key))
         return hit;
     JPH::RefConst<JPH::Shape> made = buildShape(b);
-    gRuntime.shapes.put(key, made);
+    runtime().shapes.put(key, made);
     return made;
 }
 
@@ -459,20 +466,20 @@ struct StepTouch
 
 void initJolt()
 {
-    if (gRuntime.ready.load(std::memory_order_acquire))
+    if (runtime().ready.load(std::memory_order_acquire))
         return;
     // Graph evaluation builds several physics users at once; a second init would free the job system the first one holds.
     static std::mutex initing;
     std::lock_guard lock(initing);
-    if (gRuntime.ready.load(std::memory_order_relaxed))
+    if (runtime().ready.load(std::memory_order_relaxed))
         return;
     JPH::RegisterDefaultAllocator();
     JPH::Factory::sInstance = new JPH::Factory();
     JPH::RegisterTypes();
-    gRuntime.temp = std::make_unique<JPH::TempAllocatorImpl>(64 * 1024 * 1024);
-    gRuntime.jobs = std::make_unique<TbbJobSystem>();
-    gRuntime.serialJobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
-    gRuntime.ready.store(true, std::memory_order_release);
+    runtime().temp = std::make_unique<JPH::TempAllocatorImpl>(64 * 1024 * 1024);
+    runtime().jobs = std::make_unique<TbbJobSystem>();
+    runtime().serialJobs = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+    runtime().ready.store(true, std::memory_order_release);
 }
 
 struct RigidScene::Impl final : public JPH::ContactListener
@@ -610,7 +617,7 @@ RigidScene::RigidScene(const Settings& s) : mImpl(std::make_unique<Impl>())
     initJolt();
     Impl& w = *mImpl;
     const char* threads = std::getenv("LILA_PHYSICS_THREADS");
-    w.jobs = s.serial || (threads && std::atoi(threads) == 1) ? gRuntime.serialJobs.get() : gRuntime.jobs.get();
+    w.jobs = s.serial || (threads && std::atoi(threads) == 1) ? runtime().serialJobs.get() : runtime().jobs.get();
     w.settings = s;
     w.maxBodies = s.maxBodies > 0 ? std::min(JPH::uint(s.maxBodies), kMaxBodiesLimit) : kMaxBodies;
     const JPH::uint maxPairs = s.maxPairs > 0 ? JPH::uint(s.maxPairs) : std::max(kMaxBodies, w.maxBodies);
@@ -717,7 +724,7 @@ void RigidScene::step(double dt)
         // The temp allocator and job system are shared by every scene.
         static std::mutex stepping;
         std::lock_guard lock(stepping);
-        w.system.Update(float(dt), std::max(1, w.settings.collisionSteps), gRuntime.temp.get(), w.jobs);
+        w.system.Update(float(dt), std::max(1, w.settings.collisionSteps), runtime().temp.get(), w.jobs);
     }
     w.foldTouches();
     ++w.stepCount;
@@ -1376,11 +1383,11 @@ std::vector<ConvexMesh> convexMeshes(const Shape& s)
     return out;
 }
 
-size_t shapeCacheSize() { return gRuntime.ready ? gRuntime.shapes.size() : 0; }
+size_t shapeCacheSize() { return runtime().ready ? runtime().shapes.size() : 0; }
 
 void clearShapeCache()
 {
-    if (gRuntime.ready)
-        gRuntime.shapes.clear();
+    if (runtime().ready)
+        runtime().shapes.clear();
 }
 } // namespace lila::physics

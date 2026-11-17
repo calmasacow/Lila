@@ -11,12 +11,15 @@
 #include "ui/DisplayLayersPanel.h"
 #include "ui/MaterialEditor.h"
 #include "ui/SceneDialogs.h"
+#include "ui/Theme.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMouseEvent>
+#include <QMainWindow>
+#include <QWindow>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollBar>
@@ -51,7 +54,10 @@ void pressOutside(QWidget* dialog)
 
 TEST_CASE("welcome dialog shows whole example cards in one column and ignores clicks outside")
 {
-    QPointer<ui::StartupDialog> welcome = new ui::StartupDialog({}, true, nullptr);
+    ui::applyTheme(*qApp);
+    QMainWindow host;
+    host.show();
+    QPointer<ui::StartupDialog> welcome = new ui::StartupDialog({}, true, &host);
     auto* examples = welcome->findChild<QListWidget*>("welcomeExamples");
     REQUIRE(examples);
     examples->clear();
@@ -59,6 +65,14 @@ TEST_CASE("welcome dialog shows whole example cards in one column and ignores cl
         new QListWidgetItem(QString("Example %1").arg(i), examples);
     welcome->present();
     pump();
+    CHECK_FALSE(welcome->windowFlags().testFlag(Qt::BypassWindowManagerHint));
+    REQUIRE(welcome->windowHandle());
+    CHECK(welcome->windowHandle()->transientParent() == host.windowHandle());
+    if (QGuiApplication::platformName() == "xcb")
+    {
+        CHECK_FALSE(welcome->windowFlags().testFlag(Qt::FramelessWindowHint));
+        CHECK(welcome->windowFlags().testFlag(Qt::WindowCloseButtonHint));
+    }
     CHECK_FALSE(examples->horizontalScrollBar()->isVisible());
     CHECK(examples->verticalScrollBar()->isVisible());
     const QRect first = examples->visualItemRect(examples->item(0));
@@ -75,8 +89,9 @@ TEST_CASE("welcome dialog shows whole example cards in one column and ignores cl
     pressOutside(welcome);
     REQUIRE(welcome);
     CHECK(welcome->isVisible());
-    welcome->reject();
+    welcome->close();
     pump();
+    CHECK((!welcome || !welcome->isVisible()));
 
     QPointer<ui::StartupDialog> recent = new ui::StartupDialog({}, false, nullptr);
     recent->present();

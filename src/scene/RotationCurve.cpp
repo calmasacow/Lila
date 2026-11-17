@@ -387,7 +387,8 @@ size_t RotationCurve::insert(const RotKey& k)
         return size_t(i);
     }
     auto it = std::upper_bound(keys.begin(), keys.end(), k.time, [](double x, const RotKey& key) { return x < key.time; });
-    return size_t(keys.insert(it, k) - keys.begin());
+    it = keys.insert(it, k);
+    return size_t(it - keys.begin());
 }
 
 void RotationCurve::sort()

@@ -16,14 +16,15 @@
 #include "ui/ViewportWidget.h"
 
 #include <QApplication>
+#include <QBitmap>
 #include <QClipboard>
 #include <QCursor>
+#include <QImage>
 #include <QKeyEvent>
 #include <QMainWindow>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
-#include <QScreen>
 #include <QStatusBar>
 #include <QTimer>
 #include <QToolTip>
@@ -249,9 +250,21 @@ MarkingMenu* MarkingMenu::popupDefinition(const json& def, Trigger trigger, Qt::
         return nullptr;
     if (gActive)
         gActive->close();
-    auto* mm = new MarkingMenu(def, trigger, button, at.value_or(QCursor::pos()));
+    const QPoint cursor = at.value_or(QCursor::pos());
+    QWidget* underCursor = QApplication::widgetAt(cursor);
+    QWidget* owner = underCursor ? underCursor->window() : nullptr;
+    for (QWidget* w = underCursor; w; w = w->parentWidget())
+        if (qobject_cast<ViewportWidget*>(w) || !w->property("hotkeyContext").toString().isEmpty())
+        {
+            owner = w;
+            break;
+        }
+    if (!owner)
+        return nullptr;
+    auto* mm = new MarkingMenu(def, trigger, button, cursor, owner);
     mm->show();
-    mm->activateWindow();
+    mm->raise();
+    mm->setFocus(Qt::PopupFocusReason);
     mm->grabMouse();
     mm->grabKeyboard();
     return mm;
@@ -268,18 +281,23 @@ MarkingMenu::~MarkingMenu()
         gActive = nullptr;
 }
 
-MarkingMenu::MarkingMenu(const json& def, Trigger trigger, Qt::MouseButton button, QPoint at)
-    : QWidget(nullptr, Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint | Qt::NoDropShadowWindowHint),
+MarkingMenu::MarkingMenu(const json& def, Trigger trigger, Qt::MouseButton button, QPoint at, QWidget* owner)
+    : QWidget(owner),
       mTrigger(trigger), mButton(button)
 {
-    setAttribute(Qt::WA_TranslucentBackground);
+    // Native child: stays above the Vulkan viewport, belongs to its window, never enters the taskbar.
+    // Shape the opaque surface to the menu ink, leaving the live viewport untouched between items.
+    setAttribute(Qt::WA_NativeWindow);
+    setAttribute(Qt::WA_NoSystemBackground);
+    setAttribute(Qt::WA_OpaquePaintEvent);
+    setMask(QRegion(0, 0, 1, 1));
     setAttribute(Qt::WA_DeleteOnClose);
-    setAttribute(Qt::WA_ShowWithoutActivating, false);
+    setFocusPolicy(Qt::StrongFocus);
     setMouseTracking(true);
 
     QPoint cursor = at;
-    QScreen* screen = QGuiApplication::screenAt(cursor);
-    setGeometry(screen ? screen->geometry() : QRect(cursor - QPoint(600, 600), QSize(1200, 1200)));
+    setGeometry(owner->rect());
+    owner->installEventFilter(this);
 
     mCursor = mapFromGlobal(cursor);
     mLevels.push_back(buildLevel(def, mCursor));
@@ -296,6 +314,13 @@ MarkingMenu::MarkingMenu(const json& def, Trigger trigger, Qt::MouseButton butto
         if (state != Qt::ApplicationActive)
             dismiss();
     });
+}
+
+bool MarkingMenu::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == parentWidget() && (event->type() == QEvent::Resize || event->type() == QEvent::Move || event->type() == QEvent::Hide))
+        dismiss();
+    return QWidget::eventFilter(watched, event);
 }
 
 void MarkingMenu::dismiss()
@@ -544,6 +569,14 @@ void MarkingMenu::updateHighlight(QPointF pos)
 {
     mCursor = pos;
     mCopied = false;
+    if (!rect().contains(pos.toPoint()))
+    {
+        mSlot = mOverflow = -1;
+        mOnBox = false;
+        schedulePreview();
+        update();
+        return;
+    }
     // Back at a parent's centre, or on one of its rows, the submenus above it close and the parent picks again.
     while (mLevels.size() > 1)
     {
@@ -767,7 +800,20 @@ void MarkingMenu::keyReleaseEvent(QKeyEvent* e)
 
 void MarkingMenu::paintEvent(QPaintEvent*)
 {
+    QImage image(size() * devicePixelRatioF(), QImage::Format_ARGB32);
+    image.setDevicePixelRatio(devicePixelRatioF());
+    image.fill(Qt::transparent);
+    {
+        QPainter p(&image);
+        paintMenu(p);
+    }
+    setMask(QRegion(QBitmap::fromImage(image.scaled(size()).createAlphaMask())));
     QPainter p(this);
+    p.drawImage(QPoint(0, 0), image.convertToFormat(QImage::Format_RGB32));
+}
+
+void MarkingMenu::paintMenu(QPainter& p)
+{
     p.setRenderHint(QPainter::Antialiasing);
 
     // The theme's greys and selection colour, so the menu matches the panels it opens over.

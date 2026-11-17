@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "scene/AnimCurve.h"
+#include "scene/RotationCurve.h"
 
 #include <cmath>
 
@@ -30,6 +31,17 @@ double slopeAt(const Curve& c, double t, double side)
     return side < 0 ? (c.evaluate(t) - c.evaluate(t - h)) / h : (c.evaluate(t + h) - c.evaluate(t)) / h;
 }
 } // namespace
+
+TEST_CASE("curve insertion returns the index after vector reallocation")
+{
+    Curve scalar;
+    RotationCurve rotation;
+    for (int i = 64; i > 0; --i)
+    {
+        CHECK(scalar.insert({.time = double(i)}) == 0);
+        CHECK(rotation.insert(rotation.makeKey(double(i), glm::dvec3(0.0))) == 0);
+    }
+}
 
 TEST_CASE("linear tangents interpolate straight")
 {

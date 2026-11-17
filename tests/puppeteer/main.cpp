@@ -6,6 +6,7 @@
 #include "extensions/ExtensionManager.h"
 #include "io/SceneFile.h"
 #include "scene/Node.h"
+#include "scene/Graph.h"
 #include "scene/Rig.h"
 #include "scene/SceneCommands.h"
 #include "ui/Modes.h"
@@ -58,6 +59,8 @@ int main(int argc, char** argv)
 
     doctest::Context ctx(argc, argv);
     int result = ctx.run();
+    lila::scene::Graph::current().clear();
+    lila::extensions::ExtensionManager::get().unloadAll();
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
     return result;

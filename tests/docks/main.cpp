@@ -4,6 +4,8 @@
 #include "render/Renderer.h"
 
 #include <QApplication>
+#include <QFileInfo>
+#include <QLibraryInfo>
 
 #include <cstdio>
 #include <cstdlib>
@@ -30,7 +32,8 @@ bool hasOffscreenPlugin()
 {
     std::error_code ec;
     for (const char* name : {"qoffscreen.dll", "qoffscreend.dll", "libqoffscreen.so", "libqoffscreen.dylib"})
-        if (std::filesystem::exists(exeDir() / "platforms" / name, ec))
+        if (std::filesystem::exists(exeDir() / "platforms" / name, ec) ||
+            QFileInfo::exists(QLibraryInfo::path(QLibraryInfo::PluginsPath) + "/platforms/" + name))
             return true;
     return false;
 }

@@ -23,7 +23,7 @@ std::string sha256(const std::string& text)
 void write(const QDir& dir, const QString& rel, const std::string& text)
 {
     dir.mkpath(QFileInfo(dir.filePath(rel)).path());
-    std::ofstream(dir.filePath(rel).toStdWString(), std::ios::binary) << text;
+    std::ofstream(QFileInfo(dir.filePath(rel)).filesystemFilePath(), std::ios::binary) << text;
 }
 
 json entry(const std::string& text)

@@ -120,6 +120,7 @@ public:
     Qt::MouseButton button() const { return mButton; }
 
 protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void paintEvent(QPaintEvent* e) override;
     void mouseMoveEvent(QMouseEvent* e) override;
     void mouseReleaseEvent(QMouseEvent* e) override;
@@ -149,7 +150,8 @@ private:
         std::optional<QPointF> cascade; // top left of a cascaded overflow list, which then has no compass
     };
 
-    MarkingMenu(const nlohmann::json& def, Trigger trigger, Qt::MouseButton button, QPoint at);
+    MarkingMenu(const nlohmann::json& def, Trigger trigger, Qt::MouseButton button, QPoint at, QWidget* owner);
+    void paintMenu(QPainter& p);
     ~MarkingMenu() override;
     Level buildLevel(const nlohmann::json& def, QPointF center, std::optional<QPointF> cascade = std::nullopt) const;
     void layout(Level& level) const;

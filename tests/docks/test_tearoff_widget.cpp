@@ -6,6 +6,10 @@
 #include "scene/SceneCommands.h"
 #include "scene/Transform.h"
 #include "ui/Actions.h"
+#include "ui/DockSidebar.h"
+#include "ui/Menus.h"
+#include "ui/Theme.h"
+#include "ui/Shelf.h"
 #include "ui/TearOff.h"
 #include "ui/TearOffLogic.h"
 #include "ui/ViewportHooks.h"
@@ -24,6 +28,14 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QStyleFactory>
+#include <QScreen>
+#include <QStyle>
+#include <QWindow>
+
+#if defined(Q_OS_LINUX) && QT_CONFIG(xcb)
+#include <QtGui/qguiapplication_platform.h>
+#include <xcb/xcb.h>
+#endif
 
 using namespace lila::ui;
 
@@ -347,4 +359,294 @@ TEST_CASE("a tear-off placed from the search follows the cursor until a click dr
     QApplication::sendEvent(sky, &esc);
     settleBriefly();
     CHECK_FALSE(sky->isVisible());
+}
+
+TEST_CASE("menu columns: screen height wraps whole sections at dividers")
+{
+    lila::ui::applyTheme(*qApp);
+    QWidget host;
+    menus::MenuBuilder builder(&host, [](QMenu* menu, bool) { tearoff::enable(menu); });
+    menus::addMenu({.id = "ColumnLayoutTest", .title = "Curves"});
+    builder.rebuild();
+    REQUIRE(builder.menu("ColumnLayoutTest"));
+    QMenu& menu = *builder.menu("ColumnLayoutTest");
+    const QRect screen = menu.screen()->availableGeometry();
+    QAction* probe = menu.addAction("Probe");
+    const int rowHeight = menu.actionGeometry(probe).height();
+    REQUIRE(rowHeight > 0);
+    menu.clear();
+    const int count = std::max(2, int((screen.height() - 80) / (rowHeight * 2.4)));
+    std::vector<std::vector<QAction*>> sections(3);
+    int invoked = 0;
+    for (int section = 0; section < 3; ++section)
+    {
+        menu.addSection(QString("Section %1").arg(section));
+        for (int i = 0; i < count; ++i)
+        {
+            QAction* action = menu.addAction(QString("Item %1-%2").arg(section).arg(i));
+            QObject::connect(action, &QAction::triggered, [&] { ++invoked; });
+            sections[section].push_back(action);
+        }
+    }
+
+    for (QPoint origin : {screen.topLeft() + QPoint(screen.width() / 3, 30), screen.bottomLeft() - QPoint(-10, 10)})
+    {
+        menu.popup(origin);
+        settleBriefly();
+        INFO("screen ", screen.x(), ",", screen.y(), " ", screen.width(), "x", screen.height(),
+             "; menu ", menu.x(), ",", menu.y(), " ", menu.width(), "x", menu.height());
+        CHECK(screen.contains(menu.geometry()));
+        CHECK(menu.geometry().left() == origin.x());
+        int contentBottom = 0;
+        for (const auto& section : sections)
+            contentBottom = std::max(contentBottom, menu.actionGeometry(section.back()).bottom() + 1);
+        CHECK(menu.height() - contentBottom <= 10);
+        CHECK(menu.actionGeometry(sections[2][0]).left() > menu.actionGeometry(sections[0][0]).left());
+        for (const auto& section : sections)
+        {
+            const int column = menu.actionGeometry(section[0]).left();
+            for (QAction* action : section)
+            {
+                const QRect rect = menu.actionGeometry(action);
+                CHECK(rect.left() == column);
+                CHECK(menu.rect().contains(rect));
+            }
+        }
+        // Layout-only column padding must not appear as a button in a torn-off menu.
+        tearoff::TearOffPanel panel(&menu);
+        CHECK(panel.findChildren<QPushButton*>("tearOffRow").size() == 3 * count);
+        menu.close();
+    }
+
+    // A larger font / smaller effective height must recalculate on the next opening.
+    QFont font = menu.font();
+    font.setPointSizeF(font.pointSizeF() * 1.2);
+    menu.setFont(font);
+    menu.popup(screen.topLeft() + QPoint(10, 10));
+    settleBriefly();
+    INFO("larger font menu ", menu.x(), ",", menu.y(), " ", menu.width(), "x", menu.height());
+    CHECK(screen.contains(menu.geometry()));
+    for (const auto& section : sections)
+        CHECK(menu.actionGeometry(section.front()).left() == menu.actionGeometry(section.back()).left());
+
+    if (const QString path = qEnvironmentVariable("LILA_TEST_GRAB"); !path.isEmpty())
+        CHECK(menu.grab().save(path));
+
+    // Keyboard navigation and invocation continue to use the original QActions across columns.
+    menu.setActiveAction(sections[1].back());
+    QKeyEvent down(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
+    QApplication::sendEvent(&menu, &down);
+    CHECK(menu.activeAction() == sections[2].front());
+    QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QApplication::sendEvent(&menu, &enter);
+    CHECK(invoked == 1);
+    menu.close();
+
+    // A normal-height menu stays at its requested anchor after a tall layout was shown.
+    menu.clear();
+    menu.addAction("Undo\tCtrl+Z");
+    menu.addAction("Redo\tCtrl+Shift+Z");
+    const QPoint anchor = screen.topLeft() + QPoint(screen.width() / 3, 60);
+    QMenu reference;
+    reference.setFont(menu.font());
+    reference.setTearOffEnabled(true);
+    reference.addAction("Undo\tCtrl+Z");
+    reference.addAction("Redo\tCtrl+Shift+Z");
+    reference.popup(anchor);
+    settleBriefly();
+    const QRect expected = reference.geometry();
+    reference.close();
+    menu.popup(anchor);
+    settleBriefly();
+    CHECK(menu.geometry() == expected);
+    CHECK(menu.actions().size() == 2);
+    menu.close();
+
+    // Open through an offset window's menu bar, as Edit is opened in the real application.
+    host.setGeometry(screen.left() + screen.width() / 4, screen.top() + 50, screen.width() / 2, 300);
+    QMenuBar bar(&host);
+    bar.setGeometry(0, 0, host.width(), 26);
+    menu.setTitle("Edit");
+    bar.addMenu(&menu);
+    host.show();
+    bar.show();
+    settleBriefly();
+    const QRect button = bar.actionGeometry(menu.menuAction());
+    const QPoint click = button.center();
+    QMouseEvent press(QEvent::MouseButtonPress, click, bar.mapToGlobal(click), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(&bar, &press);
+    settleBriefly();
+    CHECK(menu.isVisible());
+    CHECK(std::abs(menu.geometry().left() - bar.mapToGlobal(button.topLeft()).x()) <= 10);
+    CHECK(std::abs(menu.geometry().top() - bar.mapToGlobal(button.bottomLeft()).y()) <= 10);
+    menu.close();
+    menus::removeMenu("ColumnLayoutTest");
+}
+
+TEST_CASE("menu columns: floating window keeps every menu below its menu bar")
+{
+    lila::ui::applyTheme(*qApp);
+    QWidget host;
+    const QRect screen = host.screen()->availableGeometry();
+    host.setGeometry(screen.left() + screen.width() / 4, screen.top() + 50, screen.width() / 2, 250);
+    menus::MenuBuilder builder(&host, [](QMenu* menu, bool) { tearoff::enable(menu); });
+    menus::addMenu({.id = "MenuFloorTest", .title = "Curves"});
+    menus::addSubmenu("MenuFloorTest", "More");
+    builder.rebuild();
+    QMenu* menu = builder.menu("MenuFloorTest");
+    QMenu* child = builder.menu("MenuFloorTest/More");
+    REQUIRE(menu);
+    REQUIRE(child);
+    QMenuBar bar(&host);
+    bar.setGeometry(0, 0, host.width(), 26);
+    bar.addMenu(menu);
+    QAction* probe = menu->addAction("Probe");
+    const int rowHeight = menu->actionGeometry(probe).height();
+    REQUIRE(rowHeight > 0);
+    menu->removeAction(probe);
+    delete probe;
+    const int count = std::max(2, int((screen.height() - 80) / (rowHeight * 2.4)));
+    for (int section = 0; section < 3; ++section)
+    {
+        menu->addSection(QString("Section %1").arg(section));
+        for (int i = 0; i < count; ++i)
+            menu->addAction(QString("Item %1-%2").arg(section).arg(i));
+    }
+    child->addSection("Long section");
+    for (int i = 0; i < 3 * count; ++i)
+        child->addAction(QString("Child %1").arg(i));
+    host.show();
+    bar.show();
+    settleBriefly();
+
+    for (int y : {screen.top() + 50, screen.top() + screen.height() / 3, screen.top() + screen.height() / 2})
+    {
+        host.move(host.x(), y);
+        settleBriefly();
+        const int floor = bar.mapToGlobal(QPoint(0, bar.height())).y();
+        const QRect button = bar.actionGeometry(menu->menuAction());
+        menu->popup(bar.mapToGlobal(button.bottomLeft()) + QPoint(0, 1));
+        settleBriefly();
+        INFO("floor ", floor, "; menu ", menu->geometry().y(), " height ", menu->height(), "; screen bottom ", screen.bottom());
+        CHECK(menu->geometry().top() >= floor);
+        CHECK(screen.contains(menu->geometry()));
+        CHECK(menu->windowHandle()->transientParent() == host.windowHandle());
+        CHECK(menu->windowType() == Qt::Popup);
+        CHECK_FALSE(menu->windowFlags().testFlag(Qt::WindowStaysOnTopHint));
+#if defined(Q_OS_LINUX) && QT_CONFIG(xcb)
+        if (QGuiApplication::platformName() == "xcb")
+        {
+            auto* x11 = qApp->nativeInterface<QNativeInterface::QX11Application>();
+            REQUIRE(x11);
+            CHECK(menu->windowFlags().testFlag(Qt::BypassWindowManagerHint));
+            auto* connection = x11->connection();
+            auto* attributes = xcb_get_window_attributes_reply(connection, xcb_get_window_attributes(connection, menu->winId()), nullptr);
+            REQUIRE(attributes);
+            CHECK(attributes->override_redirect == 1);
+            std::free(attributes);
+        }
+#endif
+        int bottom = 0;
+        for (QAction* action : menu->actions())
+            if (!action->text().isEmpty())
+            {
+                CHECK(menu->rect().contains(menu->actionGeometry(action)));
+                bottom = std::max(bottom, menu->actionGeometry(action).bottom() + 1);
+            }
+        CHECK(menu->height() - bottom <= 10);
+
+        child->popup(menu->mapToGlobal(QPoint(menu->width(), menu->height() - 30)));
+        settleBriefly();
+        CHECK(child->geometry().top() >= floor);
+        CHECK(screen.contains(child->geometry()));
+        CHECK(child->windowHandle()->transientParent() == menu->windowHandle());
+        for (QAction* action : child->actions())
+            if (!action->text().isEmpty())
+                CHECK(child->rect().contains(child->actionGeometry(action)));
+        child->close();
+        settleBriefly();
+        if (y == screen.top() + screen.height() / 2 && QGuiApplication::platformName() == "xcb")
+            if (const QString path = qEnvironmentVariable("LILA_TEST_GRAB"); !path.isEmpty())
+                CHECK(menu->screen()->grabWindow(0).save(path));
+        menu->close();
+    }
+    menus::removeMenu("MenuFloorTest");
+}
+
+TEST_CASE("floating shelf: grip drag moves the window and stops on release")
+{
+    QMainWindow host;
+    host.show();
+    if (FloatingShelf::active())
+    {
+        FloatingShelf::active()->close();
+        QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+    FloatingShelf::toggle();
+    QPointer<FloatingShelf> shelf = FloatingShelf::active();
+    REQUIRE(shelf);
+    settleBriefly();
+    QLabel* grip = nullptr;
+    for (QLabel* label : shelf->findChildren<QLabel*>())
+        if (label->toolTip() == "Drag to move the shelf")
+            grip = label;
+    REQUIRE(grip);
+    const QPoint before = shelf->pos();
+    const QPoint local = grip->rect().center();
+    const QPoint global = grip->mapToGlobal(local);
+    const QPoint delta(45, 35);
+    QMouseEvent press(QEvent::MouseButtonPress, local, global, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(grip, &press);
+    QMouseEvent move(QEvent::MouseMove, local + delta, global + delta, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(grip, &move);
+    settleBriefly();
+    CHECK(shelf->pos() == before + delta);
+    QMouseEvent release(QEvent::MouseButtonRelease, local, global + delta, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(grip, &release);
+    QMouseEvent hover(QEvent::MouseMove, local, global + 2 * delta, Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(grip, &hover);
+    CHECK(shelf->pos() == before + delta);
+    const QSize oldSize = shelf->size();
+    const QPoint corner = shelf->rect().bottomRight() - QPoint(1, 1);
+    const QPoint cornerGlobal = shelf->mapToGlobal(corner);
+    const QPoint growth(30, 25);
+    QMouseEvent resizePress(QEvent::MouseButtonPress, corner, cornerGlobal, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(shelf, &resizePress);
+    QMouseEvent resizeMove(QEvent::MouseMove, corner + growth, cornerGlobal + growth, Qt::NoButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(shelf, &resizeMove);
+    CHECK(shelf->size() == oldSize + QSize(growth.x(), growth.y()));
+    QMouseEvent resizeRelease(QEvent::MouseButtonRelease, corner, cornerGlobal + growth, Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+    QApplication::sendEvent(shelf, &resizeRelease);
+    shelf->close();
+    QApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    CHECK(shelf.isNull());
+}
+
+TEST_CASE("floating tools: XCB tools bypass tiling without changing the main window")
+{
+    applyTheme(*qApp);
+    QMainWindow host;
+    host.show();
+    QWidget tool(&host, Qt::Tool | Qt::FramelessWindowHint);
+    tool.show();
+    QDockWidget dock("Floating test", &host);
+    dock.setTitleBarWidget(new DockTitleBar(&dock));
+    host.addDockWidget(Qt::RightDockWidgetArea, &dock);
+    dock.setFloating(true);
+    dock.show();
+    settleBriefly();
+    const bool xcb = QGuiApplication::platformName() == "xcb";
+    CHECK(tool.isVisible());
+    CHECK(dock.isVisible());
+    CHECK(tool.windowFlags().testFlag(Qt::BypassWindowManagerHint) == xcb);
+    CHECK(dock.windowFlags().testFlag(Qt::BypassWindowManagerHint) == xcb);
+    CHECK_FALSE(host.windowFlags().testFlag(Qt::BypassWindowManagerHint));
+    REQUIRE(tool.windowHandle());
+    CHECK(tool.windowHandle()->transientParent() == host.windowHandle());
+    dock.setFloating(false);
+    CHECK_FALSE(dock.isWindow());
+    dock.setFloating(true);
+    dock.show();
+    settleBriefly();
+    CHECK(dock.windowFlags().testFlag(Qt::BypassWindowManagerHint) == xcb);
 }

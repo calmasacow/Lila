@@ -1087,7 +1087,9 @@ void FloatingShelf::setIconSize(int size)
     mPage->rebuild();
 }
 
-FloatingShelf::FloatingShelf(QWidget* parent, bool pinned) : QWidget(parent, Qt::Tool | Qt::FramelessWindowHint), mPinned(pinned)
+FloatingShelf::FloatingShelf(QWidget* parent, bool pinned)
+    : QWidget(parent, Qt::Tool | Qt::FramelessWindowHint |
+                          (QGuiApplication::platformName() == "xcb" ? Qt::BypassWindowManagerHint : Qt::WindowFlags{})), mPinned(pinned)
 {
     setWindowTitle("Floating Shelf");
     setAttribute(Qt::WA_DeleteOnClose);
@@ -1359,6 +1361,32 @@ bool FloatingShelf::eventFilter(QObject* obj, QEvent* e)
     auto* inside = qobject_cast<QWidget*>(obj);
     if (inside && inside->window() == this)
     {
+        if (mDragOffset && e->type() == QEvent::MouseMove)
+        {
+            auto* mouse = static_cast<QMouseEvent*>(e);
+            if (mouse->buttons() & Qt::LeftButton)
+            {
+                const QPoint delta = mouse->globalPosition().toPoint() - *mDragOffset;
+                if (!mResizeEdges)
+                    move(delta);
+                else
+                {
+                    QRect next = mResizeGeometry;
+                    const int width = std::clamp(next.width() + (mResizeEdges & Qt::LeftEdge ? -delta.x() : delta.x()), minimumWidth(), maximumWidth());
+                    const int height = std::clamp(next.height() + (mResizeEdges & Qt::TopEdge ? -delta.y() : delta.y()), minimumHeight(), maximumHeight());
+                    if (mResizeEdges & Qt::LeftEdge) next.setLeft(next.right() - width + 1);
+                    if (mResizeEdges & Qt::RightEdge) next.setWidth(width);
+                    if (mResizeEdges & Qt::TopEdge) next.setTop(next.bottom() - height + 1);
+                    if (mResizeEdges & Qt::BottomEdge) next.setHeight(height);
+                    setGeometry(next);
+                }
+            }
+            else
+                mDragOffset.reset();
+            return true;
+        }
+        if (e->type() == QEvent::MouseButtonRelease && static_cast<QMouseEvent*>(e)->button() == Qt::LeftButton)
+            mDragOffset.reset();
         if (e->type() == QEvent::Enter && obj != this)
             unsetCursor();
         if (e->type() == QEvent::MouseMove)
@@ -1373,10 +1401,15 @@ bool FloatingShelf::eventFilter(QObject* obj, QEvent* e)
             static_cast<QMouseEvent*>(e)->button() == Qt::LeftButton && windowHandle())
         {
             Qt::Edges edges = obj == this ? frameEdges(static_cast<QMouseEvent*>(e)->position().toPoint()) : Qt::Edges();
-            if (edges)
-                windowHandle()->startSystemResize(edges);
-            else
-                windowHandle()->startSystemMove();
+            mResizeEdges = {};
+            if (edges && (QGuiApplication::platformName() == "xcb" || !windowHandle()->startSystemResize(edges)))
+            {
+                mResizeEdges = edges;
+                mResizeGeometry = geometry();
+                mDragOffset = static_cast<QMouseEvent*>(e)->globalPosition().toPoint();
+            }
+            else if (!edges && (QGuiApplication::platformName() == "xcb" || !windowHandle()->startSystemMove()))
+                mDragOffset = static_cast<QMouseEvent*>(e)->globalPosition().toPoint() - pos();
             return true;
         }
         if (e->type() == QEvent::Wheel)

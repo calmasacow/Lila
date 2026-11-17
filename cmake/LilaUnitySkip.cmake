@@ -33,6 +33,8 @@ set(LILA_UNITY_SKIP
     src/ui/UvEditorPick.cpp
     src/ui/UvEditorView.cpp
     tests/test_camera.cpp
+    tests/puppeteer/test_props.cpp
+    tests/sim/test_grapple_physics.cpp
     tests/test_imageplane.cpp
     tests/test_normal_frames.cpp
     tests/test_outliner_filter.cpp

@@ -19,6 +19,12 @@ set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets")
 
 project(Lila VERSION 0.3.0 LANGUAGES C CXX)
 
+# System packages on Linux may export only NOCONFIG; retain vcpkg's release fallbacks as well.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    list(APPEND CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO NOCONFIG)
+    list(APPEND CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL NOCONFIG)
+endif()
+
 if(MSVC AND CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets/x64-windows.cmake" _lila_toolset REGEX "VCPKG_PLATFORM_TOOLSET_VERSION")
     string(REGEX MATCH "14\\.([0-9]+)" _lila_toolset "${_lila_toolset}")
