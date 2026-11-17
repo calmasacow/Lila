@@ -319,3 +319,151 @@ TEST_CASE("blockwork: grid steps")
     CHECK(run("blockworkGrid", {{"coarser", true}})["step"].get<double>() == Approx(32));
     CHECK(blockwork::snap(37.0, 16.0) == Approx(32));
 }
+
+namespace
+{
+glm::dvec2 cornerUv(const geo::Mesh& m, Index f, const glm::dvec3& at)
+{
+    std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>("uv0");
+    glm::dvec2 out(1e9);
+    double best = 1e9;
+    m.forEachFaceCorner(f, [&](Index c) {
+        const double d = glm::length(m.position(m.cornerPoint(c)) - at);
+        if (d < best)
+            best = d, out = glm::dvec2(uv[c]);
+    });
+    return out;
+}
+
+void faceUvBounds(const geo::Mesh& m, Index f, glm::dvec2& lo, glm::dvec2& hi)
+{
+    std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>("uv0");
+    lo = glm::dvec2(1e9), hi = glm::dvec2(-1e9);
+    m.forEachFaceCorner(f, [&](Index c) { lo = glm::min(lo, glm::dvec2(uv[c])), hi = glm::max(hi, glm::dvec2(uv[c])); });
+}
+} // namespace
+
+TEST_CASE("blockwork: shift, fit and justify")
+{
+    fresh();
+    const std::string b = box({0, 0, 0}, {300, 150, 200});
+    const Index front = faceFacing(out(b), {0, 0, 1});
+    glm::dvec2 lo0, hi0, lo, hi;
+    faceUvBounds(out(b), front, lo0, hi0);
+    run("blockworkTexture", {{"args", {b}}, {"faces", {front}}, {"shift", {0.25, 0}}});
+    faceUvBounds(out(b), front, lo, hi);
+    CHECK(lo.x == Approx(lo0.x + 0.25));
+
+    run("blockworkTexture", {{"args", {b}}, {"faces", {front}}, {"fit", "both"}});
+    faceUvBounds(out(b), front, lo, hi);
+    CHECK(lo.x == Approx(0).epsilon(1e-5));
+    CHECK(hi.x == Approx(1));
+    CHECK(lo.y == Approx(0).epsilon(1e-5));
+    CHECK(hi.y == Approx(1));
+
+    run("blockworkTexture", {{"args", {b}}, {"faces", {front}}, {"reset", true}});
+    run("blockworkTexture", {{"args", {b}}, {"faces", {front}}, {"justify", "right"}});
+    faceUvBounds(out(b), front, lo, hi);
+    CHECK(hi.x == Approx(1));
+    CHECK(hi.x - lo.x == Approx(3));
+}
+
+TEST_CASE("blockwork: copying a texture round a corner keeps it continuous")
+{
+    fresh();
+    const std::string b = box({0, 0, 0}, {200, 200, 200});
+    geo::Mesh m = out(b);
+    const Index front = faceFacing(m, {0, 0, 1}), side = faceFacing(m, {1, 0, 0});
+    run("blockworkTexture", {{"args", {b}}, {"faces", {front}}, {"shift", {0.3, 0.1}}, {"turn", 30}});
+    run("blockworkCopyTexture", {{"args", {b}}, {"source", b}, {"sourceFace", front}, {"faces", {side}}});
+    m = out(b);
+    // The corner they share has the same uv on both faces.
+    for (const glm::dvec3 at : {glm::dvec3(200, 0, 200), glm::dvec3(200, 200, 200)})
+    {
+        const glm::dvec2 a = cornerUv(m, front, at), c = cornerUv(m, side, at);
+        CHECK(a.x == Approx(c.x).epsilon(1e-4));
+        CHECK(a.y == Approx(c.y).epsilon(1e-4));
+    }
+}
+
+TEST_CASE("blockwork: align a texture's bottom to an edge")
+{
+    fresh();
+    const std::string b = box({0, 0, 0}, {256, 128, 128});
+    geo::Mesh m = out(b);
+    const Index front = faceFacing(m, {0, 0, 1});
+    std::vector<Index> pts = m.facePoints(front);
+    run("blockworkAlignEdge", {{"args", {b}}, {"face", front}, {"edge", 0}, {"side", "bottom"}, {"fit", "height"}});
+    m = out(b);
+    const glm::dvec3 pa = m.position(pts[0]), pb = m.position(pts[1]);
+    CHECK(cornerUv(m, front, pa).y == Approx(0).epsilon(1e-5));
+    CHECK(cornerUv(m, front, pb).y == Approx(0).epsilon(1e-5));
+    CHECK(cornerUv(m, front, pa).x == Approx(0).epsilon(1e-5));
+    glm::dvec2 lo, hi;
+    faceUvBounds(m, front, lo, hi);
+    CHECK(hi.y - lo.y == Approx(1));
+}
+
+TEST_CASE("blockwork: a strip of faces maps continuously along it")
+{
+    fresh();
+    const std::string road = run("blockworkBlock", {{"origin", {0, 0, 0}}, {"size", {400, 100, 0}}, {"name", "road"}}).get<std::string>();
+    // Split the floor into four quads along x, then lay the strip.
+    geo::Mesh m = blockwork::baseMesh(g(), g().find(road)->id());
+    REQUIRE(m.numFaces() == 1);
+    std::vector<glm::dvec3> pts;
+    std::vector<Index> sizes, idx;
+    for (int i = 0; i <= 4; ++i)
+        pts.push_back({100.0 * i, 0, 0}), pts.push_back({100.0 * i, 0, 100});
+    for (Index i = 0; i < 4; ++i)
+        sizes.push_back(4), idx.insert(idx.end(), {2 * i, 2 * i + 1, 2 * i + 3, 2 * i + 2});
+    geo::Mesh strip = geo::Mesh::fromPolygons(pts, sizes, idx);
+    if (strip.faceNormal(0).y < 0)
+        for (Index f = 0; f < 4; ++f)
+            strip.flipFace(f);
+    blockwork::setBaseMesh(g(), g().find(road)->id(), strip);
+    run("blockworkTextureStrip", {{"args", {road}}, {"faces", {0, 1, 2, 3}}});
+    m = out(road);
+    for (Index f = 0; f + 1 < 4; ++f)
+    {
+        const glm::dvec3 at(100.0 * (f + 1), 0, 50);
+        const glm::dvec2 a = cornerUv(m, f, glm::dvec3(at.x, 0, 0)), c = cornerUv(m, f + 1, glm::dvec3(at.x, 0, 0));
+        CHECK(a.x == Approx(c.x).epsilon(1e-4));
+    }
+    glm::dvec2 lo, hi;
+    faceUvBounds(m, 0, lo, hi);
+    CHECK(std::abs(hi.y - lo.y) == Approx(1));
+}
+
+TEST_CASE("blockwork: texture lock off keeps the uvs, which then stretch")
+{
+    fresh();
+    const std::string b = box({0, 0, 0}, {200, 200, 200});
+    const Index top = faceFacing(out(b), {0, 1, 0});
+    const Index side = faceFacing(out(b), {0, 0, 1});
+    glm::dvec2 lo0, hi0, lo, hi;
+    faceUvBounds(out(b), side, lo0, hi0);
+    run("blockworkTextureLock", {{"args", {b}}, {"on", false}});
+    faceUvBounds(out(b), side, lo, hi);
+    CHECK(hi.y - lo.y == Approx(hi0.y - lo0.y));
+    run("blockworkExtend", {{"args", {b}}, {"faces", {top}}, {"distance", 200}});
+    faceUvBounds(out(b), side, lo, hi);
+    CHECK(hi.y - lo.y == Approx(hi0.y - lo0.y));
+    run("blockworkTextureLock", {{"args", {b}}, {"on", true}});
+    faceUvBounds(out(b), side, lo, hi);
+    CHECK(hi.y - lo.y == Approx(4));
+}
+
+TEST_CASE("blockwork: a placeholder image becomes a material mapped at the texel density")
+{
+    fresh();
+    const std::string b = box({0, 0, 0}, {512, 512, 512});
+    const std::string mat = run("blockworkPlaceholder", {{"name", "BwTestDev"}, {"size", 256}}).get<std::string>();
+    run("blockworkMaterial", {{"args", {b}}, {"material", mat}});
+    geo::Mesh m = out(b);
+    // 256 px at 5.12 px/cm repeats every 50 cm: a 512 cm face spans 10.24 repeats.
+    glm::dvec2 lo, hi;
+    faceUvBounds(m, faceFacing(m, {0, 0, 1}), lo, hi);
+    CHECK(hi.x - lo.x == Approx(10.24));
+    CHECK(m.materialNames().size() >= 1);
+}

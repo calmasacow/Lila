@@ -45,6 +45,7 @@ enum MapMode : int32_t
     kMapFace = 0,  // projected on the face's own plane, upright
     kMapWorld = 1, // projected along the world axis nearest the normal
     kMapAxes = 2,  // explicit axes (wrapped across an edge, aligned to an edge)
+    kMapStored = 3, // the uvs the mesh stores (hotspotted faces)
 };
 
 /** A face's mapping as stored, with defaults filled in. */
@@ -64,7 +65,7 @@ void setFaceMapping(lila::geo::Mesh& mesh, lila::geo::Index f, const FaceMapping
 void mappingAxes(const FaceMapping& m, const glm::dvec3& normal, glm::dvec3& u, glm::dvec3& v);
 /** The uv of a point on a face with this mapping and normal; tileSize fills a zero scale. */
 glm::dvec2 mapPoint(const FaceMapping& m, const glm::dvec3& normal, const glm::dvec3& p, double tileSize);
-/** Writes uv0 on every face from its mapping. */
+/** Writes uv0 on every face from its mapping, except faces that keep their stored uvs. */
 void applyMapping(lila::geo::Mesh& mesh, double tileSize);
 
 // Shapes.
@@ -164,4 +165,11 @@ bool registerTypes(lila::ext::Context& ctx);
 void registerCommands(lila::ext::Context& ctx);
 void registerTextureCommands(lila::ext::Context& ctx);
 void registerUi(lila::ext::Context& ctx);
+
+/** The texel density new materials map at, px per cm (default 5.12, 512 px a metre). */
+double texelDensity();
+/** cm per repeat for a material's base colour image at the texel density, or nullopt when it has none to read. */
+std::optional<glm::dvec2> materialRepeat(lila::scene::Graph& g, const std::string& material);
+/** The material made for (or already using) an image file, created when missing. */
+std::string materialForImage(lila::scene::Graph& g, const std::string& path);
 } // namespace blockwork

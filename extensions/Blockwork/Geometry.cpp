@@ -161,6 +161,8 @@ void applyMapping(Mesh& mesh, double tileSize)
         if (!mesh.faceValid(f))
             continue;
         const FaceMapping m = faceMapping(mesh, f);
+        if (m.mode == kMapStored)
+            continue;
         const glm::dvec3 n = mesh.faceNormal(f);
         mesh.forEachFaceCorner(f, [&](Index c) { uv[c] = glm::vec2(mapPoint(m, n, mesh.position(mesh.cornerPoint(c)), tileSize)); });
     }

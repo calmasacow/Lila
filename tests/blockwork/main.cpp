@@ -8,6 +8,8 @@
 #include "scene/Node.h"
 #include "scene/SceneCommands.h"
 
+#include <QGuiApplication>
+
 #include <cstdlib>
 #include <filesystem>
 
@@ -22,6 +24,9 @@ int main(int argc, char** argv)
 #else
     setenv("LILA_CONFIG_DIR", dir.string().c_str(), 1);
 #endif
+    // Placeholder textures draw text, which needs a GUI application.
+    qputenv("QT_QPA_PLATFORM", "offscreen");
+    QGuiApplication app(argc, argv);
     lila::mainq::init();
     lila::ops::registerBuiltins();
     lila::scene::types::registerBuiltins();
