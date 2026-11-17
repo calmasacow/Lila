@@ -1,0 +1,130 @@
+name: Linux packages
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Branch, commit, or existing release tag to build
+        default: main
+        required: true
+      publish:
+        description: Attach packages to the existing release matching ref
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      publish:
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
+      VCPKG_MAX_CONCURRENCY: 2
+      VCPKG_BINARY_SOURCES: clear;files,/home/runner/.cache/vcpkg/archives,readwrite
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Build and packaging tools
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          sudo apt-get update
+          sudo apt-get install -y gcc-14 g++-14 ninja-build pkg-config nasm autoconf autoconf-archive automake libtool \
+            bison flex gperf libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
+            libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev \
+            libxcb-randr0-dev libxcb-render-util0-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev \
+            libxcb-util-dev libxcb-xfixes0-dev libxcb-xinerama0-dev libxcb-xkb-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libvulkan-dev libfontconfig1-dev libfreetype-dev libdbus-1-dev \
+            patchelf rpm libarchive-tools zstd squashfs-tools desktop-file-utils
+
+      - name: Check native package generators
+        run: python3 scripts/linux/test_package.py
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: linux-x64-gcc14-${{ hashFiles('vcpkg.json', 'vcpkg-ports/**', 'cmake/triplets/*linux*') }}
+          restore-keys: linux-x64-gcc14-
+
+      - name: Prepare dependencies
+        run: |
+          git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
+          "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          python_home="$(bash scripts/fetch-python.sh)"
+          echo "LILA_PYTHON_DIR=$python_home" >> "$GITHUB_ENV"
+
+      - name: Configure and build Release
+        run: |
+          cmake --preset linux -B build-linux -DVCPKG_TARGET_TRIPLET=x64-linux-release \
+            -DLILA_USD=OFF -DLILA_VOLUMES=OFF -DLILA_BUILD_TESTS=OFF
+          cmake --build build-linux --config Release
+
+      - name: Package DEB, RPM, Arch, and AppImage
+        run: |
+          curl --fail --location --retry 3 https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage -o "$RUNNER_TEMP/appimagetool"
+          echo "ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  $RUNNER_TEMP/appimagetool" | sha256sum --check
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          python3 scripts/linux/package.py --build-dir build-linux --python-home "$LILA_PYTHON_DIR" \
+            --output build-linux/packages --appimagetool "$RUNNER_TEMP/appimagetool"
+
+      - name: Verify packaged runtime and package metadata
+        env:
+          LILA_CONFIG_DIR: ${{ runner.temp }}/lila-package-smoke
+          LILA_MCP_PORT: '19287'
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          runtime="$PWD/build-linux/packages/root"
+          desktop-file-validate "$runtime/usr/share/applications/lila.desktop"
+          "$runtime/usr/bin/lila" --version
+          "$runtime/usr/bin/lilabatch" -c 'import lila, numpy; print("Bundled Python and NumPy OK")'
+          for package in build-linux/packages/*.deb; do dpkg-deb --info "$package"; done
+          for package in build-linux/packages/*.rpm; do rpm -qip "$package"; done
+          for package in build-linux/packages/*.pkg.tar.zst; do bsdtar -xOf "$package" ./.PKGINFO; done
+          for package in build-linux/packages/*.AppImage; do APPIMAGE_EXTRACT_AND_RUN=1 "$package" --version; done
+          cd build-linux/packages
+          sha256sum --check SHA256SUMS
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lila-linux-x86_64
+          compression-level: 0
+          path: |
+            build-linux/packages/*.deb
+            build-linux/packages/*.rpm
+            build-linux/packages/*.pkg.tar.zst
+            build-linux/packages/*.AppImage
+            build-linux/packages/SHA256SUMS
+          if-no-files-found: error
+
+      - name: Attach to existing GitHub release
+        if: inputs.publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.ref }}
+        run: |
+          version="$(sed -n 's/^project(Lila VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
+          test "$RELEASE_TAG" = "v$version"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
+          gh release upload "$RELEASE_TAG" build-linux/packages/*.deb build-linux/packages/*.rpm \
+            build-linux/packages/*.pkg.tar.zst build-linux/packages/*.AppImage build-linux/packages/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" --clobber

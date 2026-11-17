@@ -100,3 +100,12 @@ jobs:
           $version = $env:TAG.Substring(1)
           $assets = @("build-installer\Lila-$version-Setup.exe", "build-installer\latest.json", "build-installer\files-$version.json") + @(Get-ChildItem "build-installer\Lila-$version-Patch-*.exe" | ForEach-Object FullName)
           gh release create $env:TAG @assets --title "Lila $version" --generate-notes
+
+  linux:
+    needs: release
+    uses: ./.github/workflows/linux-packages.yml
+    with:
+      ref: ${{ github.event.inputs.tag || github.ref_name }}
+      publish: true
+    permissions:
+      contents: write

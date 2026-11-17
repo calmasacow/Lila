@@ -44,6 +44,22 @@ QT_QPA_PLATFORM=xcb build/bin/RelWithDebInfo/lila
 
 The viewport uses X11; Wayland desktops need XWayland. A full build, Python scene save/reopen and Vulkan capture were verified locally on x86_64 Omarchy/Arch with GCC 16.2.1, Qt 6.11.2 and an NVIDIA RTX 5080, with `LILA_USD=OFF` and `LILA_VOLUMES=OFF`.
 
+### Linux packages
+
+The **Linux packages** GitHub Actions workflow builds x86_64 `.deb`, `.rpm`, `.pkg.tar.zst` (Arch), and `.AppImage` files from a selected branch or tag. Run it manually for downloadable Actions artifacts; the Release workflow also attaches these packages and SHA256 checksums after publishing a tagged release. To add Linux packages to an existing release, select its tag and enable `publish`.
+
+Packages bundle Qt, Python/NumPy, extensions, shaders, resources and runtime libraries. They require glibc 2.39 or newer (Ubuntu 24.04+, Fedora 40+, current Arch), Vulkan-capable graphics drivers, and X11/XWayland. ARM builds and older glibc distributions are not supported by this workflow. USD and NanoVDB are disabled, matching the verified Linux configuration.
+
+For local packaging after a Release build, install `dpkg-deb`, `rpmbuild`, `bsdtar`, `zstd`, `patchelf`, and `strip`, then run:
+
+```sh
+python3 scripts/linux/package.py --build-dir build-a1 --config Release \
+  --python-home .deps/python-3.14-linux --output build-a1/packages \
+  --appimagetool /path/to/appimagetool
+```
+
+Use a fresh output directory. `--formats deb rpm arch appimage` selects the outputs; AppImage packaging requires appimagetool. Packages built locally inherit the build host's glibc requirement; the compatibility floor above applies to the Ubuntu 24.04 CI build.
+
 ### Unreal
 
 1. Copy `ue/LilaLink` into `<Project>/Plugins/LilaLink` and build the project.
