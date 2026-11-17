@@ -342,6 +342,17 @@ TEST_CASE("tex: externals feed position, with uv as the fallback")
     o.externals["position"] = {1, 1, {3.0f, 4.0f, 5.0f, 1.0f}};
     image::Image given = evaluateCpu(p, o).outputs.at("out");
     CHECK(texel(given, 4, 4)[2] == doctest::Approx(5.0));
+
+    // With the bake's bounds, its 0-1 positions come out in cm.
+    g.node("Pos")->values["boundsMin"] = json::array({250.0, 0.0, -50.0});
+    g.node("Pos")->values["boundsMax"] = json::array({350.0, 400.0, 50.0});
+    Plan sized = plan(into(g, "Pos.position"), "Output", "baseColor", 8);
+    REQUIRE(sized.error.empty());
+    o.externals["position"] = {1, 1, {0.5f, 0.25f, 1.0f, 1.0f}};
+    image::Image cm = evaluateCpu(sized, o).outputs.at("out");
+    CHECK(texel(cm, 4, 4)[0] == doctest::Approx(300.0));
+    CHECK(texel(cm, 4, 4)[1] == doctest::Approx(100.0));
+    CHECK(texel(cm, 4, 4)[2] == doctest::Approx(50.0));
 }
 
 TEST_CASE("tex: an unlinked UV input reads the coordinate, Mapping moves it")
@@ -403,14 +414,14 @@ TEST_CASE("tex: spherical Projection lines up with a sphere's own uvs")
     }
     CHECK(checked > 100);
 
-    // The node itself, fed object positions, gives the same coordinate.
+    // The node itself, fed the bake's 0-1 positions and its bounds, gives the same coordinate about the bounds' middle.
     Graph g;
-    add(g, "P", "projection", {{"shape", "spherical"}});
+    add(g, "P", "projection", {{"shape", "spherical"}, {"boundsMin", {-50.0, -50.0, -50.0}}, {"boundsMax", {50.0, 50.0, 50.0}}});
     Plan plan_ = plan(into(g, "P.out"), "Output", "baseColor", 4);
     REQUIRE(plan_.error.empty());
     EvalOptions o;
     const glm::vec3 point(30.0f, 20.0f, -10.0f);
-    o.externals["position"] = {1, 1, {point.x, point.y, point.z, 1.0f}};
+    o.externals["position"] = {1, 1, {point.x / 100.0f + 0.5f, point.y / 100.0f + 0.5f, point.z / 100.0f + 0.5f, 1.0f}};
     image::Image out = evaluateCpu(plan_, o).outputs.at("out");
     CHECK(texel(out, 1, 2)[0] == doctest::Approx(sphericalUv(point).x).epsilon(1e-4));
     CHECK(texel(out, 1, 2)[1] == doctest::Approx(sphericalUv(point).y).epsilon(1e-4));
