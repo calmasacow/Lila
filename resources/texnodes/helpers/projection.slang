@@ -1,4 +1,4 @@
-//! Layer projections: where a layer's content lands on the mesh, from a box placed in object space.
+//! Layer projections: where a layer's content lands on the mesh, from a box placed in world space, where the bake's maps are.
 
 float3x3 projRotation(float3 deg)
 {
@@ -10,7 +10,7 @@ float3x3 projRotation(float3 deg)
     return mul(rz, mul(ry, rx));
 }
 
-/** An object-space point in the projector's frame: centred and turned, still in object units. */
+/** A world-space point in the projector's frame: centred and turned, still in cm. */
 float3 projFrame(float3 pos, float3 centre, float3 deg)
 {
     return mul(transpose(projRotation(deg)), pos - centre);

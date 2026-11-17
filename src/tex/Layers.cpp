@@ -3,6 +3,7 @@
 
 #include "core/Profile.h"
 #include "gn/Group.h"
+#include "scene/Graph.h"
 #include "tex/Generators.h"
 #include "tex/NodeDef.h"
 #include "tex/Plan.h"
@@ -148,6 +149,8 @@ private:
     Graph mG;
     std::vector<std::string> mWarnings;
     bool mWarnedProjection = false;
+    bool mBoundsRead = false, mHasBounds = false;
+    double mBoundsLo[3] = {0.0, 0.0, 0.0}, mBoundsHi[3] = {1.0, 1.0, 1.0};
     std::vector<Binding>* mBindings = nullptr;
     std::map<std::string, Heads> mAnchors;
     int mColumn = 0;
@@ -382,6 +385,28 @@ private:
         return subInput(s, "anchor_" + anchor + "_" + channel, *c, src);
     }
 
+    /**
+     * Gives a projecting node the box the bake's position map is normalised to, so it reads positions in cm. Read once per
+     * compile; without a baked position map the node keeps the 0-1 box and a warning says so.
+     */
+    void setBakeBounds(GNode& n)
+    {
+        if (mSet.bakeProject.empty())
+            return;
+        if (!mBoundsRead)
+        {
+            mBoundsRead = true;
+            mHasBounds = bakedPositionBounds(scene::Graph::current(), mSet.bakeProject, mBoundsLo, mBoundsHi);
+            if (!mHasBounds)
+                mWarnings.push_back("projections need the bake's position map to know the mesh's size, and " + mSet.bakeProject +
+                                    " hasn't baked one: bake Position, then edit the layer");
+        }
+        if (!mHasBounds)
+            return;
+        n.values["boundsMin"] = json::array({mBoundsLo[0], mBoundsLo[1], mBoundsLo[2]});
+        n.values["boundsMax"] = json::array({mBoundsHi[0], mBoundsHi[1], mBoundsHi[2]});
+    }
+
     /** src read through a projection (layerProjection's values); src itself when there is none. */
     Src projected(Sub& s, const Src& src, const json& projection, const std::string& name, const std::string& pointer, glm::dvec2 pos)
     {
@@ -393,6 +418,7 @@ private:
             mWarnedProjection = true;
         }
         GNode& n = subNode(s, name, "layerProjection", pos, projection);
+        setBakeBounds(n);
         bind(s.g.name, n.name, {}, pointer);
         subLink(s, src, n.name, "input");
         return {n.name, "out"};
@@ -533,6 +559,7 @@ private:
                     img.values["file"] = maps[c->name];
                     const std::string imgName = img.name;
                     GNode& d = subNode(s, "D_" + c->name, "layerDecal", {-400.0, y}, values);
+                    setBakeBounds(d);
                     const std::string decalName = d.name;
                     subLink(s, {imgName, "out"}, decalName, "input");
                     out(*c, {decalName, "out"});

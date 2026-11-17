@@ -33,6 +33,17 @@ glm::dvec3 surfaceNormal(double u)
     return glm::normalize(glm::dvec3(x > 0 ? 1.0 : -1.0, 0.0, 1.0));
 }
 
+/** The normal as the projection reads it back from the map's floats, so ties between axes fall the same way. */
+glm::dvec3 storedNormal(double u)
+{
+    const glm::vec3 stored = glm::vec3(surfaceNormal(u)) * 0.5f + 0.5f;
+    return glm::dvec3(stored * 2.0f - 1.0f);
+}
+
+/** The box the position map is normalised to, as a bake's bounds are. */
+const glm::dvec3 kBoundsLo(-30.0, -60.0, -20.0), kBoundsHi(30.0, 60.0, 10.0);
+
+/** The mesh maps as a bake stores them: positions 0-1 across the bounds, normals n * 0.5 + 0.5. */
 std::map<std::string, image::Image> meshMaps()
 {
     image::Image pos{kRes, kRes, std::vector<float>(size_t(kRes) * kRes * 4)}, nrm = pos;
@@ -40,13 +51,13 @@ std::map<std::string, image::Image> meshMaps()
         for (int x = 0; x < kRes; ++x)
         {
             const double u = (x + 0.5) / kRes, v = 1.0 - (y + 0.5) / kRes;
-            const glm::dvec3 p = surfacePoint(u, v), n = surfaceNormal(u);
+            const glm::dvec3 p = (surfacePoint(u, v) - kBoundsLo) / (kBoundsHi - kBoundsLo), n = surfaceNormal(u) * 0.5 + 0.5;
             float* a = &pos.rgba[(size_t(y) * kRes + x) * 4];
             float* b = &nrm.rgba[(size_t(y) * kRes + x) * 4];
             a[0] = float(p.x), a[1] = float(p.y), a[2] = float(p.z), a[3] = 1.0f;
             b[0] = float(n.x), b[1] = float(n.y), b[2] = float(n.z), b[3] = 1.0f;
         }
-    return {{"position", pos}, {"normal", nrm}};
+    return {{"position", pos}, {"worldNormal", nrm}};
 }
 
 /** The coordinate layerProjection reads at, written out again on the CPU. */
@@ -58,7 +69,7 @@ glm::dvec2 reference(const json& p, double u, double v)
                                       glm::rotate(glm::dmat4(1.0), r.x, {1, 0, 0}));
     const glm::dvec3 c(p.value("positionX", 0.0), p.value("positionY", 0.0), p.value("positionZ", 0.0));
     const glm::dvec3 size(p.value("sizeX", 100.0), p.value("sizeY", 100.0), p.value("sizeZ", 100.0));
-    const glm::dvec3 f = glm::transpose(rot) * (surfacePoint(u, v) - c), fn = glm::transpose(rot) * surfaceNormal(u);
+    const glm::dvec3 f = glm::transpose(rot) * (surfacePoint(u, v) - c), fn = glm::transpose(rot) * storedNormal(u);
     const glm::dvec3 l = f / size;
     const std::string mode = p.value("mode", "uv");
     if (mode == "spherical")
@@ -89,7 +100,10 @@ glm::dvec2 reference(const json& p, double u, double v)
 image::Image coords(const json& projection)
 {
     Graph g = Graph::makeMaterial("S");
-    add(g, "P", "layerProjection", projection);
+    json values = projection;
+    values["boundsMin"] = {kBoundsLo.x, kBoundsLo.y, kBoundsLo.z};
+    values["boundsMax"] = {kBoundsHi.x, kBoundsHi.y, kBoundsHi.z};
+    add(g, "P", "layerProjection", values);
     tex::EvalOptions o;
     o.externals = meshMaps();
     Plan p = plan(g, "P", "coord", kRes, PortType::Vector);
