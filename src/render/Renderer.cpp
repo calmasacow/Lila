@@ -399,11 +399,12 @@ struct WirePush
 {
     glm::mat4 viewProj;
     glm::vec4 depthPull{1.0f, 0.0f, 0.0f, 0.0f};
+    glm::vec4 eye{0.0f}; // xyz camera position, w the draw's offset toward it (MeshDraw::drawOffset)
     uint64_t instances = 0; // as in MeshPush; each entry's color is its wire colour
     uint32_t firstInstance = 0;
     uint32_t instancePad = 0;
 };
-static_assert(sizeof(WirePush) == 96, "matches WirePush in wire.slang");
+static_assert(sizeof(WirePush) == 112, "matches WirePush in wire.slang");
 
 struct LinesPush
 {
@@ -2889,7 +2890,12 @@ struct Renderer::Impl
             if (!heightfieldsOnly)
                 for (SectionRecord& r : *frameRecords)
                     if (!r.translucent)
-                        emitSection(cmd, s, r.push, r.set, *r.mesh, r.section, frameBatches.shaded[r.batch].count, viewProj, boundSet);
+                    {
+                        // A draw offset is toward the camera; toward the light it would shadow the mesh's own surface.
+                        MeshPush p = r.push;
+                        p.eye.w = 0.0f;
+                        emitSection(cmd, s, p, r.set, *r.mesh, r.section, frameBatches.shaded[r.batch].count, viewProj, boundSet);
+                    }
             if (heightfields.count() > 0)
             {
                 drawHeightfields(cmd, s, viewProj, whiteAoSet, HeightfieldPass::Shadow, int(view));
@@ -7480,12 +7486,11 @@ struct Renderer::Impl
         frameRecords = &records;
         if (!v.offscreen && sameMeshes && v.keptRecordsValid && key == v.keptRecordKey)
         {
-            const glm::vec4 eye(glm::vec3(s.eye), 1.0f);
             for (SectionRecord& r : records)
             {
                 r.push.instances = frameInstanceAddress;
                 r.push.lights = frameLightAddress;
-                r.push.eye = eye;
+                r.push.eye = glm::vec4(glm::vec3(s.eye), r.push.eye.w);
                 if (r.material)
                     r.push.textureTable = frameTableAddress;
             }
@@ -7540,7 +7545,7 @@ struct Renderer::Impl
         MeshPush p;
         p.instances = frameInstanceAddress;
         p.firstInstance = b.first;
-        p.eye = glm::vec4(glm::vec3(s.eye), 1.0f);
+        p.eye = glm::vec4(glm::vec3(s.eye), std::max(d.drawOffset, 0.0f));
         p.params = glm::vec4(s.exposure, s.zUp ? 1.0f : 0.0f, 0.0f, lightingParam(s));
         p.keyTilt = glm::radians(s.rigTilt);
         p.env = envParams(s);
@@ -7856,6 +7861,7 @@ struct Renderer::Impl
                 const MeshDraw& d = *b.draw;
                 WirePush p;
                 p.viewProj = viewProj;
+                p.eye = glm::vec4(glm::vec3(s.eye), std::max(d.drawOffset, 0.0f));
                 bool shaded = d.flags & (DrawShaded | DrawWireDepth);
                 if (shaded)
                     p.depthPull = depthPull(s.proj, heightPx, kLinePullPixels + 0.5 * lineWidth(d.wireWidth));

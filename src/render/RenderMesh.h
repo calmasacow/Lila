@@ -461,6 +461,8 @@ struct MeshDraw
     uint64_t node = 0;
     /** Lighting channel bits: lights whose bits share none with these leave it unlit. */
     uint32_t lightingChannels = 1;
+    /** Display-only: cm the mesh draws closer to the camera along each view ray, so it stays over a surface it lies on. */
+    float drawOffset = 0.0f;
 };
 
 /**

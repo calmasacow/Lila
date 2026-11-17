@@ -9,6 +9,7 @@
 
 class QLabel;
 class QListWidget;
+class QCheckBox;
 class QDoubleSpinBox;
 class QTimer;
 class QToolButton;
@@ -56,6 +57,8 @@ private:
     QLabel* mReference = nullptr;
     QLabel* mRetopo = nullptr;
     controls::Segmented* mSymmetry = nullptr;
+    QDoubleSpinBox* mDrawOffset = nullptr;
+    QCheckBox* mXray = nullptr;
     QLabel* mStats = nullptr;
     QLabel* mActiveLabel = nullptr;
     QWidget* mConstructPanel = nullptr;

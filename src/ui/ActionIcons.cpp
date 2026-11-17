@@ -220,6 +220,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"mesh.voxelRemesh", "box-padding"},
     {"topo.freezeAll", "snowflake"},
     {"topo.qualityOverlay", "chart-dots"},
+    {"topo.xrayReference", "ghost"},
     {"help.docs.topology", "book"},
     {"mesh.extrude", "arrow-bar-up"},
     {"mesh.inset", "square-dot"},

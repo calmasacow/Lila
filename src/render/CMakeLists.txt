@@ -102,6 +102,7 @@ lila_add_shaders(lila_render FILES
     shaders/vt.slang
     shaders/wire.slang
     INCLUDES
+    shaders/draw_offset.slang
     shaders/heightfield.slang
     shaders/mesh.slang
     shaders/scene_color.slang

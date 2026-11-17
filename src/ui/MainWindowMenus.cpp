@@ -169,7 +169,7 @@ void MainWindow::buildMenus()
     menus::addActions("Topology", {"#Session", "retopo.setReference", "window.topologyToolkit", "#Draw", "retopo.draw", "topo.pencil", "topo.patch",
                                    "topo.strip", "topo.stroke", "topo.cylinder", "topo.cap", "#Shape", "topo.handles", "topo.relax", "topo.settle", "mesh.relax",
                                    "#Auto Retopo", "topo.region", "topo.runRegion", "mesh.quadRemesh", "retopo.poles", "mesh.voxelRemesh",
-                                   "#Constructs", "topo.freezeAll", "#Display", "topo.qualityOverlay"});
+                                   "#Constructs", "topo.freezeAll", "#Display", "topo.qualityOverlay", "topo.xrayReference"});
 
     menu("Model", "Model", Area::MenuBar, {}, "", {"Model"});
     menus::addActions("Model", {"#Components", "mesh.extrude", "mesh.inset", "mesh.insetRegion", "mesh.bevel", "mesh.insertLoop", "mesh.splitRings", "mesh.offsetLoop", "mesh.knife", "mesh.bridge",

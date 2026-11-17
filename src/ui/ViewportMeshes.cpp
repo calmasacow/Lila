@@ -118,6 +118,8 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     d.world = e.world;
     d.node = uint64_t(id);
     d.lightingChannels = scene::lightingChannels::mask(n);
+    if (!set.render)
+        d.drawOffset = scene::drawOffset(n);
     if (set.vertexColors != render::VertexColorMode::Off && shown && !geo::colors::current(*shown).empty())
     {
         d.vertexColors = set.vertexColors;
@@ -172,6 +174,7 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
             w.instances = surface.instances;
             w.wireColor = surface.wireColor;
             w.wireWidth = surface.wireWidth;
+            w.drawOffset = surface.drawOffset;
             // Depth tested against the surface, so the far side's edges stay hidden.
             w.flags = flags | (set.wireframe ? 0u : render::DrawWireDepth);
             e.draws.push_back(std::move(w));

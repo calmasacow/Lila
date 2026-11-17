@@ -49,7 +49,7 @@ struct MeshPush
     uint lightCount;
     uint lightPad; // the draw's lighting channel bits; 0 lights it with every light
     float4 extra;   // x: live bevel radius (cm), y: 1 when the bevel pass ran this frame
-    float4 eye;     // xyz camera position
+    float4 eye;     // xyz camera position, w the draw's offset toward the camera (cm, MeshDraw::drawOffset)
     float4 base;    // rgb base color (linear), a: roughness. Background: x blur lod, y saturation, z exposure
     float4 params;  // x: exposure, y: 1 if Z-up, z: highlight amount, w: 0 studio rig, 1 environment, 2 flat (unlit), 3 sculpt rig
     float4 env;     // xy: cos/sin of the rotation, z: intensity, w: lod of the roughest mip
@@ -465,6 +465,8 @@ float3 objectNormal(VSOut i)
     return mul(transpose(m), i.normal) * sign(safeDeterminant(m));
 }
 
+#include "draw_offset.slang"
+
 [shader("vertex")]
 VSOut meshVS(VSIn v, uint instanceId: SV_InstanceID)
 {
@@ -473,7 +475,7 @@ VSOut meshVS(VSIn v, uint instanceId: SV_InstanceID)
     float4x4 world = instanceWorld(o.instance);
     float4 wp = mul(world, float4(v.pos, 1.0));
     o.worldPos = wp.xyz;
-    o.pos = mul(pc.viewProj, wp);
+    o.pos = mul(pc.viewProj, float4(towardCamera(wp.xyz, pc.viewProj, pc.eye.xyz, pc.eye.w), 1.0));
     // Inverse transpose would be exact under non-uniform scale; cofactor matrix gives it without an inverse.
     float3x3 m = (float3x3)world;
     float3x3 cof = cofactor(m);
