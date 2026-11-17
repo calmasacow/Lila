@@ -7010,11 +7010,12 @@ def polyFillHole() -> Any:
 def polyFlip() -> Any:
     """Reverse the winding of the selected faces (the whole mesh in object mode)."""
 
-def polyGridFill(gridSize: float | None = None, rotate: int | None = None) -> Any:
+def polyGridFill(style: str | None = None, gridSize: float | None = None, rotate: int | None = None) -> Any:
     """Rebuild triangle fans and other patches as a quad grid inside a ring of quads: select the fans' centre vertices or the faces. With edges selected, fills the holes they border the same way.
 
     Args:
-        gridSize: The grid's size against the hole; 1 grids right to the border with no ring. Default 0.4.
+        style: grid: one ring of quads round a grid. radial: rings following the border inward to a pole of kite quads, dense rings halving their spokes as they shrink. Borders under 6 points take grid. One of 'grid', 'radial'. Default 'grid'.
+        gridSize: The grid's size against the hole; 1 grids right to the border with no ring. With radial, the pole's size: smaller adds rings. Default 0.4.
         rotate: Steps the grid's corners round the border. Default 0.
     """
 
@@ -7083,7 +7084,7 @@ def polyLockNormals() -> Any:
     """Store the current shading normals of the selected meshes as split normals, so later edits keep them."""
 
 def polyMerge(distance: float | None = None, average: bool | None = None) -> Any:
-    """Weld selected vertices closer than a distance (all of a mesh's points if it has no component selection). Exactly two selected vertices weld whatever the distance.
+    """Weld selected vertices closer than a distance (all of a mesh's points if it has no component selection). Exactly two selected vertices weld at their centre whatever the distance.
 
     Args:
         distance: Weld distance, cm. Default 0.01.

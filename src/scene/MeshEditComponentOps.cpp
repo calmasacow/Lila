@@ -614,10 +614,15 @@ void registerMeshEditComponentCommands()
         .name = "polyGridFill",
         .doc = "Rebuild triangle fans and other patches as a quad grid inside a ring of quads: select the fans' centre vertices "
                "or the faces. With edges selected, fills the holes they border the same way.",
-        .flags = {{"gridSize", "", T::Float, 0.4, "The grid's size against the hole; 1 grids right to the border with no ring.", {}, {}, 0.05, 1.0},
+        .flags = {{"style", "", T::String, "grid",
+                   "grid: one ring of quads round a grid. radial: rings following the border inward to a pole of kite quads, dense rings halving "
+                   "their spokes as they shrink. Borders under 6 points take grid.",
+                   {"grid", "radial"}},
+                  {"gridSize", "", T::Float, 0.4, "The grid's size against the hole; 1 grids right to the border with no ring. With radial, the pole's size: smaller adds rings.", {}, {}, 0.05, 1.0},
                   {"rotate", "", T::Int, 0, "Steps the grid's corners round the border."}},
         .run = [](const Args& a) -> json {
             geo::GridFillOptions o;
+            o.style = a.get<std::string>("style") == "radial" ? geo::GridFillOptions::Style::Radial : geo::GridFillOptions::Style::Grid;
             o.gridSize = std::clamp(a.get<double>("gridSize"), 0.05, 1.0);
             o.rotate = a.get<int>("rotate");
             const K mode = components::mode();
