@@ -630,8 +630,7 @@ MaterialEditor::MaterialEditor(QWidget* parent) : QWidget(parent)
         const std::string path = picked.front()->path();
         QMenu menu(this);
         menu.addAction(icon("brush"), "Assign", [path] { runUi("assignMaterial", {{"args", json::array({path})}}); })->setEnabled(one);
-        menu.addAction(icon("pointer"), "Select Users", [path] { runUi("selectByMaterial", {{"args", json::array({path})}}); })
-            ->setEnabled(one);
+        menu.addAction(icon("pointer"), "Select Users", [paths = materialPaths(picked)] { runUi("selectByMaterial", {{"args", paths}}); });
         menu.addSeparator();
         QAction* clear = menu.addAction(icon("photo-off"), one ? QString("Clear Texture Maps") : QString("Clear Texture Maps (%1)").arg(picked.size()),
                                         [paths = materialPaths(picked)] { runUi("clearMaterialTextures", {{"args", paths}}); });

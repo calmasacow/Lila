@@ -361,6 +361,11 @@ TEST_CASE("selectByMaterial selects the objects or faces a material is assigned 
     run("assignMaterial", {{"args", {"M_Blue", b}}});
     run("selectByMaterial", {{"args", {"M_Blue"}}});
     CHECK(comps::mode() == scene::ComponentMode::Object);
+
+    run("createMaterial", {{"args", {"M_Red"}}});
+    run("assignMaterial", {{"args", {"M_Red", c}}});
+    CHECK(run("selectByMaterial", {{"args", {"M_Blue", "M_Red"}}}) == json::array({a, b, c}));
+    CHECK(comps::mode() == scene::ComponentMode::Object);
 }
 
 TEST_CASE("shading models and their inputs round trip, undo and key")

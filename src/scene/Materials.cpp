@@ -897,20 +897,32 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "selectByMaterial",
-        .doc = "Select what a material is assigned to: whole objects when it covers every face of each, otherwise just the "
-               "faces it is assigned to. Default also takes faces on slots with no material. faces=true always selects faces, "
-               "faces=false always whole objects. Returns the objects.",
-        .positionalDoc = "material",
+        .doc = "Select what the materials are assigned to: whole objects when they cover every face of each, otherwise just "
+               "the faces they are assigned to. Default also takes faces on slots with no material. faces=true always "
+               "selects faces, faces=false always whole objects. Returns the objects.",
+        .positionalDoc = "material...",
         .flags = {{"faces", "f", T::Bool, nullptr, "Force faces (true) or whole objects (false); unset picks by coverage."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
             if (a.positional.empty() || !a.positional[0].is_string())
                 throw CommandError("selectByMaterial: give a material name");
-            const std::string arg = a.positional[0].get<std::string>();
-            // The default without a node of its name also takes faces whose slot has no material, since they draw with it.
-            const bool builtinDefault = arg == materials::kDefaultSlot && !materials::find(g, arg);
-            const std::string mat = builtinDefault ? arg : materialArg(g, arg, "selectByMaterial").name();
-            auto matches = [&](const std::string& slot) { return slot == mat || (builtinDefault && !materials::find(g, slot)); };
+            std::set<std::string> mats;
+            bool builtinDefault = false;
+            for (const json& name : a.positional)
+            {
+                if (!name.is_string())
+                    throw CommandError("selectByMaterial: material names are strings");
+                const std::string arg = name.get<std::string>();
+                // The default without a node of its name also takes faces whose slot has no material, since they draw with it.
+                if (arg == materials::kDefaultSlot && !materials::find(g, arg))
+                {
+                    builtinDefault = true;
+                    mats.insert(arg);
+                }
+                else
+                    mats.insert(materialArg(g, arg, "selectByMaterial").name());
+            }
+            auto matches = [&](const std::string& slot) { return mats.count(slot) || (builtinDefault && !materials::find(g, slot)); };
             g.evaluate();
             json objects = json::array();
             std::vector<std::pair<std::string, json>> faces;
@@ -974,7 +986,7 @@ void registerCommands()
                   {"filter", "", T::String, nullptr, "linear or nearest.", {"linear", "nearest"}}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            if (a.positional.empty() || !a.positional[0].is_string())
+            if (a.positional.empty())
                 throw CommandError("setMaterialTexture: give a material name");
             Node& n = materialArg(g, a.positional[0].get<std::string>(), "setMaterialTexture");
             std::string channel = a.get<std::string>("channel");
