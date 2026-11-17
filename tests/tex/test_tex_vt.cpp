@@ -170,7 +170,7 @@ geo::Mesh tileGrid(int cols, int rows, double size)
     return m;
 }
 
-const uint8_t* pixel(const std::vector<uint8_t>& bgra, int w, int x, int y) { return &bgra[(size_t(y) * size_t(w) + size_t(x)) * 4]; }
+const uint8_t* texelAt(const std::vector<uint8_t>& bgra, int w, int x, int y) { return &bgra[(size_t(y) * size_t(w) + size_t(x)) * 4]; }
 } // namespace
 
 TEST_CASE("virtual texture: pages sample like the whole image")
@@ -348,7 +348,7 @@ TEST_CASE("virtual texture: a 60-tile 8K set opens and paints within its budget"
     mainq::drain();
     const std::vector<uint8_t> px = settle(close, 256, 256);
     const double strokeMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
-    const uint8_t* c = pixel(px, 256, 128, 128);
+    const uint8_t* c = texelAt(px, 256, 128, 128);
     // BGRA: red where the stroke landed.
     CHECK(c[2] > 150);
     CHECK(c[1] < 60);

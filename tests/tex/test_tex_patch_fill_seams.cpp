@@ -33,7 +33,7 @@ glm::dvec2 islandPoint(int face, glm::vec2 uv)
     return {(0.95 - uv.x) / 0.4 * 50.0, (uv.y - 0.1) / 0.8 * 100.0 - 50.0};
 }
 
-geo::Mesh panel()
+geo::Mesh seamPanel()
 {
     const std::vector<glm::dvec3> pts = {{-50, 0, -50}, {0, 0, -50}, {50, 0, -50}, {-50, 0, 50}, {0, 0, 50}, {50, 0, 50}};
     geo::Mesh m = geo::Mesh::fromPolygons(pts, std::vector<geo::Index>{4, 4}, std::vector<geo::Index>{0, 3, 4, 1, 1, 4, 5, 2});
@@ -135,7 +135,7 @@ double sideError(const Case& c, const image::Image& filled, int face)
 TEST_CASE("patch fill across uv seams: a hole on a seam fills from both sides, closer than island by island")
 {
     const Case c = makeCase();
-    const geo::Mesh mesh = panel();
+    const geo::Mesh mesh = seamPanel();
     tex::PatchFillOptions o;
     o.patch = 7;
     o.seed = 3;

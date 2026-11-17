@@ -15,7 +15,7 @@ namespace gp = lila::render::paint;
 namespace
 {
 /** A wall in x and y facing +z, n x n quads over 100 units, its height rippled by bumps (0 for flat). */
-std::shared_ptr<const tp::PaintMesh> wall(int n, double bumps)
+std::shared_ptr<const tp::PaintMesh> bumpyWall(int n, double bumps)
 {
     std::vector<glm::dvec3> pts;
     std::vector<geo::Index> sizes, idx;
@@ -73,7 +73,7 @@ TEST_CASE("particle brushes on the GPU walk the same paths as the CPU reference"
 {
     if (!gpu())
         return;
-    const auto mesh = wall(24, 3.0);
+    const auto mesh = bumpyWall(24, 3.0);
     const std::vector<tp::Dab> dabs = strokeDabs(*mesh, 12, 3.0f);
     for (const char* kind : {"drips", "rain", "sparks", "flow", "rustRun", "leak", "rainStreaks", "dustSettle", "burn", "scorch"})
     {
@@ -98,7 +98,7 @@ TEST_CASE("particle brushes: flow brush timing on a 500k-triangle mesh, CPU and 
 {
     if (!gpu())
         return;
-    const auto mesh = wall(500, 4.0);
+    const auto mesh = bumpyWall(500, 4.0);
     REQUIRE(mesh->triangleCount() == 500000);
     const std::vector<tp::Dab> dabs = strokeDabs(*mesh, 200, 2.0f);
     for (const char* kind : kFlowBrushes)
