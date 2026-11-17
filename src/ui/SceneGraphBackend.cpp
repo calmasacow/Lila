@@ -30,13 +30,15 @@ public:
     {
         if (verb == "GroupInfo")
             return "sceneGraphInfo";
+        if (verb == "SetNodeLabel")
+            return "sceneGraphRenameNode";
         return GraphBackend::command(verb);
     }
 
     bool supports(std::string_view verb) const override
     {
-        static const std::set<std::string_view> kVerbs = {"GroupInfo",  "NodeTypes", "AddNode",  "DeleteNode",   "Connect",
-                                                          "Disconnect", "MoveNodes", "SetValue", "SetNodeFlags", "InsertNode"};
+        static const std::set<std::string_view> kVerbs = {"GroupInfo", "NodeTypes",    "AddNode",    "DeleteNode",   "Connect",   "Disconnect",
+                                                          "MoveNodes", "SetValue",     "SetNodeFlags", "InsertNode", "SetFrames", "SetNodeLabel"};
         return kVerbs.contains(verb);
     }
 
@@ -66,6 +68,7 @@ public:
         case scene::Change::Connection:
         case scene::Change::Attrs:
         case scene::Change::Reparented:
+        case scene::Change::Renamed:
             return true;
         case scene::Change::Value:
             return n != nullptr;
@@ -76,6 +79,7 @@ public:
     bool rebuildsOnUndo() const override { return true; }
 
     QString ownerNoun() const override { return "node"; }
+    bool renamesNodes() const override { return true; }
     QString groupNoun() const override { return "View"; }
 
     SocketStyle socketStyle(const std::string& type) const override

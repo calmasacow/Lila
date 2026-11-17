@@ -52,6 +52,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPlainTextEdit>
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
@@ -330,6 +331,8 @@ public:
     std::string type;
     std::string category;
     QString label;
+    /** The header the backend gives the node before a label set on it replaces it. */
+    QString typeLabel;
     std::vector<SocketInfo> inputs, outputs;
     std::vector<std::pair<std::string, std::string>> props;
     /** Props with a text editor (code, multiline, font): drawn as typed, first line only. */
@@ -351,6 +354,7 @@ public:
     /** Shown as a badge on the header, such as a Receive naming no Send. */
     QString problem;
     QRectF badgeRect() const { return QRectF(kNodeWidth - kHeader + 2, 3, kHeader - 6, kHeader - 6); }
+    QRectF headerRect() const { return QRectF(0.0, 0.0, kNodeWidth, kHeader); }
     /** Header label, with a portal's name. */
     QString title() const;
     QString shownTitle() const { return muted ? title() + " (muted)" : title(); }
@@ -489,15 +493,20 @@ public:
     QPen base;
 };
 
-/** A frame's box behind the nodes it holds: a title band with its label and collapse arrow, and a resize grip. */
+/**
+ * A frame's box behind the nodes it holds: a title band with its label and collapse arrow, and a resize grip. A note is a
+ * frame with text, drawn wrapped in its body.
+ */
 class FrameItem final : public QGraphicsItem
 {
 public:
     explicit FrameItem(int index) : index(index) { setZValue(-2.0); }
 
     static constexpr double kTitle = 22.0;
+    static constexpr double kTextPad = 8.0;
     int index;
     QString label;
+    QString text;
     QSizeF size{300.0, 200.0};
     QColor color;
     bool collapsed = false;
@@ -507,6 +516,8 @@ public:
     QRectF titleRect() const { return QRectF(0.0, 0.0, size.width(), kTitle); }
     QRectF arrowRect() const { return QRectF(3.0, 3.0, kTitle - 6.0, kTitle - 6.0); }
     QRectF gripRect() const { return collapsed ? QRectF() : QRectF(size.width() - 14.0, size.height() - 14.0, 14.0, 14.0); }
+    /** Where the text wraps: the body under the title, padded. */
+    QRectF textRect() const { return QRectF(kTextPad, kTitle + kTextPad * 0.5, size.width() - 2.0 * kTextPad, size.height() - kTitle - kTextPad * 1.5); }
     QRectF boundingRect() const override { return box().adjusted(-2, -2, 2, 2); }
     void paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*) override;
 };
@@ -754,6 +765,22 @@ public:
     /** A frame around the selected nodes, or an empty one at the cursor when nothing is selected. */
     void frameSelection();
 
+    /** Whether the backend shows labels on its nodes (gn, tex) or renames them (the scene's own nodes). */
+    bool canRenameNodes() const { return backend->supports("SetNodeLabel"); }
+    /**
+     * Opens a box over the node's header to type its label in: Enter keeps it, Esc cancels. An empty label shows the type's
+     * again where the backend keeps labels apart from names. False when the node can't be renamed.
+     */
+    bool renameNode(const std::string& name);
+    /** The node to rename: the one selected, else the one under the cursor; empty for none. */
+    std::string renameTarget() const;
+    /** A note box at scene point at to type in; Ctrl+Enter or clicking away adds it as a note, Esc adds nothing. */
+    void addNote(QPointF at);
+    /** A node renamed by a backend whose labels are names (the scene's): its new name, to keep it selected. */
+    std::function<void(const std::string&)> onRenamed;
+    /** The in-place title or text box open on the canvas, for tests; null when none is. */
+    QWidget* inPlaceEditor() const { return mInPlace; }
+
     const std::vector<gn::GFrame>& frames() const { return mFrames; }
 
     /**
@@ -950,7 +977,19 @@ private:
 
     void dragFrame(QPointF sp);
 
+    /** The frame's title as a box over its band, Enter keeps and Esc cancels. */
     void renameFrame(int f);
+    /** The frame's text as a box over its body. */
+    void editFrameText(int f);
+    /**
+     * A one-line box over scene rect r holding text; done gets the typed text when kept. Enter or clicking away keeps it, Esc
+     * cancels.
+     */
+    void editTitleInPlace(QRectF r, const QString& text, std::function<void(const QString&)> done);
+    /** A multi-line box over scene rect r; Ctrl+Enter or clicking away keeps it, Esc cancels. */
+    void editTextInPlace(QRectF r, const QString& text, std::function<void(const QString&)> done);
+    /** A note's size for its text at a width: the title plus the wrapped lines, padded. */
+    QSizeF noteSize(const QString& text, double width) const;
 
     void frameMenu(int f, QPoint global);
 
@@ -994,6 +1033,7 @@ private:
     };
     std::optional<FieldDrag> mField;
     QPointer<QLineEdit> mFieldEdit;
+    QPointer<QWidget> mInPlace;
     NodeItem* mHotFieldNode = nullptr;
     bool mFieldCursor = false; // the viewport cursor is a field's, so leaving the field resets it
 

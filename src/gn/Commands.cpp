@@ -167,6 +167,8 @@ json nodeJson(const GNode& n, const Group& grp)
         return j;
     }
     j["label"] = d->label;
+    if (!n.label.empty())
+        j["title"] = n.label;
     j["category"] = d->category;
     Sockets s = d->socketsFor(grp, n);
     json ins = json::array(), outs = json::array(), props = json::array();
@@ -700,6 +702,22 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "gnSetNodeLabel",
+        .doc = "Show a node under its own title on the canvas: gnSetNodeLabel(group, 'Math', 'Height Scale'). Display only; the node keeps "
+               "its name, which links, scripts and exposed inputs use. An empty label shows the node type's again.",
+        .positionalDoc = "group node label",
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() < 3 || !a.positional[2].is_string())
+                throw CommandError("gnSetNodeLabel: expected (group, node, label)");
+            const std::string label = cleanNodeLabel(a.positional[2].get<std::string>());
+            return editGroup(a, "gnSetNodeLabel", [&](Group& grp) -> json {
+                nodeIn(grp, a.positional[1].get<std::string>(), "gnSetNodeLabel").label = label;
+                return label;
+            });
+        },
+    });
+
+    ops::registerCommand({
         .name = "gnSetBookmarks",
         .doc = "Replace a group's saved canvas views: gnSetBookmarks(group, {'1': [x, y, zoom]}), centre and zoom by slot. Malformed "
                "entries are dropped.",
@@ -718,7 +736,8 @@ void registerCommands()
     ops::registerCommand({
         .name = "gnSetFrames",
         .doc = "Replace a group's frames: gnSetFrames(group, [{label: 'Inputs', position: [x, y], size: [w, h], color: '', collapsed: false, "
-               "nodes: [names]}]). Frames only change the canvas; names not in the group are dropped. Returns how many frames there are.",
+               "nodes: [names], text: ''}]). A frame with text is a note, its text shown in its body. Frames only change the canvas; names "
+               "not in the group are dropped. Returns how many frames there are.",
         .positionalDoc = "group frames",
         .run = [](const Args& a) -> json {
             if (a.positional.size() < 2 || !a.positional[1].is_array())

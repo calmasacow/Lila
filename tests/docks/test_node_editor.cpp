@@ -27,8 +27,10 @@
 #include <QGraphicsView>
 #include <QKeyEvent>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMainWindow>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QToolButton>
 
 #include <cmath>
@@ -1113,4 +1115,178 @@ TEST_CASE("a node with nothing linked shows its sockets even with unused ones hi
     ui::actions::run(json("nodeEditor.toggleUnusedSockets"));
     pump();
     CHECK_FALSE(hide->checked());
+}
+
+TEST_CASE("F2 and a double-click on the title rename a node; Enter keeps, Esc cancels, an empty title shows the type's")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnMoveNodes", {{"args", {"G"}}, {"positions", {{"GroupOutput", {700, 0}}, {"GroupInput", {-300, 0}}}}});
+    run("gnAddNode", {{"args", {"G", "Math"}}, {"position", {0, 0}}, {"name", "M"}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    auto label = [] { return gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M")->label; };
+
+    selectNode(view, "M");
+    press(view, Qt::Key_F2);
+    auto* edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    CHECK(edit->text() == "Math");
+    edit->setText("Height Scale");
+    press(edit, Qt::Key_Return);
+    CHECK(label() == "Height Scale");
+    CHECK(editor->inPlaceEditor() == nullptr);
+    // The name stays for links and scripts.
+    REQUIRE(gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).node("M"));
+
+    QPointF title(60, 12);
+    mouse(view, QEvent::MouseButtonPress, title, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, title, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, title, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, title, Qt::NoButton);
+    edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    CHECK(edit->text() == "Height Scale");
+    edit->setText("Discarded");
+    press(edit, Qt::Key_Escape);
+    CHECK(label() == "Height Scale");
+    CHECK(editor->inPlaceEditor() == nullptr);
+
+    // Typing the type's own label, or nothing, drops the label.
+    selectNode(view, "M");
+    press(view, Qt::Key_F2);
+    edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    edit->setText("");
+    press(edit, Qt::Key_Return);
+    CHECK(label().empty());
+    run("undo");
+    pump();
+    CHECK(label() == "Height Scale");
+    run("undo");
+    pump();
+    CHECK(label().empty());
+}
+
+TEST_CASE("notes: Add Note types one in place, the Add menu finds it as a sticky, and its text edits on double-click")
+{
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnMoveNodes", {{"args", {"G"}}, {"positions", {{"GroupOutput", {700, 0}}, {"GroupInput", {-300, 0}}}}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    auto frames = [] { return gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G")).frames; };
+
+    ui::actions::run(json("nodeEditor.addNote"));
+    pump();
+    auto* text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    // Esc adds nothing.
+    text->setPlainText("Gone");
+    press(text, Qt::Key_Escape);
+    CHECK(frames().empty());
+
+    ui::actions::run(json("nodeEditor.addNote"));
+    pump();
+    text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    text->setPlainText("Seed drives the scatter.\nKeep it under 100.");
+    press(text, Qt::Key_Return, Qt::ControlModifier);
+    REQUIRE(frames().size() == 1);
+    gn::GFrame note = frames()[0];
+    CHECK(note.text == "Seed drives the scatter.\nKeep it under 100.");
+    CHECK(note.label == "Note");
+    CHECK(note.nodes.empty());
+    CHECK(note.size.y > 22.0 + 2 * 14.0);
+
+    // A double-click on its text opens it again; Ctrl+Enter keeps the edit, one undo step each.
+    QPointF body(note.position.x + 40, note.position.y + 32);
+    mouse(view, QEvent::MouseButtonPress, body, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, body, Qt::NoButton);
+    mouse(view, QEvent::MouseButtonDblClick, body, Qt::LeftButton);
+    mouse(view, QEvent::MouseButtonRelease, body, Qt::NoButton);
+    text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    CHECK(text->toPlainText() == "Seed drives the scatter.\nKeep it under 100.");
+    text->setPlainText("Edited");
+    press(text, Qt::Key_Return, Qt::ControlModifier);
+    CHECK(frames()[0].text == "Edited");
+    run("undo");
+    pump();
+    CHECK(frames()[0].text == "Seed drives the scatter.\nKeep it under 100.");
+    run("undo");
+    pump();
+    CHECK(frames().empty());
+
+    // The Add menu lists the note under Layout, found by its other names.
+    for (const char* word : {"note", "comment", "sticky", "annotation"})
+    {
+        CAPTURE(word);
+        press(view, Qt::Key_Tab);
+        QWidget* popup = QApplication::activePopupWidget();
+        REQUIRE(popup);
+        auto* search = popup->findChild<QLineEdit*>();
+        REQUIRE(search);
+        search->setText(word);
+        auto* list = popup->findChild<QListWidget*>();
+        REQUIRE(list);
+        REQUIRE(list->count() > 0);
+        CHECK(list->item(0)->text() == "Layout / Note");
+        QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+        QApplication::sendEvent(search, &enter);
+        pump();
+        text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+        REQUIRE(text);
+        press(text, Qt::Key_Escape);
+    }
+    CHECK(frames().empty());
+}
+
+TEST_CASE("the scene backend renames scene nodes and keeps frames")
+{
+    run("newScene");
+    run("polyCube", {{"name", "Box"}});
+    run("select", {{"args", {"Box"}}});
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kSceneGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1000, 700);
+    win.show();
+    editor->setGroup("Selection");
+    pump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    view->setFocus();
+    pump();
+    view->scene()->clearSelection();
+    for (QGraphicsItem* i : view->scene()->items())
+        if (i->flags() & QGraphicsItem::ItemIsSelectable)
+        {
+            i->setSelected(true);
+            break;
+        }
+    ui::actions::run(json("nodeEditor.renameNode"));
+    pump();
+    auto* edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    const std::string before = edit->text().toStdString();
+    edit->setText("Crate");
+    press(edit, Qt::Key_Return);
+    CHECK(scene::Graph::current().find("Crate"));
+    CHECK_FALSE(scene::Graph::current().find(before));
+    run("undo");
+    pump();
+    CHECK(scene::Graph::current().find(before));
+
+    json frames = json::array({{{"label", "Note"}, {"position", {0, 0}}, {"size", {200, 100}}, {"text", "Scene note"}, {"nodes", {before}}}});
+    run("sceneGraphSetFrames", {{"args", {"Selection", frames}}});
+    json info = run("sceneGraphInfo", {{"args", {"Selection"}}});
+    REQUIRE(info["definition"]["frames"].size() == 1);
+    CHECK(info["definition"]["frames"][0]["text"] == "Scene note");
+    CHECK(info["definition"]["frames"][0]["nodes"].size() == 1);
+    run("sceneGraphRenameNode", {{"args", {"Selection", before, "Crate"}}});
+    info = run("sceneGraphInfo", {{"args", {"Selection"}}});
+    CHECK(info["definition"]["frames"][0]["nodes"][0].get<std::string>().find("Crate") != std::string::npos);
 }

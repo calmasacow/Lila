@@ -6,6 +6,7 @@
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
 #include "scene/SceneData.h"
+#include "gn/Group.h"
 
 #include <algorithm>
 #include <functional>
@@ -21,7 +22,10 @@ namespace
 {
 using T = ArgType;
 
-/** View state kept with the scene: {"positions": {view: {fullPath: [x, y]}}, "flags": {fullPath: {flag: bool}}}. */
+/**
+ * View state kept with the scene: {"positions": {view: {fullPath: [x, y]}}, "flags": {fullPath: {flag: bool}},
+ * "frames": {view: [frame with fullPath members, see gn::framesToJson]}}.
+ */
 constexpr const char* kLayoutKey = "nodeEditor.scene";
 constexpr const char* kParentSocket = "@parent";
 constexpr const char* kChildrenSocket = "@children";
@@ -581,8 +585,20 @@ json viewInfo(const std::string& view, int depth, bool all)
         defNodes.push_back(std::move(def));
     }
 
+    json frames = layout.value("frames", json::object()).value(view, json::array());
+    if (frames.is_array())
+    {
+        std::map<std::string, std::string> shown;
+        for (size_t i = 0; i < v.order.size(); ++i)
+            shown[g.fullPath(v.order[i])] = paths[i];
+        for (json& f : frames)
+            if (f.is_object() && f.contains("nodes") && f["nodes"].is_array())
+                for (json& m : f["nodes"])
+                    if (auto it = m.is_string() ? shown.find(m.get<std::string>()) : shown.end(); it != shown.end())
+                        m = it->second;
+    }
     json out = {{"name", view}, {"view", view}, {"nodes", nodes}};
-    out["definition"] = {{"nodes", defNodes}, {"links", links}};
+    out["definition"] = {{"nodes", defNodes}, {"links", links}, {"frames", frames.is_array() ? frames : json::array()}};
     if (g.selection().empty())
         out["error"] = "Nothing selected. Select objects in the viewport or the Outliner to show their nodes.";
     return out;
@@ -924,6 +940,84 @@ void registerCommands()
                 return 0;
             });
             return nullptr;
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sceneGraphSetFrames",
+        .doc = "Replace a view's frames and notes, shaped as gnSetFrames takes them: sceneGraphSetFrames(view, [{label: 'Arm', position: "
+               "[x, y], size: [w, h], nodes: ['L_arm'], text: ''}]). Members that name no node are dropped. Kept with the scene.",
+        .positionalDoc = "view frames",
+        .run = [](const Args& a) -> json {
+            const char* cmd = "sceneGraphSetFrames";
+            std::string view = viewArg(a, cmd);
+            if (a.positional.size() < 2 || !a.positional[1].is_array())
+                throw CommandError(std::string(cmd) + ": frames must be a list");
+            std::vector<gn::GFrame> frames = gn::framesFromJson(a.positional[1]);
+            const Graph& g = sceneGraphOf();
+            for (gn::GFrame& f : frames)
+            {
+                std::vector<std::string> members;
+                for (const std::string& m : f.nodes)
+                    if (const Node* n = g.find(m))
+                        members.push_back(g.fullPath(n->id()));
+                f.nodes = std::move(members);
+            }
+            json layout = layoutData();
+            layout["frames"][view] = gn::framesToJson(frames);
+            data::set(kLayoutKey, layout);
+            return int(frames.size());
+        },
+    });
+
+    ops::registerCommand({
+        .name = "sceneGraphRenameNode",
+        .doc = "Rename a scene node from the node editor, as rename does, keeping its place, flags and frames in every view: "
+               "sceneGraphRenameNode(view, 'pCube1', 'Crate'). Returns its new path.",
+        .positionalDoc = "view node name",
+        .run = [](const Args& a) -> json {
+            const char* cmd = "sceneGraphRenameNode";
+            viewArg(a, cmd);
+            Graph& g = sceneGraphOf();
+            const NodeId id = nodeArg(stringArg(a, 1, cmd, "node"), cmd).id();
+            const std::string name = stringArg(a, 2, cmd, "name");
+            const std::string before = g.fullPath(id);
+            json renamed = ops::execute("rename", {{"args", {g.path(id), name}}});
+            const std::string after = g.fullPath(id);
+            if (after != before)
+            {
+                // Children's full paths start with the node's, so their stored state moves with it.
+                auto moved = [&](const std::string& key) -> std::optional<std::string> {
+                    if (key == before)
+                        return after;
+                    if (key.starts_with(before + "|"))
+                        return after + key.substr(before.size());
+                    return std::nullopt;
+                };
+                auto rekey = [&](json& byPath) {
+                    if (!byPath.is_object())
+                        return;
+                    json next = json::object();
+                    for (auto& [key, value] : byPath.items())
+                        next[moved(key).value_or(key)] = value;
+                    byPath = std::move(next);
+                };
+                json layout = layoutData();
+                if (layout.contains("positions") && layout["positions"].is_object())
+                    for (auto& [view, positions] : layout["positions"].items())
+                        rekey(positions);
+                if (layout.contains("flags"))
+                    rekey(layout["flags"]);
+                if (layout.contains("frames") && layout["frames"].is_object())
+                    for (auto& [view, frames] : layout["frames"].items())
+                        for (json& f : frames)
+                            if (f.is_object() && f.contains("nodes") && f["nodes"].is_array())
+                                for (json& m : f["nodes"])
+                                    if (m.is_string())
+                                        m = moved(m.get<std::string>()).value_or(m.get<std::string>());
+                data::set(kLayoutKey, layout);
+            }
+            return renamed;
         },
     });
 

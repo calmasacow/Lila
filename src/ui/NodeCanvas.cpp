@@ -102,6 +102,7 @@ NodeItem::NodeItem(NodeCanvas* canvas, const json& info) : mCanvas(canvas)
     // A loop node keeps its kind in the title so a Repeat and a For Each over the same group tell apart.
     if (!groupRef.empty())
         label = type == canvas->backend->subgroupNodeType() ? qs(groupRef) : label + ": " + qs(groupRef);
+    typeLabel = label;
     reroute = type == gn::kRerouteType;
     portal = type == gn::kSendType || type == gn::kReceiveType;
     problem = qs(info.value("problem", ""));
@@ -464,6 +465,16 @@ void FrameItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     p->setFont(f);
     p->drawText(titleRect().adjusted(kTitle, 0, -6, 0), Qt::AlignVCenter | Qt::AlignLeft,
                 p->fontMetrics().elidedText(label, Qt::ElideRight, int(size.width() - kTitle - 6)));
+    if (!collapsed && !text.isEmpty())
+    {
+        f.setBold(false);
+        p->setFont(f);
+        p->setPen(gray(215));
+        p->save();
+        p->setClipRect(textRect());
+        p->drawText(textRect(), Qt::AlignTop | Qt::AlignLeft | Qt::TextWordWrap, text);
+        p->restore();
+    }
     if (!collapsed)
     {
         QRectF g = gripRect();
@@ -653,6 +664,8 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
             item->hideUnused = f.hideUnused;
             item->hidePreview = f.hidePreview;
             item->muted = f.muted;
+            if (!f.label.empty())
+                item->label = qs(f.label);
             item->viewerActive = active[item->name];
             mScene.addItem(item);
             mNodes[item->name] = item;

@@ -517,6 +517,7 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
         rebuildSidePanel();
     };
     mCanvas->onValuesEdited = [this] { QTimer::singleShot(0, this, [this] { rebuildSidePanel(); }); };
+    mCanvas->onRenamed = [this](const std::string& name) { selectAfterRefresh({name}); };
 
     mListener = scene::Graph::current().addListener([this](scene::Change c, scene::NodeId id) {
         scene::Graph& g = scene::Graph::current();
@@ -836,6 +837,12 @@ void NodeEditor::addNodeAtCursor()
     openAddMenu(mCanvas->cursorScenePos(), nullptr);
 }
 
+namespace
+{
+/** The Add menu's entry for a note, which is no node type. */
+constexpr const char* kNoteEntry = "@note";
+} // namespace
+
 void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
 {
     if (mGroup.isEmpty())
@@ -852,8 +859,18 @@ void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
     json types = run("NodeTypes", query);
     if (!types.is_array())
         types = json::array();
+    // Notes are frames with text, not nodes, but are found and placed like one.
+    if (!wire && mBackend->supports("SetFrames"))
+        types.push_back({{"type", kNoteEntry}, {"label", "Note"}, {"category", "Layout"},
+                         {"keywords", {"comment", "sticky", "annotation", "text", "memo"}},
+                         {"doc", "A note on the canvas: a box of text, saved with the graph. Ctrl+Enter finishes typing it."}});
     auto* pop = new AddNodePopup(this, types, [this, backend = mBackend, group, at, drag](const std::string& type, const std::string& socket,
                                                                                        const json& values) {
+        if (type == kNoteEntry)
+        {
+            mCanvas->addNote(at);
+            return;
+        }
         // The new node sits beside the loose end, on the side its linked socket is on.
         QPointF pos(at.x() - kNodeWidth * 0.5, at.y() - 12.0);
         if (drag)
@@ -1666,6 +1683,30 @@ void NodeEditor::jumpToPortalSource() { mCanvas->jumpToPortal(true); }
 
 void NodeEditor::frameSelection() { mCanvas->frameSelection(); }
 
+void NodeEditor::renameSelected()
+{
+    if (!mCanvas->canRenameNodes())
+    {
+        showError(mBackend->title() + " nodes can't be renamed.");
+        return;
+    }
+    std::string name = mCanvas->renameTarget();
+    if (name.empty() || !mCanvas->renameNode(name))
+        showError("Select one node to rename.");
+}
+
+void NodeEditor::addNote()
+{
+    if (!mBackend->supports("SetFrames") || mGroup.isEmpty())
+    {
+        showError(mBackend->title() + " graphs don't take notes.");
+        return;
+    }
+    mCanvas->addNote(mCanvas->cursorScenePos());
+}
+
+QWidget* NodeEditor::inPlaceEditor() const { return mCanvas->inPlaceEditor(); }
+
 void NodeEditor::swapInputs()
 {
     if (!mCanvas->swapInputs())
@@ -1754,8 +1795,12 @@ void NodeEditor::showCanvasMenu(QPoint global)
     };
     for (const char* id : {"nodeEditor.addNode", "nodeEditor.duplicate", "nodeEditor.copy", "nodeEditor.paste", "nodeEditor.delete"})
         item(&menu, id);
-    menu.addSeparator();
     std::vector<std::string> selected = mCanvas->selectedNames();
+    if (selected.size() == 1 && mCanvas->canRenameNodes())
+        item(&menu, "nodeEditor.renameNode");
+    if (mBackend->supports("SetFrames"))
+        item(&menu, "nodeEditor.addNote");
+    menu.addSeparator();
     bool groupNode = std::any_of(selected.begin(), selected.end(), [this](const std::string& n) { return mBackend->runsSubgroup(mCanvas->typeOf(n)); });
     if (groupNode)
         item(&menu, "nodeEditor.openGroup");
@@ -1848,7 +1893,7 @@ void NodeEditor::rebuildSidePanel()
     else if (node)
     {
         std::string nodeName = node->value("name", "");
-        lay->addWidget(heading(panel, qs(node->value("label", "")) + "  (" + qs(nodeName) + ")"));
+        lay->addWidget(heading(panel, qs(node->value("title", node->value("label", ""))) + "  (" + qs(nodeName) + ")"));
         auto* form = new QFormLayout();
         form->setContentsMargins(0, 0, 0, 0);
         if (std::string type = node->value("type", ""); type == gn::kSendType || type == gn::kReceiveType)
@@ -2156,6 +2201,18 @@ void registerEditActions()
         "Trade the links and values of the selected node's first two inputs of one type, such as a Math node's operands.");
     add("nodeEditor.frameNodes", "Frame Selected Nodes", &NodeEditor::frameSelection,
         "Put a labelled frame around the selected nodes, or an empty one at the cursor. Drag its title to move it with what it holds.");
+    add("nodeEditor.renameNode", "Rename Node", &NodeEditor::renameSelected,
+        "Type a new title over the selected node's header; Enter keeps it, Esc cancels. Geometry and texture nodes keep their "
+        "names for links and scripts, and an empty title shows the type's again. Scene nodes are renamed.");
+    actions::add({.id = "nodeEditor.addNote", .label = "Add Note", .category = "Node Editor",
+                  .run =
+                      [] {
+                          if (NodeEditor* e = NodeEditor::active())
+                              e->addNote();
+                      },
+                  .doc = "Type a note at the cursor; Ctrl+Enter or clicking away adds it. A note is a frame with text: drag its title to "
+                         "move it, its corner to resize it, and double-click its text to edit it.",
+                  .keywords = {"comment", "sticky", "annotation", "memo"}});
     add("nodeEditor.portalSource", "Jump to Send", &NodeEditor::jumpToPortalSource,
         "From a selected Send or Receive, select and centre the Send of its name.");
     add("nodeEditor.portalReaders", "Jump to Receives", &NodeEditor::jumpToPortalReaders,

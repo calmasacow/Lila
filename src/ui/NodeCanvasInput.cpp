@@ -498,10 +498,24 @@ void NodeCanvas::mouseDoubleClickEvent(QMouseEvent* e)
                 pressField(n, f, e);
             return;
         }
+    // A group node or a Receive keeps its own double-click; F2 and the menu still rename them.
+    if (n && e->button() == Qt::LeftButton && canRenameNodes() && !n->reroute && n->groupRef.empty() && n->type != gn::kReceiveType &&
+        n->headerRect().contains(n->mapFromScene(sp)) && !(n->isViewer() && n->eyeRect().contains(n->mapFromScene(sp))))
+    {
+        renameNode(n->name);
+        return;
+    }
     if (!n)
         if (int f = frameAt(sp, true); f >= 0)
         {
             renameFrame(f);
+            return;
+        }
+    if (!n)
+        if (int f = frameAt(sp, false); f >= 0 && !mFrameItems[size_t(f)]->text.isEmpty() &&
+                                          mFrameItems[size_t(f)]->textRect().contains(mFrameItems[size_t(f)]->mapFromScene(sp)))
+        {
+            editFrameText(f);
             return;
         }
     if (!n)

@@ -29,6 +29,7 @@
 #include <QLineEdit>
 #include <QMainWindow>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
 #include <QThread>
 #include <QToolButton>
 
@@ -360,4 +361,48 @@ TEST_CASE("texture parameter editors read every value form the evaluator takes")
     CHECK(ui::texParams::evalCurve(pts, false, 0.25) == doctest::Approx(0.75));
     CHECK(ui::texParams::evalCurve(pts, true, 0.5) == doctest::Approx(0.5));
     CHECK(ui::texParams::evalCurve(pts, true, -1.0) == doctest::Approx(1.0));
+}
+
+TEST_CASE("texture graph nodes rename in place and the graph takes notes")
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 64}});
+    const std::string perlin = run("texAddNode", {{"args", {"Rock", "perlin"}}, {"position", {-400, 0}}}).get<std::string>();
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1000, 700);
+    win.show();
+    win.activateWindow();
+    editor->setGroup("Rock");
+    pump();
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    view->setFocus();
+    pump();
+
+    view->scene()->clearSelection();
+    nodeItem(view, perlin)->setSelected(true);
+    pressWithText(view, Qt::Key_F2);
+    auto* edit = qobject_cast<QLineEdit*>(editor->inPlaceEditor());
+    REQUIRE(edit);
+    edit->setText("Rust Breakup");
+    pressWithText(edit, Qt::Key_Return);
+    CHECK(rock().node(perlin)->label == "Rust Breakup");
+    run("undo");
+    pump();
+    CHECK(rock().node(perlin)->label.empty());
+
+    ui::actions::run(json("nodeEditor.addNote"));
+    pump();
+    auto* text = qobject_cast<QPlainTextEdit*>(editor->inPlaceEditor());
+    REQUIRE(text);
+    text->setPlainText("Breakup only drives roughness.");
+    pressWithText(text, Qt::Key_Return, Qt::ControlModifier);
+    REQUIRE(rock().frames.size() == 1);
+    CHECK(rock().frames[0].text == "Breakup only drives roughness.");
+    run("undo");
+    pump();
+    CHECK(rock().frames.empty());
 }

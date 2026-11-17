@@ -44,8 +44,9 @@ inline constexpr const char* kGeometryNodesBackend = "gn";
  * Every edit is a command named command(verb), "gn" + "AddNode" for geometry nodes, taking the same arguments as the
  * geometry-nodes command of that verb: GroupInfo, NodeTypes, AddNode, DeleteNode, Connect, Disconnect, MoveNodes,
  * SetValue, CopyNodes, PasteNodes, DuplicateNodes, GroupNodes, Ungroup, ExportGroup, ImportGroup, SaveGroup,
- * SetActiveViewer, AddInput, RemoveInput, RenameInput, MoveInput, SetInputInfo, ExposeInput, RemoveOutput. The editor
- * hides what a verb drives when supports() says the backend lacks it. GroupInfo lists the group's owners under "owners"
+ * SetActiveViewer, AddInput, RemoveInput, RenameInput, MoveInput, SetInputInfo, ExposeInput, RemoveOutput, SetTies, SetFrames
+ * (frames and notes), SetNodeFlags, SetNodeLabel (group, node, label: the node's header). The editor hides what a verb
+ * drives when supports() says the backend lacks it. GroupInfo lists the group's owners under "owners"
  * (geometry nodes says "modifiers").
  *
  * InsertNode (group, node, "from.socket", "to.socket") lets a backend wire a node dropped on a link its own way; it returns
@@ -115,6 +116,8 @@ public:
     virtual QString ownerNoun() const { return "owner"; }
     /** What the toolbar's group picker is labelled. */
     virtual QString groupNoun() const { return "Group"; }
+    /** Whether SetNodeLabel renames the node itself (a scene node) rather than setting a label beside its name. */
+    virtual bool renamesNodes() const { return false; }
     /** Whether the editor offers Rename for its groups. */
     virtual bool canRenameGroup() const { return false; }
     /** Renames a group as an undoable UI command; returns the name it ended up with, empty when it failed (already logged). */

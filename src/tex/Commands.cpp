@@ -185,6 +185,8 @@ json nodeJson(const GNode& n, const Graph& g, const SetSettings& s)
         j["category"] = p.def->category;
         j["kind"] = nodeKindName(p.def->kind);
     }
+    if (!n.label.empty())
+        j["title"] = n.label;
     json ins = json::array(), outs = json::array(), prms = json::array();
     for (const PortDecl& d : p.inputs)
         ins.push_back(portStateJson(d, &n, &g, true));
@@ -819,6 +821,22 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "texSetNodeLabel",
+        .doc = "Show a node under its own title on the canvas, as gnSetNodeLabel does: texSetNodeLabel(set, 'Noise', 'Rust Breakup'). The "
+               "node keeps its name; an empty label shows the node type's again.",
+        .positionalDoc = "set node label",
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() < 3 || !a.positional[2].is_string())
+                throw CommandError("texSetNodeLabel: expected (set, node, label)");
+            const std::string label = gn::cleanNodeLabel(a.positional[2].get<std::string>());
+            return editGraph(a, "texSetNodeLabel", [&](Graph& g, const SetSettings&) -> json {
+                nodeIn(g, a.positional[1].get<std::string>(), "texSetNodeLabel").label = label;
+                return label;
+            });
+        },
+    });
+
+    ops::registerCommand({
         .name = "texSetBookmarks",
         .doc = "Replace a texture set's saved canvas views, shaped as gnSetBookmarks takes them.",
         .positionalDoc = "set bookmarks",
@@ -835,8 +853,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "texSetFrames",
-        .doc = "Replace a texture set's frames, shaped as gnSetFrames takes them. Display only; names not in the graph are dropped. "
-               "Returns how many frames there are.",
+        .doc = "Replace a texture set's frames, shaped as gnSetFrames takes them (a frame with text is a note). Display only; names not "
+               "in the graph are dropped. Returns how many frames there are.",
         .positionalDoc = "set frames",
         .run = [](const Args& a) -> json {
             if (a.positional.size() < 2 || !a.positional[1].is_array())

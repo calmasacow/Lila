@@ -25,6 +25,66 @@ protected:
     }
 };
 
+/** A title typed in place. finish runs once: kept on Enter or focus loss, cancelled on Esc. */
+class InPlaceLine final : public QLineEdit
+{
+public:
+    using QLineEdit::QLineEdit;
+    std::function<void(bool keep)> finish;
+
+    void end(bool keep)
+    {
+        if (auto f = std::exchange(finish, nullptr))
+            f(keep);
+    }
+
+protected:
+    void keyPressEvent(QKeyEvent* e) override
+    {
+        if (e->key() == Qt::Key_Escape)
+            return end(false);
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter)
+            return end(true);
+        QLineEdit::keyPressEvent(e);
+    }
+    void focusOutEvent(QFocusEvent* e) override
+    {
+        QLineEdit::focusOutEvent(e);
+        end(true);
+    }
+};
+
+/** A note's text typed in place: Enter starts a new line, Ctrl+Enter or focus loss keeps it, Esc cancels. */
+class InPlaceText final : public QPlainTextEdit
+{
+public:
+    using QPlainTextEdit::QPlainTextEdit;
+    std::function<void(bool keep)> finish;
+
+    void end(bool keep)
+    {
+        if (auto f = std::exchange(finish, nullptr))
+            f(keep);
+    }
+
+protected:
+    void keyPressEvent(QKeyEvent* e) override
+    {
+        if (e->key() == Qt::Key_Escape)
+            return end(false);
+        if ((e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) && (e->modifiers() & Qt::ControlModifier))
+            return end(true);
+        QPlainTextEdit::keyPressEvent(e);
+    }
+    void focusOutEvent(QFocusEvent* e) override
+    {
+        QPlainTextEdit::focusOutEvent(e);
+        // The box's own context menu takes focus without ending the edit.
+        if (e->reason() != Qt::PopupFocusReason)
+            end(true);
+    }
+};
+
 json fieldNumber(double v, bool integer) { return integer ? json(int64_t(std::llround(v))) : json(v); }
 
 double clampFieldValue(double v, const json& limits)
@@ -168,6 +228,87 @@ void NodeCanvas::editFieldText(NodeItem* n, int input)
         edit->deleteLater();
         setFocus();
     });
+}
+
+void NodeCanvas::editTitleInPlace(QRectF r, const QString& text, std::function<void(const QString&)> done)
+{
+    if (mInPlace)
+        mInPlace->deleteLater();
+    QRect v = mapFromScene(r).boundingRect();
+    auto* edit = new InPlaceLine(viewport());
+    edit->setGeometry(v.adjusted(0, std::min(0, (v.height() - 22) / 2), 0, std::max(0, (22 - v.height()) / 2)));
+    edit->setText(text);
+    edit->selectAll();
+    mInPlace = edit;
+    edit->finish = [this, edit, done = std::move(done)](bool keep) {
+        const QString typed = edit->text();
+        edit->hide();
+        edit->deleteLater();
+        setFocus();
+        if (keep)
+            done(typed);
+    };
+    edit->show();
+    edit->setFocus();
+}
+
+void NodeCanvas::editTextInPlace(QRectF r, const QString& text, std::function<void(const QString&)> done)
+{
+    if (mInPlace)
+        mInPlace->deleteLater();
+    QRect v = mapFromScene(r).boundingRect();
+    auto* edit = new InPlaceText(viewport());
+    edit->setGeometry(v.x(), v.y(), std::max(v.width(), 200), std::max(v.height(), 80));
+    edit->setPlaceholderText("Note text. Ctrl+Enter to finish");
+    edit->setPlainText(text);
+    edit->selectAll();
+    mInPlace = edit;
+    edit->finish = [this, edit, done = std::move(done)](bool keep) {
+        const QString typed = edit->toPlainText();
+        edit->hide();
+        edit->deleteLater();
+        setFocus();
+        if (keep)
+            done(typed);
+    };
+    edit->show();
+    edit->setFocus();
+}
+
+std::string NodeCanvas::renameTarget() const
+{
+    std::vector<NodeItem*> selected = selectedNodes();
+    if (selected.size() == 1)
+        return selected.front()->name;
+    if (mHoverNode)
+        return mHoverNode->name;
+    return {};
+}
+
+bool NodeCanvas::renameNode(const std::string& name)
+{
+    auto it = mNodes.find(name);
+    if (it == mNodes.end() || it->second->reroute || !canRenameNodes() || mGroup.empty())
+        return false;
+    NodeItem* n = it->second;
+    // A label equal to the type's is no label, so the header follows the type's own.
+    const QString typeLabel = n->typeLabel, shown = n->label;
+    editTitleInPlace(n->mapRectToScene(n->headerRect()), shown, [this, name, typeLabel, shown](const QString& typed) {
+        const QString text = typed.simplified();
+        if (text == shown)
+            return;
+        if (backend->renamesNodes())
+        {
+            if (text.isEmpty())
+                return;
+            json r = runVerb(*backend, "SetNodeLabel", args({mGroup, name, text.toStdString()}));
+            if (r.is_string() && onRenamed)
+                onRenamed(r.get<std::string>());
+            return;
+        }
+        runVerb(*backend, "SetNodeLabel", args({mGroup, name, text == typeLabel ? std::string() : text.toStdString()}));
+    });
+    return true;
 }
 
 void NodeCanvas::pickFieldColor(NodeItem* n, int input, QPoint global)

@@ -78,7 +78,8 @@ QString GraphBackend::canvasHint() const
 {
     return "Select a node to edit its values.\n\nTab / Shift+A add a node under the cursor; while dragging a wire, or letting one go "
            "on empty canvas, it lists only nodes that connect. Ctrl+drag cuts links, Alt+click a socket disconnects it, Delete / X deletes, Ctrl+C / Ctrl+V copy "
-           "and paste as text, Ctrl+D duplicates, F frames the selection, Home frames all. Hold Z and drag across wires to zip-tie "
+           "and paste as text, Ctrl+D duplicates, F frames the selection, Home frames all. F2 or a double-click on a title renames a node; "
+           "Add Note (Tab, then type note) leaves a note. Hold Z and drag across wires to zip-tie "
            "them; drag a tie to move it, Shift+drag to turn it, right-click it for colour and removal. Alt+right-drag from one node to "
            "another connects them; Ctrl+drag a linked input moves its link, Shift+drag copies it.";
 }
