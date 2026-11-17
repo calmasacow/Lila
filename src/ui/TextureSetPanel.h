@@ -25,6 +25,9 @@ inline constexpr const char* kTextureSetsDock = "textureSets";
  */
 LILA_UI_API void registerTextureSetPanel();
 
+/** Opens the name box on the set picker of the visible Texture Set panel; false when none is visible. */
+LILA_UI_API bool startSetRename();
+
 namespace textureSets
 {
 /**
@@ -65,6 +68,8 @@ public:
 
     void setTextureSet(const std::string& set);
     std::string textureSet() const;
+    /** Opens a name box over the set picker; Enter renames the set shown. */
+    void startRename();
     /** Rereads the set now instead of on the next event loop turn. */
     void refresh();
 

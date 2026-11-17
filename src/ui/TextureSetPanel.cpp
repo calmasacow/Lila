@@ -2971,6 +2971,15 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
             d->expanded[it->data(0, kRoleId).toString().toStdString()] = false;
     });
     connect(d->sets, &QComboBox::activated, this, [this](int) { setTextureSet(d->sets->currentData().toString().toStdString()); });
+    d->sets->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(d->sets, &QWidget::customContextMenuRequested, this, [this](const QPoint& at) {
+        if (d->set.empty())
+            return;
+        QMenu menu(this);
+        menu.addAction(icon("pencil"), "Rename", this, [this] { startRename(); });
+        menu.addAction(icon("trash"), "Delete", this, [set = d->set] { deleteTextureSet(set); });
+        menu.exec(d->sets->mapToGlobal(at));
+    });
     connect(d->variants, &QComboBox::activated, this, [this](int) {
         const QString data = d->variants->currentData().toString();
         const std::string set = d->set;
@@ -3086,6 +3095,28 @@ TextureSetPanel::~TextureSetPanel()
     std::erase(panelList(), this);
     if (lastFocusedPanel() == this)
         lastFocusedPanel() = nullptr;
+}
+
+void TextureSetPanel::startRename()
+{
+    if (d->set.empty())
+        return;
+    controls::editInPlace(d->sets, QString::fromStdString(d->set), [this, from = d->set](const QString& to) {
+        std::string renamed = renameTextureSet(from, to.toStdString());
+        if (!renamed.empty())
+            setTextureSet(renamed);
+    });
+}
+
+bool startSetRename()
+{
+    for (TextureSetPanel* p : panelList())
+        if (p->isVisible())
+        {
+            p->startRename();
+            return true;
+        }
+    return false;
 }
 
 void TextureSetPanel::setTextureSet(const std::string& set)

@@ -31,6 +31,12 @@ LILA_UI_API std::string textureSetForSlot(scene::Graph& g, const std::string& sl
 /** Shows the Texture Graph panel with the set open in its editors. */
 LILA_UI_API void openTextureSet(const std::string& set);
 
+/** Renames a set as an undoable UI command; returns its new name, empty when it failed (already logged). */
+LILA_UI_API std::string renameTextureSet(const std::string& set, const std::string& to);
+
+/** Deletes a set as an undoable UI command; false when it failed (already logged). */
+LILA_UI_API bool deleteTextureSet(const std::string& set);
+
 /** The set the texture actions work on: the Texture Graph editor's, else the 2D View's, else the first. */
 LILA_UI_API std::string currentTextureSet();
 

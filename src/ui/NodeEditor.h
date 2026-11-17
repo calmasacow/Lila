@@ -134,6 +134,8 @@ public:
     QString parentGroup() const;
     /** Writes the group to a file picked in a dialog. */
     void exportGroup();
+    /** Opens a name box over the group picker; Enter or leaving it renames the group through the backend, Esc cancels. */
+    void startGroupRename();
     /** Reads group files into the scene and shows the last file's main group. */
     void importGroups(const QStringList& files);
     /** Previews a node through the backend: for geometry nodes, in the group's Viewer. */

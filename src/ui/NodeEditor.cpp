@@ -620,7 +620,7 @@ void NodeEditor::buildToolbar()
         bar->addWidget(saveBtn);
     }
     bool files = !b.fileSuffixes().empty();
-    if (files && (b.supports("ExportGroup") || b.supports("ImportGroup")))
+    if (b.canRenameGroup() || b.canDeleteGroup() || (files && (b.supports("ExportGroup") || b.supports("ImportGroup"))))
     {
         auto* more = new QToolButton(mBar);
         more->setIcon(icon("dots"));
@@ -629,11 +629,34 @@ void NodeEditor::buildToolbar()
         controls::setRole(more, "overflow");
         auto* menu = new QMenu(more);
         menu->setToolTipsVisible(true);
-        const QString suffix = qs(b.fileSuffixes().front());
-        if (b.supports("ExportGroup"))
+        if (b.canRenameGroup() || b.canDeleteGroup())
+        {
+            std::vector<QAction*> needGroup;
+            if (b.canRenameGroup())
+            {
+                needGroup.push_back(menu->addAction(icon("pencil"), "Rename " + b.groupNoun(), this, [this] { startGroupRename(); }));
+                needGroup.back()->setToolTip("Rename this " + b.groupNoun().toLower() + " in place; Enter keeps it, Esc cancels");
+            }
+            if (b.canDeleteGroup())
+            {
+                needGroup.push_back(menu->addAction(icon("trash"), "Delete " + b.groupNoun(), this, [this] {
+                    if (!mGroup.isEmpty())
+                        mBackend->deleteGroup(mGroup.toStdString());
+                }));
+                needGroup.back()->setToolTip("Delete this " + b.groupNoun().toLower() + "; Ctrl+Z brings it back");
+            }
+            connect(menu, &QMenu::aboutToShow, menu, [this, needGroup] {
+                for (QAction* a : needGroup)
+                    a->setEnabled(!mGroup.isEmpty());
+            });
+            if (files)
+                menu->addSeparator();
+        }
+        const QString suffix = files ? qs(b.fileSuffixes().front()) : QString();
+        if (files && b.supports("ExportGroup"))
             menu->addAction(icon("file-export"), "Export Group...", this, [this] { exportGroup(); })
                 ->setToolTip("Export this group (and the groups nested in it) to a ." + suffix + " file to share");
-        if (b.supports("ImportGroup"))
+        if (files && b.supports("ImportGroup"))
             menu->addAction(icon("file-import"), "Import Groups...", this, [this] {
                     QStringList patterns;
                     for (const std::string& ext : mBackend->fileSuffixes())
@@ -1045,6 +1068,21 @@ void NodeEditor::rebuildPathBar()
         lay->addWidget(sep);
     }
     mPathBar->setVisible(!mPath.empty());
+}
+
+void NodeEditor::startGroupRename()
+{
+    if (mGroup.isEmpty() || !mBackend->canRenameGroup())
+        return;
+    controls::editInPlace(mGroups, mGroup, [this, from = mGroup](const QString& to) {
+        std::string renamed = mBackend->renameGroup(from.toStdString(), to.toStdString());
+        if (renamed.empty())
+            return;
+        // The rename's own refresh may already have dropped the old name and moved to another group.
+        std::replace(mPath.begin(), mPath.end(), from, qs(renamed));
+        mGroup = qs(renamed);
+        refresh(true);
+    });
 }
 
 void NodeEditor::exportGroup()

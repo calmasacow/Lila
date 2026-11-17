@@ -21,6 +21,7 @@
 #include "ui/TexParams.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
+#include "ui/TextureSetPanel.h"
 #include "ui/Theme.h"
 #include "ui/FileDialog.h"
 #include "ui/UiCommands.h"
@@ -194,6 +195,11 @@ public:
 
     QString ownerNoun() const override { return "texture set"; }
     QString groupNoun() const override { return "Texture Set"; }
+    bool canRenameGroup() const override { return true; }
+
+    std::string renameGroup(const std::string& group, const std::string& to) const override { return renameTextureSet(group, to); }
+    bool canDeleteGroup() const override { return true; }
+    bool deleteGroup(const std::string& group) const override { return deleteTextureSet(group); }
 
     bool canViewNodes() const override { return true; }
 
@@ -468,6 +474,23 @@ std::string currentTextureSet()
     return names.empty() ? std::string() : names.front();
 }
 
+std::string renameTextureSet(const std::string& set, const std::string& to)
+{
+    scene::Graph& g = scene::Graph::current();
+    scene::Node* n = tex::findSet(g, set);
+    if (!n)
+        return {};
+    json path = runUi("rename", {{"args", {n->path(), to}}});
+    scene::Node* renamed = path.is_string() ? g.find(path.get<std::string>()) : nullptr;
+    return renamed ? renamed->name() : std::string();
+}
+
+bool deleteTextureSet(const std::string& set)
+{
+    scene::Node* n = tex::findSet(scene::Graph::current(), set);
+    return n && tryRunUi("delete", {{"args", {n->path()}}});
+}
+
 void registerTextureGraphUi()
 {
     static bool done = false;
@@ -505,6 +528,31 @@ void registerTextureGraphUi()
                          "Texture Graph. With a mesh selected, it drives the mesh's first material, assigning a new one if the mesh only has "
                          "Default.",
                   .python = "lila.ops.texCreateSet(\"RockTex\", settings={\"material\": \"Rock\"})"});
+    actions::add({.id = "texture.renameSet",
+                  .label = "Rename Texture Set",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          NodeEditor* e = texEditor();
+                          if (e && e->isVisible())
+                              e->startGroupRename();
+                          else if (!startSetRename())
+                              log::warn("Rename Texture Set: open the Texture Set panel or the Texture Graph");
+                      },
+                  .doc = "Rename the texture set shown, in place in its picker.",
+                  .python = "lila.ops.rename(\"RockTex\", \"BoulderTex\")"});
+    actions::add({.id = "texture.deleteSet",
+                  .label = "Delete Texture Set",
+                  .category = "Texture",
+                  .run =
+                      [] {
+                          if (std::string set = currentTextureSet(); set.empty())
+                              log::warn("Delete Texture Set: no texture set");
+                          else
+                              deleteTextureSet(set);
+                      },
+                  .doc = "Delete the texture set shown in the Texture Graph, with its graph and layers. Undo brings it back.",
+                  .python = "lila.ops.delete(\"RockTex\")"});
     actions::add({.id = "texture.import",
                   .label = "Import Texture Graph...",
                   .category = "Texture",
@@ -567,7 +615,7 @@ void registerTextureGraphUi()
                   .python = "lila.ui.run_action(\"texture.clearPreview\")"});
 
     menus::addMenu({.id = "Texture", .title = "Texture", .before = "Rig", .sets = {"Texture"}});
-    menus::addActions("Texture", {"texture.newSet", "tex.paint", "tex.stencil", "tex.quickMaskOverlay", "tex.paintAlongCurve", "tex.patchFill", "tex.transferSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "tex.materialFromMaps", "tex.materialsFromFolder", "texture.importPainterSmart", "tex.importPtex", "tex.exportPtex", "texture.exportMaterial",
+    menus::addActions("Texture", {"texture.newSet", "texture.renameSet", "texture.deleteSet", "tex.paint", "tex.stencil", "tex.quickMaskOverlay", "tex.paintAlongCurve", "tex.patchFill", "tex.transferSet", "", "window.textureGraph", "window.texture2d", "", "texture.import", "tex.materialFromMaps", "tex.materialsFromFolder", "texture.importPainterSmart", "tex.importPtex", "tex.exportPtex", "texture.exportMaterial",
                                   "texture.exportNodes", "texture.exportMaps", "texture.exportVariants", "", "texture.clearPreview", "#View", "viewport.textureView3d",
                                   "viewport.textureViewSplit", "viewport.textureView2d"});
 }

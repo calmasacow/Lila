@@ -110,6 +110,14 @@ public:
     virtual QString ownerNoun() const { return "owner"; }
     /** What the toolbar's group picker is labelled. */
     virtual QString groupNoun() const { return "Group"; }
+    /** Whether the editor offers Rename for its groups. */
+    virtual bool canRenameGroup() const { return false; }
+    /** Renames a group as an undoable UI command; returns the name it ended up with, empty when it failed (already logged). */
+    virtual std::string renameGroup(const std::string& /*group*/, const std::string& /*to*/) const { return {}; }
+    /** Whether the editor offers Delete for its groups. */
+    virtual bool canDeleteGroup() const { return false; }
+    /** Deletes a group as an undoable UI command; false when it failed (already logged). */
+    virtual bool deleteGroup(const std::string& /*group*/) const { return false; }
 
     /** The node type that previews in the viewport (an eye on its header toggles it); empty for none. */
     virtual std::string viewerType() const { return {}; }

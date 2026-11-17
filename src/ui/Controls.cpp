@@ -21,6 +21,7 @@
 #include <QScrollArea>
 #include <QKeyEvent>
 #include <QScrollBar>
+#include <QShortcut>
 #include <QSpinBox>
 #include <QStyle>
 #include <QStyleOptionToolButton>
@@ -29,6 +30,7 @@
 #include <QWheelEvent>
 
 #include <algorithm>
+#include <memory>
 #include <cmath>
 
 namespace lila::ui::controls
@@ -145,6 +147,33 @@ void addVariants(QToolButton* b, const std::vector<std::string>& variants)
     b->setMenu(menu);
 }
 } // namespace
+
+void editInPlace(QWidget* over, const QString& text, std::function<void(const QString&)> commit)
+{
+    if (!over || !over->parentWidget())
+        return;
+    auto* edit = new QLineEdit(text, over->parentWidget());
+    edit->setGeometry(over->geometry());
+    edit->selectAll();
+    edit->show();
+    edit->raise();
+    edit->setFocus();
+    // editingFinished fires again when the box loses focus on its way out.
+    auto done = std::make_shared<bool>(false);
+    auto close = [edit, done] {
+        *done = true;
+        edit->deleteLater();
+    };
+    QObject::connect(new QShortcut(Qt::Key_Escape, edit, nullptr, nullptr, Qt::WidgetShortcut), &QShortcut::activated, edit, close);
+    QObject::connect(edit, &QLineEdit::editingFinished, edit, [edit, done, close, text, commit = std::move(commit)] {
+        if (*done)
+            return;
+        const QString to = edit->text().trimmed();
+        close();
+        if (!to.isEmpty() && to != text)
+            commit(to);
+    });
+}
 
 void setRole(QWidget* w, const char* role)
 {
