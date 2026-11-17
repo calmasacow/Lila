@@ -184,7 +184,7 @@ struct TexturePaintSettings
     bool occlusion = true;
     float filterRadius = 4.0f;
     float amount = 1.0f;
-    std::string normalMode = "bump";
+    std::string normalMode = "raise";
     float intensity = 1.0f;
     std::string stampImage;
     std::string fillBy = "island";
@@ -294,7 +294,16 @@ tp::Payload payloadFor(const TexturePaintSettings& s, bool erase)
         p.channels.clear();
         p.directionChannel = s.flowChannel;
     }
-    if (s.tool == "normal")
+    if (s.tool == "normal" && (s.normalMode == "raise" || s.normalMode == "lower"))
+    {
+        // Raised and sunken shapes are height: dabs blend towards one level, so a stroke is one flat plate (no rake), its
+        // edge the brush's falloff, and the set turns the height into normals.
+        p.kind = "paint";
+        p.channels.clear();
+        const float h = std::abs(s.intensity);
+        p.channels["height"] = glm::vec3(s.normalMode == "lower" ? -h : h);
+    }
+    else if (s.tool == "normal")
     {
         p.channels.clear();
         p.directionChannel = "normal";
@@ -450,7 +459,7 @@ void applyPreset(TexturePaintSettings& s, const tex::brushes::Preset& p)
     s.amount = pay.value("amount", 1.0f);
     s.tilt = pay.value("tilt", 0.5f);
     s.flowChannel = pay.value("channel", std::string("normal"));
-    s.normalMode = pay.value("normalMode", std::string("bump"));
+    s.normalMode = pay.value("normalMode", std::string("raise"));
     s.intensity = pay.value("intensity", 1.0f);
     s.fillBy = pay.value("fillBy", std::string("island"));
     s.material = pay.contains("source") ? pay["source"].value("library", std::string()) : std::string();
@@ -1118,9 +1127,14 @@ public:
         dirRow->addWidget(mFlow, 1);
         mDirRow = addRow(form, "Direction", dirRow);
         mNormalMode = new QComboBox(this);
+        mNormalMode->addItem("Raise", "raise");
+        mNormalMode->addItem("Lower", "lower");
         mNormalMode->addItem("Bump", "bump");
         mNormalMode->addItem("Stamp", "stamp");
-        mIntensity = settingSpin(this, -4.0, 4.0, 0.1, 2, "Normal: strength; negative digs");
+        mNormalMode->setToolTip("Raise and Lower paint a flat raised or sunken shape (in the set's height, made into normals), "
+                                "its edge the brush's falloff. Bump presses a bump per dab; Stamp lays a normal map");
+        mIntensity = settingSpin(this, -4.0, 4.0, 0.1, 2, "Raise and Lower: how high, in height units (1 is the set's Height Depth). "
+                                                         "Bump and Stamp: strength; negative digs");
         auto* normalRow = new QHBoxLayout;
         normalRow->addWidget(mNormalMode);
         normalRow->addWidget(mIntensity);
