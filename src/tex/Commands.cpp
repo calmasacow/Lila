@@ -1,5 +1,6 @@
 #include "tex/TextureSet.h"
 
+#include "core/Log.h"
 #include "core/Profile.h"
 #include "gn/Routing.h"
 #include "ops/Command.h"
@@ -9,6 +10,7 @@
 #include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
+#include "tex/Generators.h"
 #include "tex/Interop.h"
 #include "tex/Layers.h"
 #include "tex/PainterImport.h"
@@ -62,6 +64,26 @@ json editGraph(const Args& a, const char* cmd, const std::function<json(Graph&, 
     json result = fn(g, s);
     writeGraph(graph(), n, g);
     return result;
+}
+
+/**
+ * Fills a node's unset boundsMin and boundsMax inputs from the bake project's last position map, for nodes that turn that
+ * map's 0-1 values back into proportions (Triplanar, Fresnel).
+ */
+void fillBakeBounds(GNode& n, const SetSettings& s, const char* cmd)
+{
+    const NodeDef* def = findNode(n.type);
+    if (!def || !def->input("boundsMin") || !def->input("boundsMax") || n.values.contains("boundsMin") || n.values.contains("boundsMax"))
+        return;
+    double lo[3], hi[3];
+    if (!bakedPositionBounds(graph(), s.bakeProject, lo, hi))
+    {
+        log::warn("{}: {} has no baked position map to take its bounds from, so it treats the mesh's bounds as a cube; bake Position, "
+                  "then set Bounds Min and Max", cmd, n.name);
+        return;
+    }
+    n.values["boundsMin"] = json::array({lo[0], lo[1], lo[2]});
+    n.values["boundsMax"] = json::array({hi[0], hi[1], hi[2]});
 }
 
 std::pair<std::string, std::string> splitPlug(const std::string& s, const char* cmd)
@@ -551,13 +573,14 @@ void registerCommands()
             std::string type = positionalString(a, 1, "texAddNode", "type");
             if (!findNode(type))
                 throw CommandError("texAddNode: unknown node type '" + type + "'");
-            return editGraph(a, "texAddNode", [&](Graph& g, const SetSettings&) -> json {
+            return editGraph(a, "texAddNode", [&](Graph& g, const SetSettings& s) -> json {
                 std::string base = a.get<std::string>("name", type);
                 if (!gn::validIdentifier(base))
                     throw CommandError("texAddNode: '" + base + "' isn't a valid name");
                 GNode n{g.uniqueNodeName(base), type, {0.0, 0.0}, json::object()};
                 if (a.has("position"))
                     n.position = {a.flags["position"][0].get<double>(), a.flags["position"][1].get<double>()};
+                fillBakeBounds(n, s, "texAddNode");
                 g.nodes.push_back(n);
                 return n.name;
             });
@@ -992,6 +1015,8 @@ void registerCommands()
 
             std::vector<std::string> errors;
             Graph g = graphFromSpec(spec, name, settings, errors);
+            for (GNode& node : g.nodes)
+                fillBakeBounds(node, settings, "texBuildGraph");
             if (!errors.empty())
             {
                 std::string msg = "texBuildGraph: " + std::to_string(errors.size()) + " problem" + (errors.size() == 1 ? "" : "s");
