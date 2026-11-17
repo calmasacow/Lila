@@ -347,6 +347,7 @@ public:
             font = editor->editorFont();
         mEdit->setEditorFont(font);
         mEdit->hostKeyHandler = [this](QKeyEvent* k) { return hostKey(k); };
+        mEdit->singleLine = true;
         lay->addWidget(mEdit);
         setFocusProxy(mEdit);
 
