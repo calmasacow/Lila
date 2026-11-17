@@ -42,7 +42,7 @@ Script quoting: paths in single quotes, forward slashes, `'` escaped as `\'`, no
 
 ## Send (Lila extension)
 
-One `.py` file in `%APPDATA%\Lila\extensions`, loaded once with `loadExtension("<name>", autoload=True)`. Copy `godot_link.py` and change the project check and the export call.
+One `.py` file in `%APPDATA%\Lila\extensions` (every project), or in `<workspace>/.lila/extensions` to share it with a team through the project, loaded once with `loadExtension("<name>", autoload=True)`. Copy `godot_link.py` and change the project check and the export call.
 
 - Register commands (`extension.register_command`) for connect and send, so scripts can call them; the menu actions call the commands.
 - Store the project folder with `lila.prefs.set("general", "/<engine>Link/project", path)`. Validate it by the engine's marker file (`project.godot`, `Assets` + `ProjectSettings`).
