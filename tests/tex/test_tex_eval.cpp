@@ -442,3 +442,36 @@ TEST_CASE("tex: Image reads through its UV input")
     g.node("M")->values["offsetX"] = 0.37;
     CHECK(maxDiff(eval(into(g, "I.out"), "Output", "baseColor", 32), expected) > 0.05);
 }
+
+TEST_CASE("tex: Image gives the file's alpha and reads colour as linear or sRGB")
+{
+    const fs::path file = tempDir("image_alpha") / "half.png";
+    const float v = 128.0f / 255.0f, a = 64.0f / 255.0f;
+    image::writePng(file, 2, 2, std::vector<float>{v, v, v, a, v, v, v, a, v, v, v, a, v, v, v, a}, 8);
+
+    Graph g;
+    add(g, "I", "image", {{"file", file.string()}});
+    PlanRequest r;
+    r.width = r.height = 4;
+    r.outputs = {{"color", "I", "out", PortType::Color, {}}, {"alpha", "I", "alpha", PortType::Gray, {}}};
+    EvalResult linear = evaluateCpu(buildPlan(g, r));
+    CHECK(texel(linear.outputs.at("color"), 1, 1)[0] == doctest::Approx(v).epsilon(1e-3));
+    CHECK(texel(linear.outputs.at("color"), 1, 1)[3] == doctest::Approx(a).epsilon(1e-3));
+    CHECK(texel(linear.outputs.at("alpha"), 1, 1)[0] == doctest::Approx(a).epsilon(1e-3));
+
+    g.node("I")->values["colorSpace"] = "srgb";
+    EvalResult srgb = evaluateCpu(buildPlan(g, r));
+    CHECK(texel(srgb.outputs.at("color"), 1, 1)[0] == doctest::Approx(std::pow((v + 0.055) / 1.055, 2.4)).epsilon(1e-3));
+    CHECK(texel(srgb.outputs.at("color"), 1, 1)[3] == doctest::Approx(a).epsilon(1e-3));
+    CHECK(texel(srgb.outputs.at("alpha"), 1, 1)[0] == doctest::Approx(a).epsilon(1e-3));
+
+    SUBCASE("no file reads alpha 1")
+    {
+        Graph none;
+        add(none, "I", "image");
+        PlanRequest one;
+        one.width = one.height = 4;
+        one.outputs = {{"alpha", "I", "alpha", PortType::Gray, {}}};
+        CHECK(texel(evaluateCpu(buildPlan(none, one)).outputs.at("alpha"), 0, 0)[0] == doctest::Approx(1.0));
+    }
+}
