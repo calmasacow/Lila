@@ -736,10 +736,10 @@ private:
 
     /**
      * Buffers a pass reads anywhere but at its own uv (see Pass::local); those read only within a known texel distance of
-     * it (inputs with a reach, through nodes sampled at uv) go in near instead, with that distance.
+     * it (inputs with a reach, through nodes sampled at uv) go in nearby instead, with that distance.
      */
     void nonLocalReads(const Ref& r, const std::string& rootKey, bool identity, int reach, std::set<std::tuple<int, bool, int>>& seen,
-                       std::set<int>& out, std::map<int, int>& near)
+                       std::set<int>& out, std::map<int, int>& nearby)
     {
         if (r.constant())
             return;
@@ -749,7 +749,7 @@ private:
             if (!identity)
                 out.insert(b);
             else if (reach > 0)
-                near[b] = std::max(near[b], reach);
+                nearby[b] = std::max(nearby[b], reach);
             return;
         }
         if (!seen.insert({r.node, identity, reach}).second)
@@ -757,7 +757,7 @@ private:
         const FlatNode& n = mNodes[size_t(r.node)];
         if (n.def->kind == NodeKind::Buffer)
         {
-            nonLocalReads(n.inputs[0], rootKey, identity, reach, seen, out, near);
+            nonLocalReads(n.inputs[0], rootKey, identity, reach, seen, out, nearby);
             return;
         }
         std::string text = expandCode(n, n.def->code);
@@ -774,9 +774,9 @@ private:
             const bool atUv = samplesAtUv(text, n.ports.inputs[k].id, n);
             const int inputReach = n.ports.inputs[k].reach;
             if (identity && !atUv && inputReach > 0)
-                nonLocalReads(n.inputs[k], rootKey, true, reach + inputReach, seen, out, near);
+                nonLocalReads(n.inputs[k], rootKey, true, reach + inputReach, seen, out, nearby);
             else
-                nonLocalReads(n.inputs[k], rootKey, identity && atUv, reach, seen, out, near);
+                nonLocalReads(n.inputs[k], rootKey, identity && atUv, reach, seen, out, nearby);
         }
         const std::string index = std::to_string(r.node);
         for (const ParamDecl& p : n.ports.params)
@@ -904,16 +904,16 @@ private:
         if (localOut)
         {
             std::set<std::tuple<int, bool, int>> seen;
-            std::set<int> far;
-            std::map<int, int> near;
-            nonLocalReads(root.ref, rootKey, true, 0, seen, far, near);
+            std::set<int> distant;
+            std::map<int, int> nearby;
+            nonLocalReads(root.ref, rootKey, true, 0, seen, distant, nearby);
             localOut->clear();
             if (reachOut)
                 reachOut->clear();
             for (int b : readsOut)
-                if (far.contains(b))
+                if (distant.contains(b))
                     continue;
-                else if (auto it = near.find(b); it != near.end())
+                else if (auto it = nearby.find(b); it != nearby.end())
                 {
                     if (reachOut)
                         (*reachOut)[b] = it->second;
