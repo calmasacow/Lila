@@ -868,6 +868,7 @@ public:
         connect(moreMenu, &QMenu::aboutToShow, wire, [wire] { wire->setChecked(texturePaintDimWire()); });
         moreMenu->addSeparator();
         moreMenu->addAction("Save Brush Preset...", this, [this] { savePresetAs(); });
+        moreMenu->addAction("Reset Brush", this, [] { actions::run(json("tex.resetBrush")); });
         moreMenu->addAction("Image Editor...", this, [this] {
             const QString exe = ui::fileDialog::getOpenFileName(this, "Image Editor", {}, "Programs (*.exe);;All files (*)");
             if (!exe.isEmpty())
@@ -5057,6 +5058,20 @@ std::string quickMaskSet()
     return s.quickMask || !s.quickLimit.empty() ? currentTextureSet() : std::string();
 }
 
+nlohmann::json defaultTexturePaintBrush() { return TexturePaintSettings{}.stroke.toJson(); }
+
+void resetTexturePaintBrush()
+{
+    // An empty preset: what any preset sets goes back to the defaults; channel values and the stencil stay.
+    tex::brushes::Preset none;
+    none.payload = {{"kind", "paint"}};
+    TexturePaintSettings& s = texturePaintState();
+    applyPreset(s, none);
+    s.stroke = TexturePaintSettings{}.stroke;
+    brushChanged();
+    ensureTexturePaint();
+}
+
 void applyTexturePaintPreset(const std::string& id)
 {
     std::optional<tex::brushes::Preset> p = tex::brushes::find(id);
@@ -5122,6 +5137,13 @@ void registerTexturePaintUi()
         if (tool && std::string_view(tool->name()) == "texturePaint")
             quickMaskOverlay::addDraws(fs, quickMaskSet());
     });
+    actions::add({.id = "tex.resetBrush",
+                  .label = "Reset Brush",
+                  .category = "Texture",
+                  .run = [] { resetTexturePaintBrush(); },
+                  .doc = "Put the texture brush back to the default round brush: size, strength, falloff and source, as "
+                         "before any preset. Channel values stay.",
+                  .keywords = {"default brush", "brush preset"}});
     actions::add({.id = "tex.paintWire",
                   .label = "Wireframe While Painting",
                   .category = "Texture",

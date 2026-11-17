@@ -1835,6 +1835,10 @@ struct TextureSetPanel::Impl
         for (const tex::brushes::Preset& p : presets)
             sorted.push_back(&p);
         std::stable_sort(sorted.begin(), sorted.end(), [](auto* a, auto* b) { return a->category < b->category; });
+        // Drawn like every preset, from the default brush.
+        tex::brushes::Preset round;
+        round.brush = defaultTexturePaintBrush();
+        addShelfItem(presetPreview(round), "Default", QString(), "brush", "Default: the round brush as before any preset", "default round reset");
         for (const tex::brushes::Preset* p : sorted)
             addShelfItem(presetPreview(*p), qs(p->name), qs(p->id), "brush",
                          (p->category.empty() ? QString() : qs(p->category) + ": ") + qs(p->name) + (p->doc.empty() ? QString() : "\n" + qs(p->doc)),
@@ -1922,7 +1926,9 @@ struct TextureSetPanel::Impl
             return;
         const QString kind = it->data(Qt::UserRole + 1).toString();
         const std::string id = it->data(Qt::UserRole).toString().toStdString();
-        if (kind == "brush")
+        if (kind == "brush" && id.empty())
+            resetTexturePaintBrush();
+        else if (kind == "brush")
             applyTexturePaintPreset(id);
         else if (kind == "alpha")
             setTexturePaintAlpha(id);

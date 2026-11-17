@@ -75,6 +75,10 @@ LILA_UI_API QWidget* texturePaintPage(QWidget* parent);
 /** The brush preset last applied (tex::brushes id), empty for none. Applying one starts Texture Paint. */
 LILA_UI_API std::string texturePaintPreset();
 LILA_UI_API void applyTexturePaintPreset(const std::string& id);
+/** The default round brush's settings (brush::BrushSettings JSON). */
+LILA_UI_API nlohmann::json defaultTexturePaintBrush();
+/** The default round brush again, as before any preset (tex.resetBrush). Starts Texture Paint. */
+LILA_UI_API void resetTexturePaintBrush();
 /** The brush tip's alpha (brush::alphas path), empty for round. Setting one starts Texture Paint. */
 LILA_UI_API std::string texturePaintAlpha();
 LILA_UI_API void setTexturePaintAlpha(const std::string& alphaPath);
