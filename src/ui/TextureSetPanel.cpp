@@ -799,6 +799,20 @@ std::string textureGraphSet()
     return {};
 }
 
+/** Whether the selection holds a mesh, or a group with one under it. */
+bool selectsMeshes(scene::Graph& g)
+{
+    for (scene::NodeId id : g.selection())
+    {
+        if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+            return true;
+        for (scene::NodeId d : g.descendants(id))
+            if (scene::Node* n = g.node(d); n && n->type().isA("mesh"))
+                return true;
+    }
+    return false;
+}
+
 } // namespace
 
 // Panel ----------------------------------------------------------------------------------------------------------------
@@ -846,6 +860,9 @@ struct TextureSetPanel::Impl
     QSplitter* split = nullptr;
     bool wide = false;
     QWidget* empty = nullptr;
+    QLabel* emptyText = nullptr;
+    /** Follow found meshes selected and no set on their materials: the panel shows none rather than the last one. */
+    bool noSetForSelection = false;
     QTimer* refreshTimer = nullptr;
     int sceneListener = 0;
     int activeListener = 0;
@@ -2417,9 +2434,9 @@ struct TextureSetPanel::Impl
         sets->clear();
         for (const std::string& n : names)
             sets->addItem(icon("texture"), qs(n), qs(n));
-        if (set.empty() || std::find(names.begin(), names.end(), set) == names.end())
+        if (!(set.empty() && noSetForSelection) && (set.empty() || std::find(names.begin(), names.end(), set) == names.end()))
             set = names.empty() ? std::string() : names.front();
-        sets->setCurrentIndex(sets->findData(qs(set)));
+        sets->setCurrentIndex(set.empty() ? -1 : sets->findData(qs(set)));
         sets->blockSignals(false);
     }
 
@@ -2445,6 +2462,8 @@ struct TextureSetPanel::Impl
             }
         }
         empty->setVisible(!n);
+        emptyText->setText(noSetForSelection ? "No texture set on the selected meshes. Click New Texture Set to make one."
+                                             : "No texture set. Click New Texture Set to make one for the selected meshes.");
         const std::string sKey = n ? nextSettings.toJson().dump() : std::string();
         const std::string vKey = set + "|" + nextView.dump() + "|" + sKey + "|" + shownChannel() + "|" + textureSets::activeLayer(set);
         settings = nextSettings;
@@ -2635,6 +2654,7 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->sets->setToolTip("The texture set shown");
     d->sets->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     d->sets->setMinimumContentsLength(10);
+    d->sets->setPlaceholderText("No texture set");
     d->follow = new QToolButton(this);
     d->follow->setText("Follow");
     d->follow->setToolTip("Follow: show the set of the selected mesh's material");
@@ -2759,7 +2779,8 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
     d->empty = new QWidget(this);
     auto* eh = new QVBoxLayout(d->empty);
     eh->setContentsMargins(0, 4, 0, 4);
-    eh->addWidget(dim(d->empty, "No texture set. Click New Texture Set to start a layer stack for the selected mesh's material."));
+    d->emptyText = dim(d->empty, "No texture set. Click New Texture Set to make one for the selected meshes.");
+    eh->addWidget(d->emptyText);
     auto* make = new QPushButton("New Texture Set", d->empty);
     connect(make, &QPushButton::clicked, this, [] { actions::run(json("texture.newSet")); });
     eh->addWidget(make);
@@ -3017,11 +3038,22 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
                     return;
                 if (GraphBackendPtr b = graphBackends::find(kTextureGraphBackend))
                 {
-                    GraphBackend::Owner o = b->followSelection(scene::Graph::current());
-                    if (!o.group.empty() && o.group != d->set)
+                    scene::Graph& g = scene::Graph::current();
+                    GraphBackend::Owner o = b->followSelection(g);
+                    if (!o.group.empty() && (o.group != d->set || d->noSetForSelection))
                     {
                         d->set = o.group;
+                        d->noSetForSelection = false;
                         showInTextureGraphs(o.group);
+                        d->selLayer.clear();
+                        d->selMask.clear();
+                        d->scheduleRefresh();
+                    }
+                    // Meshes picked whose materials have no set: show that, not the set picked before.
+                    else if (o.group.empty() && selectsMeshes(g) && !d->noSetForSelection)
+                    {
+                        d->set.clear();
+                        d->noSetForSelection = true;
                         d->selLayer.clear();
                         d->selMask.clear();
                         d->scheduleRefresh();
@@ -3058,6 +3090,7 @@ TextureSetPanel::TextureSetPanel(QWidget* parent) : QWidget(parent), d(std::make
         if (group.empty() || group == d->set)
             return;
         d->set = group;
+        d->noSetForSelection = false;
         d->selLayer.clear();
         d->selMask.clear();
         d->scheduleRefresh();
@@ -3124,6 +3157,7 @@ void TextureSetPanel::setTextureSet(const std::string& set)
     if (set == d->set)
         return;
     d->set = set;
+    d->noSetForSelection = false;
     d->selLayer.clear();
     d->selMask.clear();
     d->refresh();

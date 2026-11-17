@@ -9,6 +9,7 @@
 #include "core/Log.h"
 #include "core/Profile.h"
 #include "ops/Command.h"
+#include "ops/Undo.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "scene/Node.h"
@@ -36,27 +37,23 @@ namespace
 namespace tp = tex::paint;
 namespace rp = render::paint;
 
-/** The mesh a set paints: the first using its material, else the first mesh. */
-std::string meshOf(scene::Graph& g, const scene::Node& set)
+/** The meshes Texture Paint reaches that use the set's material. */
+std::vector<std::string> meshesOf(scene::Graph& g, const scene::Node& set)
 {
     g.evaluate();
     const std::string material = rp::setMaterial(set);
-    std::string any;
-    for (scene::NodeId id : g.nodes())
+    std::vector<std::string> out;
+    for (scene::NodeId id : texturePaintTargets())
     {
         scene::Node* n = g.node(id);
-        if (!n || !n->type().isA("mesh"))
-            continue;
-        scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        scene::MeshPtr m = n ? n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh) : nullptr;
         if (!m || !m->numFaces())
             continue;
-        if (any.empty())
-            any = n->path();
         const auto& names = m->materialNames();
         if (std::find(names.begin(), names.end(), material) != names.end())
-            return n->path();
+            out.push_back(n->path());
     }
-    return any;
+    return out;
 }
 
 double area3(const tp::PaintMesh& m, uint32_t t)
@@ -171,27 +168,130 @@ struct UvTexturePaint::State
     std::optional<double> radius;
 
     UvScale scale;
-    /** The mesh the set paints, kept for the hover cursor; empty finds it again. */
+    /** The meshes the set paints here, found again at each press; and the one under the cursor. */
+    std::vector<std::string> paths;
     std::string hoverPath;
+    /** What each mesh's part of a stroke starts from; the parts commit as one undo step. */
+    tp::Stroke header;
+    std::optional<UndoChunk> chunk;
 
-    /** The painted mesh node and its paint mesh, for the cursor and the stroke; nulls without one. */
-    std::pair<scene::Node*, std::shared_ptr<const tp::PaintMesh>> target()
+    std::shared_ptr<const tp::PaintMesh> paintMesh(const std::string& path) const
     {
         scene::Graph& g = scene::Graph::current();
         scene::Node* s = tex::findSet(g, set);
-        if (!s)
-            return {};
-        scene::Node* n = hoverPath.empty() ? nullptr : g.find(hoverPath);
-        if (!n)
-        {
-            hoverPath = meshOf(g, *s);
-            n = hoverPath.empty() ? nullptr : g.find(hoverPath);
-        }
-        std::shared_ptr<const tp::PaintMesh> pm = n ? rp::paintMesh(g, hoverPath, rp::setMaterial(*s)) : nullptr;
+        return s ? rp::paintMesh(g, path, rp::setMaterial(*s)) : nullptr;
+    }
+
+    /** The mesh with a triangle within tolerance (uv) of uv, prefer tried first; empty when none. */
+    std::string meshAt(const glm::vec2& uv, float tolerance, const std::string& prefer = {})
+    {
+        if (paths.empty())
+            if (scene::Node* s = tex::findSet(scene::Graph::current(), set))
+                paths = meshesOf(scene::Graph::current(), *s);
+        auto hits = [&](const std::string& p) {
+            std::shared_ptr<const tp::PaintMesh> pm = paintMesh(p);
+            uint32_t tri = 0;
+            float u = 0.0f, v = 0.0f;
+            return pm && pm->atUv(uv, tri, u, v, tolerance);
+        };
+        if (!prefer.empty() && hits(prefer))
+            return prefer;
+        for (const std::string& p : paths)
+            if (p != prefer && hits(p))
+                return p;
+        return {};
+    }
+
+    /** The mesh node and paint mesh for the cursor: the one under uv, else the last hovered, else the first; nulls without one. */
+    std::pair<scene::Node*, std::shared_ptr<const tp::PaintMesh>> target(const glm::vec2& uv)
+    {
+        if (std::string under = meshAt(uv, 0.0f, hoverPath); !under.empty())
+            hoverPath = under;
+        if (hoverPath.empty() && !paths.empty())
+            hoverPath = paths.front();
+        scene::Node* n = hoverPath.empty() ? nullptr : scene::Graph::current().find(hoverPath);
+        std::shared_ptr<const tp::PaintMesh> pm = n ? paintMesh(hoverPath) : nullptr;
         if (!pm)
             return {};
         scale.update(*pm);
         return {n, pm};
+    }
+
+    /** Starts the stroke's part on the mesh at path: its own record, symmetry and size. False when it can't paint. */
+    bool beginSegment(const std::string& path)
+    {
+        scene::Graph& g = scene::Graph::current();
+        scene::Node* s = g.node(setId);
+        scene::Node* node = g.find(path);
+        std::shared_ptr<const tp::PaintMesh> pm = paintMesh(path);
+        if (!s || !node || !pm)
+            return false;
+        auto h = std::make_shared<tp::Stroke>(header);
+        uint64_t top = 0;
+        if (const tp::Buffer* b = tp::readPaint(*s)->buffer(layer))
+            for (const auto& st : b->strokes)
+                top = std::max(top, st->id);
+        h->id = top + 1;
+        h->mesh = path;
+        // Mirrored and radial copies land on the surface (through the mesh's point pairs), wherever their uvs are, and
+        // whenever the mesh has symmetry, as viewport strokes are.
+        brush::BrushSettings b = brush;
+        b.mirror = scene::symmetrySpec(*node).has_value();
+        scene::MeshPtr outMesh = node->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        sym = tp::brushSymmetry(b, outMesh.get(), scene::paintSymmetrySpec(*node));
+        h->symmetry = sym.toJson();
+        try
+        {
+            rp::beginLive(g, *s, layer, h);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("UV editor: {}", ex.what());
+            return false;
+        }
+        mesh = pm;
+        meshPath = path;
+        scale.update(*pm);
+        radius = objectRadius(brush, *node, scale.centre);
+        record = *h;
+        record.dabs.clear();
+        return true;
+    }
+
+    /** Commits the current mesh's part of the stroke; with no dabs, only drops its live pages. */
+    void commitSegment()
+    {
+        if (record.dabs.empty())
+        {
+            rp::cancelLive(setId, layer);
+            return;
+        }
+        try
+        {
+            ops::execute("texPaintStroke", {{"args", {set, layer}}, {"stroke", record.toJson(false)}}, CallSource::Script);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("UV editor: {}", ex.what());
+            rp::cancelLive(setId, layer);
+        }
+        record.dabs.clear();
+    }
+
+    void paint(std::vector<tp::Dab>& dabs)
+    {
+        if (dabs.empty())
+            return;
+        try
+        {
+            rp::liveDabs(setId, layer, dabs);
+        }
+        catch (const std::exception& ex)
+        {
+            log::warn("UV editor: {}", ex.what());
+        }
+        record.dabs.insert(record.dabs.end(), dabs.begin(), dabs.end());
+        dabs.clear();
     }
 };
 
@@ -234,6 +334,7 @@ void UvTexturePaint::setChannel(const std::string& set, const std::string& chann
     m->channel = channel;
     m->tiles.clear();
     m->hoverPath.clear();
+    m->paths.clear();
     if (shown())
         m->poll.start();
     else
@@ -318,7 +419,7 @@ void UvTexturePaint::drawCursor(QPainter& p, QPointF at, const ToUv& toUv, doubl
         return;
     const brush::BrushSettings b = brush::BrushSettings::fromJson(texturePaintSettings()["brush"]);
     double r = b.radius;
-    if (auto [node, mesh] = m->target(); node)
+    if (auto [node, mesh] = m->target(glm::vec2(toUv(at))); node)
         if (std::optional<double> radius = objectRadius(b, *node, m->scale.centre))
             r = *radius / m->scale.at(glm::vec2(toUv(at))) * pxPerUv;
     p.setPen(QPen(QColor(230, 230, 230), 1.0));
@@ -359,15 +460,13 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
         log::warn("UV editor: {}", ex.what());
         return true;
     }
-    m->hoverPath.clear();
-    scene::Node* meshNode = nullptr;
-    std::tie(meshNode, m->mesh) = m->target();
-    m->meshPath = m->mesh ? m->hoverPath : std::string();
-    if (!m->mesh)
+    m->paths = meshesOf(g, *set);
+    if (m->paths.empty())
     {
-        log::warn("UV editor: no mesh uses {}'s material", m->set);
+        log::warn("UV editor: no mesh Texture Paint reaches uses {}'s material; select the meshes to paint, or none for all", m->set);
         return true;
     }
+    const glm::vec2 at(toUv(e->position()));
     if (payload.kind == "project")
     {
         log::warn("UV editor: the projection buffer paints in the viewport");
@@ -380,15 +479,17 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
     m->tileable = tex::readSettings(*set).tileable;
     if (payload.kind == "fill")
     {
+        const std::string path = m->meshAt(at, 0.0f);
+        std::shared_ptr<const tp::PaintMesh> pm = path.empty() ? nullptr : m->paintMesh(path);
         uint32_t tri = 0;
         float u = 0.0f, v = 0.0f;
-        if (!m->mesh->atUv(glm::vec2(toUv(e->position())), tri, u, v))
+        if (!pm || !pm->atUv(at, tri, u, v))
             return true;
         json pay = s["payload"];
         pay["triangle"] = tri;
         try
         {
-            ops::execute("texPaintStroke", {{"args", {m->set, m->layer}}, {"stroke", {{"mesh", m->meshPath}, {"payload", pay}}}}, CallSource::UI);
+            ops::execute("texPaintStroke", {{"args", {m->set, m->layer}}, {"stroke", {{"mesh", path}, {"payload", pay}}}}, CallSource::UI);
         }
         catch (const std::exception& ex)
         {
@@ -400,41 +501,24 @@ bool UvTexturePaint::mousePress(QMouseEvent* e, const ToUv& toUv, double pxPerUv
         for (const tex::Channel& c : tex::readSettings(*set).channels)
             payload.channels[c.name] = glm::vec3(0.0f);
     m->brush = brush::BrushSettings::fromJson(s["brush"]);
-    auto header = std::make_shared<tp::Stroke>();
-    uint64_t top = 0;
-    if (const tp::Buffer* b = tp::readPaint(*set)->buffer(m->layer))
-        for (const auto& st : b->strokes)
-            top = std::max(top, st->id);
-    header->id = top + 1;
-    header->mesh = m->meshPath;
-    header->brush = m->brush.toJson();
-    header->payload = payload;
+    m->header = tp::Stroke();
+    m->header.brush = m->brush.toJson();
+    m->header.payload = payload;
     // No view: painted in uv, both sides of a seam take the paint by 3D distance as in the viewport.
-    header->occlusion = false;
+    m->header.occlusion = false;
+    m->header.seed = m->brush.seed;
+    std::string first = m->meshAt(at, 0.0f);
+    if (first.empty())
+        first = m->paths.front();
+    m->chunk.emplace("Paint Stroke");
+    if (!m->beginSegment(first))
     {
-        // Mirrored and radial copies land on the surface (through the mesh's point pairs), wherever their uvs are.
-        scene::MeshPtr outMesh = meshNode->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
-        // Mirrored whenever the mesh has symmetry, as viewport strokes are.
-        brush::BrushSettings b = m->brush;
-        b.mirror = scene::symmetrySpec(*meshNode).has_value();
-        m->sym = tp::brushSymmetry(b, outMesh.get(), scene::paintSymmetrySpec(*meshNode));
-        header->symmetry = m->sym.toJson();
-    }
-    header->seed = m->brush.seed;
-    m->record = *header;
-    m->record.dabs.clear();
-    try
-    {
-        rp::beginLive(g, *set, m->layer, header);
-    }
-    catch (const std::exception& ex)
-    {
-        log::warn("UV editor: {}", ex.what());
+        m->chunk.reset();
         return true;
     }
+    m->hoverPath = first;
     m->stroking = true;
-    m->radius = objectRadius(m->brush, *meshNode, m->scale.centre);
-    const double screenRadius = m->radius ? *m->radius / m->scale.at(glm::vec2(toUv(e->position()))) * pxPerUv : m->brush.radius;
+    const double screenRadius = m->radius ? *m->radius / m->scale.at(at) * pxPerUv : m->brush.radius;
     m->sampler.begin(m->brush, {{e->position().x(), e->position().y()}, 1.0}, screenRadius);
     mouseMove(e, toUv, pxPerUv);
     return true;
@@ -459,21 +543,25 @@ bool UvTexturePaint::mouseMove(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
         uint32_t tri = 0;
         float u = 0.0f, v = 0.0f;
         tp::Dab d;
+        // As the viewport sizes dabs: a light touch still leaves 5%.
+        const double radius = m->radius ? *m->radius * std::max(0.05, m->brush.pressureSize.map(s.pressure)) * s.size : 0.0;
+        const double radiusUv = m->brush.radius * m->brush.pressureSize.map(s.pressure) * s.size / std::max(pxPerUv, 1e-9);
+        const float reach = float(m->radius ? radius / m->scale.average : radiusUv);
+        if (!m->mesh->atUv(uv, tri, u, v, reach))
+        {
+            // Off this mesh: another one in the same uv space may be under the dab.
+            const std::string other = m->meshAt(uv, reach, m->meshPath);
+            if (other.empty() || other == m->meshPath)
+                continue;
+            m->paint(dabs);
+            m->commitSegment();
+            if (!m->beginSegment(other) || !m->mesh->atUv(uv, tri, u, v, reach))
+                continue;
+        }
         if (m->radius)
-        {
-            // As the viewport sizes dabs: a light touch still leaves 5%.
-            const double radius = *m->radius * std::max(0.05, m->brush.pressureSize.map(s.pressure)) * s.size;
-            if (!m->mesh->atUv(uv, tri, u, v, float(radius / m->scale.average)))
-                continue;
             d.radius = float(std::max(radius, 1e-6));
-        }
         else
-        {
-            const double radiusUv = m->brush.radius * m->brush.pressureSize.map(s.pressure) * s.size / std::max(pxPerUv, 1e-9);
-            if (!m->mesh->atUv(uv, tri, u, v, float(radiusUv)))
-                continue;
             d.radius = float(std::max(radiusUv * m->scale.at(tri), 1e-6));
-        }
         d.triangle = tri;
         d.u = u;
         d.v = v;
@@ -487,18 +575,7 @@ bool UvTexturePaint::mouseMove(QMouseEvent* e, const ToUv& toUv, double pxPerUv)
                     dabs.push_back(w);
         }
     }
-    if (!dabs.empty())
-    {
-        try
-        {
-            rp::liveDabs(m->setId, m->layer, dabs);
-        }
-        catch (const std::exception& ex)
-        {
-            log::warn("UV editor: {}", ex.what());
-        }
-        m->record.dabs.insert(m->record.dabs.end(), dabs.begin(), dabs.end());
-    }
+    m->paint(dabs);
     return true;
 }
 
@@ -551,20 +628,8 @@ bool UvTexturePaint::mouseRelease(QMouseEvent* e, const ToUv& toUv, double pxPer
     m->sampler.end();
     mouseMove(e, toUv, pxPerUv);
     m->stroking = false;
-    if (m->record.dabs.empty())
-    {
-        rp::cancelLive(m->setId, m->layer);
-        return true;
-    }
-    try
-    {
-        ops::execute("texPaintStroke", {{"args", {m->set, m->layer}}, {"stroke", m->record.toJson(false)}}, CallSource::Script);
-    }
-    catch (const std::exception& ex)
-    {
-        log::warn("UV editor: {}", ex.what());
-        rp::cancelLive(m->setId, m->layer);
-    }
+    m->commitSegment();
+    m->chunk.reset();
     return true;
 }
 } // namespace lila::ui

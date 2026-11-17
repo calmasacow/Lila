@@ -4,6 +4,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
+#include <vector>
+
 class QWidget;
 
 namespace lila::ui
@@ -25,6 +28,12 @@ namespace lila::ui
  *   Esc                  cancel the stroke, clear the buffer, or leave the tool
  */
 LILA_UI_API void startTexturePaint();
+
+/**
+ * The meshes Texture Paint reaches, in the viewport and the 2D View: the selected meshes and the meshes under selected
+ * groups, else every mesh. Ids are scene::NodeId.
+ */
+LILA_UI_API std::vector<uint64_t> texturePaintTargets();
 
 /** Texture Paint is the active viewport tool (the 2D View paints with it then). */
 LILA_UI_API bool texturePaintActive();

@@ -163,10 +163,17 @@ public:
     std::string newGroupAction() const override { return "texture.newSet"; }
     std::vector<std::string> fileSuffixes() const override { return {"lilamat", "lilatexnodes", "lilatexnode"}; }
 
-    /** A selected texture set, else the set bound to a material slot of a selected mesh. */
+    /** A selected texture set, else the set bound to a material slot of a selected mesh or a mesh under a selected group. */
     Owner followSelection(scene::Graph& g) const override
     {
+        std::vector<scene::NodeId> ids;
         for (scene::NodeId id : g.selection())
+        {
+            ids.push_back(id);
+            for (scene::NodeId d : g.descendants(id))
+                ids.push_back(d);
+        }
+        for (scene::NodeId id : ids)
         {
             scene::Node* n = g.node(id);
             if (!n)

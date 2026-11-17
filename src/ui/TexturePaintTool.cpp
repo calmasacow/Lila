@@ -3165,7 +3165,7 @@ public:
             auto it = gLayers.find(t->set);
             status.subject = QString::fromStdString(t->setName);
             status.mode = QString::fromStdString(st.tool);
-            status.fields = {{"layer", it != gLayers.end() ? QString::fromStdString(it->second) : QString("new layer")}};
+            status.fields = {{"layer", it != gLayers.end() ? QString::fromStdString(it->second) : QString("new layer")}, {"meshes", reachLabel()}};
             if ((st.tool == "clone" || st.tool == "heal") && !mCloneUv)
                 status.keys = {{"Ctrl+Alt+click", "set source"}};
         }
@@ -3228,14 +3228,7 @@ private:
         LILA_ZONE();
         scene::Graph& g = scene::Graph::current();
         g.evaluate();
-        std::vector<NodeId> candidates;
-        for (NodeId id : g.selection())
-            if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
-                candidates.push_back(id);
-        if (candidates.empty())
-            for (NodeId id : g.nodes())
-                if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
-                    candidates.push_back(id);
+        const std::vector<NodeId> candidates = texturePaintTargets();
         glm::dvec3 o, d;
         view.ray(px, o, d);
         std::optional<Target> best;
@@ -3328,6 +3321,15 @@ private:
         const std::string layer = texturePaintState().quickMask ? std::string(kQuickMaskBuffer) : layerFor(*set);
         if (layer.empty())
             return false;
+        // A buffer paints one mesh's live stroke at a time: what the stroke laid on another mesh of it commits first.
+        for (auto it = mSegments.begin(); it != mSegments.end();)
+            if (it->target.set == t.set && it->layer == layer)
+            {
+                commitSegment(*it);
+                it = mSegments.erase(it);
+            }
+            else
+                ++it;
         auto header = std::make_shared<tp::Stroke>(*mStrokeTemplate);
         uint64_t top = 0;
         if (const tex::paint::Buffer* b = tex::paint::readPaint(*set)->buffer(layer))
@@ -3837,6 +3839,8 @@ private:
         mRecord = *header;
         mRecord.dabs.clear();
         mSegments.clear();
+        // Every mesh the stroke crosses commits into one undo step, some of them while it is still being drawn.
+        mStrokeChunk.emplace("Paint Stroke");
         mTileable = tex::readSettings(*set).tileable;
         mStrokeTemplate = std::make_shared<tp::Stroke>(mRecord);
         if (!materialsShown())
@@ -3916,38 +3920,63 @@ private:
         viewportTools::requestRedraw();
     }
 
+    /** How many meshes strokes reach, for the status line: the selected ones, else all. */
+    QString reachLabel()
+    {
+        scene::Graph& g = scene::Graph::current();
+        if (mReachLabel.isEmpty() || g.selection() != mReachSelection)
+        {
+            mReachSelection = g.selection();
+            bool selected = false;
+            for (NodeId id : mReachSelection)
+            {
+                std::vector<NodeId> under = g.descendants(id);
+                under.push_back(id);
+                selected = selected || std::ranges::any_of(under, [&](NodeId u) {
+                    scene::Node* n = g.node(u);
+                    return n && n->type().isA("mesh");
+                });
+            }
+            const size_t count = selected ? texturePaintTargets().size() : 0;
+            mReachLabel = selected ? QString("%1 selected").arg(count) : QString("all");
+        }
+        return mReachLabel;
+    }
+
+    /** Commits one mesh's part of the stroke; an empty one only drops its live pages. */
+    void commitSegment(const Segment& sg)
+    {
+        scene::Node* set = scene::Graph::current().node(sg.target.set);
+        if (!set || sg.record.dabs.empty())
+        {
+            rp::cancelLive(sg.target.set, sg.layer);
+            return;
+        }
+        try
+        {
+            // The record goes in unechoed: it can hold thousands of dabs.
+            ops::execute("texPaintStroke", {{"args", {set->name(), sg.layer}}, {"stroke", sg.record.toJson(false)}}, CallSource::Script);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("Texture paint: {}", e.what());
+            rp::cancelLive(sg.target.set, sg.layer);
+        }
+    }
+
     void endStroke()
     {
         mAirTimer.reset();
         mStroke.end();
         flush();
         mStroking = false;
-        scene::Graph& g = scene::Graph::current();
         std::vector<Segment> segments = std::exchange(mSegments, {});
         std::erase_if(segments, [&](const Segment& sg) { return sg.target.mesh == mTarget.mesh && sg.target.set == mTarget.set; });
         segments.push_back({mTarget, mLayer, mRecord, mSym});
         mStrokeTemplate.reset();
-        // Every mesh the stroke crossed commits in one undo step.
-        UndoChunk chunk("Paint Stroke");
         for (const Segment& sg : segments)
-        {
-            scene::Node* set = g.node(sg.target.set);
-            if (!set || sg.record.dabs.empty())
-            {
-                rp::cancelLive(sg.target.set, sg.layer);
-                continue;
-            }
-            try
-            {
-                // The record goes in unechoed: it can hold thousands of dabs.
-                ops::execute("texPaintStroke", {{"args", {set->name(), sg.layer}}, {"stroke", sg.record.toJson(false)}}, CallSource::Script);
-            }
-            catch (const std::exception& e)
-            {
-                log::warn("Texture paint: {}", e.what());
-                rp::cancelLive(sg.target.set, sg.layer);
-            }
-        }
+            commitSegment(sg);
+        mStrokeChunk.reset();
         // The stroke may have wired new channels; the next hover compiles what the stroke after it would add.
         mWarmedSet = kNoNode;
         viewportTools::requestRedraw();
@@ -3963,6 +3992,7 @@ private:
             rp::cancelLive(sg.target.set, sg.layer);
         mStrokeTemplate.reset();
         rp::cancelLive(mTarget.set, mLayer);
+        mStrokeChunk.reset();
         viewportTools::requestRedraw();
     }
 
@@ -4796,6 +4826,10 @@ private:
     tp::PaintSymmetry mSym;
     /** The meshes a stroke left for another, and the header every new one starts from. */
     std::vector<Segment> mSegments;
+    /** reachLabel's answer, kept until the selection changes. */
+    std::vector<NodeId> mReachSelection;
+    QString mReachLabel;
+    std::optional<UndoChunk> mStrokeChunk;
     std::unique_ptr<QTimer> mAirTimer;
     QElapsedTimer mAirClock;
     bool mTileable = false;
@@ -4914,6 +4948,26 @@ std::optional<std::pair<std::string, std::string>> actionTarget()
     return std::make_pair(set->name(), layer);
 }
 } // namespace
+
+std::vector<uint64_t> texturePaintTargets()
+{
+    scene::Graph& g = scene::Graph::current();
+    std::vector<NodeId> out;
+    auto add = [&](NodeId id) {
+        if (scene::Node* n = g.node(id); n && n->type().isA("mesh") && std::ranges::find(out, id) == out.end())
+            out.push_back(id);
+    };
+    for (NodeId id : g.selection())
+    {
+        add(id);
+        for (NodeId d : g.descendants(id))
+            add(d);
+    }
+    if (out.empty())
+        for (NodeId id : g.nodes())
+            add(id);
+    return out;
+}
 
 void startTexturePaint() { viewportTools::set(std::make_unique<TexturePaintTool>()); }
 
