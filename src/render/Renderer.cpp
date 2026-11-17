@@ -8310,12 +8310,19 @@ struct Renderer::Impl
             // Big uploads leave big staging buffers, slow to free: they go once the GPU is done with them, while the
             // thread is idle, instead of in front of the next frame drawn into the same slot.
             const auto wake = nextWake();
+            // A frame submitted under the cap is due later than this wait would end; wake to re-arm for its time.
+            auto readyOrSooner = [&] {
+                if (ready())
+                    return true;
+                const auto next = nextWake();
+                return next && (!wake || *next < *wake);
+            };
             if (reclaimStaging())
-                cv.wait_for(lock, std::chrono::milliseconds(20), ready);
+                cv.wait_for(lock, std::chrono::milliseconds(20), readyOrSooner);
             else if (wake)
-                cv.wait_until(lock, *wake, ready);
+                cv.wait_until(lock, *wake, readyOrSooner);
             else
-                cv.wait(lock, ready);
+                cv.wait(lock, readyOrSooner);
             if (quit)
                 break;
 
