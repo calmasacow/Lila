@@ -25,7 +25,7 @@ inline constexpr const char* kTexture2dDock = "texture2d";
  */
 LILA_UI_API void registerTextureGraphUi();
 
-/** The texture set a material slot binds to: the one whose material setting names the slot, else the one named like it. */
+/** The texture set painting on a material slot goes into (tex::setForMaterial); empty when the material uses none. */
 LILA_UI_API std::string textureSetForSlot(scene::Graph& g, const std::string& slot);
 
 /** Shows the Texture Graph panel with the set open in its editors. */

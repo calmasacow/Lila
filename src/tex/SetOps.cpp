@@ -512,7 +512,7 @@ json exportSet(scene::Node& set, const ExportOptions& options)
         {
             bake::NameTokens tokens;
             tokens.project = set.name();
-            tokens.material = s.material.empty() ? set.name() : s.material;
+            tokens.material = set.name();
             tokens.map = j.suffix;
             tokens.ext = j.format;
             tokens.udim = t.udim;

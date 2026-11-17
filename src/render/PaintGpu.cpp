@@ -2591,8 +2591,16 @@ StrokePtr retarget(const StrokePtr& s, const PaintMesh& mesh, RetargetCount& n) 
 
 std::string setMaterial(const scene::Node& set)
 {
-    const tex::SetSettings s = tex::readSettings(set);
-    return s.material.empty() ? set.name() : s.material;
+    std::string key;
+    for (const std::string& m : tex::materialsUsing(scene::Graph::current(), set.name()))
+        key += (key.empty() ? "" : std::string(1, tex::paint::kMaterialSeparator)) + m;
+    return key;
+}
+
+bool usesSet(const std::vector<std::string>& materialNames, const scene::Node& set)
+{
+    const std::vector<std::string> users = tex::materialsUsing(scene::Graph::current(), set.name());
+    return std::ranges::any_of(materialNames, [&](const std::string& m) { return std::ranges::find(users, m) != users.end(); });
 }
 
 scene::MeshPtr paintSurface(const scene::Node& meshNode)

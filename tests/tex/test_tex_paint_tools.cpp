@@ -526,7 +526,7 @@ TEST_CASE("texture paint tools: stroke frame time at 2K and 4K with 8 channels")
         }
         tex::writeGraph(sg(), set, g);
         ui::texLive::install();
-        REQUIRE(ui::texLive::mapsFor("Panel"));
+        REQUIRE(ui::texLive::mapsFor("M_Panel"));
         REQUIRE(ui::texLive::waitIdle(120000));
 
         tp::Stroke header;

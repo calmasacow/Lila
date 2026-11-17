@@ -74,6 +74,10 @@ using namespace scene::material;
 namespace fs = std::filesystem;
 
 constexpr int kPreviewThumb = 40;
+/** A map picker row value that takes the map from the texture set named after it. */
+constexpr const char* kSetValuePrefix = "texset:";
+
+void dimLabel(QLabel* l) { l->setStyleSheet("color: #8a8a8a;"); }
 constexpr int kPreviewSize = 112;
 
 QColor displayColor(const glm::dvec3& linear)
@@ -290,38 +294,58 @@ bool hasTextureMaps(const scene::Node& material)
     return false;
 }
 
-/** The texture set drawing a material in the viewport, and the material's map slots it replaces there. */
+/** The texture sets drawing a material's maps in the viewport: per map slot, the set that supplies it there. */
 struct BoundSet
 {
-    std::string name;
-    std::set<int> replaced;
+    std::map<int, std::string> from;
 };
+
+/** Whether a set has what the viewport draws in one of the material's map slots. */
+bool setSupplies(const tex::SetSettings& s, int attr)
+{
+    switch (attr)
+    {
+    case kBaseColorMap: return s.channel("baseColor") != nullptr;
+    case kNormalMap: return s.channel("normal") != nullptr;
+    case kEmissiveMap: return s.channel("emissive") != nullptr;
+    case kAmbientOcclusionMap: return s.channel("ao") != nullptr;
+    case kRoughnessMap: return s.channel("roughness") != nullptr;
+    case kMetallicMap: return s.channel("metallic") != nullptr;
+    case kOrmMap: return s.channel("ao") || s.channel("roughness") || s.channel("metallic");
+    default: return false;
+    }
+}
 
 BoundSet boundSet(const scene::Node& material)
 {
     scene::Graph& g = scene::Graph::current();
+    BoundSet out;
     if (!PrefStore::get().value<bool>("general", "/texture/liveViewport", true))
-        return {};
-    BoundSet out{textureSetForSlot(g, material.name()), {}};
-    scene::Node* set = out.name.empty() ? nullptr : tex::findSet(g, out.name);
-    if (!set)
-        return {};
-    try
+        return out;
+    for (const auto& [channel, attr] : scene::materials::textureChannels())
     {
-        const tex::SetSettings s = tex::readSettings(*set);
-        if (s.channel("baseColor"))
-            out.replaced.insert(kBaseColorMap);
-        if (s.channel("normal"))
-            out.replaced.insert(kNormalMap);
-        if (s.channel("emissive"))
-            out.replaced.insert(kEmissiveMap);
-        // The set's occlusion, roughness and metallic draw from one packed image, so any of them takes all four slots.
-        if (s.channel("ao") || s.channel("roughness") || s.channel("metallic"))
-            out.replaced.insert({kAmbientOcclusionMap, kRoughnessMap, kMetallicMap, kOrmMap});
+        const std::string name = scene::materials::textureSetFor(material, channel);
+        scene::Node* set = name.empty() ? nullptr : tex::findSet(g, name);
+        if (!set)
+            continue;
+        try
+        {
+            if (setSupplies(tex::readSettings(*set), attr))
+                out.from[attr] = name;
+        }
+        catch (const std::exception&)
+        {
+        }
     }
-    catch (const std::exception&)
-    {
-    }
+    return out;
+}
+
+/** A material map picker's rows for taking the map from a texture set: "texset:<set>" values. */
+std::vector<texturePicker::Item> setItems()
+{
+    std::vector<texturePicker::Item> out;
+    for (const std::string& name : tex::setNames(scene::Graph::current()))
+        out.push_back({kSetValuePrefix + name, qs(name), {}, "Texture Sets"});
     return out;
 }
 
@@ -1054,9 +1078,22 @@ void MaterialEditor::rebuild()
         QLabel* l = label(text);
         auto* box = new ImagePicker(nullptr, text, mBody);
         grid->addWidget(box, row++, 1, 1, 2);
+        box->setExtraItems(setItems);
+        // A file or None stops the map's own texture set pick; a "texset:" row starts one.
         auto apply = [this, channel](const std::string& p) {
-            if (scene::Node* m = current())
-                runUi("setMaterialTexture", {{"args", json::array({m->path()})}, {"channel", channel}, {"path", p}});
+            scene::Node* m = current();
+            if (!m)
+                return;
+            json call = {{"args", json::array({m->path()})}, {"channel", channel}};
+            if (p.starts_with(kSetValuePrefix))
+                call["textureSet"] = p.substr(std::string_view(kSetValuePrefix).size());
+            else
+            {
+                call["path"] = p;
+                if (scene::materials::textureSetMaps(*m).contains(channel))
+                    call["textureSet"] = "";
+            }
+            runUi("setMaterialTexture", call);
         };
         box->setResolver([](const std::string& p) { return paths::fromUtf8(scene::materials::resolvePath(p)); });
         box->setProblem([](const std::filesystem::path& f) { return textures::error(paths::toUtf8(f)); });
@@ -1065,11 +1102,16 @@ void MaterialEditor::rebuild()
             if (scene::Node* m = current())
                 assignByName(*m, files);
         });
-        connect(box, &ImagePicker::chosen, this, [this, apply, attr](const QString& v) {
+        connect(box, &ImagePicker::chosen, this, [this, apply, attr, channel](const QString& v) {
             scene::Node* m = current();
-            if (m && v.toStdString() != m->as<std::string>(attr))
+            if (m && (v.toStdString() != m->as<std::string>(attr) || scene::materials::textureSetMaps(*m).contains(channel)))
                 apply(v.toStdString());
         });
+        auto* from = new QLabel(mBody);
+        from->setObjectName(QString("mapFromSet:") + channel);
+        from->setContentsMargins(kPreviewThumb + 6, 0, 0, 0);
+        dimLabel(from);
+        grid->addWidget(from, row++, 1, 1, 2);
         onMiddleClickReset(l, [apply] { apply(""); }, "none", box);
         if (const int first = scene::materials::samplingAttr(attr); first >= 0)
         {
@@ -1110,15 +1152,20 @@ void MaterialEditor::rebuild()
                     opts->setVisible(!m->as<std::string>(attr).empty());
             });
         }
-        mUpdaters.push_back([this, box, l, attr, bound] {
+        mUpdaters.push_back([this, box, l, from, attr, bound] {
             scene::Node* m = current();
             if (!m)
                 return;
             box->setValue(m->as<std::string>(attr));
-            // The slot stays editable under a texture set: it is what draws again once the set is unbound.
-            const bool replaced = bound->replaced.contains(attr);
+            // The slot stays editable under a texture set: it is what draws again once the set lets go of it.
+            auto it = bound->from.find(attr);
+            const bool replaced = it != bound->from.end();
             l->setEnabled(!replaced);
-            const QString tip = replaced ? QString("Not drawn: texture set %1 supplies this map in the viewport.").arg(qs(bound->name)) : QString();
+            // The Texture Set row already names the whole set; only a map taken from another set says so here.
+            from->setVisible(replaced && it->second != scene::materials::textureSet(*m));
+            if (replaced)
+                from->setText("From texture set " + qs(it->second));
+            const QString tip = replaced ? QString("Not drawn: texture set %1 supplies this map in the viewport.").arg(qs(it->second)) : QString();
             l->setToolTip(tip);
             box->setToolTip(tip);
         });
@@ -1242,35 +1289,44 @@ void MaterialEditor::rebuild()
     }
 
     section("Surface");
-    QLabel* setLabel = label("Texture Set");
-    auto* setButton = new QPushButton(mBody);
-    setButton->setObjectName("materialTextureSet");
-    setButton->setToolTip("The texture set drawing this material in the viewport. Its channels replace the dimmed map slots "
-                          "below. Click to open it in the Texture Graph.");
-    auto* unbind = new QToolButton(mBody);
-    unbind->setObjectName("materialTextureSetUnbind");
-    unbind->setIcon(icon("x"));
-    unbind->setToolTip("Unbind: the material draws its own maps again. The texture set is kept.");
+    label("Texture Set");
+    auto* setPick = new QComboBox(mBody);
+    setPick->setObjectName("materialTextureSet");
+    setPick->setToolTip("The texture set drawing this material's maps, in place of the files below. Any number of materials can "
+                        "use one set; painting a mesh with this material paints the set.");
+    auto* openSet = new QToolButton(mBody);
+    openSet->setObjectName("materialTextureSetOpen");
+    openSet->setIcon(icon("node-editor"));
+    openSet->setToolTip("Open the texture set in the Texture Graph");
     auto* setRow = new QHBoxLayout;
     setRow->setContentsMargins(0, 0, 0, 0);
     setRow->setSpacing(3);
-    setRow->addWidget(setButton);
-    setRow->addWidget(unbind);
-    setRow->addStretch(1);
+    setRow->addWidget(setPick, 1);
+    setRow->addWidget(openSet);
     grid->addLayout(setRow, row++, 1, 1, 2);
-    connect(setButton, &QPushButton::clicked, this, [bound] {
-        if (!bound->name.empty())
-            openTextureSet(bound->name);
+    connect(setPick, &QComboBox::activated, this, [this, setPick](int i) { setAttr(kTextureSet, setPick->itemData(i).toString().toStdString()); });
+    connect(openSet, &QToolButton::clicked, this, [this] {
+        if (scene::Node* m = current(); m && !scene::materials::textureSet(*m).empty())
+            openTextureSet(scene::materials::textureSet(*m));
     });
-    connect(unbind, &QToolButton::clicked, this, [bound] {
-        if (!bound->name.empty())
-            runUi("texSetSettings", {{"args", json::array({bound->name, {{"material", ""}}})}});
-    });
-    mUpdaters.push_back([setLabel, setButton, unbind, bound] {
-        setLabel->setVisible(!bound->name.empty());
-        setButton->setVisible(!bound->name.empty());
-        unbind->setVisible(!bound->name.empty());
-        setButton->setText(qs(bound->name));
+    mUpdaters.push_back([this, setPick, openSet] {
+        scene::Node* m = current();
+        if (!m)
+            return;
+        const std::string now = scene::materials::textureSet(*m);
+        QSignalBlocker block(setPick);
+        setPick->clear();
+        setPick->addItem("None", QString());
+        for (const std::string& name : tex::setNames(scene::Graph::current()))
+            setPick->addItem(icon("texture"), qs(name), qs(name));
+        int at = setPick->findData(qs(now));
+        if (at < 0 && !now.empty())
+        {
+            setPick->addItem(qs(now + " (missing)"), qs(now));
+            at = setPick->count() - 1;
+        }
+        setPick->setCurrentIndex(std::max(0, at));
+        openSet->setEnabled(!now.empty());
     });
     color("Base Color", kBaseColor);
     texture("Base Color Map", "baseColor", kBaseColorMap);

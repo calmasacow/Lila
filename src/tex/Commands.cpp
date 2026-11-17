@@ -219,6 +219,9 @@ json mergeSettings(const SetSettings& base, const json& changes, const char* cmd
 {
     if (!changes.is_object())
         throw CommandError(std::string(cmd) + ": settings must be a dict");
+    if (changes.contains("material"))
+        throw CommandError(std::string(cmd) + ": a texture set has no material; a material picks the set (its Texture Set, "
+                           "texCreateSet materials=, or setMaterialTexture textureSet= for one map)");
     json merged = base.toJson();
     for (auto& [k, v] : changes.items())
         merged[k] = v;
@@ -459,11 +462,12 @@ void registerCommands()
     ops::registerCommand({
         .name = "texCreateSet",
         .doc = "Create a texture set: a texture graph with a Material Output, and the channels, tile sizes and export preset its maps use. "
-               "Returns its name.",
+               "materials= points those materials at it. Returns its name.",
         .positionalDoc = "name",
         .flags = {{"settings", "", T::Any, nullptr, "Settings dict: channels [{name, type, bits}], width, height, tiles [udim or {udim, width, height}], "
-                                                    "normalConvention (opengl/directx), bakeProject, exportPreset, material."},
-                  presetFlag({"resolution", "", T::Int, nullptr, "Width and height of every tile.", {}, {}, 1.0}, kTextureSizePresets)},
+                                                    "normalConvention (opengl/directx), bakeProject, exportPreset."},
+                  presetFlag({"resolution", "", T::Int, nullptr, "Width and height of every tile.", {}, {}, 1.0}, kTextureSizePresets),
+                  {"materials", "", T::List, nullptr, "Materials that use the set (their Texture Set), created when missing."}},
         .run = [](const Args& a) -> json {
             std::string name = positionalString(a, 0, "texCreateSet", "name");
             if (!gn::validIdentifier(name))
@@ -482,6 +486,19 @@ void registerCommands()
             }
             writeGraph(graph(), *n, Graph::makeMaterial(name));
             writeSettings(graph(), *n, SetSettings::fromJson(settings));
+            if (a.has("materials"))
+                try
+                {
+                    const std::vector<std::string> materials = a.flags["materials"].get<std::vector<std::string>>();
+                    for (const std::string& m : materials)
+                        if (!scene::materials::find(graph(), m))
+                            ops::execute("createMaterial", {{"args", {m}}});
+                    assignSet(graph(), name, materials);
+                }
+                catch (const std::exception& e)
+                {
+                    throw CommandError(std::string("texCreateSet: ") + e.what());
+                }
             return name;
         },
     });
@@ -496,7 +513,7 @@ void registerCommands()
     ops::registerCommand({
         .name = "texSetSettings",
         .doc = "Change a texture set's settings: the keys given replace the set's (channels, width, height, tiles, normalConvention, "
-               "bakeProject, exportPreset, material, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.",
+               "bakeProject, exportPreset, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.",
         .positionalDoc = "set settings",
         .run = [](const Args& a) -> json {
             Node& n = setNode(positionalString(a, 0, "texSetSettings", "texture set"), "texSetSettings");
@@ -937,10 +954,8 @@ void registerCommands()
             }
             if (!spec.is_object())
                 throw CommandError("texBuildGraph: the spec must be an object with material, nodes and links");
-            std::string material = spec.value("material", std::string());
-            if (material.empty() && spec.contains("settings") && spec["settings"].is_object())
-                material = spec["settings"].value("material", std::string());
-            // With no set named, the one already bound to the material is rebuilt, whatever it is called.
+            const std::string material = spec.value("material", std::string());
+            // With no set named, the one the material uses is rebuilt, whatever it is called.
             const std::string bound = material.empty() ? std::string() : setForMaterial(graph(), material);
             const std::string name = spec.contains("set") ? spec.value("set", std::string())
                                      : !bound.empty()     ? bound
@@ -958,10 +973,8 @@ void registerCommands()
             SetSettings settings = existing ? readSettings(*existing) : SetSettings::makeDefault();
             if (spec.contains("settings"))
                 settings = SetSettings::fromJson(mergeSettings(settings, spec["settings"], "texBuildGraph"));
-            if (!material.empty())
-                settings.material = material;
-            if (a.has("assign") && (settings.material.empty() || settings.material == name))
-                throw CommandError("texBuildGraph: assign needs a material name other than the set's; add \"material\" to the spec");
+            if (a.has("assign") && material.empty())
+                throw CommandError("texBuildGraph: assign needs a material; add \"material\" to the spec");
 
             std::vector<std::string> errors;
             Graph g = graphFromSpec(spec, name, settings, errors);
@@ -977,11 +990,15 @@ void registerCommands()
             writeSettings(graph(), *n, settings);
             writeGraph(graph(), *n, g);
 
-            const std::string slot = settings.material.empty() ? name : settings.material;
-            if (a.has("assign"))
+            const std::string slot = material;
+            if (!slot.empty())
             {
                 if (!scene::materials::find(graph(), slot))
                     ops::execute("createMaterial", {{"args", {slot}}});
+                assignSet(graph(), name, {slot});
+            }
+            if (a.has("assign"))
+            {
                 json call = {{"args", json::array({slot})}};
                 for (const json& m : a.flags["assign"])
                     call["args"].push_back(m);

@@ -1,5 +1,7 @@
 #include "tex/TextureSet.h"
 
+#include "scene/Graph.h"
+#include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/PageStore.h"
 #include "tex/PaintStrokes.h"
@@ -50,7 +52,7 @@ json SetSettings::toJson() const
         tl.push_back(o);
     }
     return {{"channels", ch},         {"width", width},           {"height", height},           {"tiles", tl},
-            {"normalConvention", normalConvention}, {"bakeProject", bakeProject}, {"exportPreset", exportPreset}, {"material", material},
+            {"normalConvention", normalConvention}, {"bakeProject", bakeProject}, {"exportPreset", exportPreset},
             {"heightDepth", heightDepth},   {"uvWidth", uvWidth},       {"uvHeight", uvHeight},       {"normalFromHeight", normalFromHeight},
             {"normalFade", normalFade},     {"heightSource", heightSource}, {"faceGroups", faceGroups},
             {"projectionViews", projectionViews}, {"tileable", tileable}};
@@ -110,7 +112,6 @@ SetSettings SetSettings::fromJson(const json& j)
             throw std::invalid_argument("normalConvention must be opengl or directx");
         s.bakeProject = j.value("bakeProject", s.bakeProject);
         s.exportPreset = j.value("exportPreset", s.exportPreset);
-        s.material = j.value("material", s.material);
         s.heightDepth = j.value("heightDepth", s.heightDepth);
         s.uvWidth = j.value("uvWidth", s.uvWidth);
         s.uvHeight = j.value("uvHeight", s.uvHeight);
@@ -181,16 +182,37 @@ std::vector<std::string> setNames(scene::Graph& g)
 
 std::string setForMaterial(scene::Graph& g, std::string_view material)
 {
-    for (const std::string& name : setNames(g))
-        try
-        {
-            if (Node* n = findSet(g, name); n && readSettings(*n).material == material)
-                return name;
-        }
-        catch (const std::exception&)
-        {
-        }
+    Node* m = scene::materials::find(g, material);
+    if (!m)
+        return {};
+    for (const std::string& set : scene::materials::textureSetsUsed(*m))
+        if (findSet(g, set))
+            return set;
     return {};
+}
+
+std::vector<std::string> materialsUsing(scene::Graph& g, std::string_view set)
+{
+    std::vector<std::string> out;
+    for (NodeId id : g.nodes())
+        if (Node* m = g.node(id); m->type().isA("material"))
+        {
+            const std::vector<std::string> used = scene::materials::textureSetsUsed(*m);
+            if (std::ranges::find(used, set) != used.end())
+                out.push_back(m->name());
+        }
+    return out;
+}
+
+void assignSet(scene::Graph& g, std::string_view set, const std::vector<std::string>& materials)
+{
+    for (const std::string& name : materials)
+    {
+        Node* m = scene::materials::find(g, name);
+        if (!m)
+            throw std::invalid_argument(name + " is not a material");
+        g.setValue({m->id(), scene::material::kTextureSet, -1}, std::string(set));
+    }
 }
 
 std::string defaultSetName(std::string_view material)

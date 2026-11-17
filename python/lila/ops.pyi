@@ -2063,7 +2063,7 @@ def createGroom(*objects: Any, guides: str | None = None, count: int | None = No
         sides: Points around each lock.
     """
 
-def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, bc: Sequence[float] | None = None) -> Any:
+def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, bc: Sequence[float] | None = None) -> Any:
     """Create a material (Unreal default lit inputs). Faces use it through a slot of the same name. Returns its name.
 
     Args:
@@ -2169,6 +2169,7 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         emissiveMapColorSpace: How emissiveMap's 8- and 16-bit values are read: auto (sRGB, as a colour map), sRGB, or linear (raw data). EXR and HDR files are always linear.
         baseColorMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
         emissiveMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
+        textureSet: Texture set whose maps draw this material, in place of the maps it has. Any number of materials can use one set; painting a mesh with this material paints the set.
     """
 
 def createMesh(points: Sequence[Any] | None = None, faces: Sequence[Any] | None = None, uvs: Sequence[Any] | None = None, name: str | None = None, *, n: str | None = None) -> Any:
@@ -8784,10 +8785,10 @@ def selectByAngle(angle: float | None = None) -> Any:
     """
 
 def selectByMaterial(*objects: Any, faces: bool | None = None, f: bool | None = None) -> Any:
-    """Select what a material is assigned to: whole objects when it covers every face of each, otherwise just the faces it is assigned to. Default also takes faces on slots with no material. faces=true always selects faces, faces=false always whole objects. Returns the objects.
+    """Select what the materials are assigned to: whole objects when they cover every face of each, otherwise just the faces they are assigned to. Default also takes faces on slots with no material. faces=true always selects faces, faces=false always whole objects. Returns the objects.
 
     Args:
-        objects: material.
+        objects: material...
         faces: Force faces (true) or whole objects (false); unset picks by coverage. Short form f.
     """
 
@@ -9174,13 +9175,14 @@ def setLoopKey(*objects: Any, attribute: Any | None = None, time: float | None =
         snapRange: Move the playback range end to the loop key. Short form sr. Default True.
     """
 
-def setMaterialTexture(*objects: Any, channel: str | None = None, path: str | None = None, wrap: str | None = None, wrapU: str | None = None, wrapV: str | None = None, filter: str | None = None, c: str | None = None, p: str | None = None) -> Any:
-    """Set or clear (path='') a texture: channel baseColor, metallic, roughness, normal, ambientOcclusion, orm, mro (the packed map with the MRO layout) or emissive. Stored relative to the workspace root (or the scene folder without one). wrap, wrapU, wrapV and filter set how it is sampled; given without path they change only that.
+def setMaterialTexture(*objects: Any, channel: str | None = None, path: str | None = None, textureSet: str | None = None, wrap: str | None = None, wrapU: str | None = None, wrapV: str | None = None, filter: str | None = None, c: str | None = None, p: str | None = None, ts: str | None = None) -> Any:
+    """Set or clear (path='') a texture: channel baseColor, metallic, roughness, normal, ambientOcclusion, orm, mro (the packed map with the MRO layout) or emissive. Stored relative to the workspace root (or the scene folder without one). textureSet takes the channel's map from a texture set instead ('' stops). wrap, wrapU, wrapV and filter set how it is sampled; given without path they change only that.
 
     Args:
         objects: material.
         channel: Texture channel. Short form c.
         path: Image file; empty clears. Short form p.
+        textureSet: Take this map from a texture set; empty stops. Short form ts.
         wrap: Both wrap modes. One of 'repeat', 'clamp', 'mirror', 'black'.
         wrapU: Wrap along U. One of 'repeat', 'clamp', 'mirror', 'black'.
         wrapV: Wrap along V. One of 'repeat', 'clamp', 'mirror', 'black'.
@@ -10373,13 +10375,14 @@ def texCopyNodes(*objects: Any) -> Any:
         objects: set nodes...
     """
 
-def texCreateSet(*objects: Any, settings: Any | None = None, resolution: int | None = None) -> Any:
-    """Create a texture set: a texture graph with a Material Output, and the channels, tile sizes and export preset its maps use. Returns its name.
+def texCreateSet(*objects: Any, settings: Any | None = None, resolution: int | None = None, materials: Sequence[Any] | None = None) -> Any:
+    """Create a texture set: a texture graph with a Material Output, and the channels, tile sizes and export preset its maps use. materials= points those materials at it. Returns its name.
 
     Args:
         objects: name.
-        settings: Settings dict: channels [{name, type, bits}], width, height, tiles [udim or {udim, width, height}], normalConvention (opengl/directx), bakeProject, exportPreset, material.
+        settings: Settings dict: channels [{name, type, bits}], width, height, tiles [udim or {udim, width, height}], normalConvention (opengl/directx), bakeProject, exportPreset.
         resolution: Width and height of every tile.
+        materials: Materials that use the set (their Texture Set), created when missing.
     """
 
 def texDeleteNode(*objects: Any) -> Any:
@@ -10900,7 +10903,7 @@ def texSetNodeFlags(*objects: Any, muted: bool | None = None, collapsed: bool | 
     """
 
 def texSetSettings(*objects: Any) -> Any:
-    """Change a texture set's settings: the keys given replace the set's (channels, width, height, tiles, normalConvention, bakeProject, exportPreset, material, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.
+    """Change a texture set's settings: the keys given replace the set's (channels, width, height, tiles, normalConvention, bakeProject, exportPreset, heightDepth, uvWidth, uvHeight, normalFromHeight, normalFade, heightSource). Returns the full settings.
 
     Args:
         objects: set settings.

@@ -213,7 +213,6 @@ std::string meshForSet(const Node& set)
 {
     scene::Graph& g = graph();
     g.evaluate();
-    const std::string material = setMaterial(set);
     std::string any;
     for (scene::NodeId id : g.nodes())
     {
@@ -226,7 +225,7 @@ std::string meshForSet(const Node& set)
         if (any.empty())
             any = n->path();
         const auto& names = m->materialNames();
-        if (std::find(names.begin(), names.end(), material) != names.end())
+        if (usesSet(names, set))
             return n->path();
     }
     return any;

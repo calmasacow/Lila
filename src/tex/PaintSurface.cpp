@@ -161,20 +161,30 @@ std::shared_ptr<const PaintMesh> PaintMesh::build(const geo::Mesh& mesh, std::sh
         tangents = geo::cornerTangents(mesh, tris, cn);
     }
     std::span<const int32_t> slot = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
-    int32_t want = -1;
+    std::vector<char> want(mesh.materialNames().size(), 0);
+    bool wantAny = false;
     if (!material.empty() && !slot.empty())
-        for (size_t i = 0; i < mesh.materialNames().size(); ++i)
-            if (mesh.materialNames()[i] == material)
-                want = int32_t(i);
+        for (size_t start = 0; start <= material.size();)
+        {
+            size_t end = material.find(kMaterialSeparator, start);
+            if (end == std::string_view::npos)
+                end = material.size();
+            const std::string_view name = material.substr(start, end - start);
+            for (size_t i = 0; i < mesh.materialNames().size(); ++i)
+                if (mesh.materialNames()[i] == name)
+                    wantAny = want[i] = 1;
+            start = end + 1;
+        }
+    auto wanted = [&](int32_t s) { return s >= 0 && size_t(s) < want.size() && want[size_t(s)]; };
     bool anyUses = false;
-    if (want >= 0)
+    if (wantAny)
         for (size_t t = 0; t < n && !anyUses; ++t)
-            anyUses = slot[tris.faces[t]] == want;
+            anyUses = wanted(slot[tris.faces[t]]);
 
     for (size_t t = 0; t < n; ++t)
     {
         if (anyUses)
-            out->paintable[t] = slot[tris.faces[t]] == want ? 1 : 0;
+            out->paintable[t] = wanted(slot[tris.faces[t]]) ? 1 : 0;
         out->faces[t] = uint32_t(tris.faces[t]);
         if (!slot.empty())
             out->materials[t] = slot[tris.faces[t]];

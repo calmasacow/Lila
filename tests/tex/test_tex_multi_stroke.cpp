@@ -21,8 +21,8 @@ TEST_CASE("texture paint multi: one stroke over two meshes with their own sets w
         run("createMaterial", {{"args", {std::string("M_") + m}}});
         run("assignMaterial", {{"args", {std::string("M_") + m}}});
     }
-    run("texCreateSet", {{"args", {"SetA"}}, {"resolution", 128}, {"settings", {{"material", "M_PanelA"}}}});
-    run("texCreateSet", {{"args", {"SetB"}}, {"resolution", 128}, {"settings", {{"material", "M_PanelB"}}}});
+    run("texCreateSet", {{"args", {"SetA"}}, {"resolution", 128}, {"materials", {"M_PanelA"}}});
+    run("texCreateSet", {{"args", {"SetB"}}, {"resolution", 128}, {"materials", {"M_PanelB"}}});
     scene::Node& a = *tex::findSet(sg(), "SetA");
     scene::Node& b = *tex::findSet(sg(), "SetB");
 

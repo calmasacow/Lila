@@ -551,7 +551,8 @@ std::string ensureTextureSet(const Sheet& s, const std::filesystem::path& f, con
     if (!hasTextureSet(set))
     {
         ops::execute("texCreateSet", {{"args", {set}},
-                                      {"settings", {{"width", s.width}, {"height", s.height}, {"bakeProject", project}, {"material", materialName(s, palette)}}}});
+                                      {"settings", {{"width", s.width}, {"height", s.height}, {"bakeProject", project}}},
+                                      {"materials", {materialName(s, palette)}}});
         ops::execute("texAddLayer", {{"args", {set, "procedural"}}, {"name", kBakeLayer}, {"index", 0}, {"graph", bakeLayerGraph()}});
     }
     syncHeightNormals(s, f, set);

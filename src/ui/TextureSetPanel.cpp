@@ -168,37 +168,6 @@ void texComboDefault(QComboBox* c, const QString& value)
     texComboDefaultIndex(c, c->findData(value));
 }
 
-/** Lists the scene's materials, refreshed each time it opens, keeping `current` selected and listed. */
-class MaterialSlotCombo : public QComboBox
-{
-public:
-    MaterialSlotCombo(std::string current, QWidget* parent) : QComboBox(parent), mCurrent(std::move(current)) { fill(); }
-
-    void showPopup() override
-    {
-        mCurrent = currentData().toString().toStdString();
-        fill();
-        QComboBox::showPopup();
-    }
-
-private:
-    void fill()
-    {
-        std::vector<std::string> names;
-        for (const scene::Node* m : scene::materials::all(scene::Graph::current()))
-            names.push_back(m->path());
-        if (std::ranges::find(names, mCurrent) == names.end())
-            names.push_back(mCurrent);
-        std::ranges::sort(names);
-        clear();
-        for (const std::string& n : names)
-            addItem(QString::fromStdString(n), QString::fromStdString(n));
-        setCurrentIndex(std::max(0, findData(QString::fromStdString(mCurrent))));
-    }
-
-    std::string mCurrent;
-};
-
 // Active paint layers ------------------------------------------------------------------------------------------------
 
 struct ActiveState
@@ -1710,21 +1679,24 @@ struct TextureSetPanel::Impl
         tileable->setToolTip("The texture repeats (trim sheets, tiling materials): strokes wrap round the uv square's edges, and the 2D View tiles it");
         QObject::connect(tileable, &QCheckBox::toggled, settingsBox, [this](bool on) { runUi("texSetSettings", args({json{{"tileable", on}}})); });
         form->addRow("Painting", tileable);
-        form->addRow("Material", materialPicker(settingsBox));
+        form->addRow("Used By", usedBy(settingsBox));
         auto* bake = new QLabel(settings.bakeProject.empty() ? QString("None") : qs(settings.bakeProject), settingsBox);
         bake->setToolTip("The bake project whose maps feed the set's mesh inputs (texSetSettings bakeProject=)");
         form->addRow("Bake Project", bake);
         v->addLayout(form);
     }
 
-    /** The material slot the set drives. An empty setting means the material named after the set. */
-    QComboBox* materialPicker(QWidget* parent)
+    /** The materials that pick the set, as names; a material picks it in its Texture Set field. */
+    QLabel* usedBy(QWidget* parent)
     {
-        auto* box = new MaterialSlotCombo(settings.material.empty() ? set : settings.material, parent);
-        box->setToolTip("Meshes using this material show the set's maps");
-        QObject::connect(box, &QComboBox::activated, parent,
-                         [this, box](int) { runUi("texSetSettings", args({json{{"material", box->currentData().toString().toStdString()}}})); });
-        return box;
+        std::string names;
+        for (const std::string& m : tex::materialsUsing(scene::Graph::current(), set))
+            names += (names.empty() ? "" : ", ") + m;
+        auto* l = new QLabel(names.empty() ? QString("No material") : qs(names), parent);
+        l->setObjectName("usedBy");
+        l->setWordWrap(true);
+        l->setToolTip("Materials whose Texture Set (or one of whose maps) is this set. Pick it in the Material Editor.");
+        return l;
     }
 
     /** Wide: the smart materials sit under the settings in the side column. Narrow: one column, with them under the layers. */
@@ -2462,7 +2434,7 @@ struct TextureSetPanel::Impl
             }
         }
         empty->setVisible(!n);
-        emptyText->setText(noSetForSelection ? "No texture set on the selected meshes. Click New Texture Set to make one."
+        emptyText->setText(noSetForSelection ? "The selected meshes' materials use no texture set. Click New Texture Set to make one, or pick one in the Material Editor."
                                              : "No texture set. Click New Texture Set to make one for the selected meshes.");
         const std::string sKey = n ? nextSettings.toJson().dump() : std::string();
         const std::string vKey = set + "|" + nextView.dump() + "|" + sKey + "|" + shownChannel() + "|" + textureSets::activeLayer(set);
@@ -3557,7 +3529,7 @@ std::string setForDrop(scene::Node& meshNode, std::string slot)
     std::string name = tex::defaultSetName(slot);
     for (int i = 1; !g.findAll(name).empty(); ++i)
         name = tex::defaultSetName(slot) + std::to_string(i);
-    json r = runUi("texCreateSet", {{"args", {name}}, {"settings", {{"material", slot}}}});
+    json r = runUi("texCreateSet", {{"args", {name}}, {"materials", {slot}}});
     if (!r.is_string())
         return {};
     log::info("{}: new texture set {} for material {}", meshNode.name(), r.get<std::string>(), slot);

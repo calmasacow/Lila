@@ -182,6 +182,12 @@ std::vector<AttrDef> materialAttrs()
                     .doc = "Draw back faces too (with flipped normals). One-sided materials cull them, as in Unreal."};
     a[kUvSet] = {.name = "uvSet", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable,
                  .doc = "UV set the textures use (0 or 1).", .minValue = 0.0, .maxValue = 1.0};
+    a[kTextureSet] = {.name = "textureSet", .type = PlugType::String, .defaultValue = std::string(), .flags = AttrInput | AttrStorable,
+                      .doc = "Texture set whose maps draw this material, in place of the maps it has. Any number of materials can "
+                             "use one set; painting a mesh with this material paints the set."};
+    a[kTextureSetMaps] = {.name = "textureSetMaps", .type = PlugType::String, .defaultValue = std::string(),
+                          .flags = AttrInput | AttrStorable | AttrHidden,
+                          .doc = "Single maps taken from texture sets: {channel: set} JSON, set with setMaterialTexture textureSet=."};
     a[kListOrder] = {.name = "listOrder", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable | AttrHidden,
                      .doc = "Position in the Material Editor's list (reorderMaterials); 0 sorts by name after the placed ones."};
     stylisedAttrs(a);
@@ -362,6 +368,30 @@ void renameSlots(Graph& g, const std::string& from, const std::string& to)
         g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
     }
 }
+/** Materials using the texture set from (whole or per map) use to instead. */
+void renameSetUsers(Graph& g, const std::string& from, const std::string& to)
+{
+    for (NodeId id : g.nodes())
+    {
+        Node* m = g.node(id);
+        if (!m->type().isA("material") || m->referenceId())
+            continue;
+        if (m->as<std::string>(kTextureSet) == from)
+            g.setValue({id, kTextureSet, -1}, to);
+        json maps = json::parse(m->as<std::string>(kTextureSetMaps), nullptr, false);
+        if (!maps.is_object())
+            continue;
+        bool changed = false;
+        for (auto& [channel, set] : maps.items())
+            if (set == from)
+            {
+                set = to;
+                changed = true;
+            }
+        if (changed)
+            g.setValue({id, kTextureSetMaps, -1}, maps.dump());
+    }
+}
 } // namespace
 
 namespace materials
@@ -404,6 +434,39 @@ Node* create(Graph& g, std::string_view name)
     return g.createNode(*t, name.empty() ? std::string_view("M_Material") : name, kNoNode, false);
 }
 
+std::string textureSet(const Node& material) { return material.as<std::string>(kTextureSet); }
+
+std::map<std::string, std::string> textureSetMaps(const Node& material)
+{
+    std::map<std::string, std::string> out;
+    const json j = json::parse(material.as<std::string>(kTextureSetMaps), nullptr, false);
+    if (j.is_object())
+        for (const auto& [channel, set] : j.items())
+            if (set.is_string() && !set.get<std::string>().empty())
+                out[channel] = set.get<std::string>();
+    return out;
+}
+
+std::string textureSetFor(const Node& material, std::string_view channel)
+{
+    const std::map<std::string, std::string> maps = textureSetMaps(material);
+    if (auto it = maps.find(std::string(channel)); it != maps.end())
+        return it->second;
+    return textureSet(material);
+}
+
+std::vector<std::string> textureSetsUsed(const Node& material)
+{
+    std::vector<std::string> out;
+    if (std::string whole = textureSet(material); !whole.empty())
+        out.push_back(whole);
+    const std::map<std::string, std::string> maps = textureSetMaps(material);
+    for (const auto& [channel, attr] : textureChannels())
+        if (auto it = maps.find(channel); it != maps.end() && std::ranges::find(out, it->second) == out.end())
+            out.push_back(it->second);
+    return out;
+}
+
 std::string rename(Graph& g, NodeId id, const std::string& name)
 {
     Node* n = g.node(id);
@@ -411,6 +474,8 @@ std::string rename(Graph& g, NodeId id, const std::string& name)
     std::string to = g.rename(id, name);
     if (to != from && n->type().isA("material"))
         renameSlots(g, from, to);
+    if (to != from && n->type().name == "textureSet")
+        renameSetUsers(g, from, to);
     return to;
 }
 
@@ -904,7 +969,7 @@ void registerCommands()
         .flags = {{"faces", "f", T::Bool, nullptr, "Force faces (true) or whole objects (false); unset picks by coverage."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            if (a.positional.empty() || !a.positional[0].is_string())
+            if (a.positional.empty())
                 throw CommandError("selectByMaterial: give a material name");
             std::set<std::string> mats;
             bool builtinDefault = false;
@@ -975,18 +1040,19 @@ void registerCommands()
         .name = "setMaterialTexture",
         .doc = "Set or clear (path='') a texture: channel baseColor, metallic, roughness, normal, ambientOcclusion, orm, mro "
                "(the packed map with the MRO layout) or emissive. Stored relative to the workspace root (or the scene "
-               "folder without one). wrap, wrapU, wrapV and filter set how it is sampled; given without path they change "
-               "only that.",
+               "folder without one). textureSet takes the channel's map from a texture set instead ('' stops). wrap, wrapU, "
+               "wrapV and filter set how it is sampled; given without path they change only that.",
         .positionalDoc = "material",
         .flags = {{"channel", "c", T::String, nullptr, "Texture channel."},
                   {"path", "p", T::String, nullptr, "Image file; empty clears."},
+                  {"textureSet", "ts", T::String, nullptr, "Take this map from a texture set; empty stops."},
                   {"wrap", "", T::String, nullptr, "Both wrap modes.", {"repeat", "clamp", "mirror", "black"}},
                   {"wrapU", "", T::String, nullptr, "Wrap along U.", {"repeat", "clamp", "mirror", "black"}},
                   {"wrapV", "", T::String, nullptr, "Wrap along V.", {"repeat", "clamp", "mirror", "black"}},
                   {"filter", "", T::String, nullptr, "linear or nearest.", {"linear", "nearest"}}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
-            if (a.positional.empty())
+            if (a.positional.empty() || !a.positional[0].is_string())
                 throw CommandError("setMaterialTexture: give a material name");
             Node& n = materialArg(g, a.positional[0].get<std::string>(), "setMaterialTexture");
             std::string channel = a.get<std::string>("channel");
@@ -994,7 +1060,27 @@ void registerCommands()
             if (attr < 0)
                 throw CommandError("setMaterialTexture: unknown channel '" + channel + "'");
             const bool sampled = a.has("wrap") || a.has("wrapU") || a.has("wrapV") || a.has("filter");
-            if (a.has("path") || !sampled)
+            if (a.has("textureSet"))
+            {
+                const std::string key = channel == "mro" ? "orm" : channel;
+                json maps = json::parse(n.as<std::string>(kTextureSetMaps), nullptr, false);
+                if (!maps.is_object())
+                    maps = json::object();
+                const std::string set = a.get<std::string>("textureSet");
+                if (set.empty())
+                    maps.erase(key);
+                else
+                {
+                    Node* s = g.find(set);
+                    if (!s || s->type().name != "textureSet")
+                        throw CommandError("setMaterialTexture: " + set + " is not a texture set");
+                    maps[key] = s->name();
+                }
+                g.setValue({n.id(), kTextureSetMaps, -1}, maps.empty() ? std::string() : maps.dump());
+                if (!a.has("path") && !sampled)
+                    return nullptr;
+            }
+            if (a.has("path") || (!sampled && !a.has("textureSet")))
             {
                 std::string path = a.has("path") ? a.get<std::string>("path") : std::string();
                 std::replace(path.begin(), path.end(), '\\', '/');

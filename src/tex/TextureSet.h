@@ -16,8 +16,9 @@
 #include <vector>
 
 /**
- * Texture sets: a scene node ("textureSet") per material slot, holding the texture graph and the settings its maps are
- * made with. Both are JSON string attrs, so scenes save them (.lila and .lilaa alike) and every edit undoes.
+ * Texture sets: a scene node ("textureSet") holding the texture graph and the settings its maps are made with. Both are
+ * JSON string attrs, so scenes save them (.lila and .lilaa alike) and every edit undoes. A set knows nothing of materials:
+ * a material picks a set (or single maps of one) the way it picks a texture file.
  */
 namespace lila::tex
 {
@@ -51,8 +52,6 @@ struct LILA_SCENE_API SetSettings
     std::string bakeProject;
     /** A bake target name (bake/Targets.h) texExport uses by default. */
     std::string exportPreset = "unreal";
-    /** The {material} token in file names; empty uses the set's name. */
-    std::string material;
     /** cm from height 0 to height 1: the relief the height channel stands for. */
     double heightDepth = 5.0;
     /** World size of the UV square along U and V, cm. With heightDepth, what turns height steps into slopes. */
@@ -94,8 +93,15 @@ LILA_SCENE_API void registerCommands();
 
 LILA_SCENE_API scene::Node* findSet(scene::Graph& g, std::string_view name);
 LILA_SCENE_API std::vector<std::string> setNames(scene::Graph& g);
-/** The set whose material setting names the material; empty when none does. */
+/**
+ * The set painting on the material's faces goes into: the set it picks whole, else the set of its first per-map pick;
+ * empty when it uses none (or there is no such material).
+ */
 LILA_SCENE_API std::string setForMaterial(scene::Graph& g, std::string_view material);
+/** The materials using the set, whole or for one of their maps, by name in scene order. */
+LILA_SCENE_API std::vector<std::string> materialsUsing(scene::Graph& g, std::string_view set);
+/** Points the materials at the whole set. Undoable (inside a command). Throws std::invalid_argument for a name that is not a material. */
+LILA_SCENE_API void assignSet(scene::Graph& g, std::string_view set, const std::vector<std::string>& materials);
 /** The name a material's new set gets: the material's name without its M_ or MI_ prefix, plus Tex. */
 LILA_SCENE_API std::string defaultSetName(std::string_view material);
 /** Throw std::invalid_argument when the stored JSON is unreadable. */

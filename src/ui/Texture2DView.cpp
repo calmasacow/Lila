@@ -737,27 +737,7 @@ private:
 };
 } // namespace
 
-std::string textureSetForSlot(scene::Graph& g, const std::string& slot)
-{
-    std::string named;
-    for (const std::string& name : tex::setNames(g))
-    {
-        scene::Node* n = tex::findSet(g, name);
-        if (!n)
-            continue;
-        try
-        {
-            if (tex::readSettings(*n).material == slot)
-                return name;
-        }
-        catch (const std::exception&)
-        {
-        }
-        if (name == slot)
-            named = name;
-    }
-    return named;
-}
+std::string textureSetForSlot(scene::Graph& g, const std::string& slot) { return tex::setForMaterial(g, slot); }
 
 namespace texture2d
 {
@@ -993,7 +973,7 @@ struct Texture2DView::Impl
         else if (c.result.stale || (!data && !c.source.set.empty()))
             text += "   rendering...";
         status->setText(text);
-        const QString empty = c.source.set.empty()       ? QString("No texture set. Click New Texture Set in the Texture Set panel.")
+        const QString empty = c.source.set.empty()       ? QString("No texture set. Click New Texture Set in the Texture Set panel, or pick one in the Material Editor.")
                               : !c.result.error.empty() ? qs(c.result.error)
                                                         : QString("Rendering...");
         if (empty != canvas->emptyText)

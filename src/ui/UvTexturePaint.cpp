@@ -41,7 +41,6 @@ namespace rp = render::paint;
 std::vector<std::string> meshesOf(scene::Graph& g, const scene::Node& set)
 {
     g.evaluate();
-    const std::string material = rp::setMaterial(set);
     std::vector<std::string> out;
     for (scene::NodeId id : texturePaintTargets())
     {
@@ -50,7 +49,7 @@ std::vector<std::string> meshesOf(scene::Graph& g, const scene::Node& set)
         if (!m || !m->numFaces())
             continue;
         const auto& names = m->materialNames();
-        if (std::find(names.begin(), names.end(), material) != names.end())
+        if (rp::usesSet(names, set))
             out.push_back(n->path());
     }
     return out;

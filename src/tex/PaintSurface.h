@@ -75,11 +75,15 @@ struct LILA_SCENE_API PaintMesh
     bool atUv(const glm::vec2& uv, uint32_t& tri, float& u, float& v, float maxDistance = 0.0f) const;
 
     /**
-     * The painted part of a mesh: faces whose material slot is `material`, or every face when none uses it (or
-     * material is empty). Uses uv0. bvh must be built from mesh.
+     * The painted part of a mesh: faces whose material slot is `material` (or one of several joined by
+     * kMaterialSeparator, a set driving more than one), or every face when none uses it (or material is empty). Uses
+     * uv0. bvh must be built from mesh.
      */
     static std::shared_ptr<const PaintMesh> build(const geo::Mesh& mesh, std::shared_ptr<const geo::MeshBvh> bvh, std::string_view material);
 };
+
+/** Joins the materials of a set that drives several, in PaintMesh::build's material key. */
+inline constexpr char kMaterialSeparator = ';';
 
 /** A dab's centre and the distance its tip can reach. */
 struct DabReach

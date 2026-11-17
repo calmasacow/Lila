@@ -47,8 +47,13 @@ using tex::paint::StrokePtr;
 LILA_UI_API scene::MeshPtr paintSurface(const scene::Node& meshNode);
 /** The painted part of a mesh node for a material, cached by the node's evaluated mesh. Null when it is not a mesh. */
 LILA_UI_API std::shared_ptr<const PaintMesh> paintMesh(scene::Graph& g, const std::string& meshPath, const std::string& material);
-/** The material a set's tiles bind to (its settings' material, else its name). */
+/**
+ * The material key a set paints, for paintMesh: the materials using the set (tex::materialsUsing), joined by
+ * tex::paint::kMaterialSeparator. Empty when none does, which paints the whole mesh.
+ */
 LILA_UI_API std::string setMaterial(const scene::Node& set);
+/** Whether a mesh with these material slots has faces the set paints. */
+LILA_UI_API bool usesSet(const std::vector<std::string>& materialNames, const scene::Node& set);
 
 /** Brings a set's (or one buffer's) pages up to date with its paint data. Throws std::runtime_error on GPU failure. */
 LILA_UI_API void sync(scene::Graph& g, scene::Node& set);

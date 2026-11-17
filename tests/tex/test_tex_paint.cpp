@@ -422,7 +422,7 @@ TEST_CASE("texture paint: the live viewport composites a painted buffer")
     tex::writeGraph(sg(), set, g);
     paintStroke("Panel", "P", redStroke({{25, 0, 0}}, 20.0));
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Panel"));
+    REQUIRE(ui::texLive::mapsFor("M_Panel"));
     REQUIRE(ui::texLive::waitIdle());
     GpuImageRef img = ui::texLive::channelImage("Panel", "baseColor");
     REQUIRE(img);
@@ -462,7 +462,7 @@ TEST_CASE("texture paint: a committed or undone stroke redraws the viewport at f
     tex::writeGraph(sg(), set, g);
     paintStroke("Sharp", "P", redStroke({{25, 0, 0}}, 20.0));
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Sharp"));
+    REQUIRE(ui::texLive::mapsFor("M_Sharp"));
     REQUIRE(ui::texLive::waitIdle());
     auto counts = [](const char* key) {
         std::vector<uint64_t> out;
@@ -533,7 +533,7 @@ TEST_CASE("texture paint: the graph a first stroke makes is compiled ahead, so a
     addMesh("PanelMesh", seamPanel());
     scene::Node& set = makeSet("Ahead", 256);
     ui::texLive::install();
-    REQUIRE(ui::texLive::mapsFor("Ahead"));
+    REQUIRE(ui::texLive::mapsFor("M_Ahead"));
     REQUIRE(ui::texLive::waitIdle());
     std::vector<std::string> channels;
     for (const tex::Channel& c : tex::readSettings(set).channels)

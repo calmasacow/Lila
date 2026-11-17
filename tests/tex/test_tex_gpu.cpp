@@ -532,7 +532,7 @@ TEST_CASE("tex gpu: a texture set drives its material in the viewport, live")
         return;
     ui::texLive::install();
     run("newScene");
-    run("texCreateSet", {{"args", {"Paint"}}, {"settings", {{"width", 512}, {"height", 512}, {"material", "PaintMat"}}}});
+    run("texCreateSet", {{"args", {"Paint"}}, {"settings", {{"width", 512}, {"height", 512}}}, {"materials", {"PaintMat"}}});
     run("createMaterial", {{"args", {"PaintMat"}}});
     run("texAddNode", {{"args", {"Paint", "color"}}, {"name", "C"}});
     run("texSetValue", {{"args", {"Paint", "C.color", json::array({0.8, 0.05, 0.05, 1.0})}}});

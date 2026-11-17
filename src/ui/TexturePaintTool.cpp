@@ -457,18 +457,13 @@ void applyChannelValues(const std::map<std::string, glm::vec3>& values)
 
 float toDisplay(float v) { return std::pow(std::clamp(v, 0.0f, 1.0f), 1.0f / 2.2f); }
 float fromDisplay(float v) { return std::pow(std::clamp(v, 0.0f, 1.0f), 2.2f); }
-/** The texture set whose material a face of the mesh uses; the only set when the mesh names none of theirs. */
+/** The texture set the material of a face of the mesh uses; null when it uses none. */
 scene::Node* setForFace(scene::Graph& g, const geo::Mesh& mesh, geo::Index face)
 {
-    std::string slot;
     std::span<const int32_t> ids = mesh.faceAttrs().get<int32_t>(geo::attr::kMaterial);
-    if (!ids.empty() && face < ids.size())
-        slot = scene::materials::slotName(mesh, ids[face]);
-    const std::vector<std::string> names = tex::setNames(g);
-    for (const std::string& name : names)
-        if (scene::Node* s = tex::findSet(g, name); s && !slot.empty() && rp::setMaterial(*s) == slot)
-            return s;
-    return names.size() == 1 ? tex::findSet(g, names.front()) : nullptr;
+    const std::string slot = scene::materials::slotName(mesh, !ids.empty() && face < ids.size() ? ids[face] : 0);
+    const std::string set = tex::setForMaterial(g, slot);
+    return set.empty() ? nullptr : tex::findSet(g, set);
 }
 
 /** A number field; a 0 to 1 amount gets the slider fill every bounded amount in Lila has. */
@@ -3411,7 +3406,6 @@ private:
             scene::Node* set = tex::findSet(g, name);
             if (!set)
                 continue;
-            const std::string material = rp::setMaterial(*set);
             for (NodeId id : g.nodes())
             {
                 scene::Node* n = g.node(id);
@@ -3421,7 +3415,7 @@ private:
                 if (!m || !m->numFaces())
                     continue;
                 const auto& names = m->materialNames();
-                if (std::find(names.begin(), names.end(), material) != names.end())
+                if (rp::usesSet(names, *set))
                     rp::prewarmTarget(g, *set, n->path());
             }
             warmGraph(*set);

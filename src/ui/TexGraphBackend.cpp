@@ -22,6 +22,7 @@
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
 #include "ui/TextureSetPanel.h"
+#include "ui/TexturePaintTool.h"
 #include "ui/Theme.h"
 #include "ui/FileDialog.h"
 #include "ui/UiCommands.h"
@@ -339,27 +340,6 @@ NodeEditor* texEditor()
     return texEditors().empty() ? nullptr : texEditors().front();
 }
 
-/** "<slot>Tex" for the selected mesh's first material slot, so the new set drives it. Empty when no mesh is selected. */
-/** The first selected mesh's first material slot, or a new material assigned to the selection when that slot is Default. */
-std::string slotForNewSet()
-{
-    scene::Graph& g = scene::Graph::current();
-    for (scene::NodeId id : g.selection())
-        if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
-            if (scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh))
-            {
-                std::string slot = scene::materials::slotName(*mesh, 0);
-                if (slot != scene::materials::kDefaultSlot)
-                    return slot;
-                json made = runUi("createMaterial", argsCall({"M_" + n->name()}));
-                if (!made.is_string())
-                    return {};
-                runUi("assignMaterial", argsCall({made}));
-                return made.get<std::string>();
-            }
-    return {};
-}
-
 std::string uniqueName(std::string base)
 {
     std::string clean;
@@ -404,24 +384,103 @@ QSize sizeFromMaps(const std::string& slot)
     return {snap(least.width()), snap(least.height())};
 }
 
-void newSet()
+std::string joinNames(const std::vector<std::string>& names)
 {
-    UndoChunk chunk("New Texture Set");
-    std::string slot = slotForNewSet();
-    json call = argsCall({uniqueName(slot.empty() ? "TextureSet" : tex::defaultSetName(slot))});
-    if (!slot.empty())
+    std::string out;
+    for (const std::string& n : names)
+        out += (out.empty() ? "" : ", ") + n;
+    return out;
+}
+
+/** A new texture set the materials pick, sized to the smallest map of the first. Returns its name. */
+std::string createSetFor(const std::vector<std::string>& materials)
+{
+    const std::string first = materials.empty() ? std::string() : materials.front();
+    json call = argsCall({uniqueName(first.empty() ? "TextureSet" : tex::defaultSetName(first))});
+    if (!materials.empty())
+        call["materials"] = materials;
+    if (const QSize size = first.empty() ? QSize() : sizeFromMaps(first); size.isValid())
     {
-        call["settings"] = {{"material", slot}};
-        if (const QSize size = sizeFromMaps(slot); size.isValid())
+        call["settings"] = {{"width", size.width()}, {"height", size.height()}};
+        log::info("{}: {} x {}, the size of {}'s smallest map", call["args"][0].get<std::string>(), size.width(), size.height(), first);
+    }
+    return ops::execute("texCreateSet", call).get<std::string>();
+}
+
+/** M_<mesh name>, made unused. */
+std::string newMaterialName(const scene::Node& mesh)
+{
+    const std::string base = "M_" + mesh.name();
+    std::string name = base;
+    for (int i = 1; !scene::Graph::current().findAll(name).empty(); ++i)
+        name = base + std::to_string(i);
+    return name;
+}
+
+/** Creates a material and assigns it to the meshes at paths. Returns its name. */
+std::string assignNewMaterial(const scene::Node& namedAfter, const std::vector<std::string>& paths)
+{
+    const std::string material = ops::execute("createMaterial", argsCall({newMaterialName(namedAfter)})).get<std::string>();
+    json call = argsCall({material});
+    for (const std::string& p : paths)
+        call["args"].push_back(p);
+    ops::execute("assignMaterial", call);
+    return material;
+}
+
+/** The materials of the selected meshes that use no texture set, in scene order. Meshes only on Default first share a new material. */
+std::vector<std::string> materialsWithoutSet()
+{
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    std::vector<scene::Node*> meshes;
+    for (scene::NodeId id : g.selection().empty() ? std::vector<uint64_t>() : texturePaintTargets())
+        if (scene::Node* n = g.node(id))
+            meshes.push_back(n);
+
+    std::vector<std::string> materials, unassigned, kept;
+    scene::Node* firstUnassigned = nullptr;
+    for (scene::Node* n : meshes)
+    {
+        scene::MeshPtr mesh = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        std::vector<std::string> names = mesh ? mesh->materialNames() : std::vector<std::string>{};
+        // A mesh only on Default gets a material; a Default slot beside real ones is left alone.
+        if (names.empty() || (names.size() == 1 && names[0] == scene::materials::kDefaultSlot))
         {
-            call["settings"]["width"] = size.width();
-            call["settings"]["height"] = size.height();
-            log::info("{}: {} x {}, the size of the material's smallest map", slot, size.width(), size.height());
+            unassigned.push_back(n->path());
+            firstUnassigned = firstUnassigned ? firstUnassigned : n;
+            continue;
+        }
+        for (const std::string& m : names)
+        {
+            if (m == scene::materials::kDefaultSlot || std::ranges::find(materials, m) != materials.end() || std::ranges::find(kept, m) != kept.end())
+                continue;
+            // A material that already uses a set keeps it.
+            (tex::setForMaterial(g, m).empty() ? materials : kept).push_back(m);
         }
     }
-    json r = runUi("texCreateSet", call);
-    if (r.is_string())
-        openSet(r.get<std::string>());
+    if (!unassigned.empty())
+        materials.push_back(assignNewMaterial(*firstUnassigned, unassigned));
+    if (!kept.empty())
+        log::info("New Texture Set: {} keep the texture sets they use", joinNames(kept));
+    return materials;
+}
+
+/** See the texCreateSetForSelection doc. */
+std::string createSetForSelection() { return createSetFor(materialsWithoutSet()); }
+
+void newSet()
+{
+    try
+    {
+        json r = ops::execute("texCreateSetForSelection", json::object(), CallSource::UI);
+        if (r.is_string())
+            openSet(r.get<std::string>());
+    }
+    catch (const std::exception& e)
+    {
+        log::error("{}", e.what());
+    }
 }
 
 QString fileFilter()
@@ -527,14 +586,19 @@ void registerTextureGraphUi()
                  .open = false,
                  .toggleAction = "window.texture2d"});
 
+    ops::registerCommand({
+        .name = "texCreateSetForSelection",
+        .doc = "Make a texture set and pick it in the materials of the selected meshes (and the meshes under "
+               "selected groups) that use no set yet. Meshes only on Default first share a new material. Returns the set.",
+        .run = [](const Args&) -> json { return createSetForSelection(); },
+    });
     actions::add({.id = "texture.newSet",
                   .label = "New Texture Set",
                   .category = "Texture",
                   .run = [] { newSet(); },
-                  .doc = "Make a texture set (a texture graph with a Material Output and the standard channels) and open it in the "
-                         "Texture Graph. With a mesh selected, it drives the mesh's first material, assigning a new one if the mesh only has "
-                         "Default.",
-                  .python = "lila.ops.texCreateSet(\"RockTex\", settings={\"material\": \"Rock\"})"});
+                  .doc = "Make a texture set, picked by the selected meshes' materials that have none, and open it in the Texture "
+                         "Graph.",
+                  .python = "texCreateSet(\"HullTex\", materials=[\"M_Hull\", \"M_Canopy\"])"});
     actions::add({.id = "texture.renameSet",
                   .label = "Rename Texture Set",
                   .category = "Texture",

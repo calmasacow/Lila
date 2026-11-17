@@ -191,13 +191,12 @@ private:
     static std::string meshFor(scene::Graph& g, const scene::Node& set)
     {
         g.evaluate();
-        const std::string material = rp::setMaterial(set);
         for (scene::NodeId id : g.nodes())
             if (scene::Node* n = g.node(id); n && n->type().isA("mesh"))
                 if (scene::MeshPtr m = n->as<scene::MeshPtr>(scene::MeshNode::kOutMesh); m && m->numFaces())
                 {
                     const auto& names = m->materialNames();
-                    if (std::find(names.begin(), names.end(), material) != names.end())
+                    if (rp::usesSet(names, set))
                         return n->path();
                 }
         return {};
