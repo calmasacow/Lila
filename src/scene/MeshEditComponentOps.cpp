@@ -342,7 +342,7 @@ void registerMeshEditComponentCommands()
     ops::registerCommand({
         .name = "polyMerge",
         .doc = "Weld selected vertices closer than a distance (all of a mesh's points if it has no component selection). "
-               "Exactly two selected vertices weld whatever the distance.",
+               "Exactly two selected vertices weld at their centre whatever the distance.",
         .flags = {{"distance", "", T::Float, 0.01, "Weld distance, cm.", {}, {}, 0.0}, {"average", "", T::Bool, false, "Move merged points to their average."}},
         .run = [](const Args& a) -> json {
             const bool pair = components::mode() == K::Vertex;
@@ -351,8 +351,10 @@ void registerMeshEditComponentCommands()
                 // Just past the pair's own gap, so a mirrored pair welds too without reaching further. A symmetric
                 // selection is the pair once per side.
                 const Ids one = s && sel.size() > 2 ? s->wedgeGroups(sel).front() : sel;
-                if (pair && one.size() == 2 && m.pointValid(one[0]) && m.pointValid(one[1]))
+                if (pair && one.size() == 2 && m.pointValid(one[0]) && m.pointValid(one[1])) {
                     o.distance = std::max(o.distance, glm::distance(m.position(one[0]), m.position(one[1])) * 1.001 + 1e-6);
+                    o.average = true;
+                }
                 return points(geo::mergeByDistance(m, sel, o));
             }, true);
         },
