@@ -338,15 +338,17 @@ std::optional<std::pair<glm::dvec3, retopo::AngleSnap>> RetopoDrawTool::lineSnap
     return std::pair{*anchor, snap};
 }
 
-bool RetopoDrawTool::visible(const glm::dvec3& p, const ViewInfo& view) const
+bool RetopoDrawTool::visible(const glm::dvec3& p, const ViewInfo& view) const { return xrayReference() || !behindReference(p, view); }
+
+bool RetopoDrawTool::behindReference(const glm::dvec3& p, const ViewInfo& view) const
 {
     if (mRefBvh.empty())
-        return true;
+        return false;
     glm::dvec3 d = p - view.eye;
     double len = glm::length(d);
     // Slack so points on the surface aren't hidden by it, plus the drawOffset that lifts the retopo mesh's draw.
     double slack = view.unitsPerPixel(p) * 3.0 + mDrawOffset;
-    return len <= slack || !mRefBvh.occluded(view.eye, d / len, len - slack);
+    return len > slack && mRefBvh.occluded(view.eye, d / len, len - slack);
 }
 
 std::vector<std::optional<QPointF>> RetopoDrawTool::projectPoints(const ViewInfo& view) const
@@ -379,13 +381,22 @@ RetopoDrawTool::Hover RetopoDrawTool::pick(QPointF px, const ViewInfo& view) con
         return h;
     const geo::Mesh& m = *mRetopo;
     auto screen = projectPoints(view);
+    const bool xray = xrayReference();
+    bool bestInFront = h.dot >= 0;
     for (Index p = 0; p < m.pointCapacity(); ++p)
-        if (screen[p] && distPx(*screen[p], px) < best)
+    {
+        if (!screen[p] || distPx(*screen[p], px) >= kPickRadiusPx)
+            continue;
+        // With X-Ray Reference a point behind the surface is picked only when none in front of it is in reach.
+        const bool inFront = !xray || !behindReference(pointWorld(p), view);
+        if (inFront == bestInFront ? distPx(*screen[p], px) < best : inFront)
         {
             best = distPx(*screen[p], px);
+            bestInFront = inFront;
             h.point = p;
             h.dot = -1;
         }
+    }
     if (h.point != kInvalid || h.dot >= 0)
         return h;
     double bestEdge = kPickRadiusPx;
@@ -434,8 +445,8 @@ RetopoDrawTool::Hover RetopoDrawTool::pick(QPointF px, const ViewInfo& view) con
     if (h.face != kInvalid)
     {
         glm::dvec3 hit;
-        // Faces behind the reference surface don't count.
-        if (surfaceHit(px, view, hit) && glm::length(hit - o) + view.unitsPerPixel(hit) * 4.0 < bestT)
+        // Faces behind the reference surface don't count, unless it is drawn see-through.
+        if (!xray && surfaceHit(px, view, hit) && glm::length(hit - o) + view.unitsPerPixel(hit) * 4.0 < bestT)
             h.face = kInvalid;
     }
     return h;

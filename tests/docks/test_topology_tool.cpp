@@ -608,3 +608,117 @@ TEST_CASE("retopo draw: drag moves an edge or a face, Ctrl middle-drag moves a l
     CHECK(retopo::retopoDrawDots(*g.find("retopo")).size() == 1);
     ui::viewportTools::set(nullptr);
 }
+
+namespace
+{
+/** Looking down -Z at (x, y), cmPerPx to the pixel, that point at pixel (100, 100). */
+ui::ViewInfo zoomedFrontView(double x, double y, double cmPerPx)
+{
+    ui::ViewInfo v;
+    v.eye = {x, y, 200.0};
+    v.view = glm::lookAt(v.eye, glm::dvec3(x, y, 0.0), glm::dvec3(0.0, 1.0, 0.0));
+    const double half = 100.0 * cmPerPx;
+    // Reversed-Z as the viewport's cameras are, so pixel rays start in front of the sphere.
+    v.proj = glm::ortho(-half, half, -half, half, 400.0, 1.0);
+    v.width = v.height = 200.0;
+    v.ortho = true;
+    v.camera = "front";
+    return v;
+}
+
+/** A quad on the front of a 50 cm sphere reference, with Retopo Draw running on it. */
+ui::RetopoDrawTool* drawOnSphere()
+{
+    geo::SphereOptions o;
+    o.subdivAxis = 48;
+    o.subdivHeight = 48;
+    meshNode("ref", geo::makeSphere(o));
+    auto S = [](double x, double y) {
+        const glm::dvec3 p = glm::normalize(glm::dvec3(x, y, 1.0)) * 50.0;
+        return json::array({p.x, p.y, p.z});
+    };
+    ops::execute("retopoDrawAddFace", {{"mesh", "retopo"}, {"reference", "ref"}, {"create", true},
+                                       {"points", {S(-0.4, -0.4), S(0.4, -0.4), S(0.4, 0.4), S(-0.4, 0.4)}}});
+    ui::viewportTools::set(std::make_unique<ui::RetopoDrawTool>(scene::Graph::current().find("ref")->id(), "retopo"));
+    REQUIRE(ui::activeRetopoDraw());
+    return ui::activeRetopoDraw();
+}
+
+const geo::Mesh& retopoMesh()
+{
+    scene::Graph& g = scene::Graph::current();
+    g.evaluate();
+    return *g.find("retopo")->as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+}
+
+/** The retopo point nearest to p. */
+geo::Index nearestPoint(const glm::dvec3& p)
+{
+    const geo::Mesh& m = retopoMesh();
+    geo::Index best = geo::kInvalid;
+    for (geo::Index q = 0; q < m.pointCapacity(); ++q)
+        if (m.pointValid(q) && (best == geo::kInvalid || glm::length(m.position(q) - p) < glm::length(m.position(best) - p)))
+            best = q;
+    return best;
+}
+
+void drawDrag(Qt::MouseButton button, QPointF from, QPointF to, const ui::ViewInfo& view, Qt::KeyboardModifiers mods = Qt::NoModifier)
+{
+    ui::RetopoDrawTool* draw = ui::activeRetopoDraw();
+    QMouseEvent press(QEvent::MouseButtonPress, from, from, button, button, mods);
+    draw->mousePress(&press, view);
+    for (int k = 1; k <= 5; ++k)
+    {
+        QPointF p = from + (to - from) * (k / 5.0);
+        QMouseEvent move(QEvent::MouseMove, p, p, Qt::NoButton, button, mods);
+        draw->mouseMove(&move, view);
+    }
+    QMouseEvent release(QEvent::MouseButtonRelease, to, to, button, Qt::NoButton, mods);
+    draw->mouseRelease(&release, view);
+}
+} // namespace
+
+TEST_CASE("retopo draw: an inserted loop's points can be grabbed close up")
+{
+    setup();
+    drawOnSphere();
+    // Ctrl click on the middle of the top edge, from far enough to see the whole quad.
+    const glm::dvec3 corner = glm::normalize(glm::dvec3(0.4, 0.4, 1.0)) * 50.0;
+    const ui::ViewInfo far = zoomedFrontView(0.0, 0.0, 1.0);
+    drawDrag(Qt::LeftButton, QPointF(100.0, 100.0 + corner.y), QPointF(100.0, 100.0 + corner.y), far, Qt::ControlModifier);
+    REQUIRE(retopoMesh().numPoints() == 6);
+
+    const glm::dvec3 top = glm::normalize(glm::dvec3(0.0, 0.4, 1.0)) * 50.0;
+    const geo::Index p = nearestPoint(top);
+    const glm::dvec3 was = retopoMesh().position(p);
+    CHECK(std::abs(was.x) < 0.5);
+    // 0.05 cm to the pixel: the occlusion slack is a fraction of a millimetre here.
+    const ui::ViewInfo close = zoomedFrontView(was.x, was.y, 0.05);
+    drawDrag(Qt::MiddleButton, QPointF(100, 100), QPointF(140, 100), close);
+    CHECK(retopoMesh().position(p).x == doctest::Approx(was.x + 2.0).epsilon(0.05));
+    CHECK(retopoMesh().position(p).z > 40.0);
+    ui::viewportTools::set(nullptr);
+}
+
+TEST_CASE("retopo draw: X-Ray Reference lets a point under the reference be grabbed")
+{
+    setup();
+    drawOnSphere();
+    // A corner pushed 5 cm under the surface.
+    const glm::dvec3 corner = glm::normalize(glm::dvec3(0.4, 0.4, 1.0)) * 50.0;
+    const geo::Index p = nearestPoint(corner);
+    const glm::dvec3 under = corner * 0.9;
+    ops::execute("retopoDrawMove", {{"mesh", "retopo"}, {"points", {p}}, {"positions", {json::array({under.x, under.y, under.z})}}});
+    const ui::ViewInfo close = zoomedFrontView(under.x, under.y, 0.05);
+
+    ui::setXrayReference(false);
+    drawDrag(Qt::MiddleButton, QPointF(100, 100), QPointF(140, 100), close);
+    CHECK(glm::length(retopoMesh().position(p) - under) < 1e-9);
+
+    ui::setXrayReference(true);
+    drawDrag(Qt::MiddleButton, QPointF(100, 100), QPointF(140, 100), close);
+    CHECK(retopoMesh().position(p).x == doctest::Approx(under.x + 2.0).epsilon(0.05));
+    CHECK(retopoMesh().position(p).z > 40.0);
+    ui::setXrayReference(false);
+    ui::viewportTools::set(nullptr);
+}

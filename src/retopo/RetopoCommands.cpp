@@ -1071,7 +1071,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "retopoDrawInsertLoop",
-        .doc = "Retopo Draw: insert an edge loop across the ring through an edge (base mesh id), mirrored with symmetry.",
+        .doc = "Retopo Draw: insert an edge loop across the ring through an edge (base mesh id), mirrored with symmetry. The new "
+               "points land on the reference surface.",
         .flags = {nodeFlag({"mesh", "", T::String, nullptr, "Retopo mesh."}, "mesh"),
                   {"edge", "", T::Int, nullptr, "An edge the loop crosses.", {}, {}, 0.0},
                   {"fraction", "", T::Float, 0.5, "Where along the ring edges, 0 to 1.", {}, {}, 0.01, 0.99}},
@@ -1101,14 +1102,37 @@ void registerCommands()
             double fraction = std::clamp(a.get<double>("fraction"), 0.01, 0.99);
             geo::EdgeLoopOptions lo;
             lo.fraction = fraction;
-            geo::insertEdgeLoop(m, e, lo);
+            std::vector<Index> loop = geo::insertEdgeLoop(m, e, lo);
             for (auto& [me, start] : images)
                 if (m.edgeValid(me))
                 {
                     bool same = glm::length(m.position(m.edgePoint(me, 0)) - start) < 1e-6 * (1.0 + glm::length(start));
                     lo.fraction = same ? fraction : 1.0 - fraction;
-                    geo::insertEdgeLoop(m, me, lo);
+                    std::ranges::copy(geo::insertEdgeLoop(m, me, lo), std::back_inserter(loop));
                 }
+            // A point part way along a straight edge sits under a curved reference, where the tool hides it.
+            if (const ReferenceSurface* surface = referenceSurface(n))
+            {
+                std::optional<geo::SymmetryMap> map;
+                if (auto spec = scene::symmetrySpec(n))
+                    map = geo::SymmetryMap::buildFor(m, *spec, symmetryTolerance(m));
+                std::vector<uint8_t> placed(m.pointCapacity(), 0);
+                for (Index p : geo::pointsOfEdges(m, loop))
+                {
+                    geo::BvhClosest c;
+                    if (placed[p] || !surface->bvh.closestPoint(m.position(p), c))
+                        continue;
+                    // Mirror images follow the first of them snapped, so the loop stays symmetric on a lopsided reference.
+                    const glm::dvec3 at = map ? map->constrain(p, c.point) : c.point;
+                    m.setPosition(p, at);
+                    for (int k = 1; map && k < map->order(); ++k)
+                        if (Index q = map->image(k, p); q != geo::kInvalid && q != p)
+                        {
+                            m.setPosition(q, map->transform(k, at));
+                            placed[q] = 1;
+                        }
+                }
+            }
             m.compact();
             g.setValue(base, MeshPtr(std::make_shared<geo::Mesh>(std::move(m))));
             return nullptr;

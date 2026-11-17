@@ -129,7 +129,9 @@ private:
     std::optional<glm::dvec3> anchorWorld() const;
     void drawLineSnap(OverlayPainter& p, const ViewInfo& view) const;
     std::vector<std::optional<QPointF>> projectPoints(const ViewInfo& view) const;
+    /** Whether p is drawn and can be picked: not behind the reference, or anywhere with X-Ray Reference on. */
     bool visible(const glm::dvec3& p, const ViewInfo& view) const;
+    bool behindReference(const glm::dvec3& p, const ViewInfo& view) const;
     Hover pick(QPointF px, const ViewInfo& view) const;
     glm::dvec3 pointWorld(geo::Index p) const;
 
