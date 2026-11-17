@@ -130,6 +130,7 @@ lila_module(lila_ui UI
     Overlay.cpp Overlay.h
     CursorBadges.cpp CursorBadges.h
     Panels.cpp Panels.h
+    ExtensionScope.cpp ExtensionScope.h
     RetopoDrawTool.cpp RetopoDrawTool.h
     RetopoPolesTool.cpp RetopoPolesTool.h
     TopologyTool.cpp TopologyTool.h TopologyModes.cpp TopologyToolkit.cpp TopologyToolkit.h
