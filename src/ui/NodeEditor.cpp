@@ -111,12 +111,17 @@ NodeEditor*& lastFocused()
     return e;
 }
 
-/** Search-as-you-type node picker. Enter or a click adds the node. */
+/**
+ * Search-as-you-type node picker. Enter or a click adds the node. A type's variants (its operations) are listed while
+ * searching, each adding the node with its values set; keywords match like the label.
+ */
 class AddNodePopup final : public QFrame
 {
 public:
+    using PickFn = std::function<void(const std::string& type, const std::string& socket, const json& values)>;
+
     /** types as the backend's NodeTypes returns them; pick gets the type and, for a filtered list, the socket to link. */
-    AddNodePopup(QWidget* parent, const json& types, std::function<void(const std::string&, const std::string&)> pick)
+    AddNodePopup(QWidget* parent, const json& types, PickFn pick)
         : QFrame(parent, Qt::Popup), mPick(std::move(pick))
     {
         setFrameShape(QFrame::StyledPanel);
@@ -129,8 +134,16 @@ public:
         lay->addWidget(mList);
         resize(300, 380);
         for (const json& t : types)
-            mAll.push_back({t.value("type", ""), qs(t.value("category", "") + " / " + t.value("label", "")), qs(t.value("doc", "")),
-                            t.value("socket", "")});
+        {
+            QString keywords;
+            for (const json& k : t.value("keywords", json::array()))
+                keywords += qs(k.get<std::string>()) + " ";
+            const QString text = qs(t.value("category", "") + " / " + t.value("label", ""));
+            mAll.push_back({t.value("type", ""), text, qs(t.value("doc", "")), t.value("socket", ""), keywords, json(), false});
+            for (const json& v : t.value("variants", json::array()))
+                mAll.push_back({t.value("type", ""), text + ": " + qs(v.value("label", "")), qs(t.value("doc", "")), t.value("socket", ""),
+                                keywords, v.value("values", json::object()), true});
+        }
         std::sort(mAll.begin(), mAll.end(), [](const Entry& a, const Entry& b) { return a.text < b.text; });
         filter();
         connect(mSearch, &QLineEdit::textChanged, this, [this] { filter(); });
@@ -190,20 +203,39 @@ private:
         QString text;
         QString doc;
         std::string socket;
+        QString keywords;
+        json values;
+        bool variant = false;
     };
 
     void filter()
     {
         mList->clear();
         QString q = mSearch->text().trimmed();
+        // Variants only while searching, so the full list stays one row per node; a label match ranks above a keyword match.
+        std::vector<const Entry*> first, second;
         for (const Entry& e : mAll)
-            if (q.isEmpty() || e.text.contains(q, Qt::CaseInsensitive) || qs(e.type).contains(q, Qt::CaseInsensitive))
+        {
+            if (q.isEmpty())
             {
-                auto* item = new QListWidgetItem(e.socket.empty() ? e.text : e.text + "  (" + pretty(e.socket) + ")", mList);
-                item->setData(Qt::UserRole, qs(e.type));
-                item->setData(Qt::UserRole + 1, qs(e.socket));
-                item->setToolTip(e.doc);
+                if (!e.variant)
+                    first.push_back(&e);
+                continue;
             }
+            if (e.text.contains(q, Qt::CaseInsensitive) || qs(e.type).contains(q, Qt::CaseInsensitive))
+                first.push_back(&e);
+            else if (!e.variant && e.keywords.contains(q, Qt::CaseInsensitive))
+                second.push_back(&e);
+        }
+        first.insert(first.end(), second.begin(), second.end());
+        for (const Entry* e : first)
+        {
+            auto* item = new QListWidgetItem(e->socket.empty() ? e->text : e->text + "  (" + pretty(e->socket) + ")", mList);
+            item->setData(Qt::UserRole, qs(e->type));
+            item->setData(Qt::UserRole + 1, qs(e->socket));
+            item->setData(Qt::UserRole + 2, qs(e->values.dump()));
+            item->setToolTip(e->doc);
+        }
         mList->setCurrentRow(0);
     }
 
@@ -213,13 +245,14 @@ private:
             return;
         std::string type = i->data(Qt::UserRole).toString().toStdString();
         std::string socket = i->data(Qt::UserRole + 1).toString().toStdString();
+        json values = json::parse(i->data(Qt::UserRole + 2).toString().toStdString(), nullptr, false);
         mPicked = true;
         close();
-        mPick(type, socket);
+        mPick(type, socket, values.is_object() ? values : json());
         deleteLater();
     }
 
-    std::function<void(const std::string&, const std::string&)> mPick;
+    PickFn mPick;
     bool mPicked = false;
     std::vector<Entry> mAll;
     QLineEdit* mSearch;
@@ -817,7 +850,8 @@ void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
     json types = run("NodeTypes", query);
     if (!types.is_array())
         types = json::array();
-    auto* pop = new AddNodePopup(this, types, [this, backend = mBackend, group, at, drag](const std::string& type, const std::string& socket) {
+    auto* pop = new AddNodePopup(this, types, [this, backend = mBackend, group, at, drag](const std::string& type, const std::string& socket,
+                                                                                       const json& values) {
         // The new node sits beside the loose end, on the side its linked socket is on.
         QPointF pos(at.x() - kNodeWidth * 0.5, at.y() - 12.0);
         if (drag)
@@ -829,6 +863,9 @@ void NodeEditor::openAddMenu(QPointF at, const WireDrag* wire)
         if (!r.is_string())
             return;
         std::string name = r.get<std::string>();
+        if (values.is_object())
+            for (auto& [k, v] : values.items())
+                runVerb(*backend, "SetValue", args({group, name + "." + k, v}));
         if (drag && !socket.empty())
         {
             std::string mine = name + "." + socket, theirs = drag->node + "." + drag->socket;
@@ -1683,7 +1720,7 @@ void NodeEditor::findNode()
     json entries = json::array();
     for (auto& [name, title] : mCanvas->nodeList())
         entries.push_back({{"type", name}, {"category", title.toStdString()}, {"label", name}});
-    auto* pop = new AddNodePopup(this, entries, [this](const std::string& name, const std::string&) { focusNode(name); });
+    auto* pop = new AddNodePopup(this, entries, [this](const std::string& name, const std::string&, const json&) { focusNode(name); });
     pop->popup(QCursor::pos());
 }
 

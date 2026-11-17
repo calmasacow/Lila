@@ -57,6 +57,9 @@ LILA_SCENE_API image::Image readLiveMeshMap(const std::string& bakeProject, cons
 /** A map's file from the bake project's last bake (else its manifest) for a tile; empty when it has none. */
 LILA_SCENE_API std::filesystem::path bakedMapFile(scene::Graph& g, const std::string& bakeProject, const std::string& map, int udim);
 
+/** The world-space box the project's last baked position map is normalised to; false when it has no baked position map. */
+LILA_SCENE_API bool bakedPositionBounds(scene::Graph& g, const std::string& bakeProject, double lo[3], double hi[3]);
+
 /**
  * Something rewrote a bake project's map files outside a bake command (a trim sheet's own bake): readers that cache them,
  * such as the viewport's texture sets, reload. The renderer installs the listener.

@@ -8,6 +8,7 @@
 #include "gn/Zones.h"
 
 #include "ops/Command.h"
+#include "ops/CommandOptions.h"
 #include "ops/Undo.h"
 #include "core/Log.h"
 #include "core/Paths.h"
@@ -844,7 +845,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "gnNodeTypes",
-        .doc = "The node library: type, label, category and description of each node. With linkType, only nodes that can take a "
+        .doc = "The node library: type, label, category and description of each node, and for a node with an operation its options as "
+               "variants ({label, values} to set on the new node). With linkType, only nodes that can take a "
                "link from (or, with linkInput, give one to) a socket of that type, each with the socket it would use.",
         .flags = {{"linkType", "", T::String, nullptr, "Socket type of a dragged link's loose end."},
                   {"linkInput", "", T::Bool, false, "The drag started at an input, so the node needs a matching output."},
@@ -874,6 +876,13 @@ void registerCommands()
                 json e = {{"type", d->type}, {"label", d->label}, {"category", d->category}, {"doc", d->doc}};
                 if (const std::string* owner = declRegistry().ownerOf(d->type); owner && !owner->empty())
                     e["owner"] = *owner;
+                if (const PropDecl* op = d->prop("operation"); op && op->options.size() > 1)
+                {
+                    json variants = json::array();
+                    for (const std::string& o : op->options)
+                        variants.push_back({{"label", ops::options::prettyLabel(o)}, {"values", {{"operation", o}}}});
+                    e["variants"] = variants;
+                }
                 if (a.get<bool>("detail", false))
                 {
                     GNode probe{d->type, d->type, {0.0, 0.0}, json::object()};

@@ -278,6 +278,40 @@ fs::path bakedMapFile(scene::Graph& g, const std::string& project, const std::st
     return {};
 }
 
+bool bakedPositionBounds(scene::Graph& g, const std::string& project, double lo[3], double hi[3])
+{
+    if (project.empty())
+        return false;
+    for (scene::NodeId id : bake::projects(g))
+    {
+        scene::Node* n = g.node(id);
+        if (!n || n->name() != project)
+            continue;
+        json r = bake::lastResult(id);
+        if (!r.is_object() || !r.contains("outputs"))
+            r = bake::readManifest(*n);
+        if (!r.is_object())
+            return false;
+        for (const json& o : r.value("outputs", json::array()))
+        {
+            const json meta = o.value("meta", json::object());
+            if (o.value("map", std::string()) != "position" || !meta.is_object())
+                continue;
+            const json a = meta.value("boundsMin", json()), b = meta.value("boundsMax", json());
+            if (!a.is_array() || !b.is_array() || a.size() != 3 || b.size() != 3)
+                continue;
+            for (size_t k = 0; k < 3; ++k)
+            {
+                lo[k] = a[k].get<double>();
+                hi[k] = b[k].get<double>();
+            }
+            return true;
+        }
+        return false;
+    }
+    return false;
+}
+
 void setExternalSource(ExternalSource fn) { externalSource() = std::move(fn); }
 
 std::map<std::string, image::Image> evaluateOutputs(scene::Node& set, const std::vector<OutputRequest>& requests, int udim, int width, int height,

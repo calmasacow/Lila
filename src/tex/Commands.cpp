@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "gn/Routing.h"
 #include "ops/Command.h"
+#include "ops/CommandOptions.h"
 #include "tex/PatchFill.h"
 #include "tex/Ptex.h"
 #include "scene/Materials.h"
@@ -180,6 +181,15 @@ json defJson(const NodeDef& d, bool detail)
     json e = {{"type", d.type}, {"label", d.label}, {"category", d.category}, {"doc", d.doc}, {"kind", nodeKindName(d.kind)}, {"tier", d.tier}};
     if (!d.owner.empty())
         e["owner"] = d.owner;
+    if (!d.keywords.empty())
+        e["keywords"] = d.keywords;
+    if (const ParamDecl* op = d.param("operation"); op && op->type == ParamType::Enum)
+    {
+        json variants = json::array();
+        for (const std::string& o : op->options)
+            variants.push_back({{"label", ops::options::prettyLabel(o)}, {"values", {{"operation", o}}}});
+        e["variants"] = variants;
+    }
     if (detail)
     {
         json ins = json::array(), outs = json::array(), prms = json::array();
@@ -1052,7 +1062,8 @@ void registerCommands()
 
     ops::registerCommand({
         .name = "texNodeTypes",
-        .doc = "The texture node library: type, label, category, kind, tier and description of each. With linkType, only nodes that can "
+        .doc = "The texture node library: type, label, category, kind, tier, description, search keywords and variants (an operation's "
+               "options, each {label, values} to set on the new node) of each. With linkType, only nodes that can "
                "take a link from (or, with linkInput, give one to) a port of that type, each with the socket it would use.",
         .flags = {{"linkType", "", T::String, nullptr, "Port type of a dragged link's loose end."},
                   {"linkInput", "", T::Bool, false, "The drag started at an input, so the node needs a matching output."},
