@@ -37,6 +37,8 @@
 #include "ui/TexLive.h"
 #include "ui/TextureGraphUi.h"
 #include "ui/TextureSetPanel.h"
+#include "ui/MaterialThumbnails.h"
+#include "ui/TexturePicker.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewInfo.h"
 #include "ui/ViewportHooks.h"
@@ -764,13 +766,61 @@ class FreshCombo final : public QComboBox
 public:
     using QComboBox::QComboBox;
     std::function<void()> beforePopup;
+    /** Opens in place of the plain list when set. */
+    std::function<void()> popup;
     void showPopup() override
     {
         if (beforePopup)
             beforePopup();
-        QComboBox::showPopup();
+        if (popup)
+            popup();
+        else
+            QComboBox::showPopup();
     }
 };
+
+/**
+ * The brush material picker: the combo's materials searchable, under their category with a thumbnail, scene sets
+ * under Scene. Thumbnails not rendered yet render in the background for the next opening.
+ */
+void pickBrushMaterial(QComboBox* combo)
+{
+    texturePicker::Options o;
+    o.title = "Material";
+    o.current = combo->currentData().toString().toStdString();
+    o.projectTextures = false;
+    o.none = false;
+    o.browse = false;
+    std::vector<texturePicker::Item> items;
+    for (int i = 0; i < combo->count(); ++i)
+    {
+        const std::string id = combo->itemData(i).toString().toStdString();
+        texturePicker::Item it;
+        it.value = id;
+        QString group = "Scene";
+        it.name = combo->itemText(i);
+        if (id.rfind("scene/", 0) == 0)
+            it.name.remove(0, int(std::string_view("Scene: ").size()));
+        else if (std::optional<tex::library::Entry> e = tex::library::find(id))
+        {
+            const std::string& cat = e->meta.category;
+            group = cat.empty() ? QString("Other") : QString::fromStdString(cat.substr(0, cat.find('/')));
+        }
+        it.group = group;
+        it.file = materialThumbs::cachedFile(id);
+        if (it.file.empty())
+            materialThumbs::renderAsync(id, {}, [](const materialThumbs::Result&, const std::string&) {});
+        items.push_back(std::move(it));
+    }
+    o.items = [items] { return items; };
+    QPointer<QComboBox> self(combo);
+    texturePicker::open(combo, std::move(o), [self](const std::string& value) {
+        if (!self)
+            return;
+        if (const int at = self->findData(QString::fromStdString(value)); at >= 0)
+            self->setCurrentIndex(at);
+    });
+}
 
 class TexturePaintPanel final : public QWidget
 {
@@ -984,6 +1034,7 @@ public:
         setSetChannels({});
         auto* materials = new FreshCombo(this);
         materials->beforePopup = [this] { refreshMaterials(); };
+        materials->popup = [materials] { pickBrushMaterial(materials); };
         mMaterial = materials;
         mMaterial->setObjectName("brushMaterial");
         mMaterial->setToolTip("The material the stroke paints: one from the library, or a texture set of this scene (Scene)");

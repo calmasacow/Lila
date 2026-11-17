@@ -338,8 +338,10 @@ private:
             it->setData(kKindRole, kind);
             it->setSizeHint({0, kIcon + 4});
         };
-        special(kNone, "None", "ban", "none clear");
-        special(kBrowse, "Browse...", "folder-open", "browse file");
+        if (mOptions.none)
+            special(kNone, "None", "ban", "none clear");
+        if (mOptions.browse)
+            special(kBrowse, "Browse...", "folder-open", "browse file");
 
         QListWidgetItem* select = nullptr;
         auto mark = [&](QListWidgetItem* it, bool current) {
