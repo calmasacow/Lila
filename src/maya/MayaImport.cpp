@@ -1720,7 +1720,37 @@ private:
         std::vector<int> handled;
         /** History steps that could not be replayed, by node type: the mesh came in as an earlier shape. */
         std::set<std::string> notReplayed;
+        /** Outputs evaluated ahead by primeChain, by node and output attribute; each is taken by its one consumer. */
+        std::map<std::pair<int, std::string>, std::optional<Geom>> primed;
+        bool tooDeep = false;
     };
+
+    /** How many history steps evalNode recurses through before it evaluates the chain below ahead of itself. */
+    static constexpr int kPrimeInterval = 50;
+    /** A recursion depth no acyclic graph reaches, given priming: only a cycle gets here. */
+    static constexpr int kMaxEvalDepth = 4 * kPrimeInterval;
+
+    /**
+     * Evaluates the single-input history below a node bottom-up into log.primed, so that evaluating the node itself
+     * recurses only a step or two. A mesh can carry hundreds of modelling and UV steps, and each nested evalNode costs
+     * kilobytes of stack.
+     */
+    void primeChain(int node, const std::string& shape, int depth, EvalLog& log) const
+    {
+        std::vector<Plug> chain;
+        std::set<int> seen{node};
+        for (int at = node;;)
+        {
+            std::optional<Plug> src = mIx.input(at, {"ip", "inputPolymesh", "ig", "inputGeometry", "i", "inMesh", "im", "inputMesh",
+                                                     "ip[0].ig", "input[0].inputGeometry"});
+            if (!src || !seen.insert(src->node).second || log.primed.contains({src->node, src->attr}))
+                break;
+            chain.push_back(*src);
+            at = src->node;
+        }
+        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+            log.primed[{it->node, it->attr}] = evalNode(it->node, it->attr, shape, depth + 1, log);
+    }
 
     void notReplayed(EvalLog& log, const std::string& shape, const MNode& n, std::string_view why) const
     {
@@ -1883,8 +1913,23 @@ private:
     /** The geometry a node's output carries, evaluating what history it can. */
     std::optional<Geom> evalNode(int node, const std::string& outAttr, const std::string& shape, int depth, EvalLog& log) const
     {
-        if (node < 0 || depth > 200)
+        if (node < 0)
             return std::nullopt;
+        if (depth > kMaxEvalDepth)
+        {
+            if (!std::exchange(log.tooDeep, true))
+                log.warnings.push_back(std::format("{}: history loops back on itself at '{}'; evaluation stopped there", shape,
+                                                   shortName(mIx.node(node).name)));
+            return std::nullopt;
+        }
+        if (auto it = log.primed.find({node, outAttr}); it != log.primed.end())
+        {
+            std::optional<Geom> g = std::move(it->second);
+            log.primed.erase(it);
+            return g;
+        }
+        if (depth % kPrimeInterval == 0)
+            primeChain(node, shape, depth, log);
         log.handled.push_back(node);
         const MNode& n = mIx.node(node);
         const std::string& t = n.type;

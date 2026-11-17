@@ -1333,3 +1333,32 @@ TEST_CASE("maya import: delete, separate, extract, combine and merge history are
         }
     CHECK(flagged == 1);
 }
+
+TEST_CASE("maya import: a mesh with hundreds of history steps still evaluates")
+{
+    const int steps = 300;
+    std::string text = "//Maya ASCII 2026 scene\n"
+                       "requires maya \"2026\";\n"
+                       "currentUnit -l centimeter -a degree -t film;\n"
+                       "createNode transform -n \"tri\";\n"
+                       "createNode mesh -n \"triShape\" -p \"tri\";\n"
+                       "createNode mesh -n \"triShapeOrig\" -p \"tri\";\n"
+                       "setAttr \".io\" yes;\n"
+                       "setAttr -s 3 \".vt[0:2]\" 0 0 0 1 0 0 0 0 1;\n"
+                       "setAttr -s 3 \".ed[0:2]\" 0 1 0 1 2 0 2 0 0;\n"
+                       "setAttr \".fc[0]\" -type \"polyFaces\" f 3 0 1 2;\n";
+    for (int i = 1; i <= steps; ++i)
+        text += std::format("createNode polyTweak -n \"polyTweak{}\";\nsetAttr \".tk[0]\" -type \"float3\" 0.01 0 0;\n", i);
+    text += "connectAttr \"triShapeOrig.w\" \"polyTweak1.ip\";\n";
+    for (int i = 2; i <= steps; ++i)
+        text += std::format("connectAttr \"polyTweak{}.out\" \"polyTweak{}.ip\";\n", i - 1, i);
+    text += std::format("connectAttr \"polyTweak{}.out\" \"triShape.i\";\n", steps);
+
+    Graph& g = fresh();
+    maya::ImportResult r = maya::importMaya(g, "deep.ma", maya::readAscii(text));
+    REQUIRE(r.ok);
+    CHECK(r.warnings.empty());
+    MeshPtr m = outMesh(g, "tri");
+    REQUIRE(m->numPoints() == 3);
+    checkVec(m->position(0), {steps * 0.01, 0, 0});
+}
