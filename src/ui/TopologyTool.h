@@ -314,8 +314,11 @@ private:
 /** Whether the retopo tools draw their reference see-through (X-Ray Reference). */
 LILA_UI_API bool xrayReference();
 LILA_UI_API void setXrayReference(bool on);
-/** With X-Ray Reference on, draws reference's shaded draws in s see-through, so the retopo mesh's far side shows. */
-LILA_UI_API void applyXrayReference(render::FrameState& s, scene::NodeId reference);
+/** Whether the retopo tools draw the reference's wireframe and selection highlight (Reference Wireframe, off by default). */
+LILA_UI_API bool referenceWire();
+LILA_UI_API void setReferenceWire(bool on);
+/** Applies X-Ray Reference and Reference Wireframe to reference's shaded draws in s. */
+LILA_UI_API void applyReferenceDisplay(render::FrameState& s, scene::NodeId reference);
 
 /** A retopo mesh edge: a light line over a dark halo, so it reads over light and dark surfaces alike. bold for hover. */
 LILA_UI_API void pushRetopoEdge(render::FrameState& s, const glm::vec3& a, const glm::vec3& b, const glm::vec4& color, bool bold = false);

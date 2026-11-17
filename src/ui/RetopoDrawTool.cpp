@@ -1082,7 +1082,7 @@ void RetopoDrawTool::draw(render::FrameState& s, OverlayPainter& p, const ViewIn
 
     refresh();
     removeOwnDraw(s);
-    applyXrayReference(s, mReference);
+    applyReferenceDisplay(s, mReference);
     const RetopoOverlayOffset offset(s, view, mRetopoName);
     if (mDrag == Drag::None)
         mMods = QGuiApplication::queryKeyboardModifiers();

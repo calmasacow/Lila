@@ -221,6 +221,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"topo.freezeAll", "snowflake"},
     {"topo.qualityOverlay", "chart-dots"},
     {"topo.xrayReference", "ghost"},
+    {"topo.referenceWire", "grid-pattern"},
     {"help.docs.topology", "book"},
     {"mesh.extrude", "arrow-bar-up"},
     {"mesh.inset", "square-dot"},

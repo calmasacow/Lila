@@ -40,6 +40,7 @@ constexpr const char* kEdgePref = "/topology/edgeLength";
 constexpr const char* kQualityPref = "/topology/qualityOverlay";
 constexpr const char* kXrayPref = "/topology/xrayReference";
 constexpr float kXrayOpacity = 0.35f;
+constexpr const char* kReferenceWirePref = "/topology/referenceWire";
 constexpr const char* kEvenSizePref = "/topology/relax/evenSize";
 constexpr const char* kSquarenessPref = "/topology/relax/squareness";
 constexpr const char* kStiffnessPref = "/topology/relax/stiffness";
@@ -1325,13 +1326,29 @@ void setXrayReference(bool on)
     viewportTools::requestRedraw();
 }
 
-void applyXrayReference(render::FrameState& s, scene::NodeId reference)
+bool referenceWire() { return PrefStore::get().value<bool>("general", kReferenceWirePref, false); }
+
+void setReferenceWire(bool on)
 {
-    if (reference == scene::kNoNode || !xrayReference())
+    PrefStore::get().set("general", kReferenceWirePref, on);
+    viewportTools::requestRedraw();
+}
+
+void applyReferenceDisplay(render::FrameState& s, scene::NodeId reference)
+{
+    if (reference == scene::kNoNode)
         return;
+    const bool xray = xrayReference(), wire = referenceWire();
+    if (!xray && wire)
+        return;
+    constexpr uint32_t kHighlight = render::DrawSelected | render::DrawSelectedOther | render::DrawUnderSelected | render::DrawPreselect;
     for (render::MeshDraw& d : s.meshes.edit())
     {
         if (d.node != uint64_t(reference) || !(d.flags & render::DrawShaded) || !d.mesh)
+            continue;
+        if (!wire)
+            d.flags &= ~(kHighlight | render::DrawWire);
+        if (!xray)
             continue;
         if (d.materials.empty())
         {
@@ -1568,7 +1585,7 @@ void TopologyTool::draw(render::FrameState& s, OverlayPainter& p, const ViewInfo
 
     refresh();
     removeOwnDraw(s);
-    applyXrayReference(s, mReference);
+    applyReferenceDisplay(s, mReference);
     const RetopoOverlayOffset offset(s, view, mRetopoName);
     if (mDrag == Drag::None)
         mMods = QGuiApplication::queryKeyboardModifiers();
@@ -1793,6 +1810,16 @@ void registerTopologyActions()
         .python = "lila.prefs.set(\"general\", \"/topology/xrayReference\", True)",
         .checked = [] { return xrayReference(); },
         .keywords = {"xray", "x-ray", "see-through", "transparent", "ghost"},
+    });
+    actions::add({
+        .id = "topo.referenceWire",
+        .label = "Reference Wireframe",
+        .category = "Topology",
+        .run = [] { setReferenceWire(!referenceWire()); },
+        .doc = "Shows the reference mesh's wireframe and selection highlight while a topology tool runs. Off by default, so only the retopo mesh's edges show.",
+        .python = "lila.prefs.set(\"general\", \"/topology/referenceWire\", True)",
+        .checked = [] { return referenceWire(); },
+        .keywords = {"wireframe", "wire", "highlight", "selection", "edges", "reference"},
     });
     actions::add({
         .id = "topo.runRegion",

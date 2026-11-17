@@ -236,6 +236,12 @@ TopologyToolkit::TopologyToolkit(QWidget* parent) : QWidget(parent)
     setCheckDefault(mXray, false);
     connect(mXray, &QCheckBox::toggled, this, [](bool on) { setXrayReference(on); });
     session->addRow("X-Ray", mXray);
+    mReferenceWire = new QCheckBox(sessionBox);
+    mReferenceWire->setObjectName("topologyReferenceWire");
+    mReferenceWire->setToolTip("Reference Wireframe: shows the reference's wireframe and selection highlight while a topology tool runs");
+    setCheckDefault(mReferenceWire, false);
+    connect(mReferenceWire, &QCheckBox::toggled, this, [](bool on) { setReferenceWire(on); });
+    session->addRow("Wireframe", mReferenceWire);
     mDrawOffset = controls::valueField(0.0, 100.0, 2, "cm", sessionBox);
     mDrawOffset->setObjectName("topologyDrawOffset");
     mDrawOffset->setKeyboardTracking(false);
@@ -469,6 +475,10 @@ void TopologyToolkit::refreshState()
     {
         QSignalBlocker block(mXray);
         mXray->setChecked(xrayReference());
+    }
+    {
+        QSignalBlocker block(mReferenceWire);
+        mReferenceWire->setChecked(referenceWire());
     }
     if (!mDrawOffset->hasFocus())
     {

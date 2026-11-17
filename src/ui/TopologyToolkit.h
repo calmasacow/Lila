@@ -59,6 +59,7 @@ private:
     controls::Segmented* mSymmetry = nullptr;
     QDoubleSpinBox* mDrawOffset = nullptr;
     QCheckBox* mXray = nullptr;
+    QCheckBox* mReferenceWire = nullptr;
     QLabel* mStats = nullptr;
     QLabel* mActiveLabel = nullptr;
     QWidget* mConstructPanel = nullptr;
