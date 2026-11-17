@@ -122,6 +122,16 @@ scene::Node* hdrLeadMesh()
     return nullptr;
 }
 
+/** On or off for a toggle action, from this view's state or the action's own check; nullopt for one-shot actions. */
+std::optional<bool> hdrActionState(const std::string& id, const ViewportWidget* view)
+{
+    if (std::optional<bool> on = viewportActionState(id, view))
+        return on;
+    if (const Action* a = actions::find(id); a && a->checked)
+        return a->checked();
+    return std::nullopt;
+}
+
 /** True when the scene can use something needing one of `needs` (viewportContext), or the toggle `id` is on. */
 bool hdrRelevant(uint32_t needs, const std::string& id, const ViewportWidget* view)
 {
@@ -159,7 +169,7 @@ public:
     {
         for (QAction* a : actions())
             if (QString id = a->property(kStateProp).toString(); !id.isEmpty())
-                if (std::optional<bool> on = viewportActionState(id.toStdString(), mView))
+                if (std::optional<bool> on = hdrActionState(id.toStdString(), mView))
                 {
                     QSignalBlocker block(a);
                     a->setChecked(*on);
@@ -884,6 +894,12 @@ QToolButton* ViewportHeader::actionButton(const char* id, const char* iconName, 
     add(b, true, keep, [this, action, overflowIcon](QMenu* m) {
         QAction* a = m->addAction(icon(overflowIcon), hdrLabel(action));
         a->setToolTip(hdrTip(action));
+        if (std::optional<bool> on = hdrActionState(action, mView))
+        {
+            a->setCheckable(true);
+            a->setChecked(*on);
+            a->setProperty(kStateProp, QString::fromStdString(action));
+        }
         connect(a, &QAction::triggered, this, [this, action] {
             activateView();
             actions::run(action);
@@ -1522,11 +1538,7 @@ void ViewportHeader::refresh()
     }
     for (auto& [b, id] : mActionButtons)
     {
-        std::optional<bool> on = viewportActionState(id, mView);
-        if (!on)
-            if (const Action* a = actions::find(id); a && a->checked)
-                on = a->checked();
-        if (on)
+        if (std::optional<bool> on = hdrActionState(id, mView))
         {
             QSignalBlocker block(b);
             b->setCheckable(true);
