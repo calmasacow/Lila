@@ -204,7 +204,7 @@ QSpinBox* intField(int lo, int hi, QWidget* parent)
     return s;
 }
 
-QLabel* dimLabel(const QString& text, QWidget* parent)
+QLabel* dimText(const QString& text, QWidget* parent)
 {
     auto* l = new QLabel(text, parent);
     controls::setRole(l, "dim");
@@ -338,11 +338,11 @@ RenderToolkit::RenderToolkit(QWidget* parent) : QWidget(parent)
         mHeight->setSuffix(" px");
         mWidth->setToolTip("Render width; the scene's resolution, shared with the gates and Camera Settings");
         mHeight->setToolTip("Render height; the scene's resolution, shared with the gates and Camera Settings");
-        f->addRow("Size", hbox(box, {mWidth, dimLabel(QString(QChar(0x00D7)), box), mHeight}));
+        f->addRow("Size", hbox(box, {mWidth, dimText(QString(QChar(0x00D7)), box), mHeight}));
         mScale = controls::valueField(5.0, 800.0, 0, "%", box);
         mScale->setToolTip("Percent of the size: 50% for quick drafts");
         setSpinDefault(mScale, 100.0);
-        mSize = dimLabel({}, box);
+        mSize = dimText({}, box);
         mSize->setMinimumWidth(80);
         f->addRow("Scale", hbox(box, {mScale, mSize}));
         mSamples = intField(1, 4096, box);
@@ -387,7 +387,7 @@ RenderToolkit::RenderToolkit(QWidget* parent) : QWidget(parent)
         mEnd = controls::valueField(-1e6, 1e6, 0, {}, mRangeBox);
         mStart->setToolTip("First frame; the playback range's until set");
         mEnd->setToolTip("Last frame; the playback range's until set");
-        rf->addRow("Range", hbox(mRangeBox, {mStart, dimLabel("to", mRangeBox), mEnd}));
+        rf->addRow("Range", hbox(mRangeBox, {mStart, dimText("to", mRangeBox), mEnd}));
         mStep = controls::valueField(0.01, 1000.0, 2, {}, mRangeBox);
         mStep->setToolTip("Frames between renders: 2 renders every other frame");
         setSpinDefault(mStep, 1.0);
@@ -463,7 +463,7 @@ RenderToolkit::RenderToolkit(QWidget* parent) : QWidget(parent)
         setSpinDefault(quality, 0.6);
         mQuality = quality;
         mOutForm->addRow("Quality", mQuality);
-        mWrites = dimLabel({}, box);
+        mWrites = dimText({}, box);
         mWrites->setWordWrap(true);
         mWrites->setTextInteractionFlags(Qt::TextSelectableByMouse);
         mOutForm->addRow("Writes", mWrites);
@@ -527,7 +527,7 @@ void RenderToolkit::addGroup(QWidget* box, QVBoxLayout* v, const QString& headin
         return;
     if (!heading.isEmpty())
     {
-        QLabel* h = dimLabel(heading, box);
+        QLabel* h = dimText(heading, box);
         h->setContentsMargins(2, 4, 0, 0);
         v->addWidget(h);
     }
