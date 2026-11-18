@@ -70,6 +70,33 @@ glm::dvec3 chartNormal(const Chart& chart)
     return len > 1e-20 ? n / len : glm::dvec3(0.0);
 }
 
+/** How much of its tightest bounding rectangle an island must fill to be rectified onto it. */
+constexpr double kRectifyFill = 0.9;
+
+/** Every triangle faces within half a degree of the island's normal. */
+bool isPlanar(const Chart& chart, const glm::dvec3& normal)
+{
+    const double minCos = std::cos(glm::radians(0.5));
+    for (const auto& t : chart.tris)
+    {
+        const glm::dvec3 n = glm::cross(chart.pos[t[1]] - chart.pos[t[0]], chart.pos[t[2]] - chart.pos[t[0]]);
+        const double len = glm::length(n);
+        if (len > 1e-20 && glm::dot(n / len, normal) < minCos)
+            return false;
+    }
+    return true;
+}
+
+/** Lays the island's points flat in its plane: uvs are their coordinates along two axes across the normal. */
+void projectToPlane(Chart& chart, const glm::dvec3& normal)
+{
+    const glm::dvec3 helper = std::abs(normal.y) < 0.9 ? glm::dvec3(0, 1, 0) : glm::dvec3(1, 0, 0);
+    const glm::dvec3 u = glm::normalize(glm::cross(helper, normal)), v = glm::cross(normal, u);
+    chart.uv.resize(chart.pos.size());
+    for (size_t i = 0; i < chart.pos.size(); ++i)
+        chart.uv[i] = {glm::dot(chart.pos[i], u), glm::dot(chart.pos[i], v)};
+}
+
 /** A disk whose boundary sits at an even distance from its centre and fills the circle: caps, discs, round plates. */
 bool looksRadial(const Chart& chart)
 {
@@ -121,24 +148,44 @@ IslandMeasure measureChart(Chart& chart, const HotspotOptions& opts)
     if (chart.uv.size() != chart.pos.size() || m.area3d <= 0.0)
         return m;
 
+    // A flat island is laid flat exactly: an unwrap can fold polygons with points in a row, and rectifying would shear
+    // slanted quads (a carved wall) into a grid.
+    const bool planar = isPlanar(chart, m.normal);
+    if (planar)
+        projectToPlane(chart, m.normal);
+
     // Mirrored islands would put the trim on backwards.
     if (chart.areaUv() < 0.0)
         for (glm::dvec2& p : chart.uv)
             p.x = -p.x;
 
+    const glm::dvec3 up = glm::length(opts.up) > 0.0 ? glm::normalize(opts.up) : glm::dvec3(0.0, 1.0, 0.0);
+    const bool flat = std::abs(glm::dot(m.normal, up)) > std::cos(glm::radians(opts.flatTolerance));
     m.radial = looksRadial(chart);
     if (!m.radial)
     {
-        m.rectified = straightenChart(chart);
-        if (m.rectified == StraightenResult::Failed)
+        std::vector<glm::dvec2> pts(chart.uv.begin(), chart.uv.end());
+        glm::dvec2 box(0.0);
+        const double angle = minAreaRectAngle(pts, &box);
+        const bool boxy = box.x * box.y > 0.0 && std::abs(chart.areaUv()) / (box.x * box.y) > kRectifyFill;
+        Chart straight = chart;
+        m.rectified = planar ? StraightenResult::Failed : straightenChart(straight);
+        // Pulling the outline onto a rectangle warps an arch or a stair profile; those keep their unwrapped shape.
+        if (m.rectified == StraightenResult::Rectangle && !boxy)
+            m.rectified = StraightenResult::Failed;
+        if (m.rectified != StraightenResult::Failed)
+            chart = std::move(straight);
+        else if (opts.orient == HotspotOrient::WorldUp && !flat)
         {
-            std::vector<glm::dvec2> pts(chart.uv.begin(), chart.uv.end());
-            rotateUv(chart, -minAreaRectAngle(pts));
+            // A ramp's side has no box edge to follow (its tightest box lies along the slope), so up runs straight up.
+            const glm::dvec2 g = upGradient(chart, up);
+            if (glm::length(g) > 0.0)
+                rotateUv(chart, std::numbers::pi * 0.5 - std::atan2(g.y, g.x));
         }
+        else
+            rotateUv(chart, -angle);
     }
 
-    const glm::dvec3 up = glm::length(opts.up) > 0.0 ? glm::normalize(opts.up) : glm::dvec3(0.0, 1.0, 0.0);
-    const bool flat = std::abs(glm::dot(m.normal, up)) > std::cos(glm::radians(opts.flatTolerance));
     HotspotOrient orient = opts.orient;
     if (orient == HotspotOrient::WorldUp && (flat || m.radial))
         orient = HotspotOrient::LongestU;

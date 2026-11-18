@@ -2,7 +2,9 @@
 #include "Entities.h"
 
 #include <lila/Components.h>
+#include <lila/Graph.h>
 #include <lila/Prefs.h>
+#include <lila/Tools.h>
 #include <lila/Transform.h>
 #include <lila/UI.h>
 #include <lila/Undo.h>
@@ -12,6 +14,7 @@
 #include <lila/ViewportRenderers.h>
 
 #include <QKeyEvent>
+#include <QTimer>
 #include <QMouseEvent>
 #include <QWheelEvent>
 
@@ -50,7 +53,8 @@ json toJson(const Settings& s)
             {"material", s.material},
             {"entityClass", s.entityClass},
             {"prefab", s.prefab},
-            {"prefabFollowsNormal", s.prefabFollowsNormal}};
+            {"prefabFollowsNormal", s.prefabFollowsNormal},
+            {"droneCamera", s.droneCamera}};
 }
 
 Settings fromJson(const json& j)
@@ -76,6 +80,7 @@ Settings fromJson(const json& j)
     s.entityClass = j.value("entityClass", std::string("PlayerStart"));
     s.prefab = j.value("prefab", std::string());
     s.prefabFollowsNormal = j.value("prefabFollowsNormal", true);
+    s.droneCamera = j.value("droneCamera", false);
     return s;
 }
 
@@ -223,9 +228,28 @@ public:
     {
         reset();
         panels::show(kToolkitId);
+        syncCamera();
     }
 
-    void deactivate() override { reset(); }
+    void deactivate() override
+    {
+        reset();
+        // Deferred, so switching modes (off and straight back on) keeps the flight.
+        QTimer::singleShot(0, [] { syncCamera(); });
+    }
+
+    bool editsWhileFlying() const override { return true; }
+
+    bool cancelStep() override
+    {
+        if (mStep == Step::Idle && !mDragging && !mPainting)
+            return false;
+        reset();
+        mPainting = false;
+        mStroke.reset();
+        mPainted.clear();
+        return true;
+    }
 
     bool mousePress(QMouseEvent* e, const ViewInfo& view) override
     {
@@ -307,9 +331,9 @@ public:
         return true;
     }
 
-    bool hotkey(const QKeyEvent& e, std::string_view) override { return alignKey(e.key()) || key(e.key(), e.modifiers()); }
+    bool hotkey(const QKeyEvent& e, std::string_view) override { return anyKey(e.key(), e.modifiers()); }
 
-    bool keyPress(QKeyEvent* e, const ViewInfo&) override { return alignKey(e->key()) || key(e->key(), e->modifiers()); }
+    bool keyPress(QKeyEvent* e, const ViewInfo&) override { return anyKey(e->key(), e->modifiers()); }
 
     void draw(render::FrameState& s, OverlayPainter& p, const ViewInfo& view) override
     {
@@ -352,6 +376,59 @@ private:
         mDragging = false;
         mFixedU = false;
         mClipKeep = 0;
+    }
+
+    bool anyKey(int k, Qt::KeyboardModifiers mods) { return alignKey(k, mods) || modeKey(k, mods) || key(k, mods); }
+
+    /**
+     * Hammer-style mode letters: B C X G A E F, S leaves the tool. Shapes: 1-4 Box to Arch, Ctrl+1-2 Stairs and Prism,
+     * Shift+B and Ctrl+B step forward and back.
+     */
+    bool modeKey(int k, Qt::KeyboardModifiers mods)
+    {
+        if (mods & (Qt::AltModifier | Qt::MetaModifier))
+            return false;
+        const bool ctrl = mods & Qt::ControlModifier, shift = mods & Qt::ShiftModifier;
+        Settings& s = settings();
+        const int shapes = int(shapeNames().size());
+        if (k == Qt::Key_B && (ctrl != shift))
+            return pickShape((int(s.shape) + (shift ? 1 : shapes - 1)) % shapes);
+        if (!shift && k >= Qt::Key_1 && k <= (ctrl ? Qt::Key_2 : Qt::Key_4))
+            return pickShape((k - Qt::Key_1) + (ctrl ? int(Shape::Stairs) : int(Shape::Box)));
+        if (ctrl || shift)
+            return false;
+        switch (k)
+        {
+        case Qt::Key_B: switchMode(Mode::Block); return true;
+        case Qt::Key_C: switchMode(Mode::Carve); return true;
+        case Qt::Key_X: switchMode(Mode::Clip); return true;
+        case Qt::Key_G: switchMode(Mode::Extend); return true;
+        case Qt::Key_A: switchMode(s.mode == Mode::Paint ? Mode::Align : Mode::Paint); return true;
+        case Qt::Key_E: switchMode(Mode::Entity); return true;
+        case Qt::Key_F: switchMode(Mode::Prefab); return true;
+        case Qt::Key_S:
+            viewportTools::set(nullptr);
+            viewportTools::requestRedraw();
+            return true;
+        default: return false;
+        }
+    }
+
+    bool pickShape(int shape)
+    {
+        Settings& s = settings();
+        s.shape = Shape(shape);
+        switchMode(s.mode == Mode::Carve ? Mode::Carve : Mode::Block);
+        return true;
+    }
+
+    void switchMode(Mode m)
+    {
+        settings().mode = m;
+        saveSettings();
+        reset();
+        syncToolkit();
+        viewportTools::requestRedraw();
     }
 
     bool key(int k, Qt::KeyboardModifiers mods)
@@ -804,20 +881,29 @@ private:
         run("blockworkAlignEdge", {{"args", {mAlignNode}}, {"face", mAlignFace}, {"edge", mAlignEdge}, {"side", sides[mAlignSide]}, {"fit", mAlignFit}});
     }
 
-    /** In Align: W A S D pick the texture side laid on the edge, Q and E fit, R resets. */
-    bool alignKey(int k)
+    /** In Align: arrows pick the texture side laid on the edge, Shift+arrows fit along that axis, Backspace resets. */
+    bool alignKey(int k, Qt::KeyboardModifiers mods)
     {
         if (settings().mode != Mode::Align)
             return false;
+        const bool fit = mods & Qt::ShiftModifier;
         switch (k)
         {
-        case Qt::Key_S: mAlignSide = 0; break;
-        case Qt::Key_A: mAlignSide = 1; break;
-        case Qt::Key_W: mAlignSide = 2; break;
-        case Qt::Key_D: mAlignSide = 3; break;
-        case Qt::Key_Q: mAlignFit = "height"; break;
-        case Qt::Key_E: mAlignFit = "width"; break;
-        case Qt::Key_R:
+        case Qt::Key_Down:
+        case Qt::Key_Up:
+            if (fit)
+                mAlignFit = "height";
+            else
+                mAlignSide = k == Qt::Key_Down ? 0 : 2;
+            break;
+        case Qt::Key_Left:
+        case Qt::Key_Right:
+            if (fit)
+                mAlignFit = "width";
+            else
+                mAlignSide = k == Qt::Key_Left ? 1 : 3;
+            break;
+        case Qt::Key_Backspace:
             if (!mAlignNode.empty() && graph().find(mAlignNode))
                 run("blockworkTexture", {{"args", {mAlignNode}}, {"faces", {mAlignFace}}, {"reset", true}});
             viewportTools::requestRedraw();
@@ -891,7 +977,14 @@ private:
         }
         const geo::Mesh m = buildShape(set.shape, f, shapeOptions());
         addEdges(s, m, ink);
-        label(p, view, mBase + f.normal * f.size.z, cm(f.size.x) + " \xc3\x97 " + cm(f.size.y) + " \xc3\x97 " + cm(f.size.z));
+        QString size = cm(f.size.x) + " \xc3\x97 " + cm(f.size.y) + " \xc3\x97 " + cm(f.size.z);
+        if (const ShapeOptions o = shapeOptions(); set.shape == Shape::Arch && !o.opening)
+        {
+            const double t = archFrame(o.direction % 2 ? f.size.y : f.size.x, f.size.z, o.thickness);
+            if (t < o.thickness)
+                size += "  frame " + cm(t);
+        }
+        label(p, view, mBase + f.normal * f.size.z, size);
         if (set.mode == Mode::Carve && !m.empty())
         {
             const glm::vec4 warn = themeLinear("warning", {1.0f, 0.4f, 0.2f, 1.0f});
@@ -975,7 +1068,7 @@ private:
                     st.fields.push_back({"texture", QString::fromStdString(s.material)});
             }
             if (s.mode == Mode::Align)
-                st.keys.insert(st.keys.begin(), {{"W A S D", "side on the edge"}, {"Q E", "fit height, width"}, {"R", "reset"}});
+                st.keys.insert(st.keys.begin(), {{"Arrows", "side on the edge"}, {"Shift+arrows", "fit height, width"}, {"Backspace", "reset"}});
             if (s.mode == Mode::Prefab)
             {
                 st.mode = QString("Prefab %1").arg(QString::fromStdString(std::filesystem::path(s.prefab).stem().string()));
@@ -994,7 +1087,8 @@ private:
                 }
             }
             if (s.mode == Mode::Block || s.mode == Mode::Carve)
-                st.keys.insert(st.keys.begin(), {"Shift+click", "start an angled edge"});
+                st.keys.insert(st.keys.begin(), {{"Shift+click", "start an angled edge"}, {"1-4 Ctrl+1-2", "shape"}});
+            st.keys.push_back({"B C X G A E F", "modes"});
             if (s.mode == Mode::Extend)
                 st.keys.insert(st.keys.begin(), {{"Shift", "extrude"}, {"Ctrl", "copy as a block"}});
             if (!mLastBuilt.empty())
@@ -1070,6 +1164,19 @@ Settings& settings()
 
 void saveSettings() { PrefStore::get().set("general", kSettingsPref, toJson(settings())); }
 
+void syncCamera()
+{
+    static bool ours = false;
+    const bool want = settings().droneCamera && viewportTools::activeId() == kToolId;
+    if (want && !drone::activeViewFlying())
+        ours = drone::setActiveViewFlying(true);
+    else if (!want && ours)
+    {
+        ours = false;
+        drone::setActiveViewFlying(false);
+    }
+}
+
 const char* modeLabel(Mode m)
 {
     static const char* const k[] = {"Block", "Carve", "Clip", "Extend", "Paint", "Align", "Entity", "Prefab"};
@@ -1103,8 +1210,32 @@ void startTool(Shape shape)
     startTool(s.mode);
 }
 
+/** Move, Rotate and Scale keep a selection of only blocks on the Blockwork grid. */
+static std::optional<SelectionSnap> blockSnap()
+{
+    Graph& g = graph();
+    const std::vector<NodeId>& sel = g.selection();
+    if (sel.empty())
+        return std::nullopt;
+    g.evaluate();
+    geo::Bounds box;
+    for (NodeId id : sel)
+    {
+        const Node* n = g.node(id);
+        if (!n || !isBlock(*n))
+            return std::nullopt;
+        box.extend(worldBounds(g, id));
+    }
+    if (!box.valid())
+        return std::nullopt;
+    const double step = gridStep();
+    return SelectionSnap{.moveStep = step, .absolute = gridAbsolute(), .anchor = box.min, .rotateStep = 15.0, .scaleStep = step, .extent = box.size()};
+}
+
 void registerTool(ext::Context& ctx)
 {
     viewportTools::add(ctx, {.id = kToolId, .label = "Blockwork", .icon = "box", .create = [] { return std::make_unique<BlockworkTool>(); }});
+    const int snap = tools::addSelectionSnap(blockSnap);
+    ctx.track("blockwork selection snap", [snap] { tools::removeSelectionSnap(snap); });
 }
 } // namespace blockwork

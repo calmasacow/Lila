@@ -22,6 +22,8 @@ using lila::json;
 /** The Texture Lock modifier's node type, and the kind addModifier takes. */
 inline constexpr const char* kTextureLockType = "textureLockModifier";
 inline constexpr const char* kTextureLockKind = "textureLock";
+inline constexpr const char* kBevelType = "blockBevelModifier";
+inline constexpr const char* kBevelKind = "blockBevel";
 
 /** The group new blocks go under when no parent is given. */
 inline constexpr const char* kDefaultGroup = "Level";
@@ -117,6 +119,14 @@ struct ShapeOptions
     std::vector<glm::dvec2> profile;
 };
 
+/** Edge attribute: the edge lies on another block's face (resting on it or butting it), so it is never bevelled. */
+inline constexpr const char* kContactAttr = "blockworkContact";
+/** Edges a bevel can round without opening a seam: hard (faces meeting sharper than angle degrees), convex, not kContactAttr. */
+std::vector<lila::geo::Index> bevelableEdges(const lila::geo::Mesh& mesh, double angle);
+/** Marks exactly these edges kContactAttr. */
+void markContact(lila::geo::Mesh& mesh, std::span<const lila::geo::Index> edges);
+/** The arch frame width used for an opening this wide and tall: thickness, capped at a quarter of the smaller side. */
+double archFrame(double width, double height, double thickness);
 /** The block as a mesh in world space with outward faces, or an empty mesh when the frame is degenerate for the shape. */
 lila::geo::Mesh buildShape(Shape shape, Frame frame, const ShapeOptions& opts);
 /** A closed profile in the (a, b) plane at origin, extruded along c by depth. Concave profiles work. */
@@ -134,6 +144,9 @@ lila::geo::Mesh clip(const lila::geo::Mesh& mesh, const glm::dvec3& point, const
 lila::geo::Index faceAt(const lila::geo::Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, double tolerance = 0.5);
 /** Faces of a whose every corner lies on an opposite-facing coplanar face of b. */
 std::vector<lila::geo::Index> coveredFaces(const lila::geo::Mesh& a, const lila::geo::Mesh& b, double tolerance = 0.01);
+
+/** Edges of a lying on a face of b: both ends and the middle in its plane and inside it or on its outline. */
+std::vector<lila::geo::Index> touchingEdges(const lila::geo::Mesh& a, const lila::geo::Mesh& b, double tolerance = 0.01);
 
 /** In-plane directions for a footprint on a surface facing normal: the world axis lying in the plane first. */
 void planeBasis(const glm::dvec3& normal, glm::dvec3& u, glm::dvec3& v);

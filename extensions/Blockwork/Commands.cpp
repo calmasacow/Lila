@@ -2,6 +2,7 @@
 
 #include <lila/Boolean.h>
 #include <lila/Components.h>
+#include <lila/Deformer.h>
 #include <lila/MeshOps.h>
 #include <lila/Prefs.h>
 #include <lila/Transform.h>
@@ -40,7 +41,7 @@ std::vector<Index> faceArg(const Args& a, NodeId mesh)
     return out;
 }
 
-std::string pathOf(Graph& g, NodeId id) { return g.fullPath(id); }
+std::string graphPathOf(Graph& g, NodeId id) { return g.fullPath(id); }
 
 /** Meshes in the scene other than skip whose world bounds overlap box (grown by pad). */
 std::vector<NodeId> overlapping(Graph& g, const geo::Bounds& box, const std::vector<NodeId>& skip, double pad, bool blocksOnly)
@@ -195,11 +196,71 @@ void registerCommands(ext::Context& ctx)
             const NodeId id = createBlock(g, std::move(m), a.get<std::string>("name", "block1") + a.get<std::string>("suffix", ""), parent,
                                           a.get<std::string>("material", ""));
             g.select({id});
-            return pathOf(g, id);
+            return graphPathOf(g, id);
         },
         .adjustable = true,
         .examples = {"blockworkBlock(origin=[0, 0, 0], size=[512, 384, 256])", "blockworkBlock(shape='stairs', size=[128, 256, 128], steps=8)",
                      "blockworkBlock(shape='prism', profile=[[0, 0], [256, 0], [256, 128], [128, 128], [128, 256], [0, 256]], size=[0, 0, 64])"},
+    });
+
+    ctx.registerCommand({
+        .name = "blockworkBevel",
+        .doc = "Bevel blocks' exposed edges with a live Block Bevel modifier: only convex edges, and none lying on another "
+               "block's face (resting on it or butting it), so no groove opens where blocks meet. It sits under a Hotspot "
+               "modifier so the bevels are trimmed too. Run it again after moving blocks to find the touching edges afresh. "
+               "Returns the modifiers.",
+        .positionalDoc = "blocks (default the selection, or every block)",
+        .flags = {{"width", "w", T::Float, 2.0, "cm from each edge to the bevel's edges.", {}, {}, 0.0},
+                  {"segments", "sg", T::Int, 1, "1 is a chamfer; more round it.", {}, {}, 1, 8},
+                  {"angle", "an", T::Float, 30.0, "Only edges whose faces meet sharper than this, degrees.", {}, {}, 0.0, 180.0},
+                  {"remove", "rm", T::Bool, false, "Take the bevel off instead."}},
+        .run = [](const Args& a) -> json {
+            Graph& g = graph();
+            const std::vector<NodeId> ids = blockArgs(a, "blockworkBevel", true);
+            if (ids.empty())
+                throw CommandError("blockworkBevel: no blocks");
+            json out = json::array();
+            for (NodeId id : ids)
+            {
+                NodeId bevel = kNoNode, hotspot = kNoNode;
+                for (NodeId m : modifiers::stack(g, id))
+                    if (const Node* n = g.node(m); n && n->type().name == kBevelType)
+                        bevel = m;
+                    else if (n && n->type().name == "trimHotspotModifier")
+                        hotspot = m;
+                if (a.get<bool>("remove", false))
+                {
+                    if (bevel != kNoNode)
+                        ops::execute("removeModifier", {{"args", json::array({g.fullPath(bevel)})}});
+                    continue;
+                }
+                geo::Mesh mine = worldMesh(g, id);
+                std::vector<Index> touching;
+                for (NodeId other : overlapping(g, mine.bounds(), {id}, 0.01, false))
+                {
+                    const std::vector<Index> f = touchingEdges(mine, worldMesh(g, other));
+                    touching.insert(touching.end(), f.begin(), f.end());
+                }
+                geo::Mesh base = baseMesh(g, id);
+                markContact(base, touching);
+                setBaseMesh(g, id, std::move(base));
+                if (bevel == kNoNode)
+                {
+                    Node* mod = g.createNode(*types::find(kBevelType), {}, kNoNode, true);
+                    // Under the hotspot, so the bevel faces are trimmed with the rest.
+                    const auto* hot = hotspot == kNoNode ? nullptr : dynamic_cast<const ModifierNode*>(g.node(hotspot));
+                    modifiers::insert(g, *mod, id, hot ? PlugRef{hotspot, hot->inAttr, -1} : PlugRef{id, MeshNode::kInMesh, -1});
+                    bevel = mod->id();
+                }
+                const std::string path = g.fullPath(bevel);
+                ops::execute("setAttr", {{"args", {path + ".width", a.get<double>("width", 2.0)}}});
+                ops::execute("setAttr", {{"args", {path + ".segments", a.get<int>("segments", 1)}}});
+                ops::execute("setAttr", {{"args", {path + ".angle", a.get<double>("angle", 30.0)}}});
+                out.push_back(path);
+            }
+            return out;
+        },
+        .examples = {"blockworkBevel(width=2)", "blockworkBevel('arch1', width=4, segments=3)", "blockworkBevel(remove=True)"},
     });
 
     ctx.registerCommand({
@@ -219,7 +280,7 @@ void registerCommands(ext::Context& ctx)
                 if (m.empty())
                     throw CommandError("blockworkHollow: " + g.node(id)->name() + " has no faces to wall");
                 setBaseMesh(g, id, std::move(m));
-                out.push_back(pathOf(g, id));
+                out.push_back(graphPathOf(g, id));
             }
             if (out.empty())
                 throw CommandError("blockworkHollow: select a block");
@@ -260,18 +321,18 @@ void registerCommands(ext::Context& ctx)
                     geo::Mesh back = clip(base, p, n, -1);
                     if (!back.empty() && back.numFaces() > 0 && front.numFaces() > 0)
                     {
-                        const json dup = ops::execute("duplicate", {{"args", {pathOf(g, id)}}});
+                        const json dup = ops::execute("duplicate", {{"args", {graphPathOf(g, id)}}});
                         const std::string copy = dup.is_array() ? dup.at(0).get<std::string>() : dup.get<std::string>();
                         setBaseMesh(g, g.find(copy)->id(), std::move(back));
                         made.push_back(copy);
                     }
                 }
                 if (front.numFaces() == 0)
-                    ops::execute("delete", {{"args", {pathOf(g, id)}}});
+                    ops::execute("delete", {{"args", {graphPathOf(g, id)}}});
                 else
                 {
                     setBaseMesh(g, id, std::move(front));
-                    out.push_back(pathOf(g, id));
+                    out.push_back(graphPathOf(g, id));
                 }
             }
             if (out.empty() && made.empty())
@@ -310,14 +371,14 @@ void registerCommands(ext::Context& ctx)
                 geo::Mesh r = booleanInto(g, t, {inT}, BooleanOp::Difference, "blockworkCarve");
                 if (r.numFaces() == 0)
                 {
-                    ops::execute("delete", {{"args", {pathOf(g, t)}}});
+                    ops::execute("delete", {{"args", {graphPathOf(g, t)}}});
                     continue;
                 }
                 setBaseMesh(g, t, std::move(r));
-                out.push_back(pathOf(g, t));
+                out.push_back(graphPathOf(g, t));
             }
             if (!a.get<bool>("keep", false))
-                ops::execute("delete", {{"args", {pathOf(g, cutter)}}});
+                ops::execute("delete", {{"args", {graphPathOf(g, cutter)}}});
             return out;
         },
         .examples = {"blockworkCarve('doorCutter')"},
@@ -343,9 +404,9 @@ void registerCommands(ext::Context& ctx)
                 others.push_back(meshIn(g, ids[i], ids[0]));
             setBaseMesh(g, ids[0], booleanInto(g, ids[0], others, BooleanOp::Union, "blockworkJoin"));
             for (size_t i = 1; i < ids.size(); ++i)
-                ops::execute("delete", {{"args", {pathOf(g, ids[i])}}});
+                ops::execute("delete", {{"args", {graphPathOf(g, ids[i])}}});
             g.select({ids[0]});
-            return pathOf(g, ids[0]);
+            return graphPathOf(g, ids[0]);
         },
         .examples = {"blockworkJoin(['room1', 'corridor1'])"},
     });
@@ -391,7 +452,7 @@ void registerCommands(ext::Context& ctx)
                     if (m.pointValid(p))
                         m.setPosition(p, m.position(p) + delta[p]);
                 setBaseMesh(g, id, std::move(m));
-                return pathOf(g, id);
+                return graphPathOf(g, id);
             }
             geo::ExtrudeOptions opts;
             opts.offset = d;
@@ -400,7 +461,7 @@ void registerCommands(ext::Context& ctx)
                 geo::extrudeFaces(m, faces, opts);
                 hardenEdges(m);
                 setBaseMesh(g, id, std::move(m));
-                return pathOf(g, id);
+                return graphPathOf(g, id);
             }
             geo::ExtrudeCopy c = geo::extrudeCopy(m, faces, opts, true);
             // Close the copy where it met the source, then build it as its own block.
@@ -419,7 +480,7 @@ void registerCommands(ext::Context& ctx)
             hardenEdges(c.mesh);
             const NodeId made = createBlock(g, std::move(c.mesh), g.node(id)->name(), g.parent(id), {});
             g.select({made});
-            return pathOf(g, made);
+            return graphPathOf(g, made);
         },
         .adjustable = true,
         .examples = {"blockworkExtend('block1', faces=[1], distance=64)", "blockworkExtend('block1', faces=[1], distance=128, mode='copy')"},
@@ -443,7 +504,7 @@ void registerCommands(ext::Context& ctx)
                             faces.push_back(f);
                 geo::flipNormals(m, faces);
                 setBaseMesh(g, id, std::move(m));
-                out.push_back(pathOf(g, id));
+                out.push_back(graphPathOf(g, id));
             }
             return out;
         },
