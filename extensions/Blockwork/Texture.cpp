@@ -2,8 +2,10 @@
 
 #include <lila/Components.h>
 #include <lila/Deformer.h>
+#include <lila/Log.h>
 #include <lila/Prefs.h>
 #include <lila/Transform.h>
+#include <lila/Uv.h>
 
 #include <QColor>
 #include <QDir>
@@ -131,6 +133,34 @@ FaceMapping wrapped(const geo::Mesh& m, Index source, Index target, Index edge, 
     return fm;
 }
 
+bool liveHotspotted(Graph& g, NodeId mesh)
+{
+    for (NodeId id : modifiers::stack(g, mesh))
+        if (const Node* n = g.node(id); n && n->type().name == "trimHotspotModifier")
+            return true;
+    return false;
+}
+
+/**
+ * Takes faces off a block's live hotspot, so the mapping or material just set on them shows, or puts them back on it.
+ * Says so when faces leave it.
+ */
+void keepOffHotspot(Graph& g, NodeId mesh, geo::Mesh& m, const std::vector<Index>& faces, bool keep)
+{
+    if (keep && !liveHotspotted(g, mesh))
+        return;
+    std::span<int32_t> k = m.faceAttrs().getOrAdd<int32_t>(uv::kHotspotKeepAttr);
+    size_t left = 0;
+    for (Index f : faces)
+        if (m.faceValid(f) && bool(k[f]) != keep)
+        {
+            k[f] = keep ? 1 : 0;
+            left += keep;
+        }
+    if (left)
+        log::info("{}: {} face{} off the live hotspot; Hotspot puts them back", g.node(mesh)->name(), left, left == 1 ? "" : "s");
+}
+
 json runEach(const Args& a, const char* cmd, const std::function<void(Graph&, NodeId, geo::Mesh&, const std::vector<Index>&)>& fn)
 {
     Graph& g = graph();
@@ -140,6 +170,7 @@ json runEach(const Args& a, const char* cmd, const std::function<void(Graph&, No
         geo::Mesh m = baseMesh(g, id);
         const std::vector<Index> faces = facesOf(a, id, m);
         fn(g, id, m, faces);
+        keepOffHotspot(g, id, m, faces, true);
         setBaseMesh(g, id, std::move(m));
         out.push_back(g.fullPath(id));
     }
@@ -391,6 +422,7 @@ void registerTextureCommands(ext::Context& ctx)
             if (side == "bottom" || side == "top")
                 fm.offset.x = float(-glm::dot(pa, u) / su);
             setFaceMapping(m, f, fm);
+            keepOffHotspot(g, ids[0], m, {f}, true);
             setBaseMesh(g, ids[0], std::move(m));
             return g.fullPath(ids[0]);
         },
@@ -469,6 +501,7 @@ void registerTextureCommands(ext::Context& ctx)
                 entry = exit;
                 cur = nextFace;
             }
+            keepOffHotspot(g, ids[0], m, std::vector<Index>(done.begin(), done.end()), true);
             setBaseMesh(g, ids[0], std::move(m));
             return g.fullPath(ids[0]);
         },
@@ -478,7 +511,8 @@ void registerTextureCommands(ext::Context& ctx)
     ctx.registerCommand({
         .name = "blockworkHotspot",
         .doc = "Map blocks' faces onto the current trim sheet: each face region gets the trim whose shape and size fit it best. live "
-               "keeps whole blocks hotspotted as they change; otherwise the selected faces are mapped once and keep those uvs. "
+               "keeps whole blocks hotspotted as they change; otherwise the selected faces are mapped once and keep those uvs. Faces that texture edits took off a live hotspot go "
+               "back on it. "
                "Needs the Trim Sheets extension. Returns what the trim command returned.",
         .positionalDoc = "blocks (default the selection)",
         .flags = {{"live", "l", T::Bool, true, "Refit whenever the block changes (whole blocks)."},
@@ -499,15 +533,33 @@ void registerTextureCommands(ext::Context& ctx)
                 throw CommandError("blockworkHotspot: select blocks");
             const std::vector<NodeId> before = g.selection();
             json result;
-            if (a.get<bool>("live", true) && !a.has("faces"))
+            // Faces taken off a live hotspot go back on it.
+            const bool wholeBlocks = a.get<bool>("live", true) && !a.has("faces");
+            for (NodeId id : ids)
+                if (liveHotspotted(g, id))
+                {
+                    geo::Mesh m = baseMesh(g, id);
+                    std::vector<Index> faces = wholeBlocks ? std::vector<Index>() : facesOf(a, id, m);
+                    if (wholeBlocks)
+                        for (Index f = 0; f < m.faceCapacity(); ++f)
+                            faces.push_back(f);
+                    keepOffHotspot(g, id, m, faces, false);
+                    setBaseMesh(g, id, std::move(m));
+                }
+            if (wholeBlocks)
             {
                 g.select(ids);
                 result = ops::execute("trimLive", call);
             }
             else
             {
+                std::vector<NodeId> fit;
                 for (NodeId id : ids)
                 {
+                    // A live block's faces just rejoin its hotspot, above.
+                    if (liveHotspotted(g, id))
+                        continue;
+                    fit.push_back(id);
                     geo::Mesh m = baseMesh(g, id);
                     std::vector<Index> faces = facesOf(a, id, m);
                     components::select(id, ComponentMode::Face, components::Ids(faces.begin(), faces.end()));
@@ -520,8 +572,11 @@ void registerTextureCommands(ext::Context& ctx)
                     }
                     setBaseMesh(g, id, std::move(m));
                 }
-                g.select(ids);
-                result = ops::execute("trimAuto", call);
+                if (!fit.empty())
+                {
+                    g.select(fit);
+                    result = ops::execute("trimAuto", call);
+                }
             }
             g.select(before);
             return result;
