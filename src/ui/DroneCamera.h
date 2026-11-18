@@ -2,6 +2,8 @@
 
 #include "core/Export.h"
 
+#include <QRectF>
+
 #include <functional>
 
 class QMouseEvent;
@@ -49,8 +51,8 @@ bool mousePress(ViewportWidget* view, QMouseEvent* e);
 bool mouseMove(ViewportWidget* view, QMouseEvent* e);
 bool mouseRelease(ViewportWidget* view, QMouseEvent* e);
 bool wheel(ViewportWidget* view, QWheelEvent* e);
-/** The banner at the top of a flying view, with its close button, and a frame round the view. */
-void draw(OverlayPainter& p, ViewportWidget* view);
+/** The banner at the top of a flying view, with its close button, and a frame round the view; the banner's rect, empty when it isn't flying. */
+QRectF draw(OverlayPainter& p, ViewportWidget* view);
 /** Sets view's cursor while it flies; false when it isn't flying. */
 bool applyCursor(ViewportWidget* view);
 

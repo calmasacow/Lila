@@ -297,7 +297,7 @@ public:
         return true;
     }
 
-    void draw(OverlayPainter& p)
+    QRectF draw(OverlayPainter& p)
     {
         const double w = mView->width(), h = mView->height();
         // A frame round the whole view says a mode is on, without tinting what is seen through it.
@@ -345,6 +345,7 @@ public:
         if (mCloseHover)
             p.rect(mClose, {1.0f, 1.0f, 1.0f, 0.18f});
         p.icon(QRectF(mClose.center().x() - 8.0, mClose.center().y() - 8.0, 16.0, 16.0), "x", text);
+        return bar;
     }
 
 protected:
@@ -633,24 +634,17 @@ bool wheel(ViewportWidget* view, QWheelEvent* e)
     return f && f->wheel(e);
 }
 
-void draw(OverlayPainter& p, ViewportWidget* view)
+QRectF draw(OverlayPainter& p, ViewportWidget* view)
 {
     DroneFlight* f = flight(view);
     if (!f)
-        return;
-    f->draw(p);
-    // In place of the layout's keys in the corner.
+        return {};
+    const QRectF banner = f->draw(p);
+    // Under the editing tool's own keys; otherwise in place of the layout's.
     if (DroneFlight::editing())
     {
-        drawKeyList(p, QPointF(16.0, double(view->height()) - 84.0),
-                    {{"Right drag", "Look"},
-                     {"Right drag + W A S D", "Move"},
-                     {"Right drag + E / Q", "Up, down"},
-                     {"Right drag + wheel", "Speed"},
-                     {"Middle drag", "Pan"},
-                     {"Wheel", "Forward"},
-                     {"Esc", "Cancel, then leave"}});
-        return;
+        addCornerKeys({{"Right drag", "look"}, {"Right drag + W A S D", "fly"}, {"Right drag + E Q", "up, down"}, {"Right drag + wheel", "speed"}});
+        return banner;
     }
     drawKeyList(p, QPointF(16.0, double(view->height()) - 84.0),
                 {{"W A S D", "Move"},
@@ -661,6 +655,7 @@ void draw(OverlayPainter& p, ViewportWidget* view)
                  {"R", "Faster"},
                  {"F", "Frame (slower with right drag)"},
                  {"Esc", "Leave"}});
+    return banner;
 }
 
 bool applyCursor(ViewportWidget* view)

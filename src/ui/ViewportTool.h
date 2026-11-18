@@ -128,6 +128,8 @@ struct ToolStatus
 
 /** Queues a tool's readout for flushToolMessages. */
 LILA_UI_API void drawToolStatus(OverlayPainter& p, const ViewInfo& view, const ToolStatus& status);
+/** Keys listed after the active tool's in the corner this frame, such as the Drone Camera's while the tool edits through it. */
+LILA_UI_API void addCornerKeys(const std::vector<KeyHint>& keys);
 /** A one-off line under the tool readout, for warnings and notices. Queued and drawn by flushToolMessages once the HUD is placed. */
 LILA_UI_API void drawToolMessage(OverlayPainter& p, const ViewInfo& view, const QString& text, const glm::vec4& color = {0.95f, 0.95f, 0.95f, 1.0f});
 /** The selected meshes' symmetry, shown at the top centre when no tool reports its own. */
