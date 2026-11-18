@@ -43,7 +43,7 @@
         0,
         0
       ],
-      "doc": "The bake's position map spans boundsMin to boundsMax in world space. Picking a camera or taking the view fills both from the last bake."
+      "doc": "The bake's position map spans boundsMin to boundsMax in world space. Picking a camera or taking the view fills both from the last bake; they follow live mesh maps while those run."
     },
     {
       "id": "boundsMax",

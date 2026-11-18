@@ -78,6 +78,9 @@ void fillBakeBounds(GNode& n, const SetSettings& s, const char* cmd)
     double lo[3], hi[3];
     if (!bakedPositionBounds(graph(), s.bakeProject, lo, hi))
     {
+        // Unset bounds follow live maps while they feed the set.
+        if (liveMeshMapMeta(s.bakeProject, "position").is_object())
+            return;
         log::warn("{}: {} has no baked position map to take its bounds from, so it treats the mesh's bounds as a cube; bake Position, "
                   "then set Bounds Min and Max", cmd, n.name);
         return;

@@ -25,7 +25,7 @@
         0,
         0
       ],
-      "doc": "The bake's position map spans boundsMin to boundsMax. Adding the node fills both from the set's last bake, so the pattern keeps its proportions on a mesh that isn't a cube."
+      "doc": "The bake's position map spans boundsMin to boundsMax. Adding the node fills both from the set's last bake, and they follow live mesh maps while those run, so the pattern keeps its proportions on a mesh that isn't a cube."
     },
     {
       "id": "boundsMax",
