@@ -232,6 +232,30 @@ TEST_CASE("blockwork: bevel rounds exposed edges and leaves the ones resting on 
     CHECK(out(b).numFaces() == 6);
 }
 
+TEST_CASE("blockwork: a rounded bevel shades smooth through its corners, a chamfer stays faceted")
+{
+    const auto hardCreases = [](const geo::Mesh& m) {
+        const auto hard = m.edgeAttrs().get<bool>(geo::attr::kHard);
+        int n = 0;
+        for (Index e = 0; e < m.edgeCapacity(); ++e)
+        {
+            if (!m.edgeValid(e) || m.edgeFaceCount(e) != 2 || !hard[e])
+                continue;
+            const Index c = m.edgeCorner(e);
+            const double d = glm::dot(m.faceNormal(m.cornerFace(c)), m.faceNormal(m.cornerFace(m.cornerRadial(c))));
+            // Hard edges other than the box's own square corners.
+            n += d > 0.1 ? 1 : 0;
+        }
+        return n;
+    };
+    fresh();
+    const std::string b = run("blockworkBlock", {{"size", {256, 192, 24}}, {"name", "lid"}}).get<std::string>();
+    run("blockworkBevel", {{"args", {b}}, {"width", 2.0}, {"segments", 2}});
+    CHECK(hardCreases(out(b)) == 0);
+    run("blockworkBevel", {{"args", {b}}, {"width", 2.0}, {"segments", 1}});
+    CHECK(hardCreases(out(b)) > 0);
+}
+
 TEST_CASE("blockwork: stairs climb the way direction turns them")
 {
     fresh();
