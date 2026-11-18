@@ -57,6 +57,12 @@ LILA_SCENE_API image::Image readLiveMeshMap(const std::string& bakeProject, cons
 /** A map's file from the bake project's last bake (else its manifest) for a tile; empty when it has none. */
 LILA_SCENE_API std::filesystem::path bakedMapFile(scene::Graph& g, const std::string& bakeProject, const std::string& map, int udim);
 
+/**
+ * The meta of the project's last baked position map (boundsMin, boundsMax, and lows: each low's node, world matrix
+ * column-major and materials); null when it has no baked position map.
+ */
+LILA_SCENE_API nlohmann::json bakedPositionMeta(scene::Graph& g, const std::string& bakeProject);
+
 /** The world-space box the project's last baked position map is normalised to; false when it has no baked position map. */
 LILA_SCENE_API bool bakedPositionBounds(scene::Graph& g, const std::string& bakeProject, double lo[3], double hi[3]);
 

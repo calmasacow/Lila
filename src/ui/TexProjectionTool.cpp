@@ -136,6 +136,10 @@ public:
         status.subject = QString::fromStdString(mLayer + (mMask.empty() ? std::string() : " " + mMask));
         status.keys = {{"click/drag", "place on surface"}, {"Shift+drag", "turn"}, {"Ctrl+drag", "scale"}, {"Enter", "done"}};
         drawToolStatus(p, view, status);
+        scene::Node* mesh = scene::Graph::current().find(mMeshPath);
+        if (!mesh)
+            return;
+        const glm::dmat4 world = mesh->as<glm::dmat4>(scene::Transform::kWorldMatrix);
         const glm::dvec3 c(mProj.value("positionX", 0.0), mProj.value("positionY", 0.0), mProj.value("positionZ", 0.0));
         const glm::dvec3 half = glm::dvec3(mProj.value("sizeX", 100.0), mProj.value("sizeY", 100.0), mProj.value("sizeZ", 100.0)) * 0.5;
         const glm::dmat3 r = rotationOf({mProj.value("rotationX", 0.0), mProj.value("rotationY", 0.0), mProj.value("rotationZ", 0.0)});
@@ -143,7 +147,7 @@ public:
         for (int k = 0; k < 8; ++k)
         {
             const glm::dvec3 l((k & 1) ? half.x : -half.x, (k & 2) ? half.y : -half.y, (k & 4) ? half.z : -half.z);
-            corner[k] = view.project(c + r * l);
+            corner[k] = view.project(glm::dvec3(world * glm::dvec4(c + r * l, 1.0)));
         }
         const glm::vec4 ink = p.ink(0.9f);
         for (int a = 0; a < 8; ++a)
@@ -203,19 +207,17 @@ private:
         scene::Node* mesh = scene::Graph::current().find(mMeshPath);
         if (!mesh || !mPaint)
             return;
-        const glm::dmat4 world = mesh->as<glm::dmat4>(scene::Transform::kWorldMatrix);
-        const glm::dmat4 inv = glm::inverse(world);
+        const glm::dmat4 inv = glm::inverse(mesh->as<glm::dmat4>(scene::Transform::kWorldMatrix));
         glm::dvec3 o, d;
         view.ray(px, o, d);
         geo::BvhHit hit;
         if (!mPaint->bvh->raycast(glm::dvec3(inv * glm::dvec4(o, 1.0)), glm::dvec3(inv * glm::dvec4(d, 0.0)), hit, std::numeric_limits<double>::max(), false))
             return;
-        // The projection lives in world space, where the bake's position and normal maps are.
-        mNormal = glm::normalize(glm::transpose(glm::dmat3(inv)) * glm::dvec3(mPaint->normal(uint32_t(hit.triangle), float(hit.bary.y), float(hit.bary.z))));
-        const glm::dvec3 at = glm::dvec3(world * glm::dvec4(hit.point, 1.0));
-        mProj["positionX"] = at.x;
-        mProj["positionY"] = at.y;
-        mProj["positionZ"] = at.z;
+        // The projection lives in the mesh's object space, so it moves with the mesh.
+        mNormal = glm::dvec3(mPaint->normal(uint32_t(hit.triangle), float(hit.bary.y), float(hit.bary.z)));
+        mProj["positionX"] = hit.point.x;
+        mProj["positionY"] = hit.point.y;
+        mProj["positionZ"] = hit.point.z;
         const glm::dvec3 r = rotationFacing(mNormal, mSpin);
         mProj["rotationX"] = r.x;
         mProj["rotationY"] = r.y;
@@ -224,7 +226,10 @@ private:
 
     void store()
     {
-        const json p = mProj;
+        json p = mProj;
+        // The compile reads the bake's position map in this mesh's object space, as the box is drawn.
+        if (!mMeshPath.empty())
+            p["mesh"] = mMeshPath;
         try
         {
             if (mMask.empty())

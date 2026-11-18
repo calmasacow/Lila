@@ -1,10 +1,12 @@
 #include "tex/Layers.h"
 #include "tex/TextImage.h"
 
+#include "core/Paths.h"
 #include "core/Profile.h"
 #include "gn/Group.h"
 #include "scene/Graph.h"
 #include "tex/Generators.h"
+#include "tex/MaterialFromMaps.h"
 #include "tex/NodeDef.h"
 #include "tex/Plan.h"
 #include "tex/Ports.h"
@@ -149,8 +151,9 @@ private:
     Graph mG;
     std::vector<std::string> mWarnings;
     bool mWarnedProjection = false;
-    bool mBoundsRead = false, mHasBounds = false;
-    double mBoundsLo[3] = {0.0, 0.0, 0.0}, mBoundsHi[3] = {1.0, 1.0, 1.0};
+    bool mBoundsRead = false;
+    json mPositionMeta;
+    std::set<std::string> mWarnedLows;
     std::vector<Binding>* mBindings = nullptr;
     std::map<std::string, Heads> mAnchors;
     int mColumn = 0;
@@ -386,8 +389,27 @@ private:
     }
 
     /**
-     * Gives a projecting node the box the bake's position map is normalised to, so it reads positions in cm. Read once per
-     * compile; without a baked position map the node keeps the 0-1 box and a warning says so.
+     * The bake's world matrix for the low a projection is placed on: its mesh value when the bake has that low, else the
+     * bake's only (or first) low. Null when the bake recorded none.
+     */
+    const json* bakeWorld(const std::string& mesh)
+    {
+        if (!mPositionMeta.contains("lows") || !mPositionMeta["lows"].is_array() || mPositionMeta["lows"].empty())
+            return nullptr;
+        const json& lows = mPositionMeta["lows"];
+        for (const json& l : lows)
+            if (l.value("node", std::string()) == mesh && l.contains("world"))
+                return &l["world"];
+        if (lows.size() > 1 && mWarnedLows.insert(mesh).second)
+            mWarnings.push_back("a projection placed " + (mesh.empty() ? std::string("by number") : "on " + mesh + ", which " + mSet.bakeProject + " doesn't bake,") +
+                                " follows " + lows[0].value("node", std::string()) + ", the bake's first low");
+        return lows[0].contains("world") ? &lows[0]["world"] : nullptr;
+    }
+
+    /**
+     * Gives a projecting node what it needs to read the bake's position map in its mesh's object space: the box the map is
+     * normalised to, in cm, and the inverse of the world matrix the mesh had when it baked. Read once per compile; without
+     * a baked position map the node keeps the 0-1 box and a warning says so.
      */
     void setBakeBounds(GNode& n)
     {
@@ -396,15 +418,26 @@ private:
         if (!mBoundsRead)
         {
             mBoundsRead = true;
-            mHasBounds = bakedPositionBounds(scene::Graph::current(), mSet.bakeProject, mBoundsLo, mBoundsHi);
-            if (!mHasBounds)
+            mPositionMeta = bakedPositionMeta(scene::Graph::current(), mSet.bakeProject);
+            if (mPositionMeta.is_null())
                 mWarnings.push_back("projections need the bake's position map to know the mesh's size, and " + mSet.bakeProject +
                                     " hasn't baked one: bake Position, then edit the layer");
         }
-        if (!mHasBounds)
+        if (mPositionMeta.is_null())
             return;
-        n.values["boundsMin"] = json::array({mBoundsLo[0], mBoundsLo[1], mBoundsLo[2]});
-        n.values["boundsMax"] = json::array({mBoundsHi[0], mBoundsHi[1], mBoundsHi[2]});
+        n.values["boundsMin"] = mPositionMeta["boundsMin"];
+        n.values["boundsMax"] = mPositionMeta["boundsMax"];
+        const json* w = bakeWorld(n.values.value("mesh", std::string()));
+        if (!w || !w->is_array() || w->size() != 16)
+            return;
+        glm::dmat4 world(1.0);
+        for (int c = 0; c < 4; ++c)
+            for (int r = 0; r < 4; ++r)
+                world[c][r] = (*w)[size_t(c * 4 + r)].get<double>();
+        const glm::dmat4 inv = glm::inverse(world);
+        const char* keys[] = {"objectX", "objectY", "objectZ", "objectW"};
+        for (int c = 0; c < 4; ++c)
+            n.values[keys[c]] = json::array({inv[c].x, inv[c].y, inv[c].z});
     }
 
     /** src read through a projection (layerProjection's values); src itself when there is none. */
@@ -475,6 +508,7 @@ private:
                     // An image fill: read in the layer's projection, so it lands where it is placed.
                     GNode& n = subNode(s, "I_" + c->name, "layerImage", {-600.0, y});
                     n.values["file"] = v;
+                    n.values["colorSpace"] = tex::maps::imageColorSpace(paths::fromUtf8(v.get<std::string>()), c->name);
                     bind(s.g.name, n.name, "file", lp + "/material/" + c->name);
                     out(*c, projected(s, {n.name, "out"}, l.projection, "Proj_" + c->name, lp + "/projection", {-400.0, y}));
                 }
@@ -557,6 +591,7 @@ private:
                 {
                     GNode& img = subNode(s, "I_" + c->name, "layerImage", {-700.0, y});
                     img.values["file"] = maps[c->name];
+                    img.values["colorSpace"] = tex::maps::imageColorSpace(paths::fromUtf8(maps[c->name].get<std::string>()), c->name);
                     const std::string imgName = img.name;
                     GNode& d = subNode(s, "D_" + c->name, "layerDecal", {-400.0, y}, values);
                     setBakeBounds(d);
@@ -619,6 +654,7 @@ private:
                 {
                     GNode& img = subNode(s, "I_" + c->name, "layerImage", {-700.0, y});
                     img.values["file"] = maps[c->name];
+                    img.values["colorSpace"] = tex::maps::imageColorSpace(paths::fromUtf8(maps[c->name].get<std::string>()), c->name);
                     const std::string imgName = img.name;
                     GNode& at = subNode(s, "S_" + c->name, "layerSampleAt", {-300.0, y},
                                         {{"hue", c->name == "baseColor" ? sc.value("hueRandom", 0.0) : 0.0}});
@@ -865,7 +901,15 @@ private:
     }
 };
 
-/** A graph as compared for graph mode: no positions, nodes by name, links sorted, no stack metadata. */
+/** A projecting node's values without the ones each compile takes from the latest bake, which no edit sets. */
+json withoutBakeValues(json values)
+{
+    for (const char* k : {"boundsMin", "boundsMax", "objectX", "objectY", "objectZ", "objectW"})
+        values.erase(k);
+    return values;
+}
+
+/** A graph as compared for graph mode: no positions, nodes by name, links sorted, no stack metadata or bake values. */
 json normalized(const json& graph, int depth = 0)
 {
     json out = json::object();
@@ -876,6 +920,8 @@ json normalized(const json& graph, int depth = 0)
     {
         json values = n.value("values", json::object());
         values.erase(kStackKey);
+        if (const std::string type = n.value("type", std::string()); type == "layerProjection" || type == "layerDecal")
+            values = withoutBakeValues(std::move(values));
         nodes[n.value("name", std::string())] = {{"type", n.value("type", std::string())}, {"values", values}};
     }
     out["nodes"] = nodes;
@@ -1509,8 +1555,8 @@ StackState readStack(const Graph& g, const SetSettings& settings)
                 continue;
             if (b.key.empty())
             {
-                actual = na->values;
-                compiled = nc->values;
+                actual = withoutBakeValues(na->values);
+                compiled = withoutBakeValues(nc->values);
             }
             else
             {
