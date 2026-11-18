@@ -1066,7 +1066,7 @@ void addBuiltIns(Registry<prefPages::Page>& r)
 
     builtIn(r, "sourceControl", "Source Control", "sourceControl", [](Page& sc) {
         sectionHeader(sc, "Provider");
-        choiceField(sc, "Provider", "/provider", {{"Automatic", "auto"}, {"Perforce", "perforce"}, {"Git", "git"}, {"None", "none"}}, "auto");
+        choiceField(sc, "Provider", "/provider", {{"Automatic", "auto"}, {"Perforce", "perforce"}, {"Git", "git"}, {"Subversion", "svn"}, {"None", "none"}}, "auto");
         sectionHeader(sc, "Saving");
         choiceField(sc, "Saving a read-only file", "/autoCheckout", {{"Ask first", "prompt"}, {"Check out", "always"}, {"Do nothing", "never"}}, "prompt");
         toggleField(sc, "Mark new files for add", "/autoAdd", true);
