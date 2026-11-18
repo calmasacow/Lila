@@ -10,7 +10,9 @@ if [ -x "$DEST/bin/python3" ]; then
 fi
 
 ARCH="$(uname -m)"
-URL="$(curl -sSfL https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
+AUTH=()
+if [ -n "${GH_TOKEN:-}" ]; then AUTH=(-H "Authorization: Bearer $GH_TOKEN"); fi
+URL="$(curl -sSfL "${AUTH[@]}" https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest \
     | grep -oE "https://[^\"]*cpython-$LILA_PY_MINOR\.[0-9]+(\+|%2B)[0-9]+-$ARCH-unknown-linux-gnu-install_only\.tar\.gz" | head -n 1)" || true
 if [ -z "$URL" ]; then
     echo "[failed] Could not find a Python $LILA_PY_MINOR download. Install Python $LILA_PY_MINOR with headers and set LILA_PYTHON_DIR to it instead." >&2

@@ -65,6 +65,8 @@ jobs:
           restore-keys: linux-x64-gcc14-
 
       - name: Prepare dependencies
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git clone https://github.com/microsoft/vcpkg.git "$RUNNER_TEMP/vcpkg"
           "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
