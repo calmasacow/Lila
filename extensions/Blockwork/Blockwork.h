@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -149,6 +150,18 @@ std::vector<lila::geo::Index> coveredFaces(const lila::geo::Mesh& a, const lila:
 
 /** Edges of a lying on a face of b: both ends and the middle in its plane and inside it or on its outline. */
 std::vector<lila::geo::Index> touchingEdges(const lila::geo::Mesh& a, const lila::geo::Mesh& b, double tolerance = 0.01);
+
+/** A plane splitting a's faces where they meet the side of a face of b that lies across one of a's edges. */
+struct ContactCut
+{
+    glm::dvec3 point{0.0};
+    glm::dvec3 normal{0.0};
+    /** The faces of a around the edge it crosses. */
+    std::vector<lila::geo::Index> faces;
+};
+/** The first place a face of b covers only part of one of a's edges (of those given), so that stretch can be split off as its own edge. */
+std::optional<ContactCut> partialContactCut(const lila::geo::Mesh& a, const lila::geo::Mesh& b, std::span<const lila::geo::Index> edges,
+                                            double tolerance = 0.01);
 
 /** In-plane directions for a footprint on a surface facing normal: the world axis lying in the plane first. */
 void planeBasis(const glm::dvec3& normal, glm::dvec3& u, glm::dvec3& v);

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <optional>
 #include <unordered_map>
 
 namespace blockwork
@@ -613,6 +614,63 @@ std::vector<Index> touchingEdges(const Mesh& a, const Mesh& b, double tolerance)
         }
     }
     return out;
+}
+
+std::optional<ContactCut> partialContactCut(const Mesh& a, const Mesh& b, std::span<const Index> edges, double tolerance)
+{
+    for (Index fb = 0; fb < b.faceCapacity(); ++fb)
+    {
+        if (!b.faceValid(fb))
+            continue;
+        const std::vector<glm::dvec3> poly = facePositions(b, fb);
+        const glm::dvec3 n = b.faceNormal(fb);
+        for (Index e : edges)
+        {
+            if (!a.edgeValid(e))
+                continue;
+            const glm::dvec3 p0 = a.position(a.edgePoint(e, 0)), p1 = a.position(a.edgePoint(e, 1));
+            if (std::abs(glm::dot(p0 - poly[0], n)) > tolerance || std::abs(glm::dot(p1 - poly[0], n)) > tolerance)
+                continue;
+            // Only where one of the edge's faces is pressed against b's face.
+            bool pressed = false;
+            const Index c0 = a.edgeCorner(e);
+            for (Index k = c0; !pressed;)
+            {
+                pressed = glm::dot(a.faceNormal(a.cornerFace(k)), n) < -0.999;
+                k = a.cornerRadial(k);
+                if (k == c0 || k == geo::kInvalid)
+                    break;
+            }
+            if (!pressed)
+                continue;
+            for (size_t i = 0; i < poly.size(); ++i)
+            {
+                // The plane standing on this side of b's face, across a's edge.
+                const glm::dvec3 q0 = poly[i], q1 = poly[(i + 1) % poly.size()];
+                const glm::dvec3 across = glm::cross(q1 - q0, n);
+                if (glm::length(across) < 1e-9)
+                    continue;
+                const glm::dvec3 side = glm::normalize(across);
+                const double d0 = glm::dot(p0 - q0, side), d1 = glm::dot(p1 - q0, side);
+                if (d0 * d1 >= 0.0 || std::abs(d0) <= tolerance || std::abs(d1) <= tolerance)
+                    continue;
+                const glm::dvec3 x = p0 + (p1 - p0) * (d0 / (d0 - d1));
+                const double t = std::clamp(glm::dot(x - q0, q1 - q0) / glm::dot(q1 - q0, q1 - q0), 0.0, 1.0);
+                if (glm::length(q0 + (q1 - q0) * t - x) > tolerance)
+                    continue;
+                ContactCut c{x, side, {}};
+                for (Index k = c0;;)
+                {
+                    c.faces.push_back(a.cornerFace(k));
+                    k = a.cornerRadial(k);
+                    if (k == c0 || k == geo::kInvalid)
+                        break;
+                }
+                return c;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 double depthThrough(const Mesh& m, const std::vector<glm::dvec3>& points, const glm::dvec3& dir)

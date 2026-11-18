@@ -235,13 +235,36 @@ void registerCommands(ext::Context& ctx)
                     continue;
                 }
                 geo::Mesh mine = worldMesh(g, id);
-                std::vector<Index> touching;
+                std::vector<geo::Mesh> others;
                 for (NodeId other : overlapping(g, mine.bounds(), {id}, 0.01, false))
+                    others.push_back(worldMesh(g, other));
+                geo::Mesh base = baseMesh(g, id);
+                const glm::dmat4 w = g.node(id)->as<glm::dmat4>(Transform::kWorldMatrix), toLocal = glm::inverse(w);
+                // Split off the stretch of an edge another block covers only part of, so that stretch stays square.
+                for (int guard = 0; guard < 64; ++guard)
                 {
-                    const std::vector<Index> f = touchingEdges(mine, worldMesh(g, other));
+                    geo::Mesh plain = mine;
+                    plain.edgeAttrs().remove(kContactAttr);
+                    const std::vector<Index> rounded = bevelableEdges(plain, a.get<double>("angle", 30.0));
+                    std::optional<ContactCut> cut;
+                    for (const geo::Mesh& o : others)
+                        if ((cut = partialContactCut(mine, o, rounded)))
+                            break;
+                    if (!cut)
+                        break;
+                    geo::cutAlongPlane(base, glm::dvec3(toLocal * glm::dvec4(cut->point, 1.0)),
+                                       glm::normalize(glm::transpose(glm::dmat3(w)) * cut->normal), 1e-4, {}, cut->faces);
+                    mine = base;
+                    for (Index p = 0; p < mine.pointCapacity(); ++p)
+                        if (mine.pointValid(p))
+                            mine.setPosition(p, glm::dvec3(w * glm::dvec4(mine.position(p), 1.0)));
+                }
+                std::vector<Index> touching;
+                for (const geo::Mesh& o : others)
+                {
+                    const std::vector<Index> f = touchingEdges(mine, o);
                     touching.insert(touching.end(), f.begin(), f.end());
                 }
-                geo::Mesh base = baseMesh(g, id);
                 markContact(base, touching);
                 setBaseMesh(g, id, std::move(base));
                 if (bevel == kNoNode)

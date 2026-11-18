@@ -232,6 +232,29 @@ TEST_CASE("blockwork: bevel rounds exposed edges and leaves the ones resting on 
     CHECK(out(b).numFaces() == 6);
 }
 
+TEST_CASE("blockwork: an edge another block covers part of stays square only where it is covered")
+{
+    fresh();
+    // A parapet butting the back of another near its end, as at a corner of a roof.
+    const std::string back = box({0, 0, 0}, {800, 24, 64}, "back");
+    box({776, 0, -400}, {24, 400, 64}, "side");
+    run("blockworkBevel", {{"args", {back}}, {"width", 2.0}, {"segments", 2}});
+    const geo::Mesh m = out(back);
+    const glm::dmat4 w = g().find(back)->as<glm::dmat4>(Transform::kWorldMatrix);
+    bool coveredSquare = false, exposedSquare = false;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+    {
+        if (!m.pointValid(p))
+            continue;
+        const glm::dvec3 q(w * glm::dvec4(m.position(p), 1.0));
+        coveredSquare |= glm::length(q - glm::dvec3(776, 64, 0)) < 1e-3;
+        exposedSquare |= std::abs(q.y - 64) < 1e-3 && std::abs(q.z) < 1e-3 && q.x < 770;
+    }
+    CHECK(coveredSquare);
+    CHECK_FALSE(exposedSquare);
+    CHECK(closed(m));
+}
+
 TEST_CASE("blockwork: a rounded bevel shades smooth through its corners, a chamfer stays faceted")
 {
     const auto hardCreases = [](const geo::Mesh& m) {
