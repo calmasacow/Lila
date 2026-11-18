@@ -7,6 +7,7 @@
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
 #include "scene/Transform.h"
+#include "ui/Tools.h"
 
 #include <doctest/doctest.h>
 
@@ -161,6 +162,74 @@ TEST_CASE("blockwork: shapes are closed")
     geo::Mesh ell = out(l);
     CHECK(closed(ell));
     CHECK(ell.numFaces() == 8);
+}
+
+TEST_CASE("blockwork: a small arch keeps an opening half its width")
+{
+    blockwork::Frame f;
+    f.size = {48, 16, 48};
+    const geo::Mesh m = blockwork::buildShape(blockwork::Shape::Arch, f, {});
+    bool left = false, right = false;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && std::abs(m.position(p).y) < 1e-6)
+        {
+            left |= std::abs(m.position(p).x - 12.0) < 1e-6;
+            right |= std::abs(m.position(p).x - 36.0) < 1e-6;
+        }
+    CHECK(left);
+    CHECK(right);
+    CHECK(blockwork::archFrame(16, 32, 25) == Approx(4));
+    CHECK(blockwork::archFrame(400, 300, 25) == Approx(25));
+}
+
+TEST_CASE("blockwork: a selection of blocks snaps to the grid, anything else doesn't")
+{
+    fresh();
+    const std::string b = run("blockworkBlock", {{"origin", {32, 0, 16}}, {"size", {48, 16, 48}}}).get<std::string>();
+    run("select", {{"args", {b}}});
+    std::optional<ui::SelectionSnap> s = ui::tools::selectionSnap();
+    REQUIRE(s);
+    CHECK(s->moveStep == Approx(blockwork::gridStep()));
+    CHECK(s->rotateStep == Approx(15));
+    CHECK(s->anchor.x == Approx(32));
+    CHECK(s->anchor.z == Approx(16));
+    CHECK(s->extent.x == Approx(48));
+    const std::string cube = run("polyCube")[0].get<std::string>();
+    run("select", {{"args", {b, cube}}});
+    CHECK_FALSE(ui::tools::selectionSnap());
+    ui::tools::setSnap(ui::SnapRotateHold, true);
+    run("select", {{"args", {b}}});
+    CHECK_FALSE(ui::tools::selectionSnap());
+    ui::tools::setSnap(ui::SnapRotateHold, false);
+}
+
+TEST_CASE("blockwork: bevel rounds exposed edges and leaves the ones resting on another block square")
+{
+    fresh();
+    run("blockworkBlock", {{"origin", {-256, -32, -256}}, {"size", {512, 512, 32}}, {"name", "slab"}});
+    const std::string b = run("blockworkBlock", {{"size", {128, 128, 128}}, {"name", "box"}}).get<std::string>();
+    // A shutter on the box's side: its back edges lie on the box, the box's own corners don't touch it.
+    run("blockworkBlock", {{"origin", {128, 40, 40}}, {"size", {8, 48, 48}}, {"name", "shutter"}});
+    run("blockworkBevel", {{"args", {b}}, {"width", 4.0}});
+    const geo::Mesh m = out(b);
+    bool bottomEdge = false, topCorner = false, sideCorner = false;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+    {
+        if (!m.pointValid(p))
+            continue;
+        const glm::dvec3 q = m.position(p);
+        // The edge along the ground on the x = 0 side stays where it was; the top one is cut back.
+        bottomEdge |= std::abs(q.y) < 1e-6 && std::abs(q.x) < 1e-6;
+        topCorner |= std::abs(q.y - 128.0) < 1e-6 && std::abs(q.x) < 1e-6;
+        sideCorner |= glm::length(q - glm::dvec3(128, 0, 0)) < 1e-6;
+    }
+    CHECK(bottomEdge);
+    CHECK_FALSE(topCorner);
+    CHECK_FALSE(sideCorner);
+    CHECK(m.numFaces() > 6);
+
+    run("blockworkBevel", {{"args", {b}}, {"remove", true}});
+    CHECK(out(b).numFaces() == 6);
 }
 
 TEST_CASE("blockwork: stairs climb the way direction turns them")

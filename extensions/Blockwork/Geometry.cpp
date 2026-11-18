@@ -257,6 +257,41 @@ void hardenEdges(Mesh& mesh, double angle)
     }
 }
 
+std::vector<Index> bevelableEdges(const Mesh& mesh, double angle)
+{
+    const std::span<const bool> contact = mesh.edgeAttrs().has(kContactAttr) ? mesh.edgeAttrs().get<bool>(kContactAttr) : std::span<const bool>();
+    const double limit = std::cos(glm::radians(angle));
+    std::vector<Index> out;
+    for (Index e = 0; e < mesh.edgeCapacity(); ++e)
+    {
+        if (!mesh.edgeValid(e) || mesh.edgeFaceCount(e) != 2 || (e < contact.size() && contact[e]))
+            continue;
+        const Index c = mesh.edgeCorner(e);
+        const Index f0 = mesh.cornerFace(c), f1 = mesh.cornerFace(mesh.cornerRadial(c));
+        const glm::dvec3 n0 = mesh.faceNormal(f0);
+        if (glm::dot(n0, mesh.faceNormal(f1)) >= limit)
+            continue;
+        // Convex: the other face falls away behind this one's plane. A concave edge's bevel would fill the corner.
+        if (glm::dot(n0, mesh.faceCentroid(f1) - mesh.position(mesh.cornerPoint(c))) < 0.0)
+            out.push_back(e);
+    }
+    return out;
+}
+
+void markContact(Mesh& mesh, std::span<const Index> edges)
+{
+    std::span<bool> contact = mesh.edgeAttrs().getOrAdd<bool>(kContactAttr);
+    std::fill(contact.begin(), contact.end(), false);
+    for (Index e : edges)
+        if (e < contact.size())
+            contact[e] = true;
+}
+
+double archFrame(double width, double height, double thickness)
+{
+    return std::clamp(thickness, 0.0, std::min(std::abs(width), std::abs(height)) * 0.25);
+}
+
 Mesh buildShape(Shape shape, Frame f, const ShapeOptions& o)
 {
     // Normalise: positive extents, origin at the low corner. A prism's outline is already placed from the origin.
@@ -348,7 +383,7 @@ Mesh buildShape(Shape shape, Frame f, const ShapeOptions& o)
             break;
         }
         // A doorway: a frame thickness wide around an opening with a round top, open at the floor. Profile in (U, N).
-        const double t = std::clamp(o.thickness, 0.0, W * 0.49);
+        const double t = archFrame(W, h, o.thickness);
         const double ow = W - 2.0 * t, r = ow * 0.5;
         const double spring = std::max(0.0, h - t - r);
         if (ow <= 1e-6 || h - t <= 1e-6)
@@ -540,6 +575,38 @@ std::vector<Index> coveredFaces(const Mesh& a, const Mesh& b, double tolerance)
             if (std::all_of(pa.begin(), pa.end(), [&](const glm::dvec3& p) { return insidePolygon(pb, nb, p, tolerance); }))
             {
                 out.push_back(fa);
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+std::vector<Index> touchingEdges(const Mesh& a, const Mesh& b, double tolerance)
+{
+    std::vector<std::vector<glm::dvec3>> polys;
+    std::vector<glm::dvec3> normals;
+    for (Index fb = 0; fb < b.faceCapacity(); ++fb)
+        if (b.faceValid(fb))
+        {
+            polys.push_back(facePositions(b, fb));
+            normals.push_back(b.faceNormal(fb));
+        }
+    std::vector<Index> out;
+    for (Index e = 0; e < a.edgeCapacity(); ++e)
+    {
+        if (!a.edgeValid(e))
+            continue;
+        const glm::dvec3 p0 = a.position(a.edgePoint(e, 0)), p1 = a.position(a.edgePoint(e, 1)), mid = (p0 + p1) * 0.5;
+        for (size_t i = 0; i < polys.size(); ++i)
+        {
+            const glm::dvec3& n = normals[i];
+            const glm::dvec3& o = polys[i][0];
+            if (std::abs(glm::dot(p0 - o, n)) > tolerance || std::abs(glm::dot(p1 - o, n)) > tolerance)
+                continue;
+            if (insidePolygon(polys[i], n, mid, tolerance))
+            {
+                out.push_back(e);
                 break;
             }
         }

@@ -483,9 +483,15 @@ void registerTextureCommands(ext::Context& ctx)
         .positionalDoc = "blocks (default the selection)",
         .flags = {{"live", "l", T::Bool, true, "Refit whenever the block changes (whole blocks)."},
                   {"faces", "f", T::List, nullptr, "Face ids for a one-off fit; default the selected faces."},
-                  {"seed", "s", T::Int, 0, "Variation seed."}},
+                  {"seed", "s", T::Int, 0, "Variation seed."},
+                  {"sheet", "sh", T::String, "", "The .lilatrim file; default the current sheet."},
+                  {"palette", "pal", T::String, "", "Palette the faces use (trimPaletteList); default the sheet's own."}},
         .run = [](const Args& a) -> json {
             Graph& g = graph();
+            json call = {{"seed", a.get<int>("seed", 0)}};
+            for (const char* k : {"sheet", "palette"})
+                if (const std::string v = a.get<std::string>(k, ""); !v.empty())
+                    call[k] = v;
             if (!ops::find("trimAuto") || !ops::find("trimLive"))
                 throw CommandError("blockworkHotspot: turn on the Trim Sheets extension");
             std::vector<NodeId> ids = blockArgs(a, "blockworkHotspot");
@@ -496,7 +502,7 @@ void registerTextureCommands(ext::Context& ctx)
             if (a.get<bool>("live", true) && !a.has("faces"))
             {
                 g.select(ids);
-                result = ops::execute("trimLive", {{"seed", a.get<int>("seed", 0)}});
+                result = ops::execute("trimLive", call);
             }
             else
             {
@@ -515,12 +521,13 @@ void registerTextureCommands(ext::Context& ctx)
                     setBaseMesh(g, id, std::move(m));
                 }
                 g.select(ids);
-                result = ops::execute("trimAuto", {{"seed", a.get<int>("seed", 0)}});
+                result = ops::execute("trimAuto", call);
             }
             g.select(before);
             return result;
         },
-        .examples = {"blockworkHotspot('room')", "blockworkHotspot('room', live=False, faces=[2, 3])"},
+        .examples = {"blockworkHotspot('room')", "blockworkHotspot('room', live=False, faces=[2, 3])",
+                     "blockworkHotspot('house1', palette='Plaster')"},
     });
 
     ctx.registerCommand({
