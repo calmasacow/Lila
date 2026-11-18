@@ -450,6 +450,12 @@ void FrameItem::paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*)
     p->setPen(Qt::NoPen);
     p->setBrush(title);
     p->drawPath(head.simplified());
+    if (isSelected())
+    {
+        p->setPen(QPen(themeColor("nodeSelected"), 2.0));
+        p->setBrush(Qt::NoBrush);
+        p->drawRoundedRect(collapsed ? titleRect() : box(), 5, 5);
+    }
     QColor ink = title.lightness() > 140 ? gray(25) : gray(235);
     p->setPen(ink);
     p->setBrush(ink);
@@ -593,8 +599,8 @@ NodeCanvas::NodeCanvas(QWidget* parent) : QGraphicsView(parent)
         updateEmphasis();
         if (mBuilding)
             return;
-        auto sel = mScene.selectedItems();
-        onSelect(sel.size() == 1 ? static_cast<NodeItem*>(sel[0])->name : std::string());
+        const std::vector<std::string> sel = selectedNames();
+        onSelect(sel.size() == 1 && mScene.selectedItems().size() == 1 ? sel[0] : std::string());
     });
 }
 
@@ -623,6 +629,10 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
 {
     mBuilding = true;
     bool newGroup = group != mGroup;
+    // Frames have no names: they keep their selection by index across an edit's rebuild.
+    std::vector<int> framesSelected = std::exchange(mSelectFramesNext, {});
+    if (framesSelected.empty() && !newGroup)
+        framesSelected = selectedFrames();
     mGroup = group;
     mLinks.clear();
     mNodes.clear();
@@ -702,6 +712,7 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
             auto* item = new FrameItem(i);
             mScene.addItem(item);
             mFrameItems.push_back(item);
+            item->setSelected(std::ranges::find(framesSelected, i) != framesSelected.end());
         }
         layoutFrames();
         layoutTies();
@@ -762,10 +773,21 @@ std::vector<std::string> NodeCanvas::selectedNames() const
     return out;
 }
 
+std::vector<int> NodeCanvas::selectedFrames() const
+{
+    std::vector<int> out;
+    for (FrameItem* f : mFrameItems)
+        if (f->isSelected())
+            out.push_back(f->index);
+    return out;
+}
+
 void NodeCanvas::selectAll()
 {
     for (auto& [n, item] : mNodes)
         item->setSelected(true);
+    for (FrameItem* f : mFrameItems)
+        f->setSelected(true);
 }
 
 void NodeCanvas::nodeMoved(NodeItem* n)

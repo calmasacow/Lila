@@ -24,6 +24,11 @@ namespace lila::scene
 class Node;
 }
 
+namespace lila::gn
+{
+struct GFrame;
+}
+
 namespace lila::ui
 {
 class NodeCanvas;
@@ -159,6 +164,12 @@ public:
 private:
     void openAddMenu(QPointF scenePos, const WireDrag* wire);
     void selectAfterRefresh(const std::vector<std::string>& names);
+    /** The selected frames none of whose members are in names: notes and empty frames, or frames chosen without their nodes. */
+    std::vector<int> framesOnly(const std::vector<std::string>& names) const;
+    /** Rebuilds the canvas now when the group changed since it last built, instead of waiting for the queued refresh. */
+    void catchUp();
+    /** Appends frames (SetFrames) and selects them once the canvas rebuilds. */
+    void addFrameCopies(const std::vector<gn::GFrame>& copies);
     void showError(const QString& message);
     /** panel false: only the canvas needs it, so a field being scrubbed in the side panel survives. */
     void scheduleRefresh(bool panel = true);

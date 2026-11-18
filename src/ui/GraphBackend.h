@@ -216,6 +216,8 @@ public:
     virtual std::vector<std::string> inputTypes() const { return {"float", "int", "bool", "vector", "color", "string"}; }
     /** Shown under the side panel when no node is selected. */
     virtual QString canvasHint() const;
+    /** The key bound to an action as the hotkey prefs have it now, for hints that follow rebinding; "(unbound)" when none. */
+    static QString hintKey(const char* actionId);
 
     /** Adds backend-specific buttons to the editor's toolbar, after Add Node. */
     virtual void addToolbarButtons(QBoxLayout*, NodeEditor&) const {}

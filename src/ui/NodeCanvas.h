@@ -500,7 +500,11 @@ public:
 class FrameItem final : public QGraphicsItem
 {
 public:
-    explicit FrameItem(int index) : index(index) { setZValue(-2.0); }
+    explicit FrameItem(int index) : index(index)
+    {
+        setZValue(-2.0);
+        setFlag(QGraphicsItem::ItemIsSelectable);
+    }
 
     static constexpr double kTitle = 22.0;
     static constexpr double kTextPad = 8.0;
@@ -519,6 +523,13 @@ public:
     /** Where the text wraps: the body under the title, padded. */
     QRectF textRect() const { return QRectF(kTextPad, kTitle + kTextPad * 0.5, size.width() - 2.0 * kTextPad, size.height() - kTitle - kTextPad * 1.5); }
     QRectF boundingRect() const override { return box().adjusted(-2, -2, 2, 2); }
+    /** Only the title selects it, so a rubber band over the nodes inside leaves the frame alone. */
+    QPainterPath shape() const override
+    {
+        QPainterPath p;
+        p.addRect(titleRect());
+        return p;
+    }
     void paint(QPainter* p, const QStyleOptionGraphicsItem*, QWidget*) override;
 };
 
@@ -694,6 +705,10 @@ public:
     QPointF cursorScenePos() const;
 
     std::vector<std::string> selectedNames() const;
+    /** Indices of the selected frames and notes, in order; a click on a title selects one. */
+    std::vector<int> selectedFrames() const;
+    /** Frames to select when the canvas next builds, by index: copies just pasted or duplicated. */
+    void selectFramesAfterBuild(std::vector<int> frames) { mSelectFramesNext = std::move(frames); }
 
     void selectAll();
 
@@ -1090,6 +1105,7 @@ private:
     std::string mHoverPortal; // portal name whose ghost lines are drawn
     std::vector<gn::GFrame> mFrames;
     std::vector<FrameItem*> mFrameItems;
+    std::vector<int> mSelectFramesNext;
     int mFrameDrag = -1;
     bool mFrameResize = false;
     QPointF mFrameGrab;

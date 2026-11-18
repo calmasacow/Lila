@@ -913,23 +913,130 @@ json selectionCall(const QString& group, const std::vector<std::string>& names)
         a.push_back(n);
     return {{"args", a}};
 }
+
+/** Clipboard text of frames and notes alone, for a selection without nodes and for backends that can't copy nodes. */
+constexpr const char* kFramesClipFormat = "lila.nodeFrames";
+
+/** The JSON object in clipboard text, or null: from the first '{' to the last '}', so text around it doesn't matter. */
+json clipboardJson(const std::string& text)
+{
+    const size_t a = text.find('{'), b = text.rfind('}');
+    if (a == std::string::npos || b == std::string::npos || b < a)
+        return nullptr;
+    try
+    {
+        return json::parse(text.substr(a, b - a + 1));
+    }
+    catch (const json::exception&)
+    {
+        return nullptr;
+    }
+}
 } // namespace
+
+void NodeEditor::catchUp()
+{
+    const std::optional<size_t> stamp = mGroup.isEmpty() ? std::nullopt : mBackend->groupStamp(scene::Graph::current(), mGroup.toStdString());
+    // A backend without stamps (the scene graph) can't say whether it changed: rebuild.
+    if (!stamp || stamp != mBuiltStamp)
+        refresh(false);
+}
+
+std::vector<int> NodeEditor::framesOnly(const std::vector<std::string>& names) const
+{
+    std::vector<int> out;
+    const std::vector<gn::GFrame>& frames = mCanvas->frames();
+    for (int f : mCanvas->selectedFrames())
+        if (size_t(f) < frames.size() &&
+            std::none_of(frames[size_t(f)].nodes.begin(), frames[size_t(f)].nodes.end(),
+                         [&](const std::string& m) { return std::find(names.begin(), names.end(), m) != names.end(); }))
+            out.push_back(f);
+    return out;
+}
+
+void NodeEditor::addFrameCopies(const std::vector<gn::GFrame>& copies)
+{
+    if (copies.empty() || !mBackend->supports("SetFrames"))
+        return;
+    std::vector<gn::GFrame> next = mCanvas->frames();
+    std::vector<int> added;
+    for (const gn::GFrame& f : copies)
+    {
+        added.push_back(int(next.size()));
+        next.push_back(f);
+    }
+    mCanvas->selectFramesAfterBuild(std::move(added));
+    run("SetFrames", {{"args", {mGroup.toStdString(), gn::framesToJson(next)}}});
+}
 
 void NodeEditor::deleteSelected()
 {
-    json call = selectionCall(mGroup, mCanvas->selectedNames());
+    // Frames go by index into the canvas copy, so it has to show the group as it is now.
+    catchUp();
+    const std::vector<std::string> names = mCanvas->selectedNames();
+    const std::vector<int> frames = mCanvas->selectedFrames();
+    UndoChunk chunk("Delete Nodes");
+    if (!frames.empty() && mBackend->supports("SetFrames") && !mGroup.isEmpty())
+    {
+        std::vector<gn::GFrame> next;
+        for (int i = 0; i < int(mCanvas->frames().size()); ++i)
+            if (std::find(frames.begin(), frames.end(), i) == frames.end())
+                next.push_back(mCanvas->frames()[size_t(i)]);
+        run("SetFrames", {{"args", {mGroup.toStdString(), gn::framesToJson(next)}}});
+    }
+    json call = selectionCall(mGroup, names);
     if (!call.is_null())
         run("DeleteNode", call);
 }
 
 void NodeEditor::copySelected()
 {
-    json call = selectionCall(mGroup, mCanvas->selectedNames());
-    if (call.is_null())
+    catchUp();
+    if (mGroup.isEmpty())
         return;
-    json text = run("CopyNodes", call);
-    if (text.is_string())
-        QApplication::clipboard()->setText(qs(text.get<std::string>()));
+    const std::vector<std::string> names = mCanvas->selectedNames();
+    json clip;
+    json call = selectionCall(mGroup, names);
+    if (!call.is_null() && mBackend->supports("CopyNodes"))
+        if (json text = run("CopyNodes", call); text.is_string())
+            clip = clipboardJson(text.get<std::string>());
+    // Frames whose members aren't copied (notes, empty frames) go along empty, at the same offset as the nodes.
+    std::vector<gn::GFrame> extra;
+    for (int f : framesOnly(clip.is_object() ? names : std::vector<std::string>{}))
+    {
+        gn::GFrame copy = mCanvas->frames()[size_t(f)];
+        copy.nodes.clear();
+        extra.push_back(std::move(copy));
+    }
+    if (!clip.is_object() && extra.empty())
+        return;
+    glm::dvec2 centre(0.0);
+    if (clip.is_object() && !clip.value("nodes", json::array()).empty())
+    {
+        const json& first = clip["nodes"][0];
+        const QPointF at = mCanvas->positionOf(first.value("name", std::string()));
+        const json rel = first.value("position", json::array({0.0, 0.0}));
+        centre = glm::dvec2(at.x(), at.y()) - glm::dvec2(rel[0].get<double>(), rel[1].get<double>());
+    }
+    else
+    {
+        for (const gn::GFrame& f : extra)
+            centre += f.position + f.size * 0.5;
+        centre /= double(extra.size());
+    }
+    if (!clip.is_object())
+        clip = {{"format", kFramesClipFormat}, {"version", 1}, {"nodes", json::array()}};
+    if (!extra.empty())
+    {
+        std::vector<gn::GFrame> frames = gn::framesFromJson(clip.value("frames", json::array()));
+        for (gn::GFrame& f : extra)
+        {
+            f.position = glm::round(f.position - centre);
+            frames.push_back(std::move(f));
+        }
+        clip["frames"] = gn::framesToJson(frames);
+    }
+    QApplication::clipboard()->setText(qs(clip.dump(2)));
 }
 
 void NodeEditor::cutSelected()
@@ -950,12 +1057,31 @@ void NodeEditor::paste()
         return;
     }
     QPointF at = mCanvas->cursorScenePos();
+    catchUp();
+    const json clip = clipboardJson(text.toStdString());
+    const bool hasNodes = !clip.is_object() || !clip.value("nodes", json::array()).empty();
     try
     {
-        json r = ops::execute(mBackend->command("PasteNodes"), {{"args", {mGroup.toStdString(), text.toStdString()}}, {"position", {at.x(), at.y()}}},
-                               CallSource::UI);
-        if (r.is_array())
-            selectAfterRefresh(r.get<std::vector<std::string>>());
+        UndoChunk chunk("Paste Nodes");
+        // Empty frames (notes) go in first; the backend pastes the frames holding nodes itself, after them.
+        std::vector<gn::GFrame> copies;
+        if (clip.is_object())
+            for (gn::GFrame& f : gn::framesFromJson(clip.value("frames", json::array())))
+                if (f.nodes.empty())
+                {
+                    f.position += glm::dvec2(at.x(), at.y());
+                    copies.push_back(std::move(f));
+                }
+        addFrameCopies(copies);
+        if (!hasNodes && copies.empty())
+            showError("Nothing to paste: the clipboard has no nodes or notes.");
+        if (hasNodes && mBackend->supports("PasteNodes"))
+        {
+            json r = ops::execute(mBackend->command("PasteNodes"), {{"args", {mGroup.toStdString(), text.toStdString()}}, {"position", {at.x(), at.y()}}},
+                                   CallSource::UI);
+            if (r.is_array())
+                selectAfterRefresh(r.get<std::vector<std::string>>());
+        }
     }
     catch (const std::exception& e)
     {
@@ -965,8 +1091,20 @@ void NodeEditor::paste()
 
 void NodeEditor::duplicateSelected()
 {
-    json call = selectionCall(mGroup, mCanvas->selectedNames());
-    if (call.is_null())
+    catchUp();
+    const std::vector<std::string> names = mCanvas->selectedNames();
+    UndoChunk chunk("Duplicate Nodes");
+    std::vector<gn::GFrame> copies;
+    for (int f : framesOnly(names))
+    {
+        gn::GFrame copy = mCanvas->frames()[size_t(f)];
+        copy.nodes.clear();
+        copy.position += glm::dvec2(40.0, 40.0);
+        copies.push_back(std::move(copy));
+    }
+    addFrameCopies(copies);
+    json call = selectionCall(mGroup, names);
+    if (call.is_null() || !mBackend->supports("DuplicateNodes"))
         return;
     call["offset"] = {40, 40};
     json r = run("DuplicateNodes", call);
@@ -2055,13 +2193,13 @@ void registerEditActions()
     };
     add("nodeEditor.addNode", "Add Node...", &NodeEditor::addNodeAtCursor,
         "Search for a node to add under the cursor. While dragging a wire it lists only nodes that connect to it.");
-    add("nodeEditor.delete", "Delete Nodes", &NodeEditor::deleteSelected, "Delete the selected nodes and their links.");
+    add("nodeEditor.delete", "Delete Nodes", &NodeEditor::deleteSelected, "Delete the selected nodes and their links, and the selected frames and notes.");
     add("nodeEditor.copy", "Copy Nodes", &NodeEditor::copySelected,
-        "Copy the selected nodes as text: paste them in another group or scene, or share them in a post.");
+        "Copy the selected nodes, frames and notes as text: paste them in another group or scene, or share them in a post.");
     add("nodeEditor.cut", "Cut Nodes", &NodeEditor::cutSelected, "Copy the selected nodes as text, then delete them.");
     add("nodeEditor.paste", "Paste Nodes", &NodeEditor::paste, "Paste nodes from clipboard text at the cursor.");
-    add("nodeEditor.duplicate", "Duplicate Nodes", &NodeEditor::duplicateSelected, "Duplicate the selected nodes with the links between them.");
-    add("nodeEditor.selectAll", "Select All Nodes", &NodeEditor::selectAll, "Select every node in the group.");
+    add("nodeEditor.duplicate", "Duplicate Nodes", &NodeEditor::duplicateSelected, "Duplicate the selected nodes with the links between them, and the selected frames and notes.");
+    add("nodeEditor.selectAll", "Select All Nodes", &NodeEditor::selectAll, "Select every node, frame and note in the group.");
     add("nodeEditor.frameSelected", "Frame Selected Nodes", &NodeEditor::frameSelected, "Fit the view to the selected nodes.");
     add("nodeEditor.frameAll", "Frame All Nodes", &NodeEditor::frameAll, "Fit the view to the whole group.");
     add("nodeEditor.groupNodes", "Group Selected Nodes", &NodeEditor::groupSelected,

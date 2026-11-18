@@ -1290,3 +1290,106 @@ TEST_CASE("the scene backend renames scene nodes and keeps frames")
     info = run("sceneGraphInfo", {{"args", {"Selection"}}});
     CHECK(info["definition"]["frames"][0]["nodes"][0].get<std::string>().find("Crate") != std::string::npos);
 }
+
+TEST_CASE("notes and empty frames select by their title, and copy, paste, duplicate and delete in every backend")
+{
+    registerTexGraphUi();
+    struct Case
+    {
+        const char* backend;
+        const char* group;
+    };
+    for (const Case& c : {Case{ui::kGeometryNodesBackend, "G"}, Case{ui::kTextureGraphBackend, "Rock"}, Case{ui::kSceneGraphBackend, "Selection"}})
+    {
+        CAPTURE(c.backend);
+        run("newScene");
+        run("gnCreateGroup", {{"args", {"G"}}});
+        run("gnAddNode", {{"args", {"G", "Value"}}, {"position", {0, 300}}, {"name", "V"}});
+        run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 16}});
+        run("polyCube", {{"name", "Box"}});
+        run("select", {{"args", {"Box"}}});
+
+        QMainWindow win;
+        auto* editor = new ui::NodeEditor(&win, c.backend);
+        win.setCentralWidget(editor);
+        win.resize(1000, 700);
+        win.show();
+        win.activateWindow();
+        const ui::GraphBackend& b = editor->backend();
+        REQUIRE(b.id() == c.backend);
+        // The hint names the zip tie key as bound, not a fixed letter.
+        const QString zip = ui::Hotkeys::get().keyFor("nodeEditor.zipTieOn");
+        if (std::string(c.backend) != ui::kSceneGraphBackend)
+        {
+            CHECK(b.canvasHint().contains("Hold " + (zip.isEmpty() ? QString("(unbound)") : zip) + " and drag"));
+            CHECK_FALSE(b.canvasHint().contains("Hold Z"));
+        }
+        auto frames = [&] {
+            json info = run(b.command("GroupInfo").c_str(), {{"args", {c.group}}});
+            return info["definition"].value("frames", json::array());
+        };
+        const json note = {{"label", "Note"}, {"position", {-200, -600}}, {"size", {240, 90}}, {"text", "Keep it under 100."}, {"color", "light"}};
+        run(b.command("SetFrames").c_str(), {{"args", {c.group, json::array({note})}}});
+        editor->setGroup(c.group);
+        pump();
+        auto* view = editor->findChild<QGraphicsView*>();
+        REQUIRE(view);
+        view->setFocus();
+        pump();
+        REQUIRE(frames().size() == 1);
+
+        // A click on the title selects the note (and only it); copy and paste give a second one.
+        const QPointF title(-100, -590);
+        mouse(view, QEvent::MouseButtonPress, title, Qt::LeftButton);
+        mouse(view, QEvent::MouseButtonRelease, title, Qt::NoButton);
+        ui::actions::run(json("nodeEditor.copy"));
+        CHECK(QApplication::clipboard()->text().contains("Keep it under 100."));
+        ui::actions::run(json("nodeEditor.paste"));
+        pump();
+        json now = frames();
+        REQUIRE(now.size() == 2);
+        CHECK(now[1]["text"] == "Keep it under 100.");
+        CHECK(now[1].value("nodes", json::array()).empty());
+
+        // The pasted note is selected: duplicate puts a copy beside it, delete takes the copy away, undo brings it back.
+        ui::actions::run(json("nodeEditor.duplicate"));
+        pump();
+        now = frames();
+        REQUIRE(now.size() == 3);
+        CHECK(now[2]["position"][0].get<double>() == doctest::Approx(now[1]["position"][0].get<double>() + 40.0));
+        ui::actions::run(json("nodeEditor.delete"));
+        pump();
+        CHECK(frames().size() == 2);
+        run("undo");
+        pump();
+        CHECK(frames().size() == 3);
+    }
+
+    // With nodes: a node and a note copied together paste together.
+    run("newScene");
+    run("gnCreateGroup", {{"args", {"G"}}});
+    run("gnAddNode", {{"args", {"G", "Value"}}, {"position", {0, 300}}, {"name", "V"}});
+    run("gnSetFrames", {{"args", {"G", json::array({{{"label", "Note"}, {"position", {-200, -600}}, {"size", {240, 90}}, {"text", "Both"}}})}}});
+    QMainWindow win;
+    ui::NodeEditor* editor = openOn(win, "G");
+    auto* view = editor->findChild<QGraphicsView*>();
+    selectNode(view, "V");
+    mouse(view, QEvent::MouseButtonPress, {-100, -590}, Qt::LeftButton, Qt::ShiftModifier);
+    mouse(view, QEvent::MouseButtonRelease, {-100, -590}, Qt::NoButton, Qt::ShiftModifier);
+    ui::actions::run(json("nodeEditor.copy"));
+    const QString text = QApplication::clipboard()->text();
+    CHECK(text.contains(gn::kClipboardFormat));
+    CHECK(text.contains("Both"));
+    ui::actions::run(json("nodeEditor.paste"));
+    pump();
+    gn::Group g = gn::readGroup(*gn::findGroupNode(scene::Graph::current(), "G"));
+    CHECK(g.nodes.size() == 4);
+    REQUIRE(g.frames.size() == 2);
+    // The note keeps its place relative to the node it was copied with.
+    const gn::GNode* pasted = nullptr;
+    for (const gn::GNode& n : g.nodes)
+        if (n.type == "Value" && n.name != "V")
+            pasted = &n;
+    REQUIRE(pasted);
+    CHECK(g.frames[1].position.y - pasted->position.y == doctest::Approx(-600.0 - 300.0).epsilon(0.01));
+}

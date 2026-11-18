@@ -271,7 +271,7 @@ std::set<NodeItem*> NodeCanvas::selectionFlow() const
 void NodeCanvas::updateEmphasis()
 {
     std::set<LinkItem*> lit = rerouteChains();
-    bool flowOn = (mFlowToggle || mFlowHold) && !mScene.selectedItems().isEmpty();
+    bool flowOn = (mFlowToggle || mFlowHold) && !selectedNodes().empty();
     std::set<NodeItem*> flow = flowOn ? selectionFlow() : std::set<NodeItem*>{};
     if (flowOn)
         for (LinkItem* l : mLinks)

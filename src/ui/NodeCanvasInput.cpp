@@ -267,6 +267,16 @@ void NodeCanvas::mousePressEvent(QMouseEvent* e)
                 return;
             }
             bool grip = item->gripRect().contains(local);
+            if (!grip && item->titleRect().contains(local))
+            {
+                if (e->modifiers() & Qt::ShiftModifier)
+                    item->setSelected(!item->isSelected());
+                else if (!item->isSelected())
+                {
+                    mScene.clearSelection();
+                    item->setSelected(true);
+                }
+            }
             if (grip || item->titleRect().contains(local))
             {
                 mFrameDrag = f;
