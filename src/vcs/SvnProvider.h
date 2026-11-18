@@ -87,6 +87,9 @@ private:
     std::vector<std::string> targets(const std::vector<fs::path>& files) const;
     /** Entries keyed by key(rel path). remote adds -u when the repository answered recently. */
     std::map<std::string, Entry> statusEntries(const std::vector<std::string>& rels, bool verbose, bool remote);
+    /** Commit targets for the default changelist while named ones exist; adds --depth empty to args when it can. */
+    std::vector<std::string> defaultCommitTargets(const std::vector<std::string>& files, const std::vector<std::string>& namedKeys,
+                                                  std::vector<std::string>& args);
     std::map<std::string, bool> needsLock(const std::vector<std::string>& rels);
     OpResult each(const char* verb, const std::vector<fs::path>& files);
 

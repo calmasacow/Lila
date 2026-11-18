@@ -424,3 +424,78 @@ TEST_CASE("svn: real client round trip")
     CHECK(std::string(std::istreambuf_iterator<char>(f), {}) == "one\n");
     CHECK(svn.history(a).size() == 1);
 }
+
+namespace
+{
+std::string svnStatusXml(const std::vector<std::pair<std::string, std::string>>& items, const std::string& named = {},
+                         const std::vector<std::pair<std::string, std::string>>& namedItems = {})
+{
+    auto entries = [](const std::vector<std::pair<std::string, std::string>>& v) {
+        std::string out;
+        for (const auto& [path, item] : v)
+        {
+            std::string props = item == "props" ? "modified" : "none";
+            out += "<entry path=\"" + path + "\"><wc-status item=\"" + (item == "props" ? "normal" : item) +
+                   "\" revision=\"7\" props=\"" + props + "\"></wc-status></entry>\n";
+        }
+        return out;
+    };
+    std::string xml = "<?xml version=\"1.0\"?>\n<status>\n<target path=\".\">\n" + entries(items) + "</target>\n";
+    if (!named.empty())
+        xml += "<changelist name=\"" + named + "\">\n" + entries(namedItems) + "</changelist>\n";
+    return xml + "</status>\n";
+}
+
+/** Runs a default submit against the given status and returns the commit's argv and --targets lines. */
+std::pair<std::vector<std::string>, std::string> svnDefaultSubmit(FakeWc& wc, const std::string& status)
+{
+    auto runner = std::make_shared<SvnFakeRunner>();
+    std::vector<std::string> argv;
+    std::string targets;
+    runner->answer = [&](const ProcessSpec& s) {
+        if (SvnFakeRunner::command(s) == "commit")
+        {
+            argv = s.argv;
+            auto it = std::find(s.argv.begin(), s.argv.end(), "--targets");
+            std::ifstream f(*(it + 1), std::ios::binary);
+            targets.assign(std::istreambuf_iterator<char>(f), {});
+            return svnOk("Committed revision 11.\n");
+        }
+        return svnOk(status);
+    };
+    SvnProvider svn(wc.root, {}, runner);
+    svn.submit("default", "d");
+    return {argv, targets};
+}
+} // namespace
+
+TEST_CASE("svn: default submit commits folder property edits beside named changelists")
+{
+    FakeWc wc;
+    fs::create_directories(wc.root / "Art");
+    auto [argv, targets] = svnDefaultSubmit(wc, svnStatusXml({{"Art", "props"}, {"Mine.uasset", "modified"}}, "wip", {{"Art/Fx.txt", "modified"}}));
+    CHECK(std::find(argv.begin(), argv.end(), "--depth") != argv.end());
+    CHECK(targets.find("Art@") != std::string::npos);
+    CHECK(targets.find("Fx.txt") == std::string::npos);
+}
+
+TEST_CASE("svn: default submit commits a deleted folder recursively")
+{
+    FakeWc wc;
+    auto [argv, targets] = svnDefaultSubmit(
+        wc, svnStatusXml({{"Gone", "deleted"}, {"Gone/a.txt", "deleted"}, {"Mine.uasset", "modified"}}, "wip", {{"Fx.txt", "modified"}}));
+    CHECK(std::find(argv.begin(), argv.end(), "--depth") == argv.end());
+    CHECK(targets.find("Gone@") != std::string::npos);
+    CHECK(targets.find("a.txt") == std::string::npos);
+    CHECK(targets.find("Mine.uasset@") != std::string::npos);
+    CHECK(targets.find("Fx.txt") == std::string::npos);
+}
+
+TEST_CASE("svn: default submit refuses a commit that would sweep in a named changelist")
+{
+    FakeWc wc;
+    fs::create_directories(wc.root / "Art");
+    CHECK_THROWS_AS(svnDefaultSubmit(wc, svnStatusXml({{"Gone", "deleted"}, {"Gone/a.txt", "deleted"}, {"Art", "props"}}, "wip",
+                                                      {{"Art/Fx.txt", "modified"}})),
+                    VcsError);
+}

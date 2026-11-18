@@ -682,6 +682,63 @@ OpResult SvnProvider::move(const fs::path& from, const fs::path& to, const std::
     return res;
 }
 
+std::vector<std::string> SvnProvider::defaultCommitTargets(const std::vector<std::string>& files,
+                                                          const std::vector<std::string>& namedKeys,
+                                                          std::vector<std::string>& args)
+{
+    std::vector<std::string> rels;
+    for (const std::string& f : files)
+        rels.push_back(rel(f));
+    auto under = [](const std::string& k, const std::string& dir) {
+        return dir == "." || (k.size() > dir.size() && k.compare(0, dir.size(), dir) == 0 && k[dir.size()] == '/');
+    };
+    // A folder is anything another listed item sits under; deleted ones are gone from disk.
+    std::vector<std::string> keys;
+    for (const std::string& r : rels)
+        keys.push_back(svnx::key(r));
+    auto isDir = [&](size_t i) {
+        std::error_code ec;
+        if (fs::is_directory(abs(rels[i]), ec))
+            return true;
+        return std::any_of(keys.begin(), keys.end(), [&](const std::string& k) { return under(k, keys[i]); });
+    };
+
+    std::set<std::string> deletedDirs;
+    std::map<std::string, Entry> entries = statusEntries({"."}, false, false);
+    for (size_t i = 0; i < rels.size(); ++i)
+    {
+        auto it = entries.find(keys[i]);
+        if (it != entries.end() && (it->second.item == "deleted" || it->second.item == "replaced") && isDir(i) &&
+            std::any_of(keys.begin(), keys.end(), [&](const std::string& k) { return under(k, keys[i]); }))
+            deletedDirs.insert(keys[i]);
+    }
+
+    // Every item at depth empty keeps the named changelists out, but svn refuses that for a deleted folder with children.
+    if (deletedDirs.empty())
+    {
+        args.insert(args.end(), {"--depth", "empty"});
+        return rels;
+    }
+    std::vector<std::string> out;
+    for (size_t i = 0; i < rels.size(); ++i)
+    {
+        if (std::any_of(deletedDirs.begin(), deletedDirs.end(), [&](const std::string& d) { return under(keys[i], d); }))
+            continue;
+        if (isDir(i) && !deletedDirs.contains(keys[i]))
+        {
+            // Recursing into this folder would also commit the named changelists' files inside it.
+            for (const std::string& n : namedKeys)
+                if (under(n, keys[i]))
+                    throw VcsError("svn: can't submit the default changelist in one commit: deleted folder " +
+                                   *deletedDirs.begin() + " needs a recursive commit, and folder " + rels[i] +
+                                   " has changes of its own plus files in a named changelist. Submit " + rels[i] +
+                                   " or that changelist first.");
+        }
+        out.push_back(rels[i]);
+    }
+    return out;
+}
+
 OpResult SvnProvider::submit(const std::string& changelist, const std::string& description, const std::vector<fs::path>& files)
 {
     LILA_ZONE();
@@ -756,10 +813,11 @@ OpResult SvnProvider::submit(const std::string& changelist, const std::string& d
         }
         else
         {
-            // Named changelists exist, so list the default's items and keep the named ones out.
-            for (const std::string& f : def->files)
-                commitTargets.push_back(rel(f));
-            args.insert(args.end(), {"--depth", "empty"});
+            std::vector<std::string> namedKeys;
+            for (size_t i = 1; i < lists.size(); ++i)
+                for (const std::string& f : lists[i].files)
+                    namedKeys.push_back(svnx::key(rel(f)));
+            commitTargets = defaultCommitTargets(def->files, namedKeys, args);
         }
     }
 
