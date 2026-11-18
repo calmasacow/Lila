@@ -1,6 +1,7 @@
 #include "ui/AttributeEditor.h"
 #include "ui/AttrAuthoring.h"
 #include "ui/AttrView.h"
+#include "ui/ArrayTable.h"
 #include "ui/ChannelBox.h"
 #include "ui/ChoiceTips.h"
 #include "ui/Controls.h"
@@ -55,6 +56,7 @@
 #include <QPointer>
 #include <QRegularExpression>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QStyle>
 #include <QTimer>
 #include <QToolButton>
@@ -1139,7 +1141,8 @@ AttributeEditor::AttributeEditor(QWidget* parent) : QWidget(parent)
     mListener = Graph::current().addListener([this](scene::Change c, scene::NodeId) {
         // An array element's change may add or drop a row, so element edits rebuild too.
         const scene::PlugRef* plug = Graph::current().changedPlug();
-        if (c != scene::Change::Value || (plug && plug->element >= 0) || (plug && plug->node == mNode && mTriggers.contains(plug->attr)))
+        if (c != scene::Change::Value || (plug && plug->element >= 0 && !tableKeepsUp(*plug)) ||
+            (plug && plug->node == mNode && mTriggers.contains(plug->attr)))
             mRebuild = true;
         scheduleRefresh();
     });
@@ -1416,6 +1419,31 @@ void AttributeEditor::removeElement(const std::string& attr)
     }
 }
 
+void AttributeEditor::removeElements(const std::vector<int>& attrs, const std::vector<int>& elements)
+{
+    Graph& g = Graph::current();
+    if (!g.node(mNode) || elements.empty())
+        return;
+    try
+    {
+        UndoChunk chunk(elements.size() == 1 ? "Remove Element" : "Remove Elements");
+        for (auto e = elements.rbegin(); e != elements.rend(); ++e)
+            for (int a : attrs)
+                ops::execute("removeMultiInstance", {{"args", {g.plugName({mNode, a, -1, *e})}}}, CallSource::UI);
+    }
+    catch (const CommandError& e)
+    {
+        log::error("{}", e.what());
+    }
+}
+
+bool AttributeEditor::tableKeepsUp(const scene::PlugRef& plug) const
+{
+    const auto it = mTableCounts.find(plug.attr);
+    const scene::Node* n = plug.node == mNode ? Graph::current().node(mNode) : nullptr;
+    return n && it != mTableCounts.end() && n->elements(plug.attr).size() == it->second;
+}
+
 QWidget* AttributeEditor::colorSwatch(const scene::AttrDef& def, scene::NodeId id, int index, bool readOnly)
 {
     // A data display: the swatch shows the stored linear colour in sRGB.
@@ -1498,7 +1526,8 @@ void AttributeEditor::rebuild()
     }
     mBadges.clear();
     if (shownNode() != mNode)
-        mArrayRows.clear();
+        mArrayScroll.clear();
+    mTableCounts.clear();
     mNode = shownNode();
     if (!mNavigating && mNode != scene::kNoNode && (mHistoryAt < 0 || mHistory[size_t(mHistoryAt)] != mNode))
     {
@@ -2057,36 +2086,49 @@ void AttributeEditor::rebuild()
         heading->setToolTip(QString::fromStdString(def.doc));
         form->addRow(heading);
         int added = 1;
-        // A row per element of a 70k-element USD primvar freezes the editor, so long arrays show a page at a time.
-        constexpr size_t kFirstRows = 50, kMoreRows = 200;
-        const size_t limit = mArrayRows.try_emplace(addPlug, kFirstRows).first->second;
-        const size_t hidden = indices.size() > limit ? indices.size() - limit : 0;
         const int last = indices.empty() ? -1 : indices.back();
-        indices.resize(indices.size() - hidden);
-        for (int i : indices)
+        // Past a few dozen elements, rows of fields get unreadable and a 70k-element USD primvar would freeze the editor.
+        constexpr size_t kTableAt = 32;
+        if (indices.size() > kTableAt)
         {
-            if (dot == std::string::npos)
-                added += addRow(form, def, i, QString("[%1]").arg(i)) ? 1 : 0;
-            else
-                for (int c : children)
-                {
-                    const scene::AttrDef& cd = n->type().attrs[size_t(c)];
-                    QString child = niceName(cd.name.substr(dot + 1));
-                    added += addRow(form, cd, i, QString("[%1] %2").arg(i).arg(child)) ? 1 : 0;
-                }
+            ArrayTable::Spec spec;
+            spec.node = id;
+            for (int c : children)
+            {
+                const scene::AttrDef& cd = n->type().attrs[size_t(c)];
+                if (cd.flags & scene::AttrHidden)
+                    continue;
+                spec.attrs.push_back(c);
+                spec.headers << (dot == std::string::npos ? niceName(cd.name) : niceName(cd.name.substr(dot + 1)));
+                mTableCounts[c] = n->elements(c).size();
+            }
+            spec.elements = indices;
+            spec.set = [this](const std::string& plug, const json& v) { set(plug, v); };
+            spec.remove = [this, children](const std::vector<int>& elements) { removeElements(children, elements); };
+            heading->setText(QString("%1 (%L2)").arg(niceName(addPlug)).arg(indices.size()));
+            auto* table = new ArrayTable(std::move(spec), 12);
+            table->setToolTip(QString::fromStdString(def.doc));
+            mUpdaters.push_back([table] { table->refresh(); });
+            QScrollBar* bar = table->verticalScrollBar();
+            if (auto it = mArrayScroll.find(addPlug); it != mArrayScroll.end())
+                QTimer::singleShot(0, table, [bar, at = it->second] { bar->setValue(at); });
+            connect(bar, &QScrollBar::valueChanged, this, [this, addPlug](int at) { mArrayScroll[addPlug] = at; });
+            form->addRow(table);
+            ++added;
         }
-        if (hidden > 0)
-        {
-            auto* more = new QToolButton;
-            more->setText(QString("Show %L1 More").arg(std::min(hidden, kMoreRows)));
-            more->setToolTip("Show the next elements of this array");
-            connect(more, &QToolButton::clicked, this, [this, addPlug, step = kMoreRows] {
-                mArrayRows[addPlug] += step;
-                mRebuild = true;
-                scheduleRefresh();
-            });
-            form->addRow(QString("%L1 more").arg(hidden), more);
-        }
+        else
+            for (int i : indices)
+            {
+                if (dot == std::string::npos)
+                    added += addRow(form, def, i, QString("[%1]").arg(i)) ? 1 : 0;
+                else
+                    for (int c : children)
+                    {
+                        const scene::AttrDef& cd = n->type().attrs[size_t(c)];
+                        QString child = niceName(cd.name.substr(dot + 1));
+                        added += addRow(form, cd, i, QString("[%1] %2").arg(i).arg(child)) ? 1 : 0;
+                    }
+            }
         // Only arrays that hold values can grow here; connection-only ones grow by connecting.
         bool addable = true;
         for (int c : children)

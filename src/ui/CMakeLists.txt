@@ -25,6 +25,7 @@ lila_module(lila_ui UI
     ApiReference.cpp ApiReference.h
     Docs.cpp Docs.h
     DocsUi.cpp DocsUi.h
+    ArrayTable.cpp ArrayTable.h
     AttributeEditor.cpp AttributeEditor.h
     AttrAuthoring.cpp AttrAuthoring.h
     AttrView.cpp AttrView.h
