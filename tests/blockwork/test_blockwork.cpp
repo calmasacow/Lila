@@ -434,6 +434,26 @@ TEST_CASE("blockwork: carving an arch into a wall cuts a doorway up the wall")
     CHECK(run("meshCheck", {{"args", {b}}})["shells"] == 1);
 }
 
+TEST_CASE("blockwork: carving goes through a hollowed wall and no further")
+{
+    fresh();
+    const std::string r = box({0, 0, 0}, {256, 256, 256}, "room");
+    run("blockworkHollow", {{"args", {r}}, {"thickness", 16}});
+    const geo::Mesh m = out(r);
+    const geo::Bounds bb = m.bounds();
+    const glm::dvec3 c = (bb.min + bb.max) * 0.5;
+    // From the +X wall's outside, inward: out through its inner face, not across the room.
+    CHECK(blockwork::depthThrough(m, {{bb.max.x, c.y, c.z}, {bb.max.x, c.y + 64, c.z - 64}}, {-1, 0, 0}) == Approx(16));
+    // A ray starting off the block leaves nothing.
+    CHECK(blockwork::depthThrough(m, {{bb.max.x, bb.max.y + 50, c.z}}, {-1, 0, 0}) == Approx(0));
+
+    fresh();
+    const geo::Mesh solid = out(box({0, 0, 0}, {256, 128, 64}));
+    const geo::Bounds sb = solid.bounds();
+    const glm::dvec3 sc = (sb.min + sb.max) * 0.5;
+    CHECK(blockwork::depthThrough(solid, {{sb.min.x, sc.y, sc.z}}, {1, 0, 0}) == Approx(sb.max.x - sb.min.x));
+}
+
 TEST_CASE("blockwork: join merges touching blocks")
 {
     fresh();

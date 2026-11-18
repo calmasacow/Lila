@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <unordered_map>
 
@@ -612,6 +613,38 @@ std::vector<Index> touchingEdges(const Mesh& a, const Mesh& b, double tolerance)
         }
     }
     return out;
+}
+
+double depthThrough(const Mesh& m, const std::vector<glm::dvec3>& points, const glm::dvec3& dir)
+{
+    double deepest = 0.0;
+    for (const glm::dvec3& o : points)
+    {
+        double nearest = std::numeric_limits<double>::max();
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+        {
+            if (!m.faceValid(f) || glm::dot(m.faceNormal(f), dir) <= 1e-6)
+                continue;
+            const std::vector<Index> ps = m.facePoints(f);
+            for (size_t i = 1; i + 1 < ps.size(); ++i)
+            {
+                const glm::dvec3 a = m.position(ps[0]), e1 = m.position(ps[i]) - a, e2 = m.position(ps[i + 1]) - a;
+                const glm::dvec3 pv = glm::cross(dir, e2);
+                const double det = glm::dot(e1, pv);
+                if (std::abs(det) < 1e-12)
+                    continue;
+                const glm::dvec3 tv = o - a;
+                const double u = glm::dot(tv, pv) / det;
+                const glm::dvec3 qv = glm::cross(tv, e1);
+                const double v = glm::dot(dir, qv) / det, t = glm::dot(e2, qv) / det;
+                if (u >= -1e-9 && v >= -1e-9 && u + v <= 1.0 + 1e-9 && t > 1e-4)
+                    nearest = std::min(nearest, t);
+            }
+        }
+        if (nearest < std::numeric_limits<double>::max())
+            deepest = std::max(deepest, nearest);
+    }
+    return deepest;
 }
 
 Index faceAt(const Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, double tolerance)

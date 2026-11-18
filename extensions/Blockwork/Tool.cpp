@@ -301,7 +301,7 @@ public:
         const bool dragged = std::hypot(moved.x(), moved.y()) > 6.0;
         // A press-drag-release draws the footprint in one go; clicks work too.
         if (mStep == Step::Footprint && dragged && footprintSize() > 1e-6)
-            mStep = Step::Height, mBase = mCursor;
+            finishOutline(mCursor);
         if (mDragging)
             releaseExtend(e->modifiers());
         if (mPainting)
@@ -376,6 +376,7 @@ private:
         mDragging = false;
         mFixedU = false;
         mClipKeep = 0;
+        mAutoDepth = 0.0;
     }
 
     bool anyKey(int k, Qt::KeyboardModifiers mods) { return alignKey(k, mods) || modeKey(k, mods) || key(k, mods); }
@@ -464,10 +465,7 @@ private:
         case Qt::Key_Return:
         case Qt::Key_Enter:
             if (mStep == Step::Profile && mProfile.size() >= 3)
-            {
-                mStep = Step::Height;
-                mBase = mProfile.back();
-            }
+                finishOutline(mProfile.back());
             else if (mStep == Step::ClipReady)
                 applyClip();
             else
@@ -515,9 +513,11 @@ private:
             if (!(mods & Qt::ControlModifier) || !mHavePlane)
             {
                 mHoverFace = {};
+                mSurface = kNoNode;
                 if (auto hit = surfaceSnap::underCursor(px, view))
                 {
                     mPlane = makePlane(hit->position, hit->normal);
+                    mSurface = hit->node;
                     if (s.mode == Mode::Extend || s.mode == Mode::Paint || s.mode == Mode::Align)
                         pickFace(*hit);
                 }
@@ -530,6 +530,43 @@ private:
             mCursor = snapOnPlane(mPlane, *on, step);
         if (mStep == Step::Footprint && !mFixedU)
             mU = mPlane.u, mV = mPlane.v;
+        mAutoDepth = (mods & Qt::ShiftModifier) ? 0.0 : carveDepth();
+    }
+
+    /** How deep a carve goes to come out the far side of the block it was drawn on, or 0 when it is drawn off a block. */
+    double carveDepth() const
+    {
+        if (settings().mode != Mode::Carve || (mStep != Step::Footprint && mStep != Step::Profile))
+            return 0.0;
+        Node* n = graph().node(mSurface);
+        if (!n || !isBlock(*n))
+            return 0.0;
+        std::vector<glm::dvec3> points = mProfile;
+        if (mStep == Step::Footprint)
+        {
+            const Frame f = frame();
+            points = {f.origin, f.origin + f.u * f.size.x, f.origin + f.u * f.size.x + f.v * f.size.y, f.origin + f.v * f.size.y};
+        }
+        points.push_back(mCursor);
+        glm::dvec3 mid(0.0);
+        for (const glm::dvec3& p : points)
+            mid += p;
+        points.push_back(mid / double(points.size()));
+        const double d = depthThrough(worldOut(mSurface), points, -mPlane.normal);
+        // A little past the far side, so the cut never leaves a skin on it.
+        return d > 0.0 ? d + 0.5 : 0.0;
+    }
+
+    /** The outline is done: carve straight through when the depth is known, else ask for the height. */
+    void finishOutline(const glm::dvec3& base)
+    {
+        mBase = base;
+        mStep = Step::Height;
+        if (mAutoDepth > 0.0)
+        {
+            mHeight = -mAutoDepth;
+            build();
+        }
     }
 
     void pickFace(const surfaceSnap::Hit& hit)
@@ -585,16 +622,14 @@ private:
         case Step::Footprint:
             if (footprintSize() < 1e-6 && !mFixedU)
                 break;
-            mBase = mCursor;
-            mStep = Step::Height;
+            finishOutline(mCursor);
             break;
         case Step::Profile:
             if (mProfile.size() >= 3)
                 if (auto first = mView.project(mProfile.front()), now = mView.project(mCursor); first && now &&
                     std::hypot(first->x() - now->x(), first->y() - now->y()) < 10.0)
                 {
-                    mBase = mProfile.back();
-                    mStep = Step::Height;
+                    finishOutline(mProfile.back());
                     break;
                 }
             if (glm::length(mCursor - mProfile.back()) > 1e-6)
@@ -614,7 +649,7 @@ private:
         f.v = mV;
         f.normal = mPlane.normal;
         const glm::dvec3 d = (mStep == Step::Height ? mBase : mCursor) - mA;
-        f.size = {mFixedU ? mEdgeLength : glm::dot(d, mU), glm::dot(d, mV), mStep == Step::Height ? mHeight : 0.0};
+        f.size = {mFixedU ? mEdgeLength : glm::dot(d, mU), glm::dot(d, mV), mStep == Step::Height ? mHeight : -mAutoDepth};
         return f;
     }
 
@@ -968,7 +1003,7 @@ private:
         if (mStep != Step::Footprint && mStep != Step::Height)
             return;
         const Frame f = frame();
-        if (mStep == Step::Footprint)
+        if (mStep == Step::Footprint && mAutoDepth <= 0.0)
         {
             const glm::dvec3 a = f.origin, b = a + f.u * f.size.x, c = b + f.v * f.size.y, d = a + f.v * f.size.y;
             addLine(s, a, b, ink, ink), addLine(s, b, c, ink, ink), addLine(s, c, d, ink, ink), addLine(s, d, a, ink, ink);
@@ -984,7 +1019,7 @@ private:
             if (t < o.thickness)
                 size += "  frame " + cm(t);
         }
-        label(p, view, mBase + f.normal * f.size.z, size);
+        label(p, view, (mStep == Step::Height ? mBase : mCursor) + f.normal * f.size.z, size);
         if (set.mode == Mode::Carve && !m.empty())
         {
             const glm::vec4 warn = themeLinear("warning", {1.0f, 0.4f, 0.2f, 1.0f});
@@ -1095,7 +1130,11 @@ private:
                 st.keys.insert(st.keys.begin(), {"J", "join the last block into what it touches"});
             break;
         case Step::Edge: st.prompt = "click the edge's end"; break;
-        case Step::Footprint: st.prompt = "click the opposite corner"; break;
+        case Step::Footprint:
+            st.prompt = mAutoDepth > 0.0 ? "click the opposite corner to cut through" : "click the opposite corner";
+            if (s.mode == Mode::Carve)
+                st.keys.insert(st.keys.begin(), {"Shift", "set the depth"});
+            break;
         case Step::Height:
             st.prompt = "click the height";
             st.keys.insert(st.keys.begin(), {"Tab", "turn"});
@@ -1137,6 +1176,9 @@ private:
     glm::dvec3 mCursor{0.0}, mA{0.0}, mBase{0.0}, mU{1.0, 0.0, 0.0}, mV{0.0, 0.0, 1.0};
     bool mFixedU = false;
     double mEdgeLength = 0.0, mHeight = 0.0;
+    /** Carve's depth through the block it is drawn on; 0 asks for the depth by hand. */
+    double mAutoDepth = 0.0;
+    NodeId mSurface = kNoNode;
     std::vector<glm::dvec3> mProfile;
     int mClipKeep = 0;
     HoverFace mHoverFace, mDragFace;

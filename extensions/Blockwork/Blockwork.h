@@ -140,6 +140,8 @@ void hardenEdges(lila::geo::Mesh& mesh, double angle = 40.0);
 lila::geo::Mesh hollow(const lila::geo::Mesh& mesh, double thickness, bool inward, const std::vector<lila::geo::Index>& open);
 /** Cuts along the plane and keeps the side the normal points to (keep > 0), the other (keep < 0); the cut is capped. */
 lila::geo::Mesh clip(const lila::geo::Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, int keep);
+/** How far rays from the points travel along dir before leaving the mesh; the furthest, or 0 when none leaves it. */
+double depthThrough(const lila::geo::Mesh& mesh, const std::vector<glm::dvec3>& points, const glm::dvec3& dir);
 /** The face of the mesh that point lies on, facing along normal; kInvalid when none does. */
 lila::geo::Index faceAt(const lila::geo::Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, double tolerance = 0.5);
 /** Faces of a whose every corner lies on an opposite-facing coplanar face of b. */
