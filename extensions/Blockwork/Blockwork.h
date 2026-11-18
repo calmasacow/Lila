@@ -109,6 +109,8 @@ struct ShapeOptions
     double stepHeight = 0.0;
     /** Arch: width of the frame around the opening, cm. */
     double thickness = 25.0;
+    /** Arch: the opening itself, rounded at the top of the footprint and as deep as the height, for carving doorways. */
+    bool opening = false;
     /** Quarter turns of the shape's direction around the normal (stairs climb, wedge slope, arch opening). */
     int direction = 0;
     /** Prism: the profile, in the frame's (u, v) plane relative to its origin. */

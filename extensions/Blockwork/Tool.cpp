@@ -546,6 +546,8 @@ private:
     ShapeOptions shapeOptions() const
     {
         ShapeOptions o = settings().options;
+        // Carving with an arch cuts a doorway.
+        o.opening = settings().mode == Mode::Carve;
         for (const glm::dvec3& p : mProfile)
             o.profile.push_back({glm::dot(p - mA, mU), glm::dot(p - mA, mV)});
         return o;
@@ -566,7 +568,9 @@ private:
             call["radiusToCorners"] = o.radiusToCorners, call["skipCaps"] = o.skipCaps, call["ngonCaps"] = o.ngonCaps;
         if (s.shape == Shape::Stairs)
             call["steps"] = o.steps;
-        if (s.shape == Shape::Arch)
+        if (s.shape == Shape::Arch && o.opening)
+            call["opening"] = true;
+        else if (s.shape == Shape::Arch)
             call["thickness"] = o.thickness;
         if (o.direction)
             call["direction"] = o.direction;

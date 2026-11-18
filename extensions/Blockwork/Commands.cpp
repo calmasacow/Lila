@@ -113,6 +113,7 @@ void registerCommands(ext::Context& ctx)
                   {"steps", "", T::Int, 8, "Stairs: number of steps; 0 takes it from stepHeight.", {}, {}, 0, 512},
                   {"stepHeight", "", T::Float, 0.0, "Stairs: rise per step, cm, when steps is 0.", {}, {}, 0.0},
                   {"thickness", "", T::Float, 25.0, "Arch: frame width around the opening, cm.", {}, {}, 0.0},
+                  {"opening", "", T::Bool, false, "Arch: the opening instead of the frame, round at the far end of the footprint, run through the height; for carving doorways."},
                   {"direction", "d", T::Int, 0, "Quarter turns of the stairs' climb, the wedge's slope or the arch's opening.", {}, {}, 0, 3},
                   {"profile", "p", T::List, nullptr, "Prism: the outline as [[u, v], ...] from origin, cm; concave works."},
                   {"name", "", T::String, "block1", "Node name."},
@@ -149,6 +150,7 @@ void registerCommands(ext::Context& ctx)
             o.stepHeight = a.get<double>("stepHeight", 0.0);
             o.thickness = a.get<double>("thickness", 25.0);
             o.direction = a.get<int>("direction", 0);
+            o.opening = a.get<bool>("opening", false);
             if (a.has("profile"))
                 for (const json& p : a.flags["profile"])
                     o.profile.push_back({p.at(0).get<double>(), p.at(1).get<double>()});

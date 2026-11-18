@@ -347,6 +347,24 @@ TEST_CASE("blockwork: a prism stays on the outline drawn, whichever way the last
     CHECK(b.max.z == Approx(132));
 }
 
+TEST_CASE("blockwork: carving an arch into a wall cuts a doorway up the wall")
+{
+    fresh();
+    const std::string b = box({0, 0, 0}, {256, 256, 128});
+    const std::string door = run("blockworkBlock", {{"shape", "arch"}, {"origin", {80, 0, 128}}, {"size", {96, 192, -128}}, {"normal", {0, 0, 1}},
+                                                    {"uAxis", {1, 0, 0}}, {"opening", true}, {"name", "cutter1"}})
+                                 .get<std::string>();
+    const geo::Bounds d = worldBounds(door);
+    CHECK(d.min.x == Approx(80));
+    CHECK(d.max.x == Approx(176));
+    CHECK(d.max.y == Approx(192));
+    CHECK(d.min.z == Approx(0));
+    CHECK(d.max.z == Approx(128));
+    run("blockworkCarve", {{"args", {door}}});
+    CHECK(closed(out(b)));
+    CHECK(run("meshCheck", {{"args", {b}}})["shells"] == 1);
+}
+
 TEST_CASE("blockwork: join merges touching blocks")
 {
     fresh();

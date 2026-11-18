@@ -53,7 +53,7 @@ constexpr std::array<TileDef, 6> kShapeTiles = {{
     {"Box", "box", "a box"},
     {"Wedge", "triangle", "a ramp sloping down across the footprint"},
     {"Cylinder", "cylinder", "a cylinder in the footprint; Shift+wheel sets the sides"},
-    {"Arch", "building-arch", "a doorway with a round top; Shift+wheel sets the curve's sides"},
+    {"Arch", "building-arch", "a doorway with a round top, or carved, its opening; Shift+wheel sets the curve's sides"},
     {"Stairs", "stairs", "stairs climbing across the footprint; Shift+wheel sets the steps, Tab turns them"},
     {"Prism", "polygon", "click any outline, concave too, then the height"},
 }};

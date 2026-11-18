@@ -332,6 +332,21 @@ Mesh buildShape(Shape shape, Frame f, const ShapeOptions& o)
     }
     case Shape::Arch:
     {
+        if (o.opening)
+        {
+            // The doorway: the footprint's width, round at the far end across it, run through the height.
+            const double r = W * 0.5, spring = std::max(0.0, D - r), rise = std::min(r, D);
+            std::vector<glm::dvec2> prof = {{0, 0}, {W, 0}, {W, spring}};
+            const int segs = std::max(2, o.sides);
+            for (int i = 1; i < segs; ++i)
+            {
+                const double a = glm::pi<double>() * double(i) / segs;
+                prof.push_back({r + r * std::cos(a), spring + rise * std::sin(a)});
+            }
+            prof.push_back({0, spring});
+            m = extrudeProfile(prof, O, U, V, N, h);
+            break;
+        }
         // A doorway: a frame thickness wide around an opening with a round top, open at the floor. Profile in (U, N).
         const double t = std::clamp(o.thickness, 0.0, W * 0.49);
         const double ow = W - 2.0 * t, r = ow * 0.5;
