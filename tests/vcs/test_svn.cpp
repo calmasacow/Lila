@@ -153,6 +153,12 @@ const char* kNeedsLock = R"(<?xml version="1.0" encoding="UTF-8"?>
 </properties>
 )";
 
+std::string TempReadAll(const fs::path& p)
+{
+    std::ifstream f(p, std::ios::binary);
+    return {std::istreambuf_iterator<char>(f), {}};
+}
+
 FileStatus find(const std::vector<FileStatus>& all, const fs::path& p)
 {
     for (const FileStatus& s : all)
@@ -423,6 +429,20 @@ TEST_CASE("svn: real client round trip")
     std::ifstream f(old, std::ios::binary);
     CHECK(std::string(std::istreambuf_iterator<char>(f), {}) == "one\n");
     CHECK(svn.history(a).size() == 1);
+
+    if (findExecutable("svnmucc").empty())
+    {
+        MESSAGE("svnmucc not on PATH; shelving skipped");
+        return;
+    }
+    std::ofstream(a, std::ios::binary | std::ios::trunc) << "shelved\n";
+    OpResult shelved = svn.shelve("wip", {a});
+    CHECK_FALSE(shelved.change.empty());
+    svn.revert({a});
+    svn.unshelve("wip");
+    std::ifstream back(a, std::ios::binary);
+    CHECK(std::string(std::istreambuf_iterator<char>(back), {}) == "shelved\n");
+    CHECK(svn.status({a}).at(0).changelist == "wip");
 }
 
 namespace
@@ -498,4 +518,121 @@ TEST_CASE("svn: default submit refuses a commit that would sweep in a named chan
     CHECK_THROWS_AS(svnDefaultSubmit(wc, svnStatusXml({{"Gone", "deleted"}, {"Gone/a.txt", "deleted"}, {"Art", "props"}}, "wip",
                                                       {{"Art/Fx.txt", "modified"}})),
                     VcsError);
+}
+
+namespace
+{
+const char* kInfoRoot = R"(<?xml version="1.0" encoding="UTF-8"?>
+<info><entry kind="dir" path="." revision="7"><url>https://svn.example.invalid/game/trunk</url>
+<repository><root>https://svn.example.invalid/game</root><uuid>u</uuid></repository></entry></info>
+)";
+
+bool isMucc(const ProcessSpec& s)
+{
+    return s.argv.front().find("svnmucc") != std::string::npos;
+}
+
+std::vector<std::string> muccArgs(const ProcessSpec& s)
+{
+    auto it = std::find(s.argv.begin(), s.argv.end(), "-X");
+    std::ifstream f(*(it + 1), std::ios::binary);
+    std::vector<std::string> out;
+    for (std::string l; std::getline(f, l);)
+        out.push_back(l);
+    return out;
+}
+} // namespace
+
+TEST_CASE("svn: shelve writes the changed files and their actions in one commit")
+{
+    FakeWc wc;
+    wc.write("Art/Hero @1.uasset", "hero v2");
+    wc.write("New.txt", "new");
+    auto runner = std::make_shared<SvnFakeRunner>();
+    std::vector<std::string> mucc;
+    runner->answer = [&](const ProcessSpec& s) {
+        if (isMucc(s))
+        {
+            mucc = muccArgs(s);
+            return svnOk("r12 committed by me at 2026-11-19T00:00:00.000000Z\n");
+        }
+        std::string cmd = SvnFakeRunner::command(s);
+        if (cmd == "info" && SvnFakeRunner::has(s, "."))
+            return svnOk(kInfoRoot);
+        if (cmd == "info") // the shelves folder exists, this user's does not
+            return svnOk("", SvnFakeRunner::has(s, "https://svn.example.invalid/game/shelves@") ? 0 : 1);
+        if (cmd == "status")
+            return svnOk(svnStatusXml({{"Art/Hero @1.uasset", "modified"}, {"New.txt", "added"}, {"Gone.txt", "deleted"}}));
+        return svnOk("");
+    };
+    SvnSettings settings;
+    settings.user = "me";
+    SvnProvider svn(wc.root, settings, runner);
+    OpResult r = svn.shelve("default", {wc.root / "Art" / "Hero @1.uasset", wc.root / "New.txt", wc.root / "Gone.txt"});
+    CHECK(r.change == "12");
+    CHECK(r.files.size() == 3);
+
+    const std::string shelf = "https://svn.example.invalid/game/shelves/me/default";
+    auto at = [&](const std::string& a) { return std::find(mucc.begin(), mucc.end(), a); };
+    CHECK(at("https://svn.example.invalid/game/shelves") == mucc.end());
+    CHECK(at("https://svn.example.invalid/game/shelves/me") != mucc.end());
+    CHECK(at(shelf + "/Art") != mucc.end());
+    CHECK(at(shelf + "/Art/Hero%20%401.uasset") != mucc.end());
+    CHECK(at(shelf + "/New.txt") != mucc.end());
+    CHECK(at(shelf + "/Gone.txt") == mucc.end());
+    auto prop = at("lila:shelf");
+    REQUIRE(prop != mucc.end());
+    json meta = json::parse(*(prop + 1));
+    REQUIRE(meta["files"].size() == 3);
+    CHECK(meta["files"][0]["path"] == "Art/Hero @1.uasset");
+    CHECK(meta["files"][0]["action"] == "edit");
+    CHECK(meta["files"][2]["action"] == "delete");
+}
+
+TEST_CASE("svn: unshelve writes files, adds, deletes and skips local changes")
+{
+    FakeWc wc;
+    wc.write("Hero.uasset", "hero v1");
+    wc.write("Busy.txt", "mine");
+    wc.write("Gone.txt", "old");
+    json meta = {{"name", "wip"},
+                 {"files", json::array({{{"path", "Hero.uasset"}, {"action", "edit"}, {"rev", "5"}},
+                                        {{"path", "Busy.txt"}, {"action", "edit"}, {"rev", "7"}},
+                                        {{"path", "sub/New.txt"}, {"action", "add"}, {"rev", ""}},
+                                        {{"path", "Gone.txt"}, {"action", "delete"}, {"rev", "7"}}})}};
+    auto runner = std::make_shared<SvnFakeRunner>();
+    runner->answer = [&](const ProcessSpec& s) {
+        std::string cmd = SvnFakeRunner::command(s);
+        if (cmd == "info")
+            return svnOk(kInfoRoot);
+        if (cmd == "propget" && SvnFakeRunner::has(s, "svn:needs-lock"))
+            return svnOk("", 1);
+        if (cmd == "propget")
+            return svnOk(meta.dump() + "\n");
+        if (cmd == "status")
+            return svnOk(svnStatusXml({{"Hero.uasset", "normal"}, {"Busy.txt", "modified"}, {"Gone.txt", "normal"}}));
+        if (cmd == "cat")
+            return svnOk(s.argv.back().find("Hero") != std::string::npos ? "hero v2" : "new file");
+        return svnOk("");
+    };
+    SvnSettings settings;
+    settings.user = "me";
+    SvnProvider svn(wc.root, settings, runner);
+    OpResult r = svn.unshelve("alice/wip");
+    CHECK(r.change == "wip");
+    CHECK(TempReadAll(wc.root / "Hero.uasset") == "hero v2");
+    CHECK(TempReadAll(wc.root / "sub" / "New.txt") == "new file");
+    CHECK(TempReadAll(wc.root / "Busy.txt") == "mine");
+    REQUIRE(r.warnings.size() == 2);
+    CHECK(r.warnings[0].find("r5") != std::string::npos);
+    CHECK(r.warnings[1].find("local changes") != std::string::npos);
+
+    REQUIRE(runner->of("propget").size() >= 1);
+    CHECK(SvnFakeRunner::has(runner->of("propget")[0], "https://svn.example.invalid/game/shelves/alice/wip@"));
+    REQUIRE(runner->of("add").size() == 1);
+    CHECK(SvnFakeRunner::has(runner->of("add")[0], "sub/New.txt@"));
+    REQUIRE(runner->of("delete").size() == 1);
+    CHECK(SvnFakeRunner::has(runner->of("delete")[0], "Gone.txt@"));
+    REQUIRE(runner->of("changelist").size() == 1);
+    CHECK(SvnFakeRunner::has(runner->of("changelist")[0], "wip"));
 }

@@ -36,7 +36,7 @@ enum class WriteAccess : uint8_t
  *   {"provider": "auto" | "perforce" | "git" | "svn" | "none",
  *    "perforce": {"port": "", "user": "", "client": "", "charset": "", "exe": ""},
  *    "git": {"exe": ""},
- *    "svn": {"exe": ""},
+ *    "svn": {"exe": "", "shelfRoot": "^/shelves", "user": ""},
  *    "autoCheckout": "always" | "prompt" | "never",
  *    "autoAdd": true}
  * "auto" uses Perforce when `p4 where` maps the directory, else the nearest git work tree or svn working copy.

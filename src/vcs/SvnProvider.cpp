@@ -196,6 +196,62 @@ std::string exeOf(const SvnSettings& s)
     return "svn";
 }
 
+std::string muccExeOf(const SvnSettings& s)
+{
+    std::error_code ec;
+    if (!s.exe.empty())
+    {
+        fs::path sibling = fs::path(s.exe).parent_path() / ("svnmucc" + fs::path(s.exe).extension().string());
+        if (fs::is_regular_file(sibling, ec))
+            return sibling.string();
+    }
+    if (fs::path p = findExecutable("svnmucc"); !p.empty())
+        return p.string();
+#ifdef _WIN32
+    for (const char* p : {"C:/Program Files/TortoiseSVN/bin/svnmucc.exe", "C:/Program Files/SlikSvn/bin/svnmucc.exe"})
+        if (fs::is_regular_file(p, ec))
+            return p;
+#endif
+    return "svnmucc";
+}
+
+/** Percent-encodes a relative path for a URL, keeping the slashes. @ is encoded so it never reads as a peg revision. */
+std::string urlPath(const std::string& rel)
+{
+    static const char* hex = "0123456789ABCDEF";
+    std::string out;
+    for (unsigned char c : rel)
+    {
+        if (c == '\\')
+            c = '/';
+        if (std::isalnum(c) || std::strchr("-._~/!$&'()*+,;=:", c))
+            out += char(c);
+        else
+            out += {'%', hex[c >> 4], hex[c & 15]};
+    }
+    return out;
+}
+
+/** A file of lines, removed when this goes out of scope. */
+struct LinesFile
+{
+    fs::path path;
+
+    explicit LinesFile(const std::vector<std::string>& lines, bool pegged)
+    {
+        std::random_device rd;
+        path = fs::temp_directory_path() / ("lila_svn_args_" + std::to_string(rd()) + ".txt");
+        std::ofstream out(path, std::ios::binary);
+        for (const std::string& l : lines)
+            out << (pegged ? l + "@" : l) << '\n';
+    }
+    ~LinesFile()
+    {
+        std::error_code ec;
+        fs::remove(path, ec);
+    }
+};
+
 /** A trailing @ stops svn reading an @ inside the name as a peg revision. */
 std::string peg(const std::string& path)
 {
@@ -208,38 +264,26 @@ bool changed(const std::string& item, const std::string& props)
     return !quiet.contains(item) || (props != "" && props != "none" && props != "normal");
 }
 
-/** A file of targets for --targets, removed when this goes out of scope. */
-struct TargetsFile
-{
-    fs::path path;
-
-    explicit TargetsFile(const std::vector<std::string>& targets)
-    {
-        std::random_device rd;
-        path = fs::temp_directory_path() / ("lila_svn_targets_" + std::to_string(rd()) + ".txt");
-        std::ofstream out(path, std::ios::binary);
-        for (const std::string& t : targets)
-            out << peg(t) << '\n';
-    }
-    ~TargetsFile()
-    {
-        std::error_code ec;
-        fs::remove(path, ec);
-    }
-};
 } // namespace svnx
 
 SvnSettings SvnSettings::fromJson(const json& j)
 {
     SvnSettings s;
-    if (j.is_object() && j.contains("exe") && j["exe"].is_string())
-        s.exe = j["exe"].get<std::string>();
+    if (!j.is_object())
+        return s;
+    auto str = [&](const char* k, std::string& out) {
+        if (j.contains(k) && j[k].is_string() && !j[k].get<std::string>().empty())
+            out = j[k].get<std::string>();
+    };
+    str("exe", s.exe);
+    str("shelfRoot", s.shelfRoot);
+    str("user", s.user);
     return s;
 }
 
 json SvnSettings::toJson() const
 {
-    return {{"exe", exe}};
+    return {{"exe", exe}, {"shelfRoot", shelfRoot}, {"user", user}};
 }
 
 SvnProvider::SvnProvider(fs::path root, SvnSettings settings, std::shared_ptr<ProcessRunner> runner)
@@ -758,7 +802,7 @@ OpResult SvnProvider::submit(const std::string& changelist, const std::string& d
         else
             for (const fs::path& f : files)
                 commitTargets.push_back(rel(f));
-        for (const Changelist& c : changelists({}))
+        for (const Changelist& c : localChangelists())
             if (c.id == changelist)
                 for (const std::string& f : c.files)
                     if (files.empty() || std::any_of(files.begin(), files.end(), [&](const fs::path& g) {
@@ -802,7 +846,7 @@ OpResult SvnProvider::submit(const std::string& changelist, const std::string& d
     }
     else
     {
-        std::vector<Changelist> lists = changelists({});
+        std::vector<Changelist> lists = localChangelists();
         const Changelist* def = lists.empty() ? nullptr : &lists.front();
         if (!def || def->files.empty())
             throw VcsError("svn: nothing to submit in the default changelist");
@@ -821,7 +865,7 @@ OpResult SvnProvider::submit(const std::string& changelist, const std::string& d
         }
     }
 
-    svnx::TargetsFile list(commitTargets);
+    svnx::LinesFile list(commitTargets, true);
     args.insert(args.end(), {"--targets", list.path.string()});
     std::string out = run(args);
     std::smatch m;
@@ -874,7 +918,7 @@ OpResult SvnProvider::sync(const std::vector<fs::path>& files, const fs::path&)
     return res;
 }
 
-std::vector<Changelist> SvnProvider::changelists(const fs::path&)
+std::vector<Changelist> SvnProvider::localChangelists()
 {
     LILA_ZONE();
 
@@ -977,6 +1021,330 @@ OpResult SvnProvider::moveToChangelist(const std::vector<fs::path>& files, const
     run(args);
     for (const fs::path& f : files)
         res.files.push_back(f.string());
+    return res;
+}
+
+std::vector<Changelist> SvnProvider::changelists(const fs::path&)
+{
+    LILA_ZONE();
+
+    std::vector<Changelist> out = localChangelists();
+    for (Changelist& shelf : shelves())
+    {
+        auto it = std::find_if(out.begin(), out.end(), [&](const Changelist& c) { return c.id == shelf.id; });
+        if (it != out.end())
+            it->shelved = true;
+        else
+            out.push_back(std::move(shelf));
+    }
+    return out;
+}
+
+std::string SvnProvider::runMucc(const std::string& message, const std::vector<std::string>& args)
+{
+    LILA_ZONE();
+
+    svnx::LinesFile extra(args, false);
+    ProcessSpec spec;
+    spec.argv = {svnx::muccExeOf(mSettings), "--non-interactive", "-m", message, "-X", extra.path.string()};
+    spec.cwd = mRoot;
+    spec.env = {{"LANGUAGE", "en"}, {"LC_MESSAGES", "C"}};
+    ProcessResult r = mRunner->run(spec);
+    if (!r.started)
+        throw VcsError("svn: shelving needs svnmucc, which is not installed or not on PATH. It ships with the svn "
+                       "command-line client (TortoiseSVN: the command line client tools option) " + trim(r.err));
+    if (r.exitCode != 0)
+    {
+        std::string msg = trim(r.err.empty() ? r.out : r.err);
+        throw VcsError("svnmucc: " + (msg.empty() ? "exited with code " + std::to_string(r.exitCode) : msg));
+    }
+    return r.out;
+}
+
+std::string SvnProvider::repositoryRoot()
+{
+    {
+        std::scoped_lock lock(mMutex);
+        if (!mRepositoryRoot.empty())
+            return mRepositoryRoot;
+    }
+    svnx::Node doc = svnx::parseXml(run({"info", "--xml", "."}));
+    const svnx::Node* infoNode = doc.child("info");
+    const svnx::Node* entry = infoNode ? infoNode->child("entry") : nullptr;
+    const svnx::Node* repo = entry ? entry->child("repository") : nullptr;
+    std::string root = repo ? trim(repo->childText("root")) : std::string();
+    if (root.empty())
+        throw VcsError("svn: can't read the repository root of " + mRoot.string());
+    std::scoped_lock lock(mMutex);
+    mRepositoryRoot = root;
+    return root;
+}
+
+std::string SvnProvider::shelfUser() const
+{
+    std::string u = mSettings.user;
+    if (u.empty())
+        for (const char* var : {"USERNAME", "USER"})
+            if (const char* v = std::getenv(var); v && *v)
+            {
+                u = v;
+                break;
+            }
+    for (char& c : u)
+        if (!std::isalnum((unsigned char)c) && c != '.' && c != '-' && c != '_')
+            c = '_';
+    if (u.empty())
+        throw VcsError("svn: no user name for shelves; set svn.user in the source control prefs");
+    return u;
+}
+
+std::string SvnProvider::shelfUrl(const std::string& shelf)
+{
+    std::string name = trim(shelf.empty() ? std::string("default") : shelf);
+    if (name.find("..") != std::string::npos || name.starts_with('/') || name.ends_with('/'))
+        throw VcsError("svn: bad shelf name \"" + name + "\"");
+    std::string base = mSettings.shelfRoot;
+    if (base.starts_with("^/"))
+        base = repositoryRoot() + base.substr(1);
+    while (base.ends_with('/'))
+        base.pop_back();
+    if (name.find('/') == std::string::npos)
+        name = shelfUser() + "/" + name;
+    return base + "/" + svnx::urlPath(name);
+}
+
+std::vector<Changelist> SvnProvider::shelves()
+{
+    LILA_ZONE();
+
+    std::vector<Changelist> out;
+    {
+        std::scoped_lock lock(mMutex);
+        if (std::chrono::steady_clock::now() < mOfflineUntil)
+            return out;
+    }
+    std::string mine;
+    try
+    {
+        mine = shelfUrl("x");
+        mine = mine.substr(0, mine.rfind('/'));
+    }
+    catch (const VcsError&)
+    {
+        return out;
+    }
+    int code = 0;
+    std::string xml;
+    try
+    {
+        xml = run({"propget", "lila:shelf", "--xml", "--depth", "immediates", mine + "@"}, &code, 15000);
+    }
+    catch (const VcsError&)
+    {
+        return out;
+    }
+    // A missing shelf folder only means no shelves yet.
+    svnx::Node doc = svnx::parseXml(xml);
+    const svnx::Node* props = doc.child("properties");
+    if (!props)
+        return out;
+    for (const svnx::Node& t : props->children)
+    {
+        const svnx::Node* p = t.child("property");
+        json meta = json::parse(p ? p->text : std::string(), nullptr, false);
+        if (t.name != "target" || !meta.is_object())
+            continue;
+        Changelist c;
+        c.id = meta.value("name", std::string());
+        c.description = meta.value("description", std::string());
+        c.user = meta.value("user", std::string());
+        c.shelved = true;
+        for (const json& f : meta.value("files", json::array()))
+            c.files.push_back(abs(f.value("path", std::string())).string());
+        if (!c.id.empty())
+            out.push_back(std::move(c));
+    }
+    return out;
+}
+
+OpResult SvnProvider::shelve(const std::string& changelist, const std::vector<fs::path>& files)
+{
+    LILA_ZONE();
+
+    const std::string name = changelist.empty() ? std::string("default") : changelist;
+    std::vector<std::string> rels;
+    if (files.empty())
+    {
+        for (const Changelist& c : localChangelists())
+            if (c.id == name)
+                for (const std::string& f : c.files)
+                    rels.push_back(rel(f));
+    }
+    else
+    {
+        for (const fs::path& f : files)
+            rels.push_back(rel(f));
+    }
+
+    OpResult res;
+    std::map<std::string, Entry> entries = statusEntries(rels, false, false);
+    json list = json::array();
+    std::vector<std::string> puts;
+    std::set<std::string> dirs;
+    std::error_code ec;
+    for (const std::string& r : rels)
+    {
+        auto it = entries.find(svnx::key(r));
+        const fs::path local = abs(r);
+        if (it == entries.end() || it->second.item == "unversioned" || it->second.item == "ignored")
+        {
+            res.warnings.push_back(local.string() + ": not tracked, not shelved");
+            continue;
+        }
+        const Entry& e = it->second;
+        if (e.props != "" && e.props != "none" && e.props != "normal")
+            res.warnings.push_back(local.string() + ": property changes are not shelved");
+        std::string action;
+        if (e.item == "deleted" || e.item == "missing")
+            action = "delete";
+        else if (fs::is_directory(local, ec))
+            continue;
+        else if (e.item == "added")
+            action = "add";
+        else if (e.item == "modified" || e.item == "replaced" || e.item == "conflicted" || e.item == "merged")
+            action = "edit";
+        else
+            continue;
+        std::string g = fs::path(r).generic_string();
+        list.push_back({{"path", g}, {"action", action}, {"rev", e.revision}});
+        res.files.push_back(local.string());
+        if (action == "delete")
+            continue;
+        puts.push_back(g);
+        for (fs::path p = fs::path(g).parent_path(); !p.empty(); p = p.parent_path())
+            dirs.insert(p.generic_string());
+    }
+    if (list.empty())
+        throw VcsError("svn: nothing to shelve in " + name);
+
+    const std::string shelf = shelfUrl(name);
+    const std::string user = shelf.substr(0, shelf.rfind('/'));
+    const std::string top = user.substr(0, user.rfind('/'));
+    auto exists = [&](const std::string& url) {
+        int code = 0;
+        run({"info", "--xml", url + "@"}, &code, 30000);
+        return code == 0;
+    };
+    std::vector<std::string> args;
+    if (!exists(top))
+        args.insert(args.end(), {"mkdir", top});
+    if (args.size() || !exists(user))
+        args.insert(args.end(), {"mkdir", user});
+    if (args.empty() && exists(shelf))
+        args.insert(args.end(), {"rm", shelf});
+    args.insert(args.end(), {"mkdir", shelf});
+    // std::set orders every folder before the folders inside it.
+    for (const std::string& d : dirs)
+        args.insert(args.end(), {"mkdir", shelf + "/" + svnx::urlPath(d)});
+    for (const std::string& g : puts)
+        args.insert(args.end(), {"put", abs(g).string(), shelf + "/" + svnx::urlPath(g)});
+    json meta = {{"version", 1},
+                 {"name", name},
+                 {"user", shelfUser()},
+                 {"description", name},
+                 {"time", std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count()},
+                 {"files", list}};
+    args.insert(args.end(), {"propset", "lila:shelf", meta.dump(), shelf});
+
+    std::string out = runMucc("Shelve " + shelfUser() + "/" + name, args);
+    std::smatch m;
+    if (std::regex_search(out, m, std::regex(R"(r(\d+) committed)")))
+        res.change = m[1].str();
+    return res;
+}
+
+OpResult SvnProvider::unshelve(const std::string& changelist)
+{
+    LILA_ZONE();
+
+    const std::string shelf = shelfUrl(changelist);
+    json meta = json::parse(trim(run({"propget", "lila:shelf", shelf + "@"})), nullptr, false);
+    if (!meta.is_object() || !meta.contains("files"))
+        throw VcsError("svn: " + shelf + " is not a shelf");
+    const std::string name = meta.value("name", changelist.substr(changelist.rfind('/') + 1));
+
+    std::vector<std::string> rels;
+    for (const json& f : meta["files"])
+        rels.push_back(f.value("path", std::string()));
+    std::map<std::string, Entry> entries = statusEntries(rels, false, false);
+
+    OpResult res;
+    std::vector<fs::path> added, removed, touched;
+    std::error_code ec;
+    for (const json& f : meta["files"])
+    {
+        const std::string r = f.value("path", std::string());
+        const std::string action = f.value("action", std::string());
+        const fs::path local = abs(r);
+        auto it = entries.find(svnx::key(r));
+        const bool tracked = it != entries.end() && it->second.item != "unversioned" && it->second.item != "ignored" &&
+                             it->second.item != "none";
+        if (tracked && svnx::changed(it->second.item, it->second.props))
+        {
+            res.warnings.push_back(local.string() + ": has local changes, skipped");
+            continue;
+        }
+        if (action == "delete")
+        {
+            if (tracked)
+                removed.push_back(local);
+            continue;
+        }
+        if (action == "add" && (tracked || fs::exists(local, ec)))
+        {
+            res.warnings.push_back(local.string() + ": already exists, skipped");
+            continue;
+        }
+        if (action == "edit")
+        {
+            if (!tracked)
+            {
+                res.warnings.push_back(local.string() + ": not in this working copy, skipped");
+                continue;
+            }
+            const std::string rev = f.value("rev", std::string());
+            if (!rev.empty() && rev != it->second.revision)
+                res.warnings.push_back(local.string() + ": shelved against r" + rev + ", working copy has r" + it->second.revision);
+            OpResult co = checkout({local});
+            if (!co.warnings.empty())
+            {
+                res.warnings.insert(res.warnings.end(), co.warnings.begin(), co.warnings.end());
+                continue;
+            }
+        }
+        std::string blob = run({"cat", shelf + "/" + svnx::urlPath(r) + "@"});
+        fs::create_directories(local.parent_path(), ec);
+        std::ofstream out(local, std::ios::binary | std::ios::trunc);
+        if (!out || !out.write(blob.data(), std::streamsize(blob.size())))
+        {
+            res.warnings.push_back(local.string() + ": can't write");
+            continue;
+        }
+        out.close();
+        (action == "add" ? added : touched).push_back(local);
+    }
+    if (!added.empty())
+        add(added);
+    if (!removed.empty())
+        remove(removed);
+    for (const std::vector<fs::path>* v : {&touched, &added, &removed})
+        for (const fs::path& p : *v)
+            res.files.push_back(p.string());
+    std::vector<fs::path> listed = touched;
+    listed.insert(listed.end(), added.begin(), added.end());
+    if (name != "default" && !listed.empty())
+        moveToChangelist(listed, name);
+    res.change = name;
     return res;
 }
 } // namespace lila::vcs

@@ -197,8 +197,8 @@ void registerCommands()
         .flags = {
             {"create", "", T::String, nullptr, "Create a changelist with this description; returns its number (svn: its name)."},
             {"move", "", T::String, nullptr, "Move the given files into this changelist."},
-            {"shelve", "", T::String, nullptr, "Shelve this changelist (Perforce), optionally only the given files."},
-            {"unshelve", "", T::String, nullptr, "Unshelve this changelist into itself (Perforce)."},
+            {"shelve", "", T::String, nullptr, "Shelve this changelist (Perforce; svn: to <shelfRoot>/<user>/<name> in the repository), optionally only the given files."},
+            {"unshelve", "", T::String, nullptr, "Unshelve this changelist into itself (Perforce; svn: a shelf name, or user/name for someone else's)."},
             pathFlag(),
         },
         .undoable = false,
