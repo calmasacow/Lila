@@ -849,6 +849,8 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         choiceField(viewport, "LOD groups show by default", lodDisplay::kMode,
                {{"The level for their screen size", "screenSize"}, {"A fixed level", "level"}, {"All levels", "all"}}, "screenSize");
         numberField(viewport, "Fixed level", lodDisplay::kLevel, 0.0, 0.0, double(scene::lod::kMaxLevels - 1), 1.0, 0);
+        sectionHeader(viewport, "Displacement Preview");
+        intChoiceField(viewport, "Height size for paged sets", "/texture/displacementPreviewSize", {{"2048 px", 2048}, {"4096 px", 4096}, {"8192 px", 8192}}, 4096);
         sectionHeader(viewport, "Selection");
         toggleField(viewport, "Marquee selects edges and faces it touches (off: only those whose centre it covers)", "/select/marqueeTouch", true);
         toggleField(viewport, "Camera-based selection (component marquees skip what is hidden behind surfaces)", "/select/cameraBased", false);
