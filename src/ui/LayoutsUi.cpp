@@ -474,6 +474,8 @@ void LayoutController::applyColumns(const json& columns)
 
 void LayoutController::applyPreset(const json& preset)
 {
+    // Qt's dock layout must not re-enter the event loop while it rearranges: events run there can delete what it uses.
+    const progress::NoPump noPump;
     holdOwnColumns(mWindow);
     mReset();
     std::set<std::string> open;
