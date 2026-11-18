@@ -2,6 +2,8 @@
 
 #include <lila/Components.h>
 #include <lila/Controls.h>
+#include <lila/Deformer.h>
+#include <lila/Undo.h>
 #include <lila/FileDialog.h>
 #include <lila/Icons.h>
 #include <lila/Log.h>
