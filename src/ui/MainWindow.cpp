@@ -331,6 +331,11 @@ void MainWindow::createPanelDock(const panels::Panel& p)
         setDockDocs(d, p.docs);
     if (p.ownColumn)
         keepOwnColumn(d);
+    // A saved window state that predates this dock never places it, so it joins its side's tab group now instead of a split of its own.
+    else if (!restoreDockWidget(d) && !p.floatFirst && !p.toolPalette && (p.area == Qt::LeftDockWidgetArea || p.area == Qt::RightDockWidgetArea))
+        if (QDockWidget* group = findChild<QDockWidget*>(p.area == Qt::LeftDockWidgetArea ? kModelingToolkitDock : kChannelBoxDock);
+            group && group != d && dockWidgetArea(group) == p.area && !group->isFloating())
+            tabifyDockWidget(group, d);
     if (p.place)
         p.place(d);
     if (!p.open)
