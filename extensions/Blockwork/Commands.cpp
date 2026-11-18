@@ -91,23 +91,6 @@ geo::Mesh booleanInto(Graph& g, NodeId base, const std::vector<geo::Mesh>& other
 }
 } // namespace
 
-void planeBasis(const glm::dvec3& normal, glm::dvec3& u, glm::dvec3& v)
-{
-    const glm::dvec3 n = glm::normalize(normal);
-    const glm::dvec3 a = glm::abs(n);
-    if (a.y >= a.x && a.y >= a.z)
-        u = {1.0, 0.0, 0.0};
-    else if (a.x >= a.z)
-        u = {0.0, 0.0, 1.0};
-    else
-        u = {1.0, 0.0, 0.0};
-    u = glm::normalize(u - n * glm::dot(u, n));
-    v = glm::normalize(glm::cross(n, u));
-    // Across runs along a positive world axis (+Z on floors, +Y on walls), whichever way the surface faces.
-    if (v.x + v.y + v.z < 0.0)
-        v = -v;
-}
-
 void registerCommands(ext::Context& ctx)
 {
     using T = ArgType;
@@ -155,7 +138,7 @@ void registerCommands(ext::Context& ctx)
                 if (glm::length(u) < 1e-9)
                     throw CommandError("blockworkBlock: uAxis runs along the normal");
                 f.u = glm::normalize(u);
-                f.v = glm::normalize(glm::cross(f.normal, f.u));
+                f.v = acrossAxis(f.normal, f.u);
             }
             ShapeOptions o;
             o.sides = a.get<int>("sides", 12);

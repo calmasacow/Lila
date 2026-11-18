@@ -119,6 +119,28 @@ TEST_CASE("blockwork: negative sizes and flat blocks")
     CHECK_THROWS(box({0, 0, 0}, {0, 0, 64}, "line"));
 }
 
+TEST_CASE("blockwork: a footprint drawn on a wall builds where the tool drew it")
+{
+    fresh();
+    for (const glm::dvec3 n : {glm::dvec3(1, 0, 0), glm::dvec3(-1, 0, 0), glm::dvec3(0, 0, 1), glm::dvec3(0, 0, -1)})
+    {
+        glm::dvec3 u, v;
+        blockwork::planeBasis(n, u, v);
+        const std::string b = run("blockworkBlock", {{"origin", {0, 0, 0}}, {"size", {16, 16, 64}}, {"normal", {n.x, n.y, n.z}}, {"uAxis", {u.x, u.y, u.z}}}).get<std::string>();
+        geo::Bounds want;
+        for (double a : {0.0, 16.0})
+            for (double c : {0.0, 16.0})
+                for (double h : {0.0, 64.0})
+                    want.extend(u * a + v * c + n * h);
+        const geo::Bounds got = worldBounds(b);
+        for (int i = 0; i < 3; ++i)
+        {
+            CHECK(got.min[i] == Approx(want.min[i]));
+            CHECK(got.max[i] == Approx(want.max[i]));
+        }
+    }
+}
+
 TEST_CASE("blockwork: shapes are closed")
 {
     fresh();

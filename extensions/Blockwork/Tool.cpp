@@ -501,7 +501,7 @@ private:
             if (glm::length(d) < 1e-6)
                 break;
             mU = glm::normalize(d);
-            mV = glm::normalize(glm::cross(mPlane.normal, mU));
+            mV = acrossAxis(mPlane.normal, mU);
             mEdgeLength = glm::length(d);
             mFixedU = true;
             mStep = Step::Footprint;

@@ -81,6 +81,27 @@ std::vector<glm::dvec3> facePositions(const Mesh& m, Index f)
 }
 } // namespace
 
+void planeBasis(const glm::dvec3& normal, glm::dvec3& u, glm::dvec3& v)
+{
+    const glm::dvec3 n = glm::normalize(normal);
+    const glm::dvec3 a = glm::abs(n);
+    if (a.y >= a.x && a.y >= a.z)
+        u = {1.0, 0.0, 0.0};
+    else if (a.x >= a.z)
+        u = {0.0, 0.0, 1.0};
+    else
+        u = {1.0, 0.0, 0.0};
+    u = glm::normalize(u - n * glm::dot(u, n));
+    v = acrossAxis(n, u);
+}
+
+glm::dvec3 acrossAxis(const glm::dvec3& normal, const glm::dvec3& u)
+{
+    const glm::dvec3 v = glm::normalize(glm::cross(glm::normalize(normal), u));
+    // Across runs along a positive world axis (+Z on floors, +Y on walls), whichever way the surface faces.
+    return v.x + v.y + v.z < 0.0 ? -v : v;
+}
+
 FaceMapping faceMapping(const Mesh& mesh, Index f)
 {
     FaceMapping m;

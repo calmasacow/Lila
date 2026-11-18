@@ -135,6 +135,8 @@ std::vector<lila::geo::Index> coveredFaces(const lila::geo::Mesh& a, const lila:
 
 /** In-plane directions for a footprint on a surface facing normal: the world axis lying in the plane first. */
 void planeBasis(const glm::dvec3& normal, glm::dvec3& u, glm::dvec3& v);
+/** The footprint's across direction for a side direction u, on a positive world axis whichever way the surface faces. */
+glm::dvec3 acrossAxis(const glm::dvec3& normal, const glm::dvec3& u);
 
 // Grid.
 /** The grid step, cm, in powers of two from 1/8 to 4096 (default 16). */
