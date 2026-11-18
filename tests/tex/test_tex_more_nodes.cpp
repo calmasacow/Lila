@@ -150,7 +150,7 @@ float grayOf(const Graph& g, const std::string& plug)
     return texel(eval(into(g, plug), "Output", "baseColor", 4, PortType::Gray), 1, 1)[0];
 }
 
-image::Image flat(float r, float g, float b)
+image::Image flatImage(float r, float g, float b)
 {
     image::Image img{4, 4, {}, {}};
     for (int k = 0; k < 16; ++k)
@@ -166,8 +166,8 @@ float fresnelAt(json values)
     Plan p = plan(into(g, "F.out"), "Output", "baseColor", 4, PortType::Gray);
     REQUIRE_MESSAGE(p.error.empty(), p.error);
     EvalOptions o;
-    o.externals["worldNormal"] = flat(0.5f, 0.5f, 1.0f);
-    o.externals["position"] = flat(0.5f, 0.5f, 0.5f);
+    o.externals["worldNormal"] = flatImage(0.5f, 0.5f, 1.0f);
+    o.externals["position"] = flatImage(0.5f, 0.5f, 0.5f);
     return texel(evaluateCpu(p, o).outputs.at("out"), 1, 1)[0];
 }
 } // namespace

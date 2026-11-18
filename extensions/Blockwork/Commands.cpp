@@ -40,7 +40,7 @@ std::vector<Index> faceArg(const Args& a, NodeId mesh)
     return out;
 }
 
-std::string pathOf(Graph& g, NodeId id) { return g.fullPath(id); }
+std::string graphPathOf(Graph& g, NodeId id) { return g.fullPath(id); }
 
 /** Meshes in the scene other than skip whose world bounds overlap box (grown by pad). */
 std::vector<NodeId> overlapping(Graph& g, const geo::Bounds& box, const std::vector<NodeId>& skip, double pad, bool blocksOnly)
@@ -195,7 +195,7 @@ void registerCommands(ext::Context& ctx)
             const NodeId id = createBlock(g, std::move(m), a.get<std::string>("name", "block1") + a.get<std::string>("suffix", ""), parent,
                                           a.get<std::string>("material", ""));
             g.select({id});
-            return pathOf(g, id);
+            return graphPathOf(g, id);
         },
         .adjustable = true,
         .examples = {"blockworkBlock(origin=[0, 0, 0], size=[512, 384, 256])", "blockworkBlock(shape='stairs', size=[128, 256, 128], steps=8)",
@@ -219,7 +219,7 @@ void registerCommands(ext::Context& ctx)
                 if (m.empty())
                     throw CommandError("blockworkHollow: " + g.node(id)->name() + " has no faces to wall");
                 setBaseMesh(g, id, std::move(m));
-                out.push_back(pathOf(g, id));
+                out.push_back(graphPathOf(g, id));
             }
             if (out.empty())
                 throw CommandError("blockworkHollow: select a block");
@@ -260,18 +260,18 @@ void registerCommands(ext::Context& ctx)
                     geo::Mesh back = clip(base, p, n, -1);
                     if (!back.empty() && back.numFaces() > 0 && front.numFaces() > 0)
                     {
-                        const json dup = ops::execute("duplicate", {{"args", {pathOf(g, id)}}});
+                        const json dup = ops::execute("duplicate", {{"args", {graphPathOf(g, id)}}});
                         const std::string copy = dup.is_array() ? dup.at(0).get<std::string>() : dup.get<std::string>();
                         setBaseMesh(g, g.find(copy)->id(), std::move(back));
                         made.push_back(copy);
                     }
                 }
                 if (front.numFaces() == 0)
-                    ops::execute("delete", {{"args", {pathOf(g, id)}}});
+                    ops::execute("delete", {{"args", {graphPathOf(g, id)}}});
                 else
                 {
                     setBaseMesh(g, id, std::move(front));
-                    out.push_back(pathOf(g, id));
+                    out.push_back(graphPathOf(g, id));
                 }
             }
             if (out.empty() && made.empty())
@@ -310,14 +310,14 @@ void registerCommands(ext::Context& ctx)
                 geo::Mesh r = booleanInto(g, t, {inT}, BooleanOp::Difference, "blockworkCarve");
                 if (r.numFaces() == 0)
                 {
-                    ops::execute("delete", {{"args", {pathOf(g, t)}}});
+                    ops::execute("delete", {{"args", {graphPathOf(g, t)}}});
                     continue;
                 }
                 setBaseMesh(g, t, std::move(r));
-                out.push_back(pathOf(g, t));
+                out.push_back(graphPathOf(g, t));
             }
             if (!a.get<bool>("keep", false))
-                ops::execute("delete", {{"args", {pathOf(g, cutter)}}});
+                ops::execute("delete", {{"args", {graphPathOf(g, cutter)}}});
             return out;
         },
         .examples = {"blockworkCarve('doorCutter')"},
@@ -343,9 +343,9 @@ void registerCommands(ext::Context& ctx)
                 others.push_back(meshIn(g, ids[i], ids[0]));
             setBaseMesh(g, ids[0], booleanInto(g, ids[0], others, BooleanOp::Union, "blockworkJoin"));
             for (size_t i = 1; i < ids.size(); ++i)
-                ops::execute("delete", {{"args", {pathOf(g, ids[i])}}});
+                ops::execute("delete", {{"args", {graphPathOf(g, ids[i])}}});
             g.select({ids[0]});
-            return pathOf(g, ids[0]);
+            return graphPathOf(g, ids[0]);
         },
         .examples = {"blockworkJoin(['room1', 'corridor1'])"},
     });
@@ -391,7 +391,7 @@ void registerCommands(ext::Context& ctx)
                     if (m.pointValid(p))
                         m.setPosition(p, m.position(p) + delta[p]);
                 setBaseMesh(g, id, std::move(m));
-                return pathOf(g, id);
+                return graphPathOf(g, id);
             }
             geo::ExtrudeOptions opts;
             opts.offset = d;
@@ -400,7 +400,7 @@ void registerCommands(ext::Context& ctx)
                 geo::extrudeFaces(m, faces, opts);
                 hardenEdges(m);
                 setBaseMesh(g, id, std::move(m));
-                return pathOf(g, id);
+                return graphPathOf(g, id);
             }
             geo::ExtrudeCopy c = geo::extrudeCopy(m, faces, opts, true);
             // Close the copy where it met the source, then build it as its own block.
@@ -419,7 +419,7 @@ void registerCommands(ext::Context& ctx)
             hardenEdges(c.mesh);
             const NodeId made = createBlock(g, std::move(c.mesh), g.node(id)->name(), g.parent(id), {});
             g.select({made});
-            return pathOf(g, made);
+            return graphPathOf(g, made);
         },
         .adjustable = true,
         .examples = {"blockworkExtend('block1', faces=[1], distance=64)", "blockworkExtend('block1', faces=[1], distance=128, mode='copy')"},
@@ -443,7 +443,7 @@ void registerCommands(ext::Context& ctx)
                             faces.push_back(f);
                 geo::flipNormals(m, faces);
                 setBaseMesh(g, id, std::move(m));
-                out.push_back(pathOf(g, id));
+                out.push_back(graphPathOf(g, id));
             }
             return out;
         },
