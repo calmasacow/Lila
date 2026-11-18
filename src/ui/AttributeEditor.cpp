@@ -1497,6 +1497,8 @@ void AttributeEditor::rebuild()
             mFocus = scene::kNoNode;
     }
     mBadges.clear();
+    if (shownNode() != mNode)
+        mArrayRows.clear();
     mNode = shownNode();
     if (!mNavigating && mNode != scene::kNoNode && (mHistoryAt < 0 || mHistory[size_t(mHistoryAt)] != mNode))
     {
@@ -2055,6 +2057,12 @@ void AttributeEditor::rebuild()
         heading->setToolTip(QString::fromStdString(def.doc));
         form->addRow(heading);
         int added = 1;
+        // A row per element of a 70k-element USD primvar freezes the editor, so long arrays show a page at a time.
+        constexpr size_t kFirstRows = 50, kMoreRows = 200;
+        const size_t limit = mArrayRows.try_emplace(addPlug, kFirstRows).first->second;
+        const size_t hidden = indices.size() > limit ? indices.size() - limit : 0;
+        const int last = indices.empty() ? -1 : indices.back();
+        indices.resize(indices.size() - hidden);
         for (int i : indices)
         {
             if (dot == std::string::npos)
@@ -2067,6 +2075,18 @@ void AttributeEditor::rebuild()
                     added += addRow(form, cd, i, QString("[%1] %2").arg(i).arg(child)) ? 1 : 0;
                 }
         }
+        if (hidden > 0)
+        {
+            auto* more = new QToolButton;
+            more->setText(QString("Show %L1 More").arg(std::min(hidden, kMoreRows)));
+            more->setToolTip("Show the next elements of this array");
+            connect(more, &QToolButton::clicked, this, [this, addPlug, step = kMoreRows] {
+                mArrayRows[addPlug] += step;
+                mRebuild = true;
+                scheduleRefresh();
+            });
+            form->addRow(QString("%L1 more").arg(hidden), more);
+        }
         // Only arrays that hold values can grow here; connection-only ones grow by connecting.
         bool addable = true;
         for (int c : children)
@@ -2078,7 +2098,7 @@ void AttributeEditor::rebuild()
             add->setText("Add");
             add->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
             add->setToolTip("Add an element after the last one");
-            const int next = indices.empty() ? 0 : indices.back() + 1;
+            const int next = last + 1;
             connect(add, &QToolButton::clicked, this, [this, children, next] { addElement(children, next); });
             form->addRow(QString(), add);
         }

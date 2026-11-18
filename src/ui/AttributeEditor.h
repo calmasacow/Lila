@@ -155,6 +155,8 @@ private:
     /** Count badges of the last multi-object edits, by attribute, kept until the selection changes. */
     std::map<std::string, int> mBadgeCounts;
     std::map<std::string, QLabel*> mBadges;
+    /** Element rows shown per array attribute of mNode, raised by its Show More button; long arrays start capped. */
+    std::map<std::string, size_t> mArrayRows;
     int mViewListener = 0;
     std::string mViewSig;
     struct SearchRow
