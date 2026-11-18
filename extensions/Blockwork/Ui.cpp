@@ -70,7 +70,7 @@ QFormLayout* form(QWidget* w)
 constexpr const char* kModeActions[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend",
                                         "blockwork.paint", "blockwork.align", "blockwork.entity", "blockwork.prefab"};
 constexpr const char* kModeKeys[] = {"B", "C", "X", "G", "A", "A twice", "E", "F"};
-constexpr const char* kShapeKeys[] = {"1", "2", "3", "4", "Ctrl+1", "Ctrl+2"};
+constexpr const char* kShapeKeys[] = {"1", "2", "3", "Ctrl+1", "Ctrl+2", "Ctrl+3"};
 
 class Toolkit final : public QWidget
 {

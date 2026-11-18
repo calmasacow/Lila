@@ -381,7 +381,7 @@ private:
     bool anyKey(int k, Qt::KeyboardModifiers mods) { return alignKey(k, mods) || modeKey(k, mods) || key(k, mods); }
 
     /**
-     * Hammer-style mode letters: B C X G A E F, S leaves the tool. Shapes: 1-4 Box to Arch, Ctrl+1-2 Stairs and Prism,
+     * Hammer-style mode letters: B C X G A E F, S leaves the tool. Shapes: 1-3 Box to Cylinder, Ctrl+1-3 Arch to Prism (4 stays wireframe),
      * Shift+B and Ctrl+B step forward and back.
      */
     bool modeKey(int k, Qt::KeyboardModifiers mods)
@@ -393,8 +393,8 @@ private:
         const int shapes = int(shapeNames().size());
         if (k == Qt::Key_B && (ctrl != shift))
             return pickShape((int(s.shape) + (shift ? 1 : shapes - 1)) % shapes);
-        if (!shift && k >= Qt::Key_1 && k <= (ctrl ? Qt::Key_2 : Qt::Key_4))
-            return pickShape((k - Qt::Key_1) + (ctrl ? int(Shape::Stairs) : int(Shape::Box)));
+        if (!shift && k >= Qt::Key_1 && k <= Qt::Key_3)
+            return pickShape((k - Qt::Key_1) + (ctrl ? int(Shape::Arch) : int(Shape::Box)));
         if (ctrl || shift)
             return false;
         switch (k)
@@ -1087,7 +1087,7 @@ private:
                 }
             }
             if (s.mode == Mode::Block || s.mode == Mode::Carve)
-                st.keys.insert(st.keys.begin(), {{"Shift+click", "start an angled edge"}, {"1-4 Ctrl+1-2", "shape"}});
+                st.keys.insert(st.keys.begin(), {{"Shift+click", "start an angled edge"}, {"1-3 Ctrl+1-3", "shape"}});
             st.keys.push_back({"B C X G A E F", "modes"});
             if (s.mode == Mode::Extend)
                 st.keys.insert(st.keys.begin(), {{"Shift", "extrude"}, {"Ctrl", "copy as a block"}});
