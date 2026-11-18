@@ -299,6 +299,41 @@ TEST_CASE("blockwork: carve cuts every block the cutter overlaps")
     CHECK(out(other).numFaces() == 6);
 }
 
+TEST_CASE("blockwork: carving a wedge into a face takes out the wedge")
+{
+    auto volume = [](const geo::Mesh& m, const glm::dmat4& w) {
+        double v = 0.0;
+        for (Index f = 0; f < m.faceCapacity(); ++f)
+        {
+            if (!m.faceValid(f))
+                continue;
+            std::vector<glm::dvec3> p;
+            m.forEachFaceCorner(f, [&](Index c) { p.push_back(glm::dvec3(w * glm::dvec4(m.position(m.cornerPoint(c)), 1.0))); });
+            for (size_t i = 1; i + 1 < p.size(); ++i)
+                v += glm::dot(p[0], glm::cross(p[i], p[i + 1])) / 6.0;
+        }
+        return v;
+    };
+    const glm::dvec3 centre(128, 128, 128);
+    for (const glm::dvec3 n : {glm::dvec3(1, 0, 0), glm::dvec3(-1, 0, 0), glm::dvec3(0, 0, 1), glm::dvec3(0, 0, -1), glm::dvec3(0, 1, 0)})
+    {
+        CAPTURE(n);
+        fresh();
+        const std::string b = box({0, 0, 0}, {256, 256, 256});
+        glm::dvec3 u, v;
+        blockwork::planeBasis(n, u, v);
+        const glm::dvec3 o = centre + n * 128.0 - u * 32.0 - v * 32.0;
+        const std::string cutter = run("blockworkBlock", {{"shape", "wedge"}, {"origin", {o.x, o.y, o.z}}, {"size", {64, 64, -96}}, {"normal", {n.x, n.y, n.z}},
+                                                          {"uAxis", {u.x, u.y, u.z}}, {"name", "cutter1"}})
+                                       .get<std::string>();
+        run("blockworkCarve", {{"args", {cutter}}});
+        geo::Mesh m = out(b);
+        CHECK(closed(m));
+        CHECK(run("meshCheck", {{"args", {b}}})["shells"] == 1);
+        CHECK(volume(m, g().find(b)->as<glm::dmat4>(Transform::kWorldMatrix)) == Approx(256.0 * 256.0 * 256.0 - 0.5 * 64 * 64 * 96).epsilon(1e-6));
+    }
+}
+
 TEST_CASE("blockwork: join merges touching blocks")
 {
     fresh();

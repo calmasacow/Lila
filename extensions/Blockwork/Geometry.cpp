@@ -264,8 +264,9 @@ Mesh buildShape(Shape shape, Frame f, const ShapeOptions& o)
         f.origin += f.u * f.size.x, f.size.x = -f.size.x;
     if (f.size.y < 0.0)
         f.origin += f.v * f.size.y, f.size.y = -f.size.y;
+    // A negative height grows the shape from the surface the other way, so its base stays on the surface it was drawn on.
     if (f.size.z < 0.0)
-        f.origin += f.normal * f.size.z, f.size.z = -f.size.z;
+        f.normal = -f.normal, f.size.z = -f.size.z;
     const double w = f.size.x, d = f.size.y, h = f.size.z;
     // Turn the footprint so the shape's own direction (stairs climbing toward +v) faces the requested quarter.
     glm::dvec3 U = f.u, V = f.v, O = f.origin;
