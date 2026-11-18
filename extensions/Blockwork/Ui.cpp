@@ -10,12 +10,12 @@
 
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLineEdit>
 #include <QPointer>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -29,7 +29,7 @@ using namespace lila::ui;
 
 namespace
 {
-constexpr const char* kSections = "blockworkPalette";
+constexpr const char* kSections = "blockworkToolkit";
 
 struct TileDef
 {
@@ -58,21 +58,6 @@ constexpr std::array<TileDef, 6> kShapeTiles = {{
     {"Prism", "polygon", "click any outline, concave too, then the height"},
 }};
 
-QToolButton* tileButton(const TileDef& d, QWidget* parent)
-{
-    auto* b = new QToolButton(parent);
-    b->setIcon(icon(d.icon));
-    b->setIconSize(QSize(24, 24));
-    b->setText(d.label);
-    b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    b->setCheckable(true);
-    b->setFocusPolicy(Qt::NoFocus);
-    controls::setRole(b, "tile");
-    b->setToolTip(QString("%1: %2").arg(d.label, d.tip));
-    return b;
-}
-
 QFormLayout* form(QWidget* w)
 {
     auto* f = new QFormLayout(w);
@@ -82,74 +67,42 @@ QFormLayout* form(QWidget* w)
     return f;
 }
 
-class Palette final : public QWidget
+constexpr const char* kModeActions[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend",
+                                        "blockwork.paint", "blockwork.align", "blockwork.entity", "blockwork.prefab"};
+
+class Toolkit final : public QWidget
 {
 public:
-    explicit Palette(QWidget* parent) : QWidget(parent)
+    explicit Toolkit(QWidget* parent) : QWidget(parent)
     {
         auto* v = new QVBoxLayout(this);
-        v->setContentsMargins(12, 8, 12, 8);
+        v->setContentsMargins(8, 4, 8, 8);
         v->setSpacing(4);
 
-        std::vector<QWidget*> modes;
-        for (size_t i = 0; i < kModeTiles.size(); ++i)
-        {
-            mModes[i] = tileButton(kModeTiles[i], this);
-            connect(mModes[i], &QToolButton::clicked, this, [i] { startTool(Mode(i)); });
-            modes.push_back(mModes[i]);
-        }
-        v->addWidget(controls::section("Tools", controls::grid(modes, 3, this), this, kSections));
+        auto modeRows = [this](std::initializer_list<Mode> modes, QWidget* box, std::vector<QWidget*> extra = {}) {
+            std::vector<QWidget*> rows;
+            for (Mode m : modes)
+                rows.push_back(mModes[size_t(m)] = controls::row(kModeActions[size_t(m)], nullptr, box, kModeTiles[size_t(m)].label));
+            rows.insert(rows.end(), extra.begin(), extra.end());
+            return controls::grid(rows, kColumns, box);
+        };
+        auto vbox = [](QWidget* w) {
+            auto* l = new QVBoxLayout(w);
+            l->setContentsMargins(0, 0, 0, 0);
+            l->setSpacing(6);
+            return l;
+        };
 
-        std::vector<QWidget*> shapes;
-        for (size_t i = 0; i < kShapeTiles.size(); ++i)
-        {
-            mShapes[i] = tileButton(kShapeTiles[i], this);
-            connect(mShapes[i], &QToolButton::clicked, this, [i] { startTool(Shape(i)); });
-            shapes.push_back(mShapes[i]);
-        }
-        mShapeSection = controls::section("Shapes", controls::grid(shapes, 3, this), this, kSections);
-        v->addWidget(mShapeSection);
-
-        auto* entBox = new QWidget(this);
-        auto* entForm = form(entBox);
-        mClass = new QComboBox(entBox);
-        mClass->setToolTip("Class: what the Entity tool places, from the entity definition files");
-        connect(mClass, &QComboBox::activated, this, [this](int) {
-            settings().entityClass = mClass->currentData().toString().toStdString();
-            saveSettings();
-            startTool(Mode::Entity);
-        });
-        entForm->addRow("Class", mClass);
-        auto* entRow = new QWidget(entBox);
-        auto* er = new QHBoxLayout(entRow);
-        er->setContentsMargins(0, 0, 0, 0);
-        er->setSpacing(2);
-        for (const char* id : {"blockwork.makeVolume", "blockwork.sendEntities"})
-        {
-            QToolButton* b = controls::push(id, entRow);
-            b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-            er->addWidget(b);
-        }
-        entForm->addRow("", entRow);
-        mEntitySection = controls::section("Entities", entBox, this, kSections);
-        v->addWidget(mEntitySection);
-
-        auto* gridBox = new QWidget(this);
-        auto* gridForm = form(gridBox);
-        mGrid = controls::valueField(0.125, 4096.0, 3, "cm", gridBox);
-        controls::setPresets(mGrid, {0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096});
-        mGrid->setToolTip("Grid: the step every Blockwork tool and move snapping use  ([ and ] while the tool is on)");
-        connect(mGrid, &QDoubleSpinBox::valueChanged, this, [](double s) { ops::execute("blockworkGrid", {{"step", s}}, CallSource::UI); });
-        gridForm->addRow("Step", mGrid);
-        mSnap = new controls::Segmented(gridBox);
-        mSnap->add("Lines", {}, "Moves snap onto grid lines", 1);
-        mSnap->add("Steps", {}, "Moves snap by whole grid steps from where they start", 0);
-        connect(mSnap, &controls::Segmented::picked, this, [](int id) { ops::execute("blockworkGrid", {{"absolute", id == 1}}, CallSource::UI); });
-        gridForm->addRow("Snap", mSnap);
-        v->addWidget(controls::section("Grid", gridBox, this, kSections));
-
-        mShapeBox = new QWidget(this);
+        auto* build = new QWidget(this);
+        auto* buildV = vbox(build);
+        buildV->addWidget(modeRows({Mode::Block, Mode::Carve, Mode::Clip, Mode::Extend}, build));
+        mShapeBox = new QWidget(build);
         mShapeForm = form(mShapeBox);
+        mShapes = new controls::Segmented(mShapeBox);
+        for (size_t i = 0; i < kShapeTiles.size(); ++i)
+            mShapes->add({}, kShapeTiles[i].icon, QString("%1: %2").arg(kShapeTiles[i].label, kShapeTiles[i].tip), int(i));
+        connect(mShapes, &controls::Segmented::picked, this, [](int i) { startTool(Shape(i)); });
+        mShapeForm->addRow("Shape", mShapes);
         auto intField = [&](double lo, double hi, const char* tip) {
             QDoubleSpinBox* f = controls::valueField(lo, hi, 0, {}, mShapeBox);
             f->setToolTip(tip);
@@ -173,40 +126,67 @@ public:
         mCaps->setToolTip("Caps: close the cylinder's ends");
         connect(mCaps, &QCheckBox::clicked, this, [](bool on) { settings().options.skipCaps = !on, saveSettings(); });
         mShapeForm->addRow("", mCaps);
-        mShapeSettings = controls::section("Shape", mShapeBox, this, kSections);
-        v->addWidget(mShapeSettings);
+        buildV->addWidget(mShapeBox);
+        v->addWidget(controls::section("Build", build, this, kSections));
 
-        auto* buildBox = new QWidget(this);
-        auto* buildForm = form(buildBox);
-        mSuffix = new QLineEdit(buildBox);
+        auto* texture = new QWidget(this);
+        vbox(texture)->addWidget(modeRows({Mode::Paint, Mode::Align}, texture, {controls::row("blockwork.textures", nullptr, texture, "Textures")}));
+        v->addWidget(controls::section("Texture", texture, this, kSections));
+
+        auto* place = new QWidget(this);
+        auto* placeV = vbox(place);
+        placeV->addWidget(modeRows({Mode::Entity, Mode::Prefab}, place, {controls::row("blockwork.prefabs", "folders", place, "Prefabs")}));
+        mEntityBox = new QWidget(place);
+        auto* entForm = form(mEntityBox);
+        mClass = new QComboBox(mEntityBox);
+        mClass->setToolTip("Class: what the Entity tool places, from the entity definition files");
+        connect(mClass, &QComboBox::activated, this, [this](int) {
+            settings().entityClass = mClass->currentData().toString().toStdString();
+            saveSettings();
+            startTool(Mode::Entity);
+        });
+        entForm->addRow("Class", mClass);
+        entForm->addRow("", controls::grid({controls::push("blockwork.makeVolume", mEntityBox), controls::push("blockwork.sendEntities", mEntityBox)},
+                                           kColumns, mEntityBox));
+        placeV->addWidget(mEntityBox);
+        v->addWidget(controls::section("Place", place, this, kSections));
+
+        auto* gridBox = new QWidget(this);
+        auto* gridForm = form(gridBox);
+        mGrid = controls::valueField(0.125, 4096.0, 3, "cm", gridBox);
+        controls::setPresets(mGrid, {0.125, 0.25, 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096});
+        mGrid->setToolTip("Grid: the step every Blockwork tool and move snapping use  ([ and ] while the tool is on)");
+        connect(mGrid, &QDoubleSpinBox::valueChanged, this, [](double s) { ops::execute("blockworkGrid", {{"step", s}}, CallSource::UI); });
+        gridForm->addRow("Step", mGrid);
+        mSnap = new controls::Segmented(gridBox);
+        mSnap->add("Lines", {}, "Moves snap onto grid lines", 1);
+        mSnap->add("Steps", {}, "Moves snap by whole grid steps from where they start", 0);
+        connect(mSnap, &controls::Segmented::picked, this, [](int id) { ops::execute("blockworkGrid", {{"absolute", id == 1}}, CallSource::UI); });
+        gridForm->addRow("Snap", mSnap);
+        v->addWidget(controls::section("Grid", gridBox, this, kSections));
+
+        auto* edit = new QWidget(this);
+        vbox(edit)->addWidget(controls::grid({controls::row("blockwork.hollow", "box-multiple", edit), controls::row("blockwork.join", "box", edit, "Join"),
+                                              controls::row("blockwork.flip", "arrows-exchange", edit, "Flip")},
+                                             kColumns, edit));
+        v->addWidget(controls::section("Blocks", edit, this, kSections));
+
+        auto* newBox = new QWidget(this);
+        auto* newForm = form(newBox);
+        mSuffix = new QLineEdit(newBox);
         mSuffix->setPlaceholderText("none");
         mSuffix->setToolTip("Suffix: added to new blocks' names, such as _col for engines that read collision from names");
         connect(mSuffix, &QLineEdit::editingFinished, this, [this] { settings().suffix = mSuffix->text().trimmed().toStdString(), saveSettings(); });
-        buildForm->addRow("Suffix", mSuffix);
-        mFlip = new QCheckBox("Faces Inward", buildBox);
+        newForm->addRow("Suffix", mSuffix);
+        mFlip = new QCheckBox("Faces Inward", newBox);
         mFlip->setToolTip("Faces Inward: new blocks face inside, for rooms seen from within");
         connect(mFlip, &QCheckBox::clicked, this, [](bool on) { settings().flip = on, saveSettings(); });
-        buildForm->addRow("", mFlip);
-        mOverlap = new QCheckBox("Remove Touching Faces", buildBox);
+        newForm->addRow("", mFlip);
+        mOverlap = new QCheckBox("Remove Touching Faces", newBox);
         mOverlap->setToolTip("Remove Touching Faces: faces of a new block pressed against another block's go, from both");
         connect(mOverlap, &QCheckBox::clicked, this, [](bool on) { settings().removeOverlap = on, saveSettings(); });
-        buildForm->addRow("", mOverlap);
-        v->addWidget(controls::section("New Blocks", buildBox, this, kSections, false));
-
-        auto* edit = new QWidget(this);
-        auto* editV = new QVBoxLayout(edit);
-        editV->setContentsMargins(0, 0, 0, 0);
-        editV->setSpacing(2);
-        std::vector<QWidget*> rows = {controls::row("blockwork.hollow", "box-multiple", edit), controls::row("blockwork.join", "box", edit),
-                                      controls::row("blockwork.flip", "arrows-exchange", edit)};
-        editV->addWidget(controls::grid(rows, 2, edit));
-        auto* hollowForm = form(new QWidget(edit));
-        mHollow = controls::valueField(0.01, 1e5, 1, "cm", edit);
-        mHollow->setToolTip("Walls: the thickness Hollow gives the walls");
-        connect(mHollow, &QDoubleSpinBox::valueChanged, this, [](double x) { settings().hollowThickness = x, saveSettings(); });
-        hollowForm->addRow("Walls", mHollow);
-        editV->addWidget(hollowForm->parentWidget());
-        v->addWidget(controls::section("Blocks", edit, this, kSections));
+        newForm->addRow("", mOverlap);
+        v->addWidget(controls::section("New Blocks", newBox, this, kSections, false));
         v->addStretch();
         sync();
     }
@@ -216,12 +196,15 @@ public:
         const Settings& s = settings();
         const bool active = viewportTools::activeId() == kToolId;
         for (size_t i = 0; i < mModes.size(); ++i)
-            mModes[i]->setChecked(active && int(s.mode) == int(i));
+            if (mModes[i])
+                mModes[i]->setChecked(active && int(s.mode) == int(i));
         const bool shaped = s.mode == Mode::Block || s.mode == Mode::Carve;
-        for (size_t i = 0; i < mShapes.size(); ++i)
-            mShapes[i]->setChecked(shaped && int(s.shape) == int(i));
-        mShapeSection->setEnabled(shaped);
-        mEntitySection->setVisible(s.mode == Mode::Entity);
+        {
+            const QSignalBlocker b(mShapes);
+            mShapes->setCurrent(int(s.shape));
+        }
+        mShapeBox->setVisible(shaped);
+        mEntityBox->setVisible(s.mode == Mode::Entity);
         {
             const QSignalBlocker b(mClass);
             mClass->clear();
@@ -230,7 +213,7 @@ public:
             mClass->setCurrentIndex(std::max(0, mClass->findData(QString::fromStdString(s.entityClass))));
         }
         for (auto [box, value] : {std::pair<QDoubleSpinBox*, double>{mGrid, gridStep()}, {mSides, double(s.options.sides)},
-                                  {mSteps, double(s.options.steps)}, {mThickness, s.options.thickness}, {mHollow, s.hollowThickness}})
+                                  {mSteps, double(s.options.steps)}, {mThickness, s.options.thickness}})
         {
             const QSignalBlocker block(box);
             box->setValue(value);
@@ -246,31 +229,36 @@ public:
         mOverlap->setChecked(s.removeOverlap);
         // Only the drawn shape's own settings show.
         const bool round = s.shape == Shape::Cylinder || s.shape == Shape::Arch;
-        const std::pair<QWidget*, bool> rows[] = {{mSides, round}, {mSteps, s.shape == Shape::Stairs}, {mThickness, s.shape == Shape::Arch},
+        const std::pair<QWidget*, bool> rows[] = {{mSides, round}, {mSteps, s.shape == Shape::Stairs}, {mThickness, s.shape == Shape::Arch && s.mode != Mode::Carve},
                                                   {mCorners, s.shape == Shape::Cylinder}, {mCaps, s.shape == Shape::Cylinder}};
-        bool any = false;
         for (auto [w, shown] : rows)
-        {
-            mShapeForm->setRowVisible(w, shown && shaped);
-            any = any || (shown && shaped);
-        }
-        mShapeSettings->setVisible(any);
+            mShapeForm->setRowVisible(w, shown);
     }
 
 private:
+    static constexpr int kColumns = 2;
     std::array<QToolButton*, kModeTiles.size()> mModes{};
-    std::array<QToolButton*, kShapeTiles.size()> mShapes{};
-    QWidget *mShapeSection = nullptr, *mShapeBox = nullptr, *mShapeSettings = nullptr;
+    controls::Segmented *mShapes = nullptr, *mSnap = nullptr;
+    QWidget *mShapeBox = nullptr, *mEntityBox = nullptr;
     QFormLayout* mShapeForm = nullptr;
-    QDoubleSpinBox *mGrid = nullptr, *mSides = nullptr, *mSteps = nullptr, *mThickness = nullptr, *mHollow = nullptr;
-    controls::Segmented* mSnap = nullptr;
+    QDoubleSpinBox *mGrid = nullptr, *mSides = nullptr, *mSteps = nullptr, *mThickness = nullptr;
     QCheckBox *mCorners = nullptr, *mCaps = nullptr, *mFlip = nullptr, *mOverlap = nullptr;
     QLineEdit* mSuffix = nullptr;
     QComboBox* mClass = nullptr;
-    QWidget* mEntitySection = nullptr;
 };
 
-QPointer<Palette> gPalette;
+QPointer<Toolkit> gToolkit;
+
+QWidget* makeToolkit(QWidget* parent)
+{
+    auto* scroll = new QScrollArea(parent);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    scroll->setWidget(gToolkit = new Toolkit(scroll));
+    controls::fitScrollWidth(scroll);
+    return scroll;
+}
 
 void runSelected(const char* cmd, json call)
 {
@@ -285,31 +273,28 @@ void runSelected(const char* cmd, json call)
 }
 } // namespace
 
-void syncPalette()
+void syncToolkit()
 {
-    if (gPalette)
-        gPalette->sync();
+    if (gToolkit)
+        gToolkit->sync();
 }
 
-void registerPalette(ext::Context& ctx)
+void registerToolkit(ext::Context& ctx)
 {
-    panels::add(ctx, {.id = kPaletteId,
+    panels::add(ctx, {.id = kToolkitId,
                       .title = "Blockwork",
-                      .create = [](QWidget* parent) -> QWidget* { return gPalette = new Palette(parent); },
+                      .create = makeToolkit,
                       .area = Qt::LeftDockWidgetArea,
                       .icon = "box",
                       .open = false,
-                      .place = [](QDockWidget* d) { d->setProperty(panels::kOwnSizeProperty, true); },
-                      .floatFirst = true,
-                      .toolPalette = true});
-    const int listener = viewportTools::addListener([] { syncPalette(); });
-    ctx.track("blockwork palette sync", [listener] { viewportTools::removeListener(listener); });
+                      .docs = "blockwork"});
+    const int listener = viewportTools::addListener([] { syncToolkit(); });
+    ctx.track("blockwork toolkit sync", [listener] { viewportTools::removeListener(listener); });
 }
 
 void registerUi(ext::Context& ctx)
 {
     registerTool(ctx);
-    registerPalette(ctx);
     registerTexturePanel(ctx);
     registerOrganisePanels(ctx);
 
@@ -317,8 +302,7 @@ void registerUi(ext::Context& ctx)
     for (int i = 0; i < int(kModeTiles.size()); ++i)
     {
         const Mode m = Mode(i);
-        static const char* const ids[] = {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.entity", "blockwork.prefab"};
-        actions::add(ctx, {.id = ids[i],
+        actions::add(ctx, {.id = kModeActions[i],
                            .label = std::string(m == Mode::Block ? "Block" : modeLabel(m)) + " Tool",
                            .category = "Blockwork",
                            .run = [m] { startTool(m); },
@@ -338,9 +322,10 @@ void registerUi(ext::Context& ctx)
     actions::add(ctx, {.id = "blockwork.hollow",
                        .label = "Hollow",
                        .category = "Blockwork",
-                       .run = [] { runSelected("blockworkHollow", {{"thickness", settings().hollowThickness}}); },
                        .doc = "Turn the selected blocks into walls around their volume; selected faces are left open.",
                        .python = "blockworkHollow('block1', thickness=16)",
+                       .command = "blockworkHollow",
+                       .call = json::object(),
                        .icon = "box-multiple",
                        .keywords = {"shell", "room", "solidify"}});
     actions::add(ctx, {.id = "blockwork.join",
@@ -414,6 +399,7 @@ void registerUi(ext::Context& ctx)
                                       {"blockwork.flip", "arrows-exchange", "Flip", {}, {}, true}},
                             .order = 5,
                             .docs = "blockwork"});
+    registerToolkit(ctx);
     menus::addItem(ctx, {.id = "blockwork.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Blockwork",
                          .before = levelToolkit::kDressSection});
     for (const char* a : {"blockwork.block", "blockwork.carve", "blockwork.clip", "blockwork.extend", "blockwork.paint", "blockwork.align", "blockwork.textures", "blockwork.entity", "blockwork.makeVolume", "blockwork.sendEntities", "blockwork.prefabs", "blockwork.visgroups", "blockwork.merge", "blockwork.toolMaterials"})

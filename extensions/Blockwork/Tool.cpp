@@ -47,7 +47,6 @@ json toJson(const Settings& s)
             {"suffix", s.suffix},
             {"flip", s.flip},
             {"removeOverlap", s.removeOverlap},
-            {"hollowThickness", s.hollowThickness},
             {"material", s.material},
             {"entityClass", s.entityClass},
             {"prefab", s.prefab},
@@ -73,7 +72,6 @@ Settings fromJson(const json& j)
     s.suffix = j.value("suffix", std::string());
     s.flip = j.value("flip", false);
     s.removeOverlap = j.value("removeOverlap", false);
-    s.hollowThickness = std::max(0.01, j.value("hollowThickness", 16.0));
     s.material = j.value("material", std::string());
     s.entityClass = j.value("entityClass", std::string("PlayerStart"));
     s.prefab = j.value("prefab", std::string());
@@ -224,7 +222,7 @@ public:
     void activate() override
     {
         reset();
-        panels::show(kPaletteId);
+        panels::show(kToolkitId);
     }
 
     void deactivate() override { reset(); }
@@ -304,7 +302,7 @@ public:
         else
             s.options.sides = std::clamp(s.options.sides + step, 3, 256);
         saveSettings();
-        syncPalette();
+        syncToolkit();
         viewportTools::requestRedraw();
         return true;
     }
@@ -364,7 +362,7 @@ private:
         case Qt::Key_BracketLeft:
         case Qt::Key_BracketRight:
             setGridStep(gridStep() * (k == Qt::Key_BracketLeft ? 0.5 : 2.0));
-            syncPalette();
+            syncToolkit();
             viewportTools::requestRedraw();
             return true;
         case Qt::Key_Escape:
@@ -1093,7 +1091,7 @@ void startTool(Mode mode)
         viewportTools::set(nullptr);
     }
     viewportTools::activate(kToolId);
-    syncPalette();
+    syncToolkit();
 }
 
 void startTool(Shape shape)

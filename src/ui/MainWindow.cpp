@@ -278,7 +278,7 @@ void MainWindow::arrangeDefaultDocks()
     if (!tools || !outliner || !channels)
         return;
     moveTo(tools, Qt::LeftDockWidgetArea);
-    for (const char* name : {kTopologyToolkitDock, kCurveToolkitDock, kLevelToolkitDock, kRenderToolkitDock, "tailorToolkit", "stagehand.library", "textureSets", "baker",
+    for (const char* name : {kTopologyToolkitDock, kCurveToolkitDock, kLevelToolkitDock, kRenderToolkitDock, "tailorToolkit", "blockworkToolkit", "stagehand.library", "textureSets", "baker",
                              "materialBrowser", "sourceControl", kReferenceEditorDock})
         if (QDockWidget* d = dock(name))
         {
