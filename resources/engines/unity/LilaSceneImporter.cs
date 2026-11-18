@@ -52,11 +52,6 @@ public class LilaSceneImporter : AssetPostprocessor
         return exe;
     }
 
-    static string PythonString(string path)
-    {
-        return "'" + path.Replace("\\", "/").Replace("'", "\\'") + "'";
-    }
-
     static void Convert(string asset)
     {
         string scene = Path.GetFullPath(asset);
@@ -64,15 +59,11 @@ public class LilaSceneImporter : AssetPostprocessor
         string temp = Path.Combine(Path.GetFullPath("Temp"), "Lila", Guid.NewGuid().ToString("N") + ".fbx");
         Directory.CreateDirectory(Path.GetDirectoryName(temp));
 
-        // ue6 is Lila's Y-up profile with +Z forward, which Unity imports with no rotation left on the root.
-        string script = "openScene(" + PythonString(scene) + ", force=True); "
-            + "exportFbx(" + PythonString(temp) + ", selectionOnly=False, profile='ue6', units='m', textures=True, unrealCheck=False)";
-
         var info = new ProcessStartInfo
         {
             FileName = FindBatch(),
-            // The script holds no double quotes, so one quoted argument survives the command line intact.
-            Arguments = "-c \"" + script + "\"",
+            // The unity profile is Y up with +Z forward, which Unity imports with no rotation left on the root.
+            Arguments = "--quiet --export \"" + scene + "\" \"" + temp + "\" --export-args \"profile='unity', units='m', textures=True\"",
             UseShellExecute = false,
             CreateNoWindow = true,
             RedirectStandardOutput = true,

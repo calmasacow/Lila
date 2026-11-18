@@ -25,20 +25,22 @@ User docs: `godot-plugin-tutorial.md`, `unity-plugin-tutorial.md` (step by step,
 The engine never reads `.lila` itself. `lilabatch` (installed beside `lila`) opens the scene and exports a format the engine already imports:
 
 ```
-lilabatch -c "openScene('<scene>', force=True); exportGltf('<out>.glb', selectionOnly=False, unrealCheck=False)"
-lilabatch -c "openScene('<scene>', force=True); exportFbx('<out>.fbx', selectionOnly=False, profile='ue6', units='m', textures=True, unrealCheck=False)"
+lilabatch --quiet --export <scene> <out>.glb
+lilabatch --quiet --export <scene> <out>.fbx --export-args "profile='unity', units='m', textures=True"
 ```
 
-Run the command in a terminal against a real scene before writing any plugin code.
+`--export` opens the scene and exports all of it in the format the output's extension names; `--export-args` passes the format's export flags as Python keyword arguments. Exit code 0 means the file was written; 1 comes with an `[error]` line saying why. `lilabatch --help` lists every option. Run the command in a terminal against a real scene before writing any plugin code.
+
+If the user doesn't want a plugin at all: **File > Export on Save...** in Lila (`exportOnSave(path=..., options=...)` from Python) writes a plain FBX or glTF beside the scene on every save, which the engine imports like any other file.
 
 1. **Hook the engine's asset pipeline** for `.lila` and `.lilaa`: an import plugin, asset processor, file watcher or build step.
-2. **Pick the format** the engine's own importer handles best. glTF: Y up, +Z forward, metres. FBX: `profile='ue6'` gives Y up, +Z forward; `units='m'` gives a scale of 1. Other exporters: `exportObj`, `exportAlembic`, `exportCollada`, `exportFile(path)` by extension. Flags are in the generated `lila.ops.md` reference. Export functions take the path first, then objects.
+2. **Pick the format** the engine's own importer handles best. glTF: Y up, +Z forward, metres. FBX: `profile='unity'` (the same axes as `ue6`) gives Y up, +Z forward; `units='m'` gives a scale of 1. Other exporters: `exportObj`, `exportAlembic`, `exportCollada`, `exportFile(path)` by extension. Flags are in the generated `lila.ops.md` reference. Export functions take the path first, then objects.
 3. **Export to a temp path**, then hand the result to the engine's importer. Never write into the `.lila`.
 4. **Find lilabatch** in this order: an editor setting, `LILA_BATCH`, `%LOCALAPPDATA%\Programs\Lila`, `%ProgramFiles%\Lila`, then `PATH`.
-5. **Run it** with `LILA_CRASH_NO_UI=1` in its environment, stdout and stderr captured, and a timeout. Exit code 0 and the output file existing means success.
+5. **Run it** with `LILA_CRASH_NO_UI=1` in its environment, stdout and stderr captured, and a timeout. Pass the scene and output paths as separate arguments (quoted on a command line). Exit code 0 and the output file existing means success.
 6. **Report failures** with lilabatch's output: errors go to stderr as `[error]` lines, info to stdout. A missing executable gets its own message naming the setting.
 
-Script quoting: paths in single quotes, forward slashes, `'` escaped as `\'`, no double quotes anywhere in the script, so it survives as one quoted command-line argument. Exports are synchronous and an animated scene is evaluated at every frame of its playback range: offer `animation=False` or running off the editor's main thread.
+Exports are synchronous and an animated scene is evaluated at every frame of its playback range: offer `--export-args "animation=False"` or running off the editor's main thread.
 
 ## Send (Lila extension)
 

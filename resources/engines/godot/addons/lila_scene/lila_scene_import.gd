@@ -63,10 +63,9 @@ func _import(source_file: String, save_path: String, _options: Dictionary, _plat
 	var glb := temp_dir.path_join("%s.glb" % source_file.md5_text())
 	var scene := ProjectSettings.globalize_path(source_file)
 
-	var script := "openScene(%s, force=True); exportGltf(%s, selectionOnly=False, unrealCheck=False)" % [_python_string(scene), _python_string(glb)]
 	OS.set_environment("LILA_CRASH_NO_UI", "1")
 	var output: Array = []
-	var code := OS.execute(_find_batch(), PackedStringArray(["-c", script]), output, true)
+	var code := OS.execute(_find_batch(), PackedStringArray(["--quiet", "--export", scene, glb]), output, true)
 	if code == -1:
 		push_error("Lila: lilabatch wasn't found. Set it in Editor Settings > Lila > Batch Path")
 		return ERR_FILE_NOT_FOUND
@@ -114,10 +113,6 @@ func _find_batch() -> String:
 		if not candidate.is_empty() and FileAccess.file_exists(candidate):
 			return candidate
 	return exe
-
-
-func _python_string(path: String) -> String:
-	return "'%s'" % path.replace("\\", "/").replace("'", "\\'")
 
 
 ## In the editor the glTF loader builds ImporterMeshInstance3D nodes, which only exist during import. Returns the node

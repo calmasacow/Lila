@@ -28,8 +28,8 @@ def unity_send():
     sent = []
     for obj in objects:
         path = os.path.join(folder, obj.split("|")[-1] + ".fbx")
-        # ue6 is Y up facing +Z, which Unity imports with no rotation on the root.
-        exportFbx(path, obj, profile="ue6", units="m", textures=True, unrealCheck=False)
+        # The unity profile is Y up facing +Z, which Unity imports with no rotation on the root.
+        exportFbx(path, obj, profile="unity", units="m", textures=True, unrealCheck=False)
         sent.append(path)
     return sent
 
