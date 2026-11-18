@@ -63,6 +63,13 @@ public:
     virtual bool showsSelection(scene::NodeId mesh) const { (void)mesh; return true; }
     /** With showsSelection false: draws the selected mesh with the dim under-selection wire instead of none. */
     virtual bool dimsSelection(scene::NodeId mesh) const { (void)mesh; return false; }
+    /**
+     * True keeps the tool editing while the Drone Camera flies: the left button and keys reach it, and the flight takes
+     * the right and middle buttons and the keys pressed while the right button is held.
+     */
+    virtual bool editsWhileFlying() const { return false; }
+    /** Cancels a shape, drag or stroke in progress; true when there was one. Esc in a flight tries it before landing. */
+    virtual bool cancelStep() { return false; }
 };
 
 /** An X: the cursor while a modifier click deletes what is under it. */

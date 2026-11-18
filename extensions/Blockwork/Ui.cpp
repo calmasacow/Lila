@@ -167,6 +167,18 @@ public:
         gridForm->addRow("Snap", mSnap);
         v->addWidget(controls::section("Grid", gridBox, this, kSections));
 
+        auto* viewBox = new QWidget(this);
+        mCamera = new controls::Segmented(viewBox);
+        mCamera->add("Orbit", {}, "Orbit: Alt with the mouse moves the view, as everywhere in Lila", 0);
+        mCamera->add("Drone", {}, "Drone: the view flies while the tool is on. Right drag with WASD, E and Q flies; the left button and keys still build", 1);
+        connect(mCamera, &controls::Segmented::picked, this, [](int id) {
+            settings().droneCamera = id == 1;
+            saveSettings();
+            syncCamera();
+        });
+        form(viewBox)->addRow("Camera", mCamera);
+        v->addWidget(controls::section("View", viewBox, this, kSections));
+
         auto* edit = new QWidget(this);
         vbox(edit)->addWidget(controls::grid({controls::row("blockwork.hollow", "box-multiple", edit), controls::row("blockwork.join", "box", edit, "Join"),
                                               controls::row("blockwork.flip", "arrows-exchange", edit, "Flip")},
@@ -224,6 +236,10 @@ public:
             const QSignalBlocker b(mSnap);
             mSnap->setCurrent(gridAbsolute() ? 1 : 0);
         }
+        {
+            const QSignalBlocker b(mCamera);
+            mCamera->setCurrent(s.droneCamera ? 1 : 0);
+        }
         mCorners->setChecked(s.options.radiusToCorners);
         mCaps->setChecked(!s.options.skipCaps);
         mSuffix->setText(QString::fromStdString(s.suffix));
@@ -240,7 +256,7 @@ public:
 private:
     static constexpr int kColumns = 2;
     std::array<QToolButton*, kModeTiles.size()> mModes{};
-    controls::Segmented *mShapes = nullptr, *mSnap = nullptr;
+    controls::Segmented *mShapes = nullptr, *mSnap = nullptr, *mCamera = nullptr;
     QWidget *mShapeBox = nullptr, *mEntityBox = nullptr;
     QFormLayout* mShapeForm = nullptr;
     QDoubleSpinBox *mGrid = nullptr, *mSides = nullptr, *mSteps = nullptr, *mThickness = nullptr;

@@ -14,6 +14,7 @@
 #include <lila/ViewportRenderers.h>
 
 #include <QKeyEvent>
+#include <QTimer>
 #include <QMouseEvent>
 #include <QWheelEvent>
 
@@ -52,7 +53,8 @@ json toJson(const Settings& s)
             {"material", s.material},
             {"entityClass", s.entityClass},
             {"prefab", s.prefab},
-            {"prefabFollowsNormal", s.prefabFollowsNormal}};
+            {"prefabFollowsNormal", s.prefabFollowsNormal},
+            {"droneCamera", s.droneCamera}};
 }
 
 Settings fromJson(const json& j)
@@ -78,6 +80,7 @@ Settings fromJson(const json& j)
     s.entityClass = j.value("entityClass", std::string("PlayerStart"));
     s.prefab = j.value("prefab", std::string());
     s.prefabFollowsNormal = j.value("prefabFollowsNormal", true);
+    s.droneCamera = j.value("droneCamera", false);
     return s;
 }
 
@@ -225,9 +228,28 @@ public:
     {
         reset();
         panels::show(kToolkitId);
+        syncCamera();
     }
 
-    void deactivate() override { reset(); }
+    void deactivate() override
+    {
+        reset();
+        // Deferred, so switching modes (off and straight back on) keeps the flight.
+        QTimer::singleShot(0, [] { syncCamera(); });
+    }
+
+    bool editsWhileFlying() const override { return true; }
+
+    bool cancelStep() override
+    {
+        if (mStep == Step::Idle && !mDragging && !mPainting)
+            return false;
+        reset();
+        mPainting = false;
+        mStroke.reset();
+        mPainted.clear();
+        return true;
+    }
 
     bool mousePress(QMouseEvent* e, const ViewInfo& view) override
     {
@@ -1141,6 +1163,19 @@ Settings& settings()
 }
 
 void saveSettings() { PrefStore::get().set("general", kSettingsPref, toJson(settings())); }
+
+void syncCamera()
+{
+    static bool ours = false;
+    const bool want = settings().droneCamera && viewportTools::activeId() == kToolId;
+    if (want && !drone::activeViewFlying())
+        ours = drone::setActiveViewFlying(true);
+    else if (!want && ours)
+    {
+        ours = false;
+        drone::setActiveViewFlying(false);
+    }
+}
 
 const char* modeLabel(Mode m)
 {

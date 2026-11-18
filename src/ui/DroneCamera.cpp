@@ -171,6 +171,13 @@ public:
     /** The view's own cursor again, once the flight is no longer listed for it. */
     void restoreCursor() { mView->updateCursor(); }
 
+    /** The active tool edits through the flight: it keeps the left button and the keys, flying needs the right button. */
+    static bool editing()
+    {
+        const ViewportTool* t = viewportTools::active();
+        return t && t->editsWhileFlying();
+    }
+
     void armHold()
     {
         mHoldArmed = true;
@@ -188,6 +195,17 @@ public:
             return true;
         if (!mDragging && (e->modifiers() & Qt::AltModifier))
             return false;
+        if (!mDragging && editing())
+        {
+            if (e->button() == Qt::LeftButton)
+                return false;
+            // Held back while the tool drags with the left button, so its release still reaches it.
+            if (e->buttons() & Qt::LeftButton)
+            {
+                mHeldBack |= e->button();
+                return true;
+            }
+        }
         mButtons = e->buttons();
         mView->setFocus();
         if (!mDragging)
@@ -209,6 +227,8 @@ public:
                 mCloseHover = hover;
                 mView->requestFrame();
             }
+            if (editing())
+                return false;
             // Selection preselect stays off while flying; Alt navigation still sees its moves.
             return !(e->buttons() & (Qt::LeftButton | Qt::MiddleButton | Qt::RightButton));
         }
@@ -239,6 +259,11 @@ public:
 
     bool mouseRelease(QMouseEvent* e)
     {
+        if (mHeldBack & e->button())
+        {
+            mHeldBack.setFlag(e->button(), false);
+            return true;
+        }
         if (!mDragging)
             return false;
         mButtons = e->buttons();
@@ -249,6 +274,8 @@ public:
 
     bool wheel(QWheelEvent* e)
     {
+        if (editing() && (e->modifiers() & Qt::ShiftModifier) && !(QApplication::mouseButtons() & Qt::RightButton))
+            return false;
         const double notches = e->angleDelta().y() / 120.0;
         if (notches == 0.0)
             return true;
@@ -262,6 +289,8 @@ public:
 
     bool applyCursor()
     {
+        if (!mDragging && !mCloseHover && editing())
+            return false;
         const Qt::CursorShape shape = mDragging ? Qt::BlankCursor : mCloseHover ? Qt::PointingHandCursor : Qt::ArrowCursor;
         if (mView->cursor().shape() != shape)
             mView->setCursor(shape);
@@ -345,6 +374,16 @@ protected:
             }
             return true;
         }
+        if (editing() && !looking)
+        {
+            if (k->key() != Qt::Key_Escape || (k->modifiers() & ~Qt::KeypadModifier))
+                return false;
+            if (ViewportTool* t = viewportTools::active(); t && t->cancelStep())
+                viewportTools::requestRedraw();
+            else
+                leaveLater();
+            return true;
+        }
         if (isModifierKey(k->key()))
             return false;
         if (k->modifiers() & ((looking ? Qt::NoModifier : Qt::ControlModifier) | Qt::AltModifier | Qt::MetaModifier))
@@ -423,6 +462,9 @@ private:
         if (!mDragging)
             return;
         mDragging = false;
+        // Letting go of the right button stops an editing flight, so the keys go back to the tool.
+        if (editing())
+            mHeld.fill(false);
         mView->updateCursor();
     }
 
@@ -484,6 +526,8 @@ private:
     bool mDragging = false;
     /** The buttons held in the view's drag, as its mouse events say. */
     Qt::MouseButtons mButtons;
+    /** Buttons pressed during the tool's own left drag, whose releases the flight takes. */
+    Qt::MouseButtons mHeldBack;
     QPointF mAnchor;
     QRectF mBanner, mClose;
     bool mCloseHover = false;
@@ -499,6 +543,12 @@ std::map<const ViewportWidget*, DroneFlight*>& flights()
 {
     static std::map<const ViewportWidget*, DroneFlight*> m;
     return m;
+}
+
+std::function<ViewportWidget*()>& activeViewGetter()
+{
+    static std::function<ViewportWidget*()> f;
+    return f;
 }
 
 DroneFlight* flight(const ViewportWidget* view)
@@ -531,7 +581,8 @@ void enter(ViewportWidget* view)
     if (Hotkeys::fromKey())
         f->armHold();
     view->setFocus();
-    viewportToast::show("Drone Camera on: WASD moves, R/F speed, Esc exits", view, 4000);
+    viewportToast::show(DroneFlight::editing() ? "Drone Camera on: right drag with WASD flies, Esc exits" : "Drone Camera on: WASD moves, R/F speed, Esc exits",
+                        view, 4000);
     view->requestFrame();
     Q_EMIT view->viewStateChanged();
 }
@@ -589,6 +640,18 @@ void draw(OverlayPainter& p, ViewportWidget* view)
         return;
     f->draw(p);
     // In place of the layout's keys in the corner.
+    if (DroneFlight::editing())
+    {
+        drawKeyList(p, QPointF(16.0, double(view->height()) - 84.0),
+                    {{"Right drag", "Look"},
+                     {"Right drag + W A S D", "Move"},
+                     {"Right drag + E / Q", "Up, down"},
+                     {"Right drag + wheel", "Speed"},
+                     {"Middle drag", "Pan"},
+                     {"Wheel", "Forward"},
+                     {"Esc", "Cancel, then leave"}});
+        return;
+    }
     drawKeyList(p, QPointF(16.0, double(view->height()) - 84.0),
                 {{"W A S D", "Move"},
                  {"E / Q", "Up, down"},
@@ -606,8 +669,27 @@ bool applyCursor(ViewportWidget* view)
     return f && f->applyCursor();
 }
 
+bool activeViewFlying()
+{
+    ViewportWidget* v = activeViewGetter() ? activeViewGetter()() : nullptr;
+    return v && active(v);
+}
+
+bool setActiveViewFlying(bool on)
+{
+    ViewportWidget* v = activeViewGetter() ? activeViewGetter()() : nullptr;
+    if (!v)
+        return false;
+    if (!on)
+        leave(v);
+    else if (!v->camera().ortho && v->lookThroughCamera() == scene::kNoNode)
+        enter(v);
+    return active(v);
+}
+
 void registerActions(std::function<ViewportWidget*()> activeView)
 {
+    activeViewGetter() = activeView;
     overlayIcons::add("drone", {.tabler = "drone"});
     overlayIcons::add("x", {.tabler = "x"});
     actions::add({.id = "view.drone",
@@ -619,7 +701,7 @@ void registerActions(std::function<ViewportWidget*()> activeView)
                               toggle(v);
                       },
                   .doc = "Fly the view through the scene with Unreal's viewport keys, listed in the view while flying. Nothing can be "
-                         "edited until you leave. Shift-click the button for speed and smoothing.",
+                         "edited until you leave, except with tools that edit while flying, such as Blockwork. Shift-click the button for speed and smoothing.",
                   .checked =
                       [activeView] {
                           ViewportWidget* v = activeView();

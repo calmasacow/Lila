@@ -16,8 +16,10 @@ class ViewportWidget;
  * Drone Camera: a view-only fly mode for moving through large scenes, with Unreal's viewport fly keys and mouse. WASD,
  * the arrows or the number pad move, E/Q rise and fall, Z/C zoom while held, R/F change speed, Esc leaves. Mouse as in
  * Unreal: left drag moves along the ground and turns, right drag looks, middle (or left with right) drag pans, the wheel
- * moves forward and right drag with the wheel changes speed. Nothing in the scene can be edited while it is on; Alt with
- * the mouse still tumbles, tracks and dollies. The whole flight is one camera undo step.
+ * moves forward and right drag with the wheel changes speed. Nothing in the scene can be edited while it is on, unless the
+ * active tool edits while flying (ViewportTool::editsWhileFlying): then the left button and keys stay the tool's and the
+ * flight needs the right button. Alt with the mouse still tumbles, tracks and dollies. The whole flight is one camera undo
+ * step.
  */
 namespace drone
 {
@@ -30,6 +32,13 @@ LILA_UI_API void leave(ViewportWidget* view);
  * in the view's banner.
  */
 LILA_UI_API void toggle(ViewportWidget* view);
+/** Whether the active view flies. */
+LILA_UI_API bool activeViewFlying();
+/**
+ * Flies the active view or lands it. Turning on leaves an orthographic or look-through view as it is; true when the
+ * active view flies afterwards.
+ */
+LILA_UI_API bool setActiveViewFlying(bool on);
 
 /** Flight speed in cm per second, shared by every view and remembered between sessions. */
 LILA_UI_API double speed();
