@@ -259,7 +259,9 @@ void hardenEdges(Mesh& mesh, double angle)
 
 Mesh buildShape(Shape shape, Frame f, const ShapeOptions& o)
 {
-    // Normalise: positive extents, origin at the low corner.
+    // Normalise: positive extents, origin at the low corner. A prism's outline is already placed from the origin.
+    if (shape == Shape::Prism)
+        f.size.x = std::abs(f.size.x), f.size.y = std::abs(f.size.y);
     if (f.size.x < 0.0)
         f.origin += f.u * f.size.x, f.size.x = -f.size.x;
     if (f.size.y < 0.0)

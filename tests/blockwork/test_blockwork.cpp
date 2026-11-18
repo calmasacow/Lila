@@ -334,6 +334,19 @@ TEST_CASE("blockwork: carving a wedge into a face takes out the wedge")
     }
 }
 
+TEST_CASE("blockwork: a prism stays on the outline drawn, whichever way the last point lies")
+{
+    fresh();
+    const std::string p = run("blockworkBlock", {{"shape", "prism"}, {"origin", {100, 0, 100}}, {"size", {-32, -32, 16}}, {"normal", {0, 1, 0}},
+                                                 {"uAxis", {1, 0, 0}}, {"profile", {{0, 0}, {32, 0}, {32, 32}}}})
+                              .get<std::string>();
+    const geo::Bounds b = worldBounds(p);
+    CHECK(b.min.x == Approx(100));
+    CHECK(b.max.x == Approx(132));
+    CHECK(b.min.z == Approx(100));
+    CHECK(b.max.z == Approx(132));
+}
+
 TEST_CASE("blockwork: join merges touching blocks")
 {
     fresh();
