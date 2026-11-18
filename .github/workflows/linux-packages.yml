@@ -46,7 +46,7 @@ jobs:
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
           sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 ninja-build pkg-config nasm autoconf autoconf-archive automake libtool \
+          sudo apt-get install -y gcc-14 g++-14 ninja-build pkg-config nasm autoconf autoconf-archive automake libtool libltdl-dev \
             bison flex gperf libx11-dev libx11-xcb-dev libxext-dev libxfixes-dev libxi-dev libxrender-dev \
             libxcb1-dev libxcb-cursor-dev libxcb-glx0-dev libxcb-icccm4-dev libxcb-image0-dev libxcb-keysyms1-dev \
             libxcb-randr0-dev libxcb-render-util0-dev libxcb-shape0-dev libxcb-shm0-dev libxcb-sync-dev \
@@ -57,7 +57,8 @@ jobs:
       - name: Check native package generators
         run: python3 scripts/linux/test_package.py
 
-      - uses: actions/cache@v4
+      - uses: actions/cache/restore@v4
+        id: vcpkg-cache
         with:
           path: ~/.cache/vcpkg/archives
           key: linux-x64-gcc14-${{ hashFiles('vcpkg.json', 'vcpkg-ports/**', 'cmake/triplets/*linux*') }}
@@ -128,3 +129,10 @@ jobs:
           gh release upload "$RELEASE_TAG" build-linux/packages/*.deb build-linux/packages/*.rpm \
             build-linux/packages/*.pkg.tar.zst build-linux/packages/*.AppImage build-linux/packages/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Preserve dependency cache even when the build fails
+        if: always() && steps.vcpkg-cache.outputs.cache-primary-key != '' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.cache/vcpkg/archives
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}

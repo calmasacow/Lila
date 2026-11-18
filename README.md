@@ -50,6 +50,25 @@ The **Linux packages** GitHub Actions workflow builds x86_64 `.deb`, `.rpm`, `.p
 
 Packages bundle Qt, Python/NumPy, extensions, shaders, resources and runtime libraries. They require glibc 2.39 or newer (Ubuntu 24.04+, Fedora 40+, current Arch), Vulkan-capable graphics drivers, and X11/XWayland. ARM builds and older glibc distributions are not supported by this workflow. USD and NanoVDB are disabled, matching the verified Linux configuration.
 
+Download the package for your distribution from [Releases](https://github.com/calmasacow/Lila/releases). Check the release notes for the minimum glibc version; locally built preview packages may require a newer system than the CI packages. From the directory containing the download:
+
+```sh
+# Debian / Ubuntu: apt installs the package and its system dependencies.
+sudo apt install ./Lila-*-linux-x86_64.deb
+
+# Fedora / RPM distributions:
+sudo dnf install ./Lila-*-linux-x86_64.rpm
+
+# Arch Linux / Omarchy:
+sudo pacman -U ./Lila-*-linux-x86_64.pkg.tar.zst
+
+# AppImage: no package installation required.
+chmod +x ./Lila-*-linux-x86_64.AppImage
+./Lila-*-linux-x86_64.AppImage
+```
+
+For native packages, start **Lila** from the application launcher or run `lila` in a terminal. On a Wayland desktop, install XWayland (`xwayland` on Ubuntu, `xorg-x11-server-Xwayland` on Fedora, `xorg-xwayland` on Arch). If AppImage reports that FUSE is unavailable, run it with `--appimage-extract-and-run`. Verify downloads with `sha256sum --check SHA256SUMS` after downloading the checksum file alongside the packages.
+
 For local packaging after a Release build, install `dpkg-deb`, `rpmbuild`, `bsdtar`, `zstd`, `patchelf`, and `strip`, then run:
 
 ```sh
