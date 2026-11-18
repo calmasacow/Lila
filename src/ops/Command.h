@@ -88,6 +88,9 @@ inline FlagDef presetFlag(FlagDef flag, std::vector<double> presets)
 /** Power-of-two texture sizes, the presets of every texture size field. */
 inline const std::vector<double> kTextureSizePresets = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384};
 
+/** Texture set tile sizes: past 16384 a set shows through virtual texturing. */
+inline const std::vector<double> kTextureSetSizePresets = {64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
+
 /** Normalized call: positional args plus long-name flags, defaults filled in. */
 struct LILA_FOUNDATION_API Args
 {
