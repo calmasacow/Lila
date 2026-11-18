@@ -72,7 +72,9 @@ LILA_UI_API void setPivotEdit(bool on);
 
 /**
  * Clone drag: hold Y. A drag on a manipulator handle in object mode duplicates the objects first (in the duplicate
- * option box's mode) and moves the copies, leaving the originals where they were. A tap of Y without a clone drag runs
+ * option box's mode) and moves the copies, leaving the originals where they were; on faces and edges it extrudes them
+ * first (in the extrude option box's mode) and moves the extruded ones. The /manipulator/shiftDrag pref "extrude" makes
+ * Shift-drag on faces and edges do the same, in place of Shift's fine control. A tap of Y without a clone drag runs
  * Repeat Last Tool instead.
  */
 LILA_UI_API bool cloneDrag();
