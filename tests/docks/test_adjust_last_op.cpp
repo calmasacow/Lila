@@ -22,7 +22,7 @@ using json = nlohmann::json;
 
 namespace
 {
-void mouse(QWidget* w, QEvent::Type type, QPoint at, Qt::MouseButton button, Qt::MouseButtons buttons)
+void sendMouse(QWidget* w, QEvent::Type type, QPoint at, Qt::MouseButton button, Qt::MouseButtons buttons)
 {
     QMouseEvent e(type, at, w->mapToGlobal(at), button, buttons, Qt::NoModifier);
     QApplication::sendEvent(w, &e);
@@ -32,13 +32,13 @@ void mouse(QWidget* w, QEvent::Type type, QPoint at, Qt::MouseButton button, Qt:
 void scrub(QWidget* w, Qt::MouseButton button, int dx)
 {
     const QPoint at(4, 4);
-    mouse(w, QEvent::MouseButtonPress, at, button, button);
+    sendMouse(w, QEvent::MouseButtonPress, at, button, button);
     for (int x = 6; x <= dx; x += 6)
     {
-        mouse(w, QEvent::MouseMove, at + QPoint(x, 0), Qt::NoButton, button);
+        sendMouse(w, QEvent::MouseMove, at + QPoint(x, 0), Qt::NoButton, button);
         QApplication::processEvents();
     }
-    mouse(w, QEvent::MouseButtonRelease, at + QPoint(dx, 0), button, Qt::NoButton);
+    sendMouse(w, QEvent::MouseButtonRelease, at + QPoint(dx, 0), button, Qt::NoButton);
     QApplication::processEvents();
 }
 
