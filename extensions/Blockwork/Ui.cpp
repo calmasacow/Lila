@@ -181,7 +181,8 @@ public:
 
         auto* edit = new QWidget(this);
         vbox(edit)->addWidget(controls::grid({controls::row("blockwork.hollow", "box-multiple", edit), controls::row("blockwork.join", "box", edit, "Join"),
-                                              controls::row("blockwork.flip", "arrows-exchange", edit, "Flip")},
+                                              controls::row("blockwork.flip", "arrows-exchange", edit, "Flip"),
+                                              controls::row("blockwork.bevel", "border-radius", edit, "Bevel")},
                                              kColumns, edit));
         v->addWidget(controls::section("Blocks", edit, this, kSections));
 
