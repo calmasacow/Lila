@@ -3,6 +3,7 @@
 #include "ops/Command.h"
 #include "core/Log.h"
 #include "core/PrefStore.h"
+#include "core/Progress.h"
 #include "core/Workspace.h"
 #include "python/Python.h"
 #include "ui/Actions.h"
@@ -519,6 +520,7 @@ void LayoutController::applyPreset(const json& preset)
 
 void LayoutController::apply(const json& layout)
 {
+    const progress::NoPump noPump;
     mWindow->setUpdatesEnabled(false);
     json docks = layout.value("docks", json::object());
     ensureDocks(docks);
