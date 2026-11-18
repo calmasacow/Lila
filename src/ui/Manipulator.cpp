@@ -765,6 +765,9 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
         }
     }
     else if (!d.componentPivot)
+    {
+        if (!d.pivotEdit)
+            d.selectionSnap = tools::selectionSnap();
         for (NodeId id : mTargets)
         {
             d.saved.push_back(saveTransform(g, id));
@@ -776,6 +779,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
                     if (dynamic_cast<Transform*>(g.node(c)))
                         d.savedChildren.push_back(saveTransform(g, c));
         }
+    }
     if (pivotTool(d.pivotEdit, d.tool) == Tool::Move && !d.pivotEdit && !d.componentPivot && !d.alongNormal)
     {
         for (const Saved& s : d.saved)
@@ -889,6 +893,28 @@ void Manipulator::pickAxisFromDrag(QPointF px)
     mLastHandle = mHover = d.handle;
 }
 
+/** Scale factors that make each extent a whole number of steps, at least one; uniform keeps one factor from the largest. */
+static glm::dvec3 snapExtents(glm::dvec3 s, const glm::dvec3& extent, double step, bool uniform)
+{
+    auto fit = [step](double f, double size) {
+        if (size < 1e-9)
+            return f;
+        return std::max(1.0, std::round(std::abs(f) * size / step)) * step / size * (f < 0.0 ? -1.0 : 1.0);
+    };
+    if (uniform)
+    {
+        int big = 0;
+        for (int i = 1; i < 3; ++i)
+            if (extent[i] > extent[big])
+                big = i;
+        return glm::dvec3(fit(s[big], extent[big]));
+    }
+    for (int i = 0; i < 3; ++i)
+        if (s[i] != 1.0)
+            s[i] = fit(s[i], extent[i]);
+    return s;
+}
+
 glm::dvec3 Manipulator::snapGrid(const glm::dvec3& p, const glm::dvec3& mask) const
 {
     double step = generalPref("/grid/spacing", 10.0);
@@ -918,6 +944,7 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
     }
     bool gridSnap = tools::snaps() & SnapGrid;
     IncrementSnap inc = heldSnap() ? IncrementSnap{} : tools::incrementSnap(pivotTool(d.pivotEdit, d.tool));
+    const SelectionSnap* sel = d.selectionSnap && !heldSnap() && !(tools::snaps() & SnapRotateHold) ? &*d.selectionSnap : nullptr;
 
     glm::dvec3 o, dir;
     mView.ray(cur, o, dir);
@@ -959,6 +986,9 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
                 delta = d.frame * snapGrid(local, glm::dvec3(1.0));
             }
         }
+        else if (sel && sel->moveStep > 0.0 && worldFrame)
+            delta = sel->absolute ? gizmo::snapAbsolute(sel->anchor, delta, d.frame, moveMask(h), sel->moveStep)
+                                  : gizmo::snapRelative(delta, d.frame, moveMask(h), sel->moveStep);
         else if (inc.enabled)
             delta = inc.absolute ? gizmo::snapAbsolute(d.startPivot, delta, d.frame, moveMask(h), inc.step)
                                  : gizmo::snapRelative(delta, d.frame, moveMask(h), inc.step);
@@ -998,7 +1028,12 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
             glm::dquat q = glm::angleAxis(delta.x() * k, camUp) * glm::angleAxis(delta.y() * k, camRight);
             d.angle = glm::degrees(glm::angle(q));
             d.rotateAxis = glm::axis(q);
-            if (inc.enabled)
+            if (sel && sel->rotateStep > 0.0)
+            {
+                d.angle = gizmo::snapAngle(d.angle, sel->rotateStep);
+                q = glm::angleAxis(glm::radians(d.angle), d.rotateAxis);
+            }
+            else if (inc.enabled)
             {
                 d.angle = gizmo::snapAngle(d.angle, inc.step);
                 q = glm::angleAxis(glm::radians(d.angle), d.rotateAxis);
@@ -1046,6 +1081,8 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
                 double step = generalPref("/manipulator/rotateStep", 15.0);
                 deg = std::round(deg / step) * step;
             }
+            else if (sel && sel->rotateStep > 0.0)
+                deg = gizmo::snapAngle(deg, sel->rotateStep);
             else if (inc.enabled)
                 deg = gizmo::snapAngle(deg, inc.step);
             d.angle = deg;
@@ -1086,11 +1123,14 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
             else
                 s[ai] = f;
         }
+        const bool extents = sel && sel->scaleStep > 0.0 && !gridSnap;
+        if (extents)
+            s = snapExtents(s, sel->extent, sel->scaleStep, h == H::Center);
         for (int i = 0; i < 3; ++i)
         {
             if (gridSnap)
                 s[i] = std::round(s[i] * 10.0) / 10.0;
-            else if (inc.enabled)
+            else if (inc.enabled && !extents)
                 s[i] = gizmo::snapScale(s[i], inc.step);
             // Components stop at 0 rather than flipping through, so scaling down an axis flattens them exactly.
             if (d.components)
@@ -1849,7 +1889,7 @@ QString Manipulator::readout() const
         else
             text = QString::fromUtf8("× %1, %2, %3").arg(s.x, 0, 'f', 3).arg(s.y, 0, 'f', 3).arg(s.z, 0, 'f', 3);
     }
-    if (heldSnap() || tools::incrementSnap(t).enabled)
+    if (heldSnap() || tools::incrementSnap(t).enabled || (d.selectionSnap && !(tools::snaps() & SnapRotateHold)))
         text += "  snap";
     return text;
 }

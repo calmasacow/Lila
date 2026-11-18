@@ -141,6 +141,8 @@ private:
         std::vector<scene::NodeId> conformTo;
         /** Per saved object: the world rotation that turns its up axis to the surface normal, when aligning. */
         std::vector<glm::dquat> alignRotations;
+        /** An extension's snapping for the dragged objects (tools::selectionSnap), taken at the press. */
+        std::optional<SelectionSnap> selectionSnap;
         double startAngle = 0.0;
         glm::dvec3 startHit{0.0};
         // results of the last update

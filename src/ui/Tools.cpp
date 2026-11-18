@@ -119,6 +119,27 @@ IncrementSnap incrementSnap(Tool t)
     return s;
 }
 
+static std::map<int, std::function<std::optional<SelectionSnap>()>> gSelectionSnaps;
+static int gNextSelectionSnap = 1;
+
+int addSelectionSnap(std::function<std::optional<SelectionSnap>()> fn)
+{
+    gSelectionSnaps[gNextSelectionSnap] = std::move(fn);
+    return gNextSelectionSnap++;
+}
+
+void removeSelectionSnap(int id) { gSelectionSnaps.erase(id); }
+
+std::optional<SelectionSnap> selectionSnap()
+{
+    if (gSnaps & SnapRotateHold)
+        return std::nullopt;
+    for (const auto& [id, fn] : gSelectionSnaps)
+        if (std::optional<SelectionSnap> s = fn())
+            return s;
+    return std::nullopt;
+}
+
 int addListener(std::function<void()> fn)
 {
     gListeners[gNextListener] = std::move(fn);
