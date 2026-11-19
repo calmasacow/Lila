@@ -503,7 +503,7 @@ void registerCommands()
         .positionalDoc = "name",
         .flags = {{"settings", "", T::Any, nullptr, "Settings dict: channels [{name, type, bits}], width, height, tiles [udim or {udim, width, height}], "
                                                     "normalConvention (opengl/directx), bakeProject, exportPreset."},
-                  presetFlag({"resolution", "", T::Int, nullptr, "Width and height of every tile.", {}, {}, 1.0}, kTextureSetSizePresets),
+                  presetFlag({"resolution", "", T::Int, nullptr, "Width and height of every tile.", {}, {}, 1.0}, kTextureSizePresets),
                   {"materials", "", T::List, nullptr, "Materials that use the set (their Texture Set), created when missing."}},
         .run = [](const Args& a) -> json {
             std::string name = positionalString(a, 0, "texCreateSet", "name");

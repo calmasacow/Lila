@@ -1515,14 +1515,14 @@ struct TextureSetPanel::Impl
         v->addWidget(boldHeading(settingsBox, "Resolution"));
         auto sizeBox = [](QWidget* parent, int value, bool allowDefault) {
             auto* b = new QSpinBox(parent);
-            b->setRange(allowDefault ? 0 : 16, 32768);
+            b->setRange(allowDefault ? 0 : 16, 16384);
             if (allowDefault)
                 b->setSpecialValueText("Set");
             b->setValue(value);
             b->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             // Typing commits on Enter or focus out; steps commit at once.
             b->setKeyboardTracking(false);
-            std::vector<double> presets(kTextureSetSizePresets.begin(), kTextureSetSizePresets.end());
+            std::vector<double> presets(kTextureSizePresets.begin(), kTextureSizePresets.end());
             if (allowDefault)
                 presets.push_back(0.0);
             controls::setPresets(b, presets);
