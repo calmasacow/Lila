@@ -1622,6 +1622,56 @@ Image read(const fs::path& path, std::string* err)
     return readPng(path, err);
 }
 
+Image downsampled(const Image& src, int width, int height)
+{
+    LILA_ZONE();
+    const int w = std::clamp(width, 1, std::max(src.width, 1)), h = std::clamp(height, 1, std::max(src.height, 1));
+    if (w == src.width && h == src.height)
+        return src;
+    struct Span
+    {
+        int first = 0;
+        std::vector<float> weights;
+    };
+    // Each output texel covers [i * scale, (i + 1) * scale) of the source; a source texel weighs its overlap with that.
+    auto spans = [](int from, int to) {
+        std::vector<Span> out(static_cast<size_t>(to));
+        const double scale = double(from) / double(to);
+        for (int i = 0; i < to; ++i)
+        {
+            const double a = i * scale, b = (i + 1) * scale;
+            Span& s = out[size_t(i)];
+            s.first = int(a);
+            for (int j = s.first; j < std::min(from, int(std::ceil(b))); ++j)
+                s.weights.push_back(float((std::min(b, double(j + 1)) - std::max(a, double(j))) / scale));
+        }
+        return out;
+    };
+    const std::vector<Span> xs = spans(src.width, w), ys = spans(src.height, h);
+    Image out{w, h, std::vector<float>(size_t(w) * size_t(h) * 4, 0.0f), src.icc};
+    tbb::parallel_for(0, h, [&](int y) {
+        float* row = &out.rgba[size_t(y) * size_t(w) * 4];
+        const Span& sy = ys[size_t(y)];
+        for (size_t k = 0; k < sy.weights.size(); ++k)
+        {
+            const float* in = &src.rgba[size_t(sy.first + int(k)) * size_t(src.width) * 4];
+            const float wy = sy.weights[k];
+            for (int x = 0; x < w; ++x)
+            {
+                const Span& sx = xs[size_t(x)];
+                for (size_t m = 0; m < sx.weights.size(); ++m)
+                {
+                    const float wt = wy * sx.weights[m];
+                    const float* t = in + size_t(sx.first + int(m)) * 4;
+                    for (int c = 0; c < 4; ++c)
+                        row[size_t(x) * 4 + size_t(c)] += t[c] * wt;
+                }
+            }
+        }
+    });
+    return out;
+}
+
 const std::vector<std::string>& writableFormats()
 {
     static const std::vector<std::string> f = {"png", "exr", "tga", "tif", "tiff", "psd"};

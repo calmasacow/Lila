@@ -234,3 +234,25 @@ TEST_CASE("image::read reports truncated PNG data")
     fs::remove(p);
 }
 
+
+TEST_CASE("image::downsampled averages the texels each output covers")
+{
+    image::Image src{4, 2, {}};
+    for (int i = 0; i < 8; ++i)
+        src.rgba.insert(src.rgba.end(), {float(i), 1.0f, 0.5f, 1.0f});
+    const image::Image half = image::downsampled(src, 2, 1);
+    REQUIRE(half.width == 2);
+    REQUIRE(half.height == 1);
+    CHECK(half.rgba[0] == doctest::Approx((0 + 1 + 4 + 5) / 4.0f));
+    CHECK(half.rgba[4] == doctest::Approx((2 + 3 + 6 + 7) / 4.0f));
+    CHECK(half.rgba[1] == doctest::Approx(1.0f));
+
+    // Fractional coverage keeps a flat image flat.
+    const image::Image odd = image::downsampled(src, 3, 2);
+    REQUIRE(odd.width == 3);
+    for (size_t i = 1; i < odd.rgba.size(); i += 4)
+        CHECK(odd.rgba[i] == doctest::Approx(1.0f));
+    CHECK(odd.rgba[0] == doctest::Approx((0.0f + 1.0f / 3.0f) * 0.75f));
+
+    CHECK(image::downsampled(src, 8, 8).width == 4);
+}

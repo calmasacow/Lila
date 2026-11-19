@@ -355,6 +355,8 @@ namespace
 {
 /** The status bar's progress title while a plan's shaders compile. */
 constexpr const char* kCompilingTitle = "Compiling texture shaders";
+/** Most texels one Image node file keeps on the GPU: 3 GB as floats, leaving room in a 4 GB buffer for the plan's own. */
+constexpr size_t kMaxImageTexels = size_t(3) << 26;
 
 /** Fused passes whose SPIR-V this process has not compiled yet. */
 size_t uncompiledPasses(const Plan& plan, const Prepared& prep)
@@ -552,27 +554,32 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 const fs::path path = tex::resolveImagePath(b.name, inputs.imageRoot);
                 std::error_code ec;
                 const fs::file_time_type time = fs::last_write_time(path, ec);
-                const std::string key = path.string();
-                std::shared_ptr<const image::Image> cached;
+                // Cached per plan size: each plan keeps only the copy it samples, not the whole file.
+                const std::string key = path.string() + "@" + std::to_string(plan.width) + "x" + std::to_string(plan.height);
+                std::optional<LoadedImage> cached;
                 {
                     std::scoped_lock lock(m->mutex);
                     if (auto it = m->imageCache.find(key); it != m->imageCache.end() && !ec && it->second.time == time)
-                        cached = it->second.image;
+                        cached = it->second;
                 }
-                if (cached)
-                    img = cached;
-                else
+                if (!cached)
                 {
-                    std::string err;
-                    image::Image read = image::read(path, &err);
+                    std::string err, fitted;
+                    image::Image read = tex::fitSourceImage(image::read(path, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
                     if (read.width > 0)
                     {
-                        img = std::make_shared<const image::Image>(std::move(read));
+                        cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted};
                         std::scoped_lock lock(m->mutex);
-                        m->imageCache[key] = {time, img};
+                        m->imageCache[key] = *cached;
                     }
                     else
                         warnings.push_back("image " + b.name + ": " + (err.empty() ? "can't read" : err));
+                }
+                if (cached)
+                {
+                    img = cached->image;
+                    if (!cached->warning.empty())
+                        warnings.push_back(cached->warning);
                 }
             }
             prep->images[b.id] = img;
