@@ -126,10 +126,12 @@ TEST_CASE("Ctrl+backtick opens the command palette")
         pressAndRelease(&w, Qt::Key_QuoteLeft, Qt::ControlModifier, scan);
         CHECK(ranActions() == std::vector<std::string>{"window.commandPalette"});
     }
+#ifdef _WIN32
     // What Windows actually reports for Ctrl+` on a US layout.
     ranActions().clear();
     pressAndRelease(&w, Qt::Key_At, Qt::ControlModifier, 0x29);
     CHECK(ranActions() == std::vector<std::string>{"window.commandPalette"});
+#endif
     w.releaseKeyboard();
     qApp->removeEventFilter(&Hotkeys::get());
 }

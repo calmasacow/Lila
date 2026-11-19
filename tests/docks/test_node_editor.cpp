@@ -915,9 +915,12 @@ TEST_CASE("W grabs the selection to the cursor and R scales its spacing; Esc put
     press(view, Qt::Key_W);
     mouse(view, QEvent::MouseMove, {100, 100}, Qt::NoButton);
     const QPointF a1 = a->pos();
+    // The mouse helper rounds to whole viewport pixels before the view maps back to the scene.
+    const QPointF delta = view->mapToScene(view->mapFromScene(QPointF(160, 130))) -
+                          view->mapToScene(view->mapFromScene(QPointF(100, 100)));
     mouse(view, QEvent::MouseMove, {160, 130}, Qt::NoButton);
-    CHECK(a->pos().x() - a1.x() == doctest::Approx(60).epsilon(0.02));
-    CHECK(a->pos().y() - a1.y() == doctest::Approx(30).epsilon(0.02));
+    CHECK(a->pos().x() - a1.x() == doctest::Approx(delta.x()));
+    CHECK(a->pos().y() - a1.y() == doctest::Approx(delta.y()));
     CHECK(b->pos() - a->pos() == QPointF(400, 0));
     press(view, Qt::Key_X);
     CHECK(nodeCount("G") == 4);
