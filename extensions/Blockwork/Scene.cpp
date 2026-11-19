@@ -72,6 +72,8 @@ public:
             geo::BevelOptions o;
             o.offset = n.as<double>(kWidth);
             o.segments = std::max(1, int(n.as<int64_t>(kSegments)));
+            // A round shades smooth through its corner patches (about 47 degrees apart at 2 segments); a chamfer stays faceted.
+            o.smoothingAngle = o.segments > 1 ? 60.0 : 30.0;
             geo::bevelEdges(m, edges, o);
             return m;
         };

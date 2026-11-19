@@ -238,6 +238,48 @@ TEST_CASE("hotspot: a wall goes to the strip whose world height matches, up the 
     CHECK(cycled.size() == 3);
 }
 
+TEST_CASE("hotspot: walls round a chamfered corner take one trim and run on round it")
+{
+    // Two strips the same height, so every island has a tie to pick from.
+    uv::HotspotTrim a;
+    a.kind = uv::TrimKind::StripU;
+    a.min = {0.0, 0.0};
+    a.max = {1.0, 0.25};
+    a.worldSize = {200.0, 50.0};
+    uv::HotspotTrim b = a;
+    b.min = {0.0, 0.5};
+    b.max = {1.0, 0.75};
+    const std::vector<uv::HotspotTrim> trims{a, b};
+    // Front, a 45 degree chamfer, right: a block's corner bevelled at 4 cm.
+    const glm::dvec3 pts[] = {{-200, 0, 20}, {196, 0, 20}, {200, 0, 16}, {200, 0, -200},
+                              {-200, 50, 20}, {196, 50, 20}, {200, 50, 16}, {200, 50, -200}};
+    const geo::Index sizes[] = {4, 4, 4};
+    const geo::Index idx[] = {0, 1, 5, 4, 1, 2, 6, 5, 2, 3, 7, 6};
+    for (uint32_t seed = 0; seed < 8; ++seed)
+    {
+        geo::Mesh m = geo::Mesh::fromPolygons(pts, sizes, idx);
+        uv::HotspotOptions o;
+        o.seed = seed;
+        const uv::HotspotResult r = uv::hotspot(m, {}, trims, "uv0", o);
+        REQUIRE(r.islands.size() == 3);
+        CHECK(r.islands[0].trim == r.islands[1].trim);
+        CHECK(r.islands[1].trim == r.islands[2].trim);
+        // Each edge between them carries one uv on both sides, so the strip runs on.
+        std::span<const glm::vec2> uv = m.cornerAttrs().get<glm::vec2>("uv0");
+        for (const glm::dvec3 p : {glm::dvec3(196, 50, 20), glm::dvec3(200, 50, 16)})
+        {
+            std::vector<glm::vec2> at;
+            for (geo::Index c = 0; c < m.cornerCapacity(); ++c)
+                if (m.cornerValid(c) && glm::length(m.position(m.cornerPoint(c)) - p) < 1e-6)
+                    at.push_back(uv[c]);
+            REQUIRE(at.size() == 2);
+            const float du = at[0].x - at[1].x;
+            CHECK(std::abs(du - std::round(du)) < 1e-4f);
+            CHECK(at[0].y == doctest::Approx(at[1].y));
+        }
+    }
+}
+
 TEST_CASE("hotspot: a square panel takes a square hotspot of its size")
 {
     const Sheet s = preset("hotspotGrid");

@@ -26,6 +26,7 @@
 #include "ui/UiCommands.h"
 #include "ui/UiCommon.h"
 #include "ui/ViewportDisplay.h"
+#include "ui/ViewportToast.h"
 #include "ui/ViewportToolMath.h"
 
 #include <QKeyEvent>
@@ -52,6 +53,12 @@ constexpr int kSavedAttrs[] = {Transform::kTranslate,           Transform::kRota
 constexpr int kSavedCount = int(std::size(kSavedAttrs));
 
 const glm::vec4 kTrail(0.95f, 0.95f, 0.95f, 0.8f);
+
+/** The /manipulator/shiftDrag pref: Shift-drag on faces and edges extrudes them instead of slowing the drag down. */
+bool shiftDragExtrudes()
+{
+    return PrefStore::get().value<std::string>("general", "/manipulator/shiftDrag", std::string("fine")) == "extrude";
+}
 const glm::vec4 kLocked(0.42f, 0.42f, 0.42f, 0.55f);
 
 scene::Space spaceFor(Tool t)
@@ -700,16 +707,30 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
         return true;
     }
 
-    // Clone drag: the copies are made now and dragged; the originals stay put.
+    // Clone drag: the copies are made now and dragged; the originals stay put. On faces and edges the copy is an
+    // extrude, which leaves the extruded components selected to drag.
+    const scene::ComponentMode componentMode = scene::components::mode();
+    const bool extrudable = componentMode == scene::ComponentMode::Face || componentMode == scene::ComponentMode::Edge;
+    const bool extrudeDrag = mComponents && button == Qt::LeftButton && !tools::pivotEdit() && !surfaceSlide &&
+                             (tools::cloneDrag() || ((mods & Qt::ShiftModifier) && shiftDragExtrudes() && extrudable));
+    const bool clone = !surfaceSlide && !tools::pivotEdit() && (extrudeDrag || (tools::cloneDrag() && !mComponents));
+    std::string cloneCommand;
     json cloneCall;
-    const bool clone = tools::cloneDrag() && !mComponents && !tools::pivotEdit() && !surfaceSlide;
     if (clone)
     {
-        tools::markCloneDragUsed();
-        cloneCall = ops::options::callWith("duplicate", json::object());
+        if (tools::cloneDrag())
+            tools::markCloneDragUsed();
+        if (extrudeDrag && !extrudable)
+        {
+            viewportToast::showActive("Extrude drag works on faces and edges", 2500, viewportToast::Kind::Warning);
+            return true;
+        }
+        cloneCommand = extrudeDrag ? "polyExtrude" : "duplicate";
+        cloneCall = extrudeDrag ? ops::options::callWith("polyExtrude", {{"thickness", 0.0}, {"offset", 0.0}, {"duplicate", false}})
+                                : ops::options::callWith("duplicate", json::object());
         try
         {
-            ops::execute("duplicate", cloneCall, CallSource::Script);
+            ops::execute(cloneCommand, cloneCall, CallSource::Script);
         }
         catch (const CommandError& e)
         {
@@ -727,6 +748,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
     Graph& g = Graph::current();
     Drag d;
     d.clone = clone;
+    d.cloneCommand = cloneCommand;
     d.cloneCall = cloneCall;
     d.handle = h;
     d.pressPx = d.virtualPx = d.lastPx = px;
@@ -931,7 +953,8 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
     // Shift slows the drag down for precision, except on Shift+MMB where it picks the axis and on a surface slide,
     // which follows the cursor exactly and uses Shift to keep the objects' orientation.
     const bool sliding = d.surfaceSlide || (tools::snaps() & SnapSurface);
-    double factor = (mods & Qt::ShiftModifier) && !d.axisFromDrag && !sliding ? 0.1 : 1.0;
+    const bool shiftExtrudes = d.clone && d.components && shiftDragExtrudes();
+    double factor = (mods & Qt::ShiftModifier) && !d.axisFromDrag && !sliding && !shiftExtrudes ? 0.1 : 1.0;
     d.precise = factor < 1.0;
     d.virtualPx += (px - d.lastPx) * factor;
     d.lastPx = px;
@@ -1405,16 +1428,19 @@ void Manipulator::commit()
     if (d.clone)
     {
         // The copies made on press go again, and one undo step makes them already placed.
-        dropCloneCopies();
+        dropCloneCopies(d.cloneCommand);
         const bool changed = t == Tool::Move     ? glm::length(d.moveDelta) > 1e-9
                              : t == Tool::Rotate ? std::abs(d.angle) > 1e-9
                                                  : glm::length(d.scale - glm::dvec3(1.0)) > 1e-9;
         if (!changed)
             return;
-        cloneChunk.emplace("Clone");
+        cloneChunk.emplace(d.components ? "Extrude Drag" : "Clone");
         try
         {
-            names = ops::execute("duplicate", d.cloneCall, CallSource::UI);
+            if (d.components)
+                ops::execute(d.cloneCommand, d.cloneCall, CallSource::UI);
+            else
+                names = ops::execute(d.cloneCommand, d.cloneCall, CallSource::UI);
         }
         catch (const CommandError& e)
         {
@@ -1555,15 +1581,16 @@ void Manipulator::cancel()
         return;
     restore();
     const bool clone = mDrag->clone;
+    const std::string command = mDrag->cloneCommand;
     mDrag.reset();
     if (clone)
-        dropCloneCopies();
+        dropCloneCopies(command);
 }
 
-void Manipulator::dropCloneCopies()
+void Manipulator::dropCloneCopies(const std::string& command)
 {
     UndoStack& undo = UndoStack::get();
-    if (undo.undoLabel() != "duplicate")
+    if (undo.undoLabel() != command)
         return;
     undo.undo();
     undo.flushFuture();

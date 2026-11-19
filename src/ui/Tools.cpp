@@ -192,7 +192,8 @@ void registerActions()
     actions::add({.id = "tool.pivotEditOff", .label = "End Pivot Edit", .category = "Tools", .run = [] { setPivotEdit(false); },
                   .doc = "Returns the manipulator to moving the object."});
     actions::add({.id = "tool.cloneDragOn", .label = "Clone Drag (hold)", .category = "Tools", .run = [] { setCloneDrag(true); },
-                  .doc = "While held, dragging a manipulator handle duplicates the selected objects and moves the copies."});
+                  .doc = "While held, dragging a manipulator handle duplicates the selected objects and moves the copies; on faces and edges it extrudes them and moves the extruded ones.",
+                  .keywords = {"extrude drag", "shift extrude", "duplicate drag", "alt drag"}});
     actions::add({.id = "tool.cloneDragOff", .label = "End Clone Drag", .category = "Tools", .run = [] { setCloneDrag(false); },
                   .doc = "Returns manipulator drags to moving the selected objects themselves."});
     // Y: held, a manipulator drag clones; a tap without one reactivates the last viewport tool.
@@ -200,7 +201,7 @@ void registerActions()
                       gCloneKeyUsed = false;
                       setCloneDrag(true);
                   },
-                  .doc = "Press half of the clone key: hold and drag a manipulator handle to clone the selected objects."});
+                  .doc = "Press half of the clone key: hold and drag a manipulator handle to clone the selected objects, or extrude the selected faces or edges."});
     actions::add({.id = "tool.cloneKeyUp", .label = "Clone Key Up", .category = "Tools", .run = [] {
                       setCloneDrag(false);
                       if (!gCloneKeyUsed)

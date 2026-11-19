@@ -12,6 +12,7 @@
 #include <glm/glm.hpp>
 
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -140,6 +141,8 @@ void hardenEdges(lila::geo::Mesh& mesh, double angle = 40.0);
 lila::geo::Mesh hollow(const lila::geo::Mesh& mesh, double thickness, bool inward, const std::vector<lila::geo::Index>& open);
 /** Cuts along the plane and keeps the side the normal points to (keep > 0), the other (keep < 0); the cut is capped. */
 lila::geo::Mesh clip(const lila::geo::Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, int keep);
+/** How far rays from the points travel along dir before leaving the mesh; the furthest, or 0 when none leaves it. */
+double depthThrough(const lila::geo::Mesh& mesh, const std::vector<glm::dvec3>& points, const glm::dvec3& dir);
 /** The face of the mesh that point lies on, facing along normal; kInvalid when none does. */
 lila::geo::Index faceAt(const lila::geo::Mesh& mesh, const glm::dvec3& point, const glm::dvec3& normal, double tolerance = 0.5);
 /** Faces of a whose every corner lies on an opposite-facing coplanar face of b. */
@@ -147,6 +150,18 @@ std::vector<lila::geo::Index> coveredFaces(const lila::geo::Mesh& a, const lila:
 
 /** Edges of a lying on a face of b: both ends and the middle in its plane and inside it or on its outline. */
 std::vector<lila::geo::Index> touchingEdges(const lila::geo::Mesh& a, const lila::geo::Mesh& b, double tolerance = 0.01);
+
+/** A plane splitting a's faces where they meet the side of a face of b that lies across one of a's edges. */
+struct ContactCut
+{
+    glm::dvec3 point{0.0};
+    glm::dvec3 normal{0.0};
+    /** The faces of a around the edge it crosses. */
+    std::vector<lila::geo::Index> faces;
+};
+/** The first place a face of b covers only part of one of a's edges (of those given), so that stretch can be split off as its own edge. */
+std::optional<ContactCut> partialContactCut(const lila::geo::Mesh& a, const lila::geo::Mesh& b, std::span<const lila::geo::Index> edges,
+                                            double tolerance = 0.01);
 
 /** In-plane directions for a footprint on a surface facing normal: the world axis lying in the plane first. */
 void planeBasis(const glm::dvec3& normal, glm::dvec3& u, glm::dvec3& v);
