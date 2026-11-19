@@ -670,8 +670,13 @@ void addBuiltIns(Registry<prefPages::Page>& r)
         toggleField(general, "Check for Lila updates at startup", updater::kCheckPref, true);
         sectionHeader(general, "Telemetry");
         toggleField(general, "Send anonymous usage statistics", kTelemetryUsagePref, false);
-        toggleField(general, "Send crash reports", kTelemetryCrashPref, false);
-        toggleField(general, "Send crash reports without asking", telemetry::kCrashAlwaysPref, false);
+        {
+            std::vector<std::pair<QString, std::string>> options;
+            for (const auto& [shown, value] : telemetry::crashSendChoices())
+                options.emplace_back(QString::fromStdString(shown), value);
+            const std::string mode = telemetry::crashSendMode();
+            choiceField(general, "Crash reports", telemetry::kCrashSendPref, std::move(options), mode.empty() ? "ask" : mode);
+        }
         auto onboarding = [&general](const char* label, const char* key, const std::vector<std::pair<std::string, std::string>>& choices) {
             std::vector<std::pair<QString, std::string>> options;
             for (const auto& [shown, value] : choices)
