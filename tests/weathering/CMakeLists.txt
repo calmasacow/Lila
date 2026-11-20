@@ -14,3 +14,9 @@ target_compile_definitions(lila_weathering_tests PRIVATE
     LILA_TEST_STAGEHAND_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/Stagehand.lilaext"
     LILA_TEST_WEATHERING_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/Weathering.lilaext")
 add_test(NAME lila_weathering_tests COMMAND lila_weathering_tests)
+# Edges: geometry compiled in, Blockwork and Trim Sheets loaded by the edge tests.
+target_sources(lila_weathering_tests PRIVATE ${CMAKE_SOURCE_DIR}/extensions/Weathering/EdgeGeometry.cpp)
+add_dependencies(lila_weathering_tests lila_blockwork_extension lila_trimsheets_extension)
+target_compile_definitions(lila_weathering_tests PRIVATE
+    LILA_TEST_BLOCKWORK_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/Blockwork.lilaext"
+    LILA_TEST_TRIM_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/TrimSheets.lilaext")

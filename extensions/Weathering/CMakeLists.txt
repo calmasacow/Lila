@@ -3,7 +3,7 @@
 set(WEATHERING_CORE_SOURCES Weathering.cpp Weathering.h Pieces.cpp Pieces.h Placeholders.cpp Placeholders.h)
 set(WEATHERING_AGE_SOURCES Age.cpp Ground.cpp)
 set(WEATHERING_MASK_SOURCES Masks.cpp)
-set(WEATHERING_EDGE_SOURCES Edges.cpp)
+set(WEATHERING_EDGE_SOURCES Edges.cpp EdgeGeometry.cpp EdgeGeometry.h EdgeSheets.cpp EdgeSheets.h)
 set(WEATHERING_IVY_SOURCES Ivy.cpp)
 set(WEATHERING_GENERATOR_SOURCES Generators.cpp)
 lila_add_extension(lila_weathering_extension ID Weathering MANIFEST extension.json UI
