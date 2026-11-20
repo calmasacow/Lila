@@ -5,7 +5,7 @@ set(WEATHERING_AGE_SOURCES Age.cpp Ground.cpp)
 set(WEATHERING_MASK_SOURCES Masks.cpp)
 set(WEATHERING_EDGE_SOURCES Edges.cpp)
 set(WEATHERING_IVY_SOURCES Ivy.cpp)
-set(WEATHERING_GENERATOR_SOURCES Generators.cpp)
+set(WEATHERING_GENERATOR_SOURCES Generators.cpp GenCommon.cpp GenCommon.h GenNodes.cpp GenNodes.h GenPlaceholders.cpp GenPlaceholders.h RoofLayout.cpp RoofLayout.h RooftopLayout.cpp RooftopLayout.h Truss.cpp Truss.h WindowLayout.cpp WindowLayout.h WireLayout.cpp WireLayout.h)
 lila_add_extension(lila_weathering_extension ID Weathering MANIFEST extension.json UI
     SOURCES ${WEATHERING_CORE_SOURCES} ${WEATHERING_AGE_SOURCES} ${WEATHERING_MASK_SOURCES} ${WEATHERING_EDGE_SOURCES}
             ${WEATHERING_IVY_SOURCES} ${WEATHERING_GENERATOR_SOURCES})
