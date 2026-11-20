@@ -2,7 +2,7 @@
 # Stagehand. One sources line per area.
 set(WEATHERING_CORE_SOURCES Weathering.cpp Weathering.h Pieces.cpp Pieces.h Placeholders.cpp Placeholders.h)
 set(WEATHERING_AGE_SOURCES Age.cpp Ground.cpp)
-set(WEATHERING_MASK_SOURCES Masks.cpp)
+set(WEATHERING_MASK_SOURCES Masks.cpp Masks.h MaskCompute.cpp MaskCompute.h MasksUi.cpp MasksUnreal.cpp)
 set(WEATHERING_EDGE_SOURCES Edges.cpp)
 set(WEATHERING_IVY_SOURCES Ivy.cpp)
 set(WEATHERING_GENERATOR_SOURCES Generators.cpp)
