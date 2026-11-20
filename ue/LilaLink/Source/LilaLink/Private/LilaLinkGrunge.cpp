@@ -22,7 +22,7 @@
 
 namespace
 {
-constexpr int32 Version = 1;
+constexpr int32 Version = 2;
 const TCHAR* VersionTag = TEXT("Lila Grunge v");
 const TCHAR* InstanceFolder = TEXT("/Game/LilaLink/Grunge");
 
@@ -132,10 +132,11 @@ void BuildGrunge(UMaterialFunction* Function)
 	const float Softness[MaskCount] = {0.3f, 0.4f, 0.6f, 0.5f, 0.35f, 0.6f};
 	const float Breakup[MaskCount] = {0.6f, 0.6f, 0.0f, 0.5f, 1.2f, 0.5f};
 	const float Scale[MaskCount] = {6.0f, 20.0f, 30.0f, 30.0f, 4.0f, 25.0f};
-	const float Strength[MaskCount] = {0.85f, 0.8f, 0.5f, 0.7f, 0.7f, 0.6f};
+	const float Strength[MaskCount] = {0.45f, 0.75f, 0.55f, 0.3f, 0.65f, 0.55f};
+	const float Multiply[MaskCount] = {0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f};
 	const float Rough[MaskCount] = {0.45f, 0.9f, -1.0f, 0.95f, 0.75f, 0.9f};
-	const FLinearColor Colors[MaskCount] = {{0.62f, 0.6f, 0.56f}, {0.07f, 0.06f, 0.045f}, {0.03f, 0.03f, 0.03f}, {0.5f, 0.47f, 0.42f}, {0.08f, 0.07f, 0.06f}, {0.16f, 0.13f, 0.1f}};
-	const FLinearColor Lows[MaskCount] = {{0.45f, 0.43f, 0.4f}, {0.12f, 0.1f, 0.08f}, {0.08f, 0.08f, 0.08f}, {0.4f, 0.37f, 0.33f}, {0.15f, 0.13f, 0.11f}, {0.25f, 0.21f, 0.16f}};
+	const FLinearColor Colors[MaskCount] = {{0.62f, 0.6f, 0.56f}, {0.32f, 0.29f, 0.25f}, {0.45f, 0.45f, 0.45f}, {0.5f, 0.47f, 0.42f}, {0.4f, 0.37f, 0.33f}, {0.5f, 0.45f, 0.36f}};
+	const FLinearColor Lows[MaskCount] = {{0.45f, 0.43f, 0.4f}, {0.55f, 0.52f, 0.48f}, {0.7f, 0.7f, 0.7f}, {0.4f, 0.37f, 0.33f}, {0.6f, 0.57f, 0.52f}, {0.7f, 0.66f, 0.58f}};
 	// Edge wear from the per-pixel distance to the nearest sharp edge where the face has one, else the vertex value.
 	const TCHAR* Raw[MaskCount] = {TEXT("min(min(D.x, D.y), min(D.z, D.w)) < 5000.0 ? saturate(1.0 - max(min(min(D.x, D.y), min(D.z, D.w)), 0.0) / max(EdgeWidth, 1e-3)) : A.x"), TEXT("A.y"), TEXT("A.z"), TEXT("B.x"), TEXT("A.w"), TEXT("B.y")};
 	for (int32 K = 0; K < MaskCount; ++K)
@@ -154,6 +155,7 @@ void BuildGrunge(UMaterialFunction* Function)
 		UMaterialExpression* Str = S(TEXT("Strength"), Strength[K], TEXT("How strongly the mask lays its colour over the surface."));
 		UMaterialExpression* Seed = S(TEXT("Seed"), 0.0f, TEXT("Moves the noise; Lila sets it from the mask's seed."));
 		UMaterialExpression* R = S(TEXT("Roughness"), Rough[K], TEXT("Roughness under the mask; below 0 leaves the surface's own."));
+		UMaterialExpression* Mul = S(TEXT("Multiply"), Multiply[K], TEXT("1 darkens the surface by the colour, keeping its texture; 0 lays the colour over it."));
 		UMaterialExpression* Color = G.VectorInput(*(M + TEXT("Color")), Colors[K], *Group, TEXT("Colour where the mask is full."));
 		UMaterialExpression* Low = G.VectorInput(*(M + TEXT("Low")), Lows[K], *Group, TEXT("Colour where the mask just starts."));
 		// Streaks stretch their breakup down the wall (Unreal is Z-up), so it reads as drips.
@@ -186,15 +188,16 @@ void BuildGrunge(UMaterialFunction* Function)
 		Composite.Add(Wire(FString::Printf(TEXT("L%d"), K), Low));
 		Composite.Add(Wire(FString::Printf(TEXT("S%d"), K), Str));
 		Composite.Add(Wire(FString::Printf(TEXT("R%d"), K), R));
+		Composite.Add(Wire(FString::Printf(TEXT("X%d"), K), Mul));
 	}
 	FString Layer = TEXT("float3 c = Base; float rt = 0.0; float rw = 0.0;\n");
 	for (int32 K = 0; K < MaskCount; ++K)
 	{
 		Layer += FString::Printf(TEXT("{ float3 col = lerp(L%d, C%d, M%d.x); float w = M%d.x * S%d;\n"
 									  "  if (M%d.y > 0.0) { col = lerp(col, OutlineColor, M%d.y); w = max(w, M%d.y * S%d); }\n"
-									  "  c = lerp(c, col, w);\n"
+									  "  c = lerp(c, X%d > 0.5 ? c * col : col, w);\n"
 									  "  if (R%d >= 0.0 && w > 0.0) { rt = rw > 0.0 ? lerp(rt, R%d, w) : R%d; rw = max(rw, w); } }\n"),
-			K, K, K, K, K, K, K, K, K, K, K, K);
+			K, K, K, K, K, K, K, K, K, K, K, K, K);
 	}
 	Layer += TEXT("return float4(c, lerp(Rough, rt, rw));");
 	UMaterialExpression* Result = Custom(G, TEXT("composite"), Layer, CMOT_Float4, Composite, -300);

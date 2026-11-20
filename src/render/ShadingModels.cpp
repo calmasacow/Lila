@@ -134,7 +134,8 @@ std::array<uint32_t, kGrungeBlockWords> packGrunge(const GrungeLook& g, uint64_t
         f[b + 1] = std::max(l.softness, 1e-4f);
         f[b + 2] = l.breakup;
         f[b + 3] = 1.0f / std::max(l.noiseScale, 0.01f);
-        f[b + 4] = float(std::max(l.bands, 0));
+        // Multiply rides on the bands word's sign: -(bands + 1).
+        f[b + 4] = l.multiply ? -float(std::max(l.bands, 0) + 1) : float(std::max(l.bands, 0));
         f[b + 5] = l.cut;
         f[b + 6] = l.outline;
         f[b + 7] = std::clamp(l.strength, 0.0f, 1.0f);

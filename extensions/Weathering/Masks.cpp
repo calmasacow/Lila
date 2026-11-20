@@ -59,10 +59,11 @@ enum LookAttr
     kColor,
     kLow,
     kRoughness,
+    kMultiply,
     kLookAttrs,
 };
 constexpr std::array<const char*, kLookAttrs> kLookSuffix = {"Enabled", "Level", "Softness", "Breakup", "NoiseScale", "Bands",
-                                                            "Cut",     "Outline", "Strength", "Color",   "Low",        "Roughness"};
+                                                            "Cut",     "Outline", "Strength", "Color",   "Low",        "Roughness", "Multiply"};
 constexpr std::array<const char*, kMaskCount> kMaskTitles = {"Edge Wear", "Cavity Dirt", "Occlusion", "Dust", "Streaks", "Ground Fade"};
 
 /** A mask's starting look, realistic. */
@@ -71,15 +72,16 @@ struct LookDefault
     double level, softness, breakup, noiseScale, strength;
     glm::dvec3 color, low;
     double roughness;
+    bool multiply; // grime darkens the surface by its colour; worn edges and dust lay their own colour over it
 };
 
 constexpr std::array<LookDefault, kMaskCount> kRealistic = {{
-    {0.45, 0.30, 0.60, 6.0, 0.85, {0.62, 0.60, 0.56}, {0.45, 0.43, 0.40}, 0.45},
-    {0.35, 0.40, 0.60, 20.0, 0.80, {0.07, 0.06, 0.045}, {0.12, 0.10, 0.08}, 0.90},
-    {0.35, 0.60, 0.00, 30.0, 0.50, {0.03, 0.03, 0.03}, {0.08, 0.08, 0.08}, -1.0},
-    {0.55, 0.50, 0.50, 30.0, 0.70, {0.50, 0.47, 0.42}, {0.40, 0.37, 0.33}, 0.95},
-    {0.35, 0.35, 1.20, 4.0, 0.70, {0.08, 0.07, 0.06}, {0.15, 0.13, 0.11}, 0.75},
-    {0.40, 0.60, 0.50, 25.0, 0.60, {0.16, 0.13, 0.10}, {0.25, 0.21, 0.16}, 0.90},
+    {0.45, 0.30, 0.60, 6.0, 0.45, {0.62, 0.60, 0.56}, {0.45, 0.43, 0.40}, 0.45, false},
+    {0.35, 0.40, 0.60, 20.0, 0.75, {0.32, 0.29, 0.25}, {0.55, 0.52, 0.48}, 0.90, true},
+    {0.35, 0.60, 0.00, 30.0, 0.55, {0.45, 0.45, 0.45}, {0.70, 0.70, 0.70}, -1.0, true},
+    {0.60, 0.50, 0.50, 30.0, 0.30, {0.50, 0.47, 0.42}, {0.40, 0.37, 0.33}, 0.95, false},
+    {0.35, 0.35, 1.20, 4.0, 0.65, {0.40, 0.37, 0.33}, {0.60, 0.57, 0.52}, 0.75, true},
+    {0.40, 0.60, 0.50, 25.0, 0.55, {0.50, 0.45, 0.36}, {0.70, 0.66, 0.58}, 0.90, true},
 }};
 
 /** Painted toon colours: flat, warmer, readable bands. */
@@ -119,6 +121,8 @@ std::vector<AttrDef> lookAttrs(int k)
         maskParam(lookName(k, kColor), PlugType::Vec3, d.color, "Colour where the mask is full: the ramp's top stop.", cat, {}, {}, AttrColor),
         maskParam(lookName(k, kLow), PlugType::Vec3, d.low, "Colour where the mask just starts: the ramp's bottom stop.", cat, {}, {}, AttrColor),
         maskParam(lookName(k, kRoughness), PlugType::Float, d.roughness, "Roughness under the mask; below 0 leaves the surface's own.", cat, -1.0, 1.0),
+        maskParam(lookName(k, kMultiply), PlugType::Bool, d.multiply,
+                  "Darken the surface by the colour, keeping its texture (grime); off lays the colour over it (paint, dust).", cat),
     };
 }
 
@@ -303,6 +307,7 @@ render::GrungeLook lookOf(const Node& n)
         l.color = glm::vec3(n.as<glm::dvec3>(at(n, lookName(k, kColor))));
         l.low = glm::vec3(n.as<glm::dvec3>(at(n, lookName(k, kLow))));
         l.roughness = float(n.as<double>(at(n, lookName(k, kRoughness))));
+        l.multiply = n.as<bool>(at(n, lookName(k, kMultiply)));
         l.seed = uint32_t(n.as<int64_t>(at(n, "seed")) * 7 + k);
     }
     look.outlineColor = glm::vec3(n.as<glm::dvec3>(at(n, "outlineColor")));
@@ -479,6 +484,9 @@ json styleLook(Style style)
         v[lookName(k, kColor)] = json::array({c.x, c.y, c.z});
         v[lookName(k, kLow)] = json::array({l.x, l.y, l.z});
         v[lookName(k, kRoughness)] = toon && d.roughness >= 0.0 ? 0.8 : d.roughness;
+        // Toon paints flat bands over the surface; realistic grime darkens it.
+        v[lookName(k, kMultiply)] = toon ? false : d.multiply;
+        v[lookName(k, kStrength)] = toon ? std::min(d.strength + 0.15, 0.75) : d.strength;
     }
     return v;
 }

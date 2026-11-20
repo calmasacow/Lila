@@ -49,6 +49,7 @@ json instanceParams(const Node& grunge, const Node& mesh, json& warnings)
         for (const char* s : {"Level", "Softness", "Breakup", "NoiseScale", "Cut", "Outline", "Strength", "Roughness"})
             scalars[u + s] = grunge.as<double>(at(l + s));
         scalars[u + "Bands"] = double(grunge.as<int64_t>(at(l + "Bands")));
+        scalars[u + "Multiply"] = grunge.as<bool>(at(l + "Multiply")) ? 1.0 : 0.0;
         scalars[u + "Seed"] = double(uint32_t(seed * 7 + int64_t(k)) % 4096u) * 17.31;
         vectors[u + "Color"] = rgb(grunge.as<glm::dvec3>(at(l + "Color")));
         vectors[u + "Low"] = rgb(grunge.as<glm::dvec3>(at(l + "Low")));

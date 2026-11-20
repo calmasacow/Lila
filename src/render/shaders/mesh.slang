@@ -1116,11 +1116,15 @@ void applyGrunge(VSOut i, inout float3 baseColor, inout float roughTarget, inout
         float3 p = world * a.w + d.w;
         if (k == 4)
             p = p - up * dot(p, up) * 0.9;
-        float v = masks[k] + (grungeNoise(p) - 0.5) * a.z;
-        float s = a.y * 0.5;
+        // Noise finer than a pixel fades out instead of shimmering, and the step never gets sharper than a pixel.
+        const float footprint = length(fwidth(p));
+        float v = masks[k] + (grungeNoise(p) - 0.5) * a.z * saturate(1.5 - footprint);
+        float s = max(a.y * 0.5, fwidth(v));
         float m = smoothstep(a.x - s, a.x + s, v);
-        if (b.x >= 2.0)
-            m = min(floor(m * b.x), b.x - 1.0) / (b.x - 1.0);
+        const bool multiply = b.x < 0.0;
+        const float bands = multiply ? -b.x - 1.0 : b.x;
+        if (bands >= 2.0)
+            m = min(floor(m * bands), bands - 1.0) / (bands - 1.0);
         if (b.y > 0.0)
             m = m >= b.y ? 1.0 : 0.0;
         float3 col = lerp(d.rgb, c.rgb, m);
@@ -1136,7 +1140,7 @@ void applyGrunge(VSOut i, inout float3 baseColor, inout float roughTarget, inout
                 w = max(w, line * b.w);
             }
         }
-        baseColor = lerp(baseColor, col, w);
+        baseColor = lerp(baseColor, multiply ? baseColor * col : col, w);
         if (c.w >= 0.0 && w > 0.0)
         {
             roughTarget = roughWeight > 0.0 ? lerp(roughTarget, c.w, w) : c.w;

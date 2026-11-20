@@ -357,6 +357,8 @@ struct GrungeLayer
     glm::vec3 low{0.0f};   // linear
     float roughness = -1.0f;
     uint32_t seed = 0;
+    /** Darkens by multiplying the surface with the ramp colour (grime that keeps the texture) instead of replacing it. */
+    bool multiply = false;
 
     bool operator==(const GrungeLayer&) const = default;
 };
