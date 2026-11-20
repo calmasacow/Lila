@@ -57,6 +57,18 @@ void registerWeatheringUi(ext::Context& ctx)
                            .call = json::object(),
                            .icon = e.icon,
                            .keywords = e.keywords});
+    // Age is the daily entry; the rest are its parts, used when a preset isn't wanted.
+    levelToolkit::add(ctx, {.id = "weathering",
+                            .title = "Weathering",
+                            .items = {{"weathering.age", "wand", "Age", "Age"},
+                                      {"window.propLibrary", "photo", "Presets"},
+                                      {"weathering.baseDressing", "stack-2", "Base", {}, "Parts"},
+                                      {"weathering.groundDressing", "grain", "Ground", {}, "Parts"},
+                                      {"weathering.groundTint", "droplet", "Tint", {}, "Parts"},
+                                      {"weathering.addPieces", "books", "Add Pieces", {}, {}, true},
+                                      {"weathering.unreal", "world-upload", "Unreal Materials", {}, {}, true}},
+                            .order = 44,
+                            .docs = "weathering"});
     menus::addItem(ctx, {.id = "weathering.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Weathering",
                          .before = levelToolkit::kAssetsSection});
     for (const char* a : {"weathering.age", "weathering.baseDressing", "weathering.groundDressing", "weathering.groundTint"})
