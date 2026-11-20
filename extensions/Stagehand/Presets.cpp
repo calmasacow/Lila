@@ -78,6 +78,13 @@ std::vector<json> builtinPresets()
     return specs.get<std::vector<json>>();
 }
 
+/** Presets other extensions add at load (Weathering's Age presets), by lower-case name. */
+std::map<std::string, json>& registeredPresets()
+{
+    static std::map<std::string, json> presets;
+    return presets;
+}
+
 fs::path userPresetDir() { return PrefStore::get().userDir() / "arrangement-presets"; }
 
 fs::path workspacePresetDir()
@@ -135,6 +142,8 @@ std::vector<json> allPresets()
                 log::write(LogLevel::Warning, "arrangement preset " + f.generic_string() + ": " + e.what());
             }
     }
+    for (const auto& [_, spec] : registeredPresets())
+        add(spec, spec.value("source", std::string("extension")), {});
     for (json& b : builtinPresets())
         add(std::move(b), "builtin", {});
     return out;
@@ -361,6 +370,34 @@ void registerPresetCommands(ext::Context& ctx)
         .examples = {"arrangePreset('Storeroom', slots={'floor': 'Floor'})",
                      "arrangePreset('Rubble Corner', slots={'floor': 'Ground', 'broken': ['Wall_pieces']}, seed=4)",
                      "arrangePreset('Library Shelf', slots={'boards': ['Shelf_1', 'Shelf_2'], 'books': ['Books/Hardback']})"},
+    });
+
+    ctx.registerCommand({
+        .name = "arrangementRegister",
+        .doc = "Add a built-in arrangement preset for this session, as an extension does at load: the spec's shape is "
+               "arrangementSave's. A saved user or workspace preset of the same name still wins. Optional spec fields shown in "
+               "the library's Presets tab: category, style (realistic, toon), tags, thumbnail (an image path).",
+        .positionalDoc = "preset name",
+        .flags = {{"spec", "sp", T::Any, nullptr, "{description, slots: {...}, steps: [{command, args, flags, needs}]}."},
+                  {"source", "src", T::String, "extension", "Who added it, shown as the preset's source."},
+                  {"remove", "rm", T::Bool, false, "Remove the preset of that name instead."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() != 1 || !a.positional[0].is_string())
+                throw CommandError("arrangementRegister: give the preset's name");
+            const std::string name = a.positional[0].get<std::string>();
+            if (a.get<bool>("remove", false))
+                return registeredPresets().erase(lower(name)) > 0;
+            json spec = a.has("spec") ? a.flags["spec"] : json();
+            if (!spec.is_object() || !spec.contains("steps") || !spec["steps"].is_array() || spec["steps"].empty())
+                throw CommandError("arrangementRegister: a preset needs steps: [{command, args, flags}]");
+            spec["name"] = name;
+            spec["source"] = a.get<std::string>("source", "extension");
+            registeredPresets()[lower(name)] = std::move(spec);
+            return true;
+        },
+        .examples = {"arrangementRegister('Crate Row', spec={'category': 'Storage', 'slots': {'floor': {'kind': 'mesh'}}, 'steps': "
+                     "[{'command': 'scatterProps', 'args': ['$floor'], 'flags': {'items': ['Industrial/Crate'], 'realize': True}}]})"},
     });
 
     ctx.registerCommand({

@@ -597,6 +597,45 @@ void registerLibraryCommands(ext::Context& ctx)
     });
 
     ctx.registerCommand({
+        .name = "libraryMaster",
+        .doc = "A library asset's hidden master in the scene, loaded on first use: what instances and arrangements copy. "
+               "For other tools that build from library pieces. Returns root and meshes (paths).",
+        .positionalDoc = "asset id",
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() != 1 || !a.positional[0].is_string())
+                throw CommandError("libraryMaster: give one asset id");
+            Graph& g = Graph::current();
+            const NodeId root = libraryMaster(g, a.positional[0].get<std::string>());
+            json meshes = json::array();
+            for (NodeId m : meshesOf(g, root))
+                meshes.push_back(g.node(m)->path());
+            return {{"root", g.node(root)->path()}, {"meshes", meshes}};
+        },
+        .examples = {"libraryMaster('Debris/StoneChunkM1')['meshes'][0]"},
+    });
+
+    ctx.registerCommand({
+        .name = "libraryRoot",
+        .doc = "Add a library folder for this session under a tier of its own, searched after every other tier: how an "
+               "extension ships placeholder pieces without touching the user's library paths. remove=True takes it out.",
+        .positionalDoc = "folder",
+        .flags = {{"tier", "t", T::String, "placeholder", "Tier name shown on its assets."},
+                  {"remove", "rm", T::Bool, false, "Remove the folder instead."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            if (a.positional.size() != 1 || !a.positional[0].is_string())
+                throw CommandError("libraryRoot: give one folder");
+            const fs::path dir = library::utf8Path(a.positional[0].get<std::string>());
+            if (a.get<bool>("remove", false))
+                library::removeExtensionRoot(dir);
+            else
+                library::addExtensionRoot(a.get<std::string>("tier", "placeholder"), dir);
+            return dir.generic_string();
+        },
+        .examples = {"libraryRoot('D:/Pieces/Weathering', tier='placeholder')"},
+    });
+
+    ctx.registerCommand({
         .name = "libraryPaths",
         .doc = "The library folders searched, in the order they win, with collections, tags and load errors.\n\n"
                "Workspace <workspace>/Library, then studio folders (pref stagehand /library/paths and env LILA_LIBRARY_PATH), then the "
