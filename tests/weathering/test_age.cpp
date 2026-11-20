@@ -183,3 +183,12 @@ TEST_CASE("weathering: realized base dressing settles with Stagehand")
     CHECK(r.contains("atRest"));
     CHECK(r["atRest"].get<int>() >= r["count"].get<int>() / 2);
 }
+
+TEST_CASE("weathering: preset thumbnails leave no trace in the scene")
+{
+    houseScene();
+    const size_t before = g().nodes().size();
+    const json r = run("arrangementThumbnails", {{"args", {"Abandoned"}}});
+    CHECK(r["drawn"].size() + r["skipped"].size() == 1);
+    CHECK(g().nodes().size() == before);
+}

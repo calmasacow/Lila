@@ -31,6 +31,8 @@
 #include <QMenu>
 #include <QMimeData>
 #include <QPixmap>
+#include <QStackedWidget>
+#include <QTabBar>
 #include <QToolButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -47,6 +49,7 @@ namespace
 {
 
 constexpr const char* kMime = "application/x-lila-library-asset";
+constexpr const char* kPresetMime = "application/x-lila-arrangement-preset";
 constexpr const char* kPanel = "stagehand.library";
 constexpr int kIdRole = Qt::UserRole + 1;
 
@@ -82,13 +85,230 @@ protected:
     QStringList mimeTypes() const override { return {kMime}; }
 };
 
+class PresetList final : public QListWidget
+{
+public:
+    using QListWidget::QListWidget;
+
+protected:
+    QMimeData* mimeData(const QList<QListWidgetItem*>& items) const override
+    {
+        if (items.isEmpty())
+            return nullptr;
+        auto* m = new QMimeData();
+        m->setData(kPresetMime, items.front()->data(kIdRole).toString().toUtf8());
+        return m;
+    }
+    QStringList mimeTypes() const override { return {kPresetMime}; }
+};
+
+/** The preset's spec by name, or null. */
+json presetNamed(const std::string& name)
+{
+    const json all = runUi("arrangementPresets", json::object());
+    for (const json& p : all.is_array() ? all : json::array())
+        if (p.value("name", std::string()) == name)
+            return p;
+    return nullptr;
+}
+
+/**
+ * Runs a preset on objects: weathering presets through age (every mesh under them), others with the objects in their
+ * first place slot (the floor, the boards, the ground).
+ */
+void applyPreset(const std::string& name, const std::vector<std::string>& targets)
+{
+    if (targets.empty())
+    {
+        log::write(LogLevel::Warning, "Presets: select what to dress, or drag the preset onto it");
+        return;
+    }
+    const json spec = presetNamed(name);
+    if (spec.is_null())
+        return;
+    const json slots = spec.value("slots", json::object());
+    if (spec.value("category", std::string()) == "Weathering" && slots.contains("targets"))
+    {
+        runUi("age", {{"args", targets}, {"preset", name}});
+        return;
+    }
+    json fill = json::object();
+    for (const auto& [slot, s] : slots.items())
+    {
+        const std::string kind = s.value("kind", std::string());
+        if (kind == "mesh")
+            fill[slot] = targets.front();
+        else if (kind == "meshes")
+            fill[slot] = targets;
+        else
+            continue;
+        break;
+    }
+    runUi("arrangePreset", {{"args", {name}}, {"slots", fill}});
+}
+
+std::vector<std::string> selectedPaths()
+{
+    Graph& g = Graph::current();
+    std::vector<std::string> out;
+    for (NodeId id : g.selection())
+        if (Node* n = g.node(id))
+            out.push_back(n->path());
+    return out;
+}
+
+/** Presets as picture tiles: double-click runs one on the selection, dragging one onto an object runs it there. */
+class PresetsPage final : public QWidget
+{
+public:
+    explicit PresetsPage(QWidget* parent) : QWidget(parent)
+    {
+        auto* v = new QVBoxLayout(this);
+        v->setContentsMargins(0, 0, 0, 0);
+        v->setSpacing(4);
+        auto* top = new QHBoxLayout();
+        top->setSpacing(2);
+        mSearch = new QLineEdit(this);
+        mSearch->setPlaceholderText("Search presets");
+        mSearch->setClearButtonEnabled(true);
+        mKind = new QComboBox(this);
+        mKind->addItems({"All", "Age", "Ground", "Set Dressing"});
+        mKind->setToolTip("Kind: Age presets dress round objects, Ground presets dress a ground, Set Dressing fills a place");
+        mStyle = new QComboBox(this);
+        mStyle->addItems({"Any Style", "Realistic", "Toon"});
+        mStyle->setToolTip("Style of the preset's look and placeholder pieces");
+        top->addWidget(mSearch, 1);
+        top->addWidget(mKind);
+        top->addWidget(mStyle);
+        v->addLayout(top);
+        mList = new PresetList(this);
+        mList->setViewMode(QListView::IconMode);
+        mList->setIconSize(QSize(96, 96));
+        mList->setGridSize(QSize(112, 132));
+        mList->setResizeMode(QListView::Adjust);
+        mList->setMovement(QListView::Static);
+        mList->setDragEnabled(true);
+        mList->setDragDropMode(QAbstractItemView::DragOnly);
+        mList->setContextMenuPolicy(Qt::CustomContextMenu);
+        mList->setWordWrap(true);
+        v->addWidget(mList, 1);
+        mStatus = new QLabel(this);
+        mStatus->setWordWrap(true);
+        mStatus->setEnabled(false);
+        v->addWidget(mStatus);
+
+        QObject::connect(mSearch, &QLineEdit::textChanged, this, [this] { fill(); });
+        QObject::connect(mKind, &QComboBox::currentIndexChanged, this, [this] { fill(); });
+        QObject::connect(mStyle, &QComboBox::currentIndexChanged, this, [this] { fill(); });
+        QObject::connect(mList, &QListWidget::itemDoubleClicked, this,
+                         [](QListWidgetItem* it) { applyPreset(it->data(kIdRole).toString().toStdString(), selectedPaths()); });
+        QObject::connect(mList, &QWidget::customContextMenuRequested, this, [this](QPoint pos) { contextMenu(pos); });
+    }
+
+    /** Fills the list, drawing missing thumbnails the first time the page shows. */
+    void showing()
+    {
+        fill();
+        if (mDrawn)
+            return;
+        mDrawn = true;
+        QTimer::singleShot(0, this, [this] {
+            mStatus->setText("Drawing thumbnails");
+            runUi("arrangementThumbnails", json::object());
+            fill();
+        });
+    }
+
+private:
+    static std::string kindOf(const json& p)
+    {
+        if (p.value("category", std::string()) != "Weathering")
+            return "Set Dressing";
+        return p.value("kind", std::string()) == "ground" ? "Ground" : "Age";
+    }
+
+    void fill()
+    {
+        const json all = runUi("arrangementPresets", json::object());
+        const QString words = mSearch->text().trimmed().toLower();
+        const std::string kind = mKind->currentIndex() > 0 ? mKind->currentText().toStdString() : std::string();
+        const std::string style = mStyle->currentIndex() == 1 ? "realistic" : mStyle->currentIndex() == 2 ? "toon" : "";
+        mList->clear();
+        int shown = 0;
+        for (const json& p : all.is_array() ? all : json::array())
+        {
+            const std::string name = p.value("name", std::string());
+            const std::string description = p.value("description", std::string());
+            if (!kind.empty() && kindOf(p) != kind)
+                continue;
+            if (!style.empty() && p.value("style", std::string("realistic")) != style)
+                continue;
+            if (!words.isEmpty() && !qs(name + " " + description).toLower().contains(words))
+                continue;
+            auto* it = new QListWidgetItem(qs(name), mList);
+            it->setData(kIdRole, qs(name));
+            it->setToolTip(qs(description) + "\nDouble-click to dress the selection, or drag onto an object.");
+            if (const std::string t = p.value("thumbnail", std::string()); !t.empty())
+                it->setIcon(QIcon(QPixmap(qs(t))));
+            else
+                it->setIcon(icon("photo"));
+            ++shown;
+        }
+        mStatus->setText(shown ? QString("%1 presets").arg(shown) : QString("No presets match."));
+    }
+
+    void contextMenu(QPoint pos)
+    {
+        QListWidgetItem* it = mList->itemAt(pos);
+        if (!it)
+            return;
+        const std::string name = it->data(kIdRole).toString().toStdString();
+        QMenu m(this);
+        m.addAction("Dress Selection", [name] { applyPreset(name, selectedPaths()); });
+        m.addAction("Redraw Thumbnail", [this, name] {
+            runUi("arrangementThumbnails", {{"args", {name}}, {"force", true}});
+            fill();
+        });
+        m.addSeparator();
+        m.addAction("Copy Name", [name] { QGuiApplication::clipboard()->setText(qs(name)); });
+        m.exec(mList->viewport()->mapToGlobal(pos));
+    }
+
+    QLineEdit* mSearch = nullptr;
+    QComboBox* mKind = nullptr;
+    QComboBox* mStyle = nullptr;
+    PresetList* mList = nullptr;
+    QLabel* mStatus = nullptr;
+    bool mDrawn = false;
+};
+
 class LibraryPanel final : public QWidget
 {
 public:
     explicit LibraryPanel(QWidget* parent) : QWidget(parent)
     {
-        auto* v = new QVBoxLayout(this);
-        v->setContentsMargins(12, 8, 12, 8);
+        auto* outer = new QVBoxLayout(this);
+        outer->setContentsMargins(12, 8, 12, 8);
+        outer->setSpacing(4);
+        auto* tabs = new QTabBar(this);
+        tabs->addTab("Props");
+        tabs->addTab("Presets");
+        tabs->setExpanding(false);
+        tabs->setDrawBase(false);
+        outer->addWidget(tabs);
+        auto* pages = new QStackedWidget(this);
+        auto* props = new QWidget(pages);
+        mPresets = new PresetsPage(pages);
+        pages->addWidget(props);
+        pages->addWidget(mPresets);
+        outer->addWidget(pages, 1);
+        QObject::connect(tabs, &QTabBar::currentChanged, this, [this, pages](int i) {
+            pages->setCurrentIndex(i);
+            if (i == 1)
+                mPresets->showing();
+        });
+        auto* v = new QVBoxLayout(props);
+        v->setContentsMargins(0, 0, 0, 0);
         v->setSpacing(4);
         auto* top = new QHBoxLayout();
         top->setSpacing(2);
@@ -261,6 +481,7 @@ private:
     QComboBox* mCollection = nullptr;
     AssetList* mList = nullptr;
     QLabel* mStatus = nullptr;
+    PresetsPage* mPresets = nullptr;
 };
 
 /** Where a drag would put an asset: on the surface under the cursor, else on the ground plane. */
@@ -301,6 +522,15 @@ bool onDrop(const QMimeData& mime, const viewportHooks::DropTarget& t, bool comm
         gGhost.active = false;
         viewportTools::requestRedraw();
         return false;
+    }
+    if (mime.hasFormat(kPresetMime))
+    {
+        if (!commit)
+            return true;
+        // Dropped on an object: dress it; dropped on empty space: the selection.
+        Node* n = t.face != UINT32_MAX ? Graph::current().node(t.node) : nullptr;
+        applyPreset(QString::fromUtf8(mime.data(kPresetMime)).toStdString(), n ? std::vector<std::string>{n->path()} : selectedPaths());
+        return true;
     }
     if (!mime.hasFormat(kMime))
         return false;

@@ -18,6 +18,7 @@
 #include <lila/Prefs.h>
 #include <lila/Profile.h>
 #include <lila/Transform.h>
+#include <lila/Undo.h>
 #include <lila/Workspace.h>
 
 #include <algorithm>
@@ -107,6 +108,10 @@ std::string lower(std::string s)
     return s;
 }
 
+fs::path thumbnailDir() { return userPresetDir() / "thumbs"; }
+
+fs::path thumbnailFile(const std::string& name);
+
 /** Every preset, workspace first, then the user's, then the built-ins; the first of a name wins. */
 std::vector<json> allPresets()
 {
@@ -116,6 +121,12 @@ std::vector<json> allPresets()
         const std::string key = lower(spec.value("name", std::string()));
         if (key.empty() || !seen.insert(key).second)
             return;
+        if (!spec.contains("thumbnail"))
+        {
+            std::error_code ec;
+            if (const fs::path t = thumbnailFile(spec.value("name", std::string())); fs::exists(t, ec))
+                spec["thumbnail"] = t.generic_string();
+        }
         spec["source"] = source;
         if (!file.empty())
             spec["path"] = file.generic_string();
@@ -148,6 +159,8 @@ std::vector<json> allPresets()
         add(std::move(b), "builtin", {});
     return out;
 }
+
+fs::path thumbnailFile(const std::string& name) { return thumbnailDir() / (fileSafe(name) + ".png"); }
 
 json findPreset(const std::string& name, const char* cmd)
 {
@@ -293,10 +306,111 @@ std::string madeGroup(Graph& g, const json& r)
                 return n->path();
     return {};
 }
+/**
+ * Draws a preset's thumbnail: the preset run on a stand-in (a block on a ground plane, far from the scene), captured,
+ * and the whole step cancelled so neither the scene nor undo keeps a trace. Needs captureView (the app, batch mode).
+ * Returns the file, or a note saying why it was skipped.
+ */
+json drawThumbnail(Graph& g, const json& spec)
+{
+    const std::string name = spec.value("name", std::string());
+    const fs::path file = thumbnailFile(name);
+    if (!ops::registry().find("captureView"))
+        return {{"preset", name}, {"note", "no renderer here: thumbnails are drawn by the app or batch mode"}};
+    UndoStack& undo = UndoStack::get();
+    if (undo.chunkOpen())
+        return {{"preset", name}, {"note", "skipped inside another command"}};
+    json slots = json::object();
+    for (const auto& [slot, s] : spec.value("slots", json::object()).items())
+    {
+        const std::string kind = s.value("kind", std::string());
+        if (kind == "items" && !s.contains("default") && !s.value("optional", false))
+            return {{"preset", name}, {"note", "slot " + slot + " has no default pieces to show"}};
+        if (kind == "mesh" || kind == "meshes")
+            slots[slot] = slot == "ground" || slot == "floor" ? "|PresetThumbGround" : "|PresetThumbBlock";
+    }
+    const std::vector<NodeId> previous = g.selection();
+    std::error_code ec;
+    fs::create_directories(thumbnailDir(), ec);
+    json out = {{"preset", name}};
+    std::set<NodeId> before;
+    for (NodeId id : g.nodes())
+        before.insert(id);
+    undo.openChunk("Preset thumbnail");
+    try
+    {
+        const double far = 100000.0;
+        ops::execute("polyCube", {{"name", "PresetThumbBlock"}, {"position", json::array({far, 0.0, far})}, {"width", 300.0}, {"height", 260.0},
+                                  {"depth", 300.0}, {"baseAtOrigin", true}, {"generator", false}});
+        ops::execute("polyPlane", {{"name", "PresetThumbGround"}, {"width", 900.0}, {"depth", 900.0}, {"subdivisionsX", 12}, {"subdivisionsZ", 12},
+                                   {"position", json::array({far, 0.0, far})}});
+        ops::execute("arrangePreset", {{"args", {name}}, {"slots", slots}, {"seed", 1}});
+        json shown = json::array();
+        for (NodeId id : g.nodes())
+            if (!before.contains(id) && g.node(id) && g.node(id)->type().isA("transform") && g.parent(id) == scene::kNoNode)
+                shown.push_back(g.node(id)->path());
+        ops::execute("select", {{"args", shown}});
+        ops::execute("captureView", {{"path", file.generic_string()},
+                                     {"view", "three-quarter"},
+                                     {"width", 256},
+                                     {"height", 256},
+                                     {"display", "shaded"},
+                                     {"isolate", true},
+                                     {"frameSelection", true},
+                                     {"grid", false},
+                                     {"label", false},
+                                     {"showSelection", false}});
+        out["thumbnail"] = file.generic_string();
+    }
+    catch (const std::exception& e)
+    {
+        out["note"] = std::string("stopped: ") + e.what();
+    }
+    undo.cancelChunk();
+    std::vector<NodeId> keep;
+    for (NodeId id : previous)
+        if (g.node(id))
+            keep.push_back(id);
+    g.select(keep);
+    return out;
+}
 } // namespace
 
 void registerPresetCommands(ext::Context& ctx)
 {
+    ctx.registerCommand({
+        .name = "arrangementThumbnails",
+        .doc = "Draw thumbnails for arrangement presets: each preset run on a stand-in block and ground, captured to the user's "
+               "arrangement-presets/thumbs folder, and taken out again without a trace in the scene or undo. Presets that already "
+               "have one are skipped unless force=True. Returns drawn (preset, thumbnail) and skipped (preset, note).",
+        .positionalDoc = "preset names (default all)",
+        .flags = {{"force", "f", T::Bool, false, "Draw them again even when they exist."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+
+            Graph& g = Graph::current();
+            std::set<std::string> wanted;
+            for (const json& n : a.positional)
+                if (n.is_string())
+                    wanted.insert(lower(n.get<std::string>()));
+            json drawn = json::array(), skipped = json::array();
+            for (const json& spec : allPresets())
+            {
+                const std::string name = spec.value("name", std::string());
+                if (!wanted.empty() && !wanted.contains(lower(name)))
+                    continue;
+                std::error_code ec;
+                if (!a.get<bool>("force", false) && fs::exists(thumbnailFile(name), ec))
+                    continue;
+                json r = drawThumbnail(g, spec);
+                (r.contains("thumbnail") ? drawn : skipped).push_back(std::move(r));
+            }
+            return {{"drawn", drawn}, {"skipped", skipped}};
+        },
+        .examples = {"arrangementThumbnails()", "arrangementThumbnails('Abandoned', force=True)"},
+    });
+
     ctx.registerCommand({
         .name = "arrangementPresets",
         .doc = "The arrangement presets: built in (Storeroom, Rubble Corner, Library Shelf, Messy Desk), saved to the user's "

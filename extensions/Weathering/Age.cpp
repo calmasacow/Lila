@@ -20,6 +20,7 @@ namespace weathering
 {
 void registerBasePieces();
 void registerUnreal(ext::Context& ctx);
+void registerWeatheringUi(ext::Context& ctx);
 
 namespace age
 {
@@ -164,6 +165,7 @@ bool registerAge(ext::Context& ctx)
     using namespace age;
     registerBasePieces();
     registerUnreal(ctx);
+    registerWeatheringUi(ctx);
     for (const char* style : {"realistic", "toon"})
         for (json& p : builtins(style))
         {
