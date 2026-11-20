@@ -9,6 +9,7 @@
 
 #include <glm/gtc/constants.hpp>
 #include "scene/Modifiers.h"
+#include "tex/TextureSet.h"
 
 #include <cmath>
 
@@ -24,6 +25,12 @@ void loadEdgeDeps()
         REQUIRE(em.load(LILA_TEST_TRIM_PACKAGE) == "TrimSheets");
     if (!em.isLoaded("Blockwork"))
         REQUIRE(em.load(LILA_TEST_BLOCKWORK_PACKAGE) == "Blockwork");
+    // trimDecalSend asks for texture sets, which this suite's main doesn't register.
+    if (!ops::registry().find("texSets"))
+    {
+        lila::tex::registerTypes();
+        lila::tex::registerCommands();
+    }
 }
 
 std::string cylinder(const char* name, double radius, double height, int sides)
@@ -359,4 +366,23 @@ TEST_CASE("weathering edges: realize bakes strips and sheets are written once")
     CHECK(info["trims"].size() == 16);
     CHECK(info["textures"].contains("baseColor"));
     CHECK(info["textures"].contains("opacity"));
+}
+
+TEST_CASE("weathering edges: strips send to Unreal as mesh decals on the decal master")
+{
+    fresh();
+    loadEdgeDeps();
+    const std::string box = cube("Crate", {0, 0, 0}, {100, 100, 100});
+    const json r = run("edgeDecals", {{"args", {box}}});
+    const json plan = run("trimDecalSend", {{"dryRun", true}});
+    const json meshes = plan["request"]["meshes"];
+    REQUIRE(meshes.size() == 1);
+    CHECK(meshes[0]["slot"] == r["material"]);
+    CHECK(meshes[0]["mesh"].get<std::string>().find("/Meshes/SM_Crate_EdgeDecals") != std::string::npos);
+    const json tex = meshes[0]["instance"]["textures"];
+    CHECK(tex.contains("DecalBaseColorMap"));
+    CHECK(tex.contains("DecalNormalMap"));
+    CHECK(tex.contains("DecalOpacityMap"));
+    CHECK(plan["request"]["decals"].empty());
+    CHECK(plan["newlyMapped"].size() == 1);
 }
