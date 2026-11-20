@@ -15,6 +15,7 @@
 #include <lila/Profile.h>
 #include <lila/Relocate.h>
 #include <lila/Transform.h>
+#include <lila/Viewport.h>
 
 #include <algorithm>
 #include <cmath>
@@ -68,6 +69,13 @@ void computeTint(const geo::Mesh& ground, const glm::dmat4& world, const std::ve
     for (geo::Index p = 0; p < n; ++p)
         if (ground.pointValid(p))
             pos[size_t(p)] = glm::dvec3(world * glm::dvec4(ground.position(p), 1.0));
+    // Spots bucketed on a grid as wide as the widest spot, so each point looks at its neighbourhood only.
+    double spotCell = 1.0;
+    for (double r : spots.radii)
+        spotCell = std::max(spotCell, r);
+    std::map<std::pair<int64_t, int64_t>, std::vector<size_t>> spotGrid;
+    for (size_t s = 0; s < spots.centres.size(); ++s)
+        spotGrid[{int64_t(std::floor(spots.centres[s].x / spotCell)), int64_t(std::floor(spots.centres[s].z / spotCell))}].push_back(s);
     for (geo::Index p = 0; p < n; ++p)
     {
         if (!ground.pointValid(p))
@@ -79,10 +87,18 @@ void computeTint(const geo::Mesh& ground, const glm::dmat4& world, const std::ve
             if (bvh->closestPoint(pos[size_t(p)], c, reach))
                 t = std::max(t, nearness(c.distance, reach));
         }
-        for (size_t s = 0; s < spots.centres.size(); ++s)
+        if (!spots.centres.empty())
         {
-            const glm::dvec3 d = pos[size_t(p)] - spots.centres[s];
-            t = std::max(t, nearness(std::sqrt(d.x * d.x + d.z * d.z), spots.radii[s]));
+            const glm::dvec3& q = pos[size_t(p)];
+            const int64_t cx = int64_t(std::floor(q.x / spotCell)), cz = int64_t(std::floor(q.z / spotCell));
+            for (int64_t dx = -1; dx <= 1; ++dx)
+                for (int64_t dz = -1; dz <= 1; ++dz)
+                    if (const auto it = spotGrid.find({cx + dx, cz + dz}); it != spotGrid.end())
+                        for (size_t s : it->second)
+                        {
+                            const glm::dvec3 d = q - spots.centres[s];
+                            t = std::max(t, nearness(std::sqrt(d.x * d.x + d.z * d.z), spots.radii[s]));
+                        }
         }
         if (o.bands > 1)
             t = std::ceil(t * o.bands - 1e-6) / o.bands;
@@ -158,7 +174,6 @@ public:
         kMatrices,
         kReach,
         kSpots,
-        kSpotRadius,
         kStrength,
         kWetness,
         kWetDepth,
@@ -220,13 +235,16 @@ public:
         o.wetRadius = as<double>(kWetRadius);
         o.bands = int(as<int64_t>(kBands));
         Spots spots;
-        for (const auto& [index, value] : elements(kSpots))
-            if (const glm::dvec3* c = std::get_if<glm::dvec3>(&value))
-            {
-                spots.centres.push_back(*c);
-                const PlugValue* r = element(kSpotRadius, index);
-                spots.radii.push_back(r ? std::get<double>(*r) : 25.0);
-            }
+        if (const MeshPtr& cloud = as<MeshPtr>(kSpots))
+        {
+            const std::span<const float> radius = cloud->pointAttrs().get<float>("radius");
+            for (geo::Index p = 0; p < cloud->pointCapacity(); ++p)
+                if (cloud->pointValid(p))
+                {
+                    spots.centres.push_back(cloud->position(p));
+                    spots.radii.push_back(size_t(p) < radius.size() ? double(radius[size_t(p)]) : 25.0);
+                }
+        }
         std::vector<float> tint, wet;
         computeTint(*in, as<glm::dmat4>(kMatrix), sources, spots, o, tint, wet);
         auto out = std::make_shared<geo::Mesh>(*in);
@@ -234,10 +252,15 @@ public:
                                                                             : geo::colors::add(*out, kColorSet, glm::vec4(0, 0, 0, 1));
         auto ta = out->pointAttrs().getOrAdd<float>("weatheringTint");
         auto wa = out->pointAttrs().getOrAdd<float>("weatheringWet");
+        // The viewport draws them through the grunge layers: tint as occlusion, wet as dust (see the decorator).
+        auto va = out->pointAttrs().getOrAdd<float>(render::kGrungeAttrs[2]);
+        auto da = out->pointAttrs().getOrAdd<float>(render::kGrungeAttrs[3]);
         for (size_t p = 0; p < tint.size() && p < ta.size(); ++p)
         {
             ta[p] = tint[p];
             wa[p] = wet[p];
+            va[p] = tint[p];
+            da[p] = wet[p];
         }
         // Colour sets are per corner: each corner takes its point's values.
         for (geo::Index f = 0; f < out->faceCapacity(); ++f)
@@ -351,12 +374,59 @@ std::vector<NodeId> standingOn(Graph& g, NodeId ground, const std::vector<NodeId
     }
     return out;
 }
+/** How the tint shows in Lila's viewport: grime darkening for the tint, a dark glossy film for the wet. */
+std::shared_ptr<const render::GrungeLook> tintLook(int bands)
+{
+    static std::shared_ptr<const render::GrungeLook> looks[9];
+    const int b = std::clamp(bands, 0, 8);
+    if (looks[b])
+        return looks[b];
+    render::GrungeLook look;
+    render::GrungeLayer& tintLayer = look.layers[2];
+    tintLayer.enabled = true;
+    tintLayer.level = 0.5f;
+    tintLayer.softness = 1.0f;
+    tintLayer.bands = b > 1 ? b : 0;
+    tintLayer.strength = 0.85f;
+    tintLayer.color = {0.035f, 0.03f, 0.022f};
+    tintLayer.low = tintLayer.color;
+    render::GrungeLayer& wetLayer = look.layers[3];
+    wetLayer.enabled = true;
+    wetLayer.level = 0.5f;
+    wetLayer.softness = b > 1 ? 0.0f : 0.6f;
+    wetLayer.strength = 0.55f;
+    wetLayer.color = {0.02f, 0.02f, 0.022f};
+    wetLayer.low = wetLayer.color;
+    wetLayer.roughness = 0.08f;
+    looks[b] = std::make_shared<const render::GrungeLook>(look);
+    return looks[b];
+}
+
+const GroundTintNode* tintOn(Graph& g, NodeId mesh)
+{
+    for (NodeId id : modifiers::stack(g, mesh))
+        if (Node* n = g.node(id); n && n->type().name == kTintType)
+            return static_cast<const GroundTintNode*>(n);
+    return nullptr;
+}
 } // namespace ground
 
 bool registerGround(ext::Context& ctx)
 {
     using namespace ground;
     using T = ArgType;
+    ui::viewportHooks::setMaterialDecorator("weathering.groundTint", [](NodeId id, const geo::Mesh& mesh, std::vector<render::Material>& mats) {
+        if (mats.empty() || mesh.pointAttrs().get<float>("weatheringTint").empty())
+            return;
+        const GroundTintNode* n = tintOn(Graph::current(), id);
+        if (!n || !n->as<bool>(GroundTintNode::kEnabled))
+            return;
+        const auto look = tintLook(int(n->as<int64_t>(GroundTintNode::kBands)));
+        for (render::Material& m : mats)
+            if (!m.grunge)
+                m.grunge = look;
+    });
+    ctx.track("materialDecorator:weathering.groundTint", [] { ui::viewportHooks::removeMaterialDecorator("weathering.groundTint"); });
     NodeType t;
     t.name = kTintType;
     t.icon = "brush";
@@ -372,8 +442,8 @@ bool registerGround(ext::Context& ctx)
         hiddenArray("sources", PlugType::Mesh, MeshPtr(), false, "Meshes the ground darkens round."),
         hiddenArray("matrices", PlugType::Matrix, glm::dmat4(1.0), false, "Each source's world matrix."),
         hiddenArray("reach", PlugType::Float, 40.0, true, "How far out each source darkens the ground, cm."),
-        hiddenArray("spots", PlugType::Vec3, glm::dvec3(0.0), true, "World-space spots darkened as they lay when the tint was made (a scatter on this ground)."),
-        hiddenArray("spotRadius", PlugType::Float, 25.0, true, "How far round each spot the ground darkens, cm."),
+        {.name = "spots", .type = PlugType::Mesh, .defaultValue = MeshPtr(), .flags = AttrInput | AttrHidden | AttrStorable,
+         .doc = "World-space spots darkened as they lay when the tint was made (a scatter on this ground): points with a radius attribute."},
         param("strength", PlugType::Float, 0.8, "How dark the tint gets at contact, 0 to 1.", 0.0, 1.0),
         param("wetness", PlugType::Float, 0.5, "How wet the low spots get, 0 to 1 (0 for none).", 0.0, 1.0),
         param("wetDepth", PlugType::Float, 8.0, "How far below its surroundings a spot must sit to be fully wet, cm.", 0.1),
@@ -390,8 +460,10 @@ bool registerGround(ext::Context& ctx)
     ctx.registerCommand({
         .name = "groundTint",
         .doc = "Darken a ground under and round what stands on it, and wet its low spots, live: a Ground Tint modifier fed by the "
-               "sources, so moving a wall or rescattering moves the tint. Writes the 'weathering' colour set (R tint, G wet) for "
-               "materials and MF_LilaGroundTint in Unreal. Returns the modifier.",
+               "sources, so moving a wall or rescattering moves the tint. Sources that read the ground themselves (a scatter on it, "
+               "grunge that sees it) can't feed it live and are taken as they stand. Writes the 'weathering' colour set (R tint, G "
+               "wet) for materials and MF_LilaGroundTint in Unreal. Returns modifier, live and static (source paths) and a note "
+               "when anything is static.",
         .positionalDoc = "ground mesh",
         .flags = {nodeFlag({"sources", "src", T::List, nullptr, "Meshes to darken round; default every visible mesh standing on the ground."}, "mesh"),
                   nodeFlag({"spotsFrom", "sp", T::List, nullptr, "Meshes lying on the ground (a scatter's output): spots under them darken as they lie now."}, "mesh"),
@@ -433,51 +505,78 @@ bool registerGround(ext::Context& ctx)
             const int srcAttr = m->type().attrIndex("sources"), matAttr = m->type().attrIndex("matrices"), reachAttr = m->type().attrIndex("reach");
             // The ground's own matrix can't be connected (it would loop through its own inMesh), so it is set here.
             g.setValue({m->id(), m->type().attrIndex("matrix"), -1}, gr->as<glm::dmat4>(Transform::kWorldMatrix));
+            const double reach = a.get<double>("reach", 60.0);
+            // Spots: where things lie, taken as they are now, for sources that can't feed the tint live.
+            std::map<std::pair<int64_t, int64_t>, std::pair<glm::dvec3, double>> spotCells;
+            auto addSpots = [&](Node* n, double radius) {
+                const auto mesh = n->as<MeshPtr>(n->type().attrIndex("outMesh"));
+                if (!mesh)
+                    return;
+                const double cell = std::max(radius * 0.5, 1.0);
+                const glm::dmat4 w = n->as<glm::dmat4>(Transform::kWorldMatrix);
+                auto put = [&](const glm::dvec3& q) {
+                    const std::pair<int64_t, int64_t> k{int64_t(std::floor(q.x / cell)), int64_t(std::floor(q.z / cell))};
+                    auto [it, fresh] = spotCells.try_emplace(k, std::pair{q, radius});
+                    if (!fresh && q.y < it->second.first.y)
+                        it->second = {q, std::max(radius, it->second.second)};
+                };
+                for (geo::Index f = 0; f < mesh->faceCapacity(); ++f)
+                {
+                    if (!mesh->faceValid(f))
+                        continue;
+                    const std::vector<geo::Index> pts = mesh->facePoints(f);
+                    for (size_t k = 1; k + 1 < pts.size(); ++k)
+                    {
+                        const glm::dvec3 p0(w * glm::dvec4(mesh->position(pts[0]), 1.0)), p1(w * glm::dvec4(mesh->position(pts[k]), 1.0)),
+                            p2(w * glm::dvec4(mesh->position(pts[k + 1]), 1.0));
+                        const int steps = std::clamp(int(std::ceil(std::max({glm::length(p1 - p0), glm::length(p2 - p0), glm::length(p2 - p1)}) / cell)), 1, 400);
+                        for (int i = 0; i <= steps; ++i)
+                            for (int j = 0; i + j <= steps; ++j)
+                                put(p0 + (p1 - p0) * (double(i) / steps) + (p2 - p0) * (double(j) / steps));
+                    }
+                }
+            };
+            json live = json::array(), still = json::array();
             int index = 0;
             for (NodeId s : sources)
             {
-                g.connect({s, MeshNode::kOutMesh, -1}, {m->id(), srcAttr, -1, index}, true);
+                // A source that reads this ground (its grunge sees the ground, a scatter stands on it) would loop: it is
+                // taken as it stands now instead, and listed under static.
+                try
+                {
+                    g.connect({s, MeshNode::kOutMesh, -1}, {m->id(), srcAttr, -1, index}, true);
+                }
+                catch (const std::exception&)
+                {
+                    addSpots(g.node(s), reach);
+                    still.push_back(g.node(s)->path());
+                    continue;
+                }
                 g.connect({s, Transform::kWorldMatrix, -1}, {m->id(), matAttr, -1, index}, true);
-                g.setValue({m->id(), reachAttr, -1, index}, a.get<double>("reach", 60.0));
+                g.setValue({m->id(), reachAttr, -1, index}, reach);
+                live.push_back(g.node(s)->path());
                 ++index;
             }
-            if (a.has("spotsFrom"))
+            for (const json& s : a.flags.value("spotsFrom", json::array()))
             {
-                // A scatter on the ground reads the ground, so it can't feed the tint live: its spots are taken as they lie.
-                const double radius = a.get<double>("spotRadius", 25.0);
-                const double cell = std::max(radius * 0.5, 1.0);
-                std::map<std::pair<int64_t, int64_t>, glm::dvec3> cells;
-                for (const json& s : a.flags["spotsFrom"])
-                {
-                    Node* n = g.find(s.get<std::string>());
-                    if (!n || !n->type().isA("mesh"))
-                        throw CommandError("groundTint: '" + s.get<std::string>() + "' is not a mesh");
-                    const auto mesh = n->as<MeshPtr>(n->type().attrIndex("outMesh"));
-                    if (!mesh)
-                        continue;
-                    const glm::dmat4 w = n->as<glm::dmat4>(Transform::kWorldMatrix);
-                    for (geo::Index p = 0; p < mesh->pointCapacity(); ++p)
-                        if (mesh->pointValid(p))
-                        {
-                            const glm::dvec3 q(w * glm::dvec4(mesh->position(p), 1.0));
-                            const std::pair<int64_t, int64_t> k{int64_t(std::floor(q.x / cell)), int64_t(std::floor(q.z / cell))};
-                            auto [it, fresh] = cells.try_emplace(k, q);
-                            if (!fresh && q.y < it->second.y)
-                                it->second = q;
-                        }
-                }
-                const int spotAttr = m->type().attrIndex("spots"), spotRadiusAttr = m->type().attrIndex("spotRadius");
-                int k = 0;
-                for (const auto& [_, c] : cells)
-                {
-                    if (k >= 20000)
-                        break;
-                    g.setValue({m->id(), spotAttr, -1, k}, c);
-                    g.setValue({m->id(), spotRadiusAttr, -1, k}, radius);
-                    ++k;
-                }
+                Node* n = g.find(s.get<std::string>());
+                if (!n || !n->type().isA("mesh"))
+                    throw CommandError("groundTint: '" + s.get<std::string>() + "' is not a mesh");
+                addSpots(n, a.get<double>("spotRadius", 25.0));
+                still.push_back(n->path());
             }
-            return m->path();
+            auto cloud = std::make_shared<geo::Mesh>();
+            for (const auto& [_, c] : spotCells)
+                cloud->addPoint(c.first);
+            auto radii = cloud->pointAttrs().getOrAdd<float>("radius");
+            size_t r = 0;
+            for (const auto& [_, c] : spotCells)
+                radii[r++] = float(c.second);
+            g.setValue({m->id(), m->type().attrIndex("spots"), -1}, MeshPtr(std::move(cloud)));
+            json out = {{"modifier", m->path()}, {"live", live}, {"static", still}};
+            if (!still.empty())
+                out["note"] = "static sources are taken as they stand now: run groundTint again after moving them";
+            return out;
         },
         .examples = {"groundTint('Ground')", "groundTint('Street', sources=['Wall', 'Rubble_Base'], reach=80, wetness=0.8)"},
     });

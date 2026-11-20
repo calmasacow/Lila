@@ -205,21 +205,39 @@ public:
         QObject::connect(mList, &QWidget::customContextMenuRequested, this, [this](QPoint pos) { contextMenu(pos); });
     }
 
-    /** Fills the list, drawing missing thumbnails the first time the page shows. */
+    /** Fills the list and draws missing thumbnails one at a time, so the panel stays responsive while they come in. */
     void showing()
     {
         fill();
         if (mDrawn)
             return;
         mDrawn = true;
-        QTimer::singleShot(0, this, [this] {
-            mStatus->setText("Drawing thumbnails");
-            runUi("arrangementThumbnails", json::object());
-            fill();
-        });
+        const json all = runUi("arrangementPresets", json::object());
+        for (const json& p : all.is_array() ? all : json::array())
+            if (!p.contains("thumbnail"))
+                mPending.push_back(p.value("name", std::string()));
+        mPendingTotal = int(mPending.size());
+        drawNext();
     }
 
 private:
+    void drawNext()
+    {
+        if (mPending.empty())
+        {
+            fill();
+            return;
+        }
+        mStatus->setText(QString("Drawing thumbnails, %1 of %2").arg(mPendingTotal - int(mPending.size()) + 1).arg(mPendingTotal));
+        QTimer::singleShot(0, this, [this] {
+            const std::string name = mPending.front();
+            mPending.erase(mPending.begin());
+            runUi("arrangementThumbnails", {{"args", {name}}});
+            fill();
+            drawNext();
+        });
+    }
+
     static std::string kindOf(const json& p)
     {
         if (p.value("category", std::string()) != "Weathering")
@@ -280,6 +298,8 @@ private:
     PresetList* mList = nullptr;
     QLabel* mStatus = nullptr;
     bool mDrawn = false;
+    std::vector<std::string> mPending;
+    int mPendingTotal = 0;
 };
 
 class LibraryPanel final : public QWidget

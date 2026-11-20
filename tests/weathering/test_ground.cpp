@@ -42,7 +42,7 @@ TEST_CASE("weathering: ground dressing scatters, colours and tints the ground ne
     CHECK(r["scatter"]["count"].get<int>() > 0);
     CHECK(!r["material"].get<std::string>().empty());
     CHECK(!r["group"].get<std::string>().empty());
-    REQUIRE(!r["tint"].get<std::string>().empty());
+    REQUIRE(!r["tint"]["modifier"].get<std::string>().empty());
     const geo::Mesh m = meshOf(gr);
     CHECK(geo::colors::has(m, "weathering"));
     CHECK(tintAt(m, 0, 50) > 0.3f);
@@ -113,4 +113,16 @@ TEST_CASE("weathering: ground presets in both styles run through Stagehand")
     CHECK(step["scatter"]["count"].get<int>() > 0);
     for (const auto& [id, count] : step["scatter"]["perItem"].items())
         CHECK(id.find("Toon") != std::string::npos);
+}
+
+TEST_CASE("weathering: a source that reads the ground is taken as it stands, and said so")
+{
+    fresh();
+    const std::string gr = ground();
+    cube("Wall", {0, 0, 0}, {200, 250, 40});
+    run("grungeMask", {{"args", {"Wall"}}});
+    const json r = run("groundTint", {{"args", {gr}}, {"sources", {"Wall"}}, {"reach", 80.0}, {"wetness", 0.0}});
+    CHECK(r["static"].size() == 1);
+    CHECK(r.contains("note"));
+    CHECK(tintAt(meshOf(gr), 0, 50) > 0.3f);
 }

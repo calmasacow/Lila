@@ -393,7 +393,8 @@ void registerPresetCommands(ext::Context& ctx)
                "arrangement-presets/thumbs folder, and taken out again without a trace in the scene or undo. Presets that already "
                "have one are skipped unless force=True. Returns drawn (preset, thumbnail) and skipped (preset, note).",
         .positionalDoc = "preset names (default all)",
-        .flags = {{"force", "f", T::Bool, false, "Draw them again even when they exist."}},
+        .flags = {{"force", "f", T::Bool, false, "Draw them again even when they exist."},
+                  {"clear", "cl", T::Bool, false, "Delete their thumbnails instead, so they are drawn again the next time the library shows them."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             LILA_ZONE();
@@ -401,8 +402,9 @@ void registerPresetCommands(ext::Context& ctx)
             Graph& g = Graph::current();
             std::set<std::string> wanted;
             for (const json& n : a.positional)
-                if (n.is_string())
-                    wanted.insert(lower(n.get<std::string>()));
+                for (const json& x : n.is_array() ? n : json::array({n}))
+                    if (x.is_string())
+                        wanted.insert(lower(x.get<std::string>()));
             json drawn = json::array(), skipped = json::array();
             for (const json& spec : allPresets())
             {
@@ -410,6 +412,12 @@ void registerPresetCommands(ext::Context& ctx)
                 if (!wanted.empty() && !wanted.contains(lower(name)))
                     continue;
                 std::error_code ec;
+                if (a.get<bool>("clear", false))
+                {
+                    if (fs::remove(thumbnailFile(name), ec))
+                        skipped.push_back({{"preset", name}, {"note", "cleared"}});
+                    continue;
+                }
                 if (!a.get<bool>("force", false) && fs::exists(thumbnailFile(name), ec))
                     continue;
                 json r = drawThumbnail(g, spec);

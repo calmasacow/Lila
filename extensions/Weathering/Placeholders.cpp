@@ -7,6 +7,7 @@
 #include <lila/Prefs.h>
 #include <lila/Profile.h>
 
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 
@@ -17,7 +18,7 @@ namespace weathering
 {
 namespace
 {
-constexpr int kVersion = 2;
+constexpr int kVersion = 4;
 
 std::vector<Placeholder>& registry()
 {
@@ -67,10 +68,10 @@ glm::dvec3 sizeOf(const geo::Mesh& m)
 glm::vec3 roleColor(const std::string& role, bool toon)
 {
     static const std::vector<std::pair<std::string, glm::vec3>> colors = {
-        {"rubble", {0.42f, 0.4f, 0.36f}},  {"rock", {0.36f, 0.35f, 0.33f}},   {"brick", {0.45f, 0.17f, 0.1f}},
+        {"rubble", {0.24f, 0.22f, 0.2f}},  {"rock", {0.2f, 0.19f, 0.18f}},   {"brick", {0.45f, 0.17f, 0.1f}},
         {"plank", {0.36f, 0.24f, 0.14f}},  {"beam", {0.3f, 0.2f, 0.12f}},     {"charred", {0.05f, 0.045f, 0.04f}},
         {"plant", {0.17f, 0.3f, 0.08f}},   {"grass", {0.22f, 0.36f, 0.1f}},   {"moss", {0.14f, 0.26f, 0.06f}},
-        {"bush", {0.12f, 0.24f, 0.07f}},   {"pebble", {0.4f, 0.39f, 0.37f}},  {"litter", {0.75f, 0.72f, 0.66f}},
+        {"bush", {0.12f, 0.24f, 0.07f}},   {"pebble", {0.22f, 0.21f, 0.2f}},  {"litter", {0.75f, 0.72f, 0.66f}},
         {"leaf", {0.45f, 0.25f, 0.08f}},   {"ivy-leaf", {0.1f, 0.25f, 0.06f}}, {"vine-leaf", {0.16f, 0.3f, 0.08f}},
         {"ivy-flower", {0.8f, 0.78f, 0.7f}}, {"moss-tuft", {0.14f, 0.26f, 0.06f}}, {"roof-sheet", {0.35f, 0.33f, 0.3f}},
         {"ridge-cap", {0.3f, 0.29f, 0.27f}}, {"roof-tile", {0.48f, 0.2f, 0.12f}}, {"roof-plank", {0.32f, 0.22f, 0.13f}},
@@ -136,8 +137,14 @@ json buildPlaceholders(bool force)
         const glm::vec3 c = p.color.r >= 0.0f ? p.color : roleColor(p.role, p.style == "toon");
         const std::string material = "M_" + p.name;
         std::ofstream(folder / (p.name + ".mtl"), std::ios::binary)
-            << "newmtl " << material << "\nKd " << c.r << " " << c.g << " " << c.b << "\nKs 0 0 0\nNs 10\n";
-        std::ofstream(folder / (p.name + ".obj"), std::ios::binary) << "mtllib " << p.name << ".mtl\nusemtl " << material << "\n" << geo::writeObj(m);
+            << "newmtl " << material << "\nKd " << std::pow(c.r, 1.0f / 2.2f) << " " << std::pow(c.g, 1.0f / 2.2f) << " " << std::pow(c.b, 1.0f / 2.2f)
+            << "\nKs 0 0 0\nNs 10\n";
+        // usemtl goes after the object line: a new object starts with no material.
+        std::string obj = geo::writeObj(m);
+        const size_t objectLine = obj.find("\no ");
+        const size_t afterObject = objectLine == std::string::npos ? 0 : obj.find('\n', objectLine + 1) + 1;
+        obj.insert(afterObject, "usemtl " + material + "\n");
+        std::ofstream(folder / (p.name + ".obj"), std::ios::binary) << "mtllib " << p.name << ".mtl\n" << obj;
         json tags = json::array({"weathering", "placeholder", p.role, p.style});
         for (const std::string& t : p.tags)
             tags.push_back(t);
@@ -160,6 +167,19 @@ json buildPlaceholders(bool force)
     {
     }
     log::info("Weathering: placeholder pieces written to {}", dir.generic_string());
+    // Preset thumbnails show placeholders: drawn again with the new ones next time the library shows them.
+    try
+    {
+        json names = json::array();
+        for (const json& p : ops::execute("arrangementPresets", json::object()))
+            if (p.value("source", std::string()) == "Weathering")
+                names.push_back(p.value("name", std::string()));
+        if (!names.empty())
+            ops::execute("arrangementThumbnails", {{"args", names}, {"clear", true}});
+    }
+    catch (const std::exception&)
+    {
+    }
     return {{"dir", dir.generic_string()}, {"built", true}, {"assets", ids}};
 }
 
