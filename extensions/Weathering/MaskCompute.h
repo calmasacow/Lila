@@ -74,6 +74,15 @@ struct Result
      * the min of, it is the distance to the nearest sharp edge of the face: edge wear that holds on an 8-vertex block.
      */
     std::vector<glm::vec4> edgeDistance;
+    /**
+     * Per corner, signed distances in cm to up to four lines where its face meets something: a concave edge, the ground
+     * plane, or a neighbour's surface. Per pixel, cavity dirt and occlusion fall off from the nearest.
+     */
+    std::vector<glm::vec4> contactDistance;
+    /** Per corner, up to two streak sources over its face: (cm below the source, position along it 0 to 1) pairs. */
+    std::vector<glm::vec4> streakLines;
+    /** Per corner of a side face, cm above the ground or whatever is straight below; kFarEdge elsewhere. */
+    std::vector<float> height;
     /** Distinct (point, normal) samples evaluated. */
     size_t samples = 0;
 };
@@ -85,8 +94,8 @@ Result compute(const lila::geo::Mesh& mesh, const glm::dmat4& world, std::span<c
 inline constexpr float kFarEdge = 10000.0f;
 
 /**
- * Writes a result as float corner attributes named render::kGrungeAttrs ("grungeEdge", ...) and the edge distances as
- * the vec4 corner attribute "grungeEdgeDistance".
+ * Writes a result as float corner attributes named render::kGrungeAttrs ("grungeEdge", ...), the edge and contact
+ * distances and streak lines as vec4 corner attributes and the height as a float one (render::kGrunge*Attr names).
  */
 void writeAttributes(lila::geo::Mesh& mesh, const Result& r);
 } // namespace weathering::masks

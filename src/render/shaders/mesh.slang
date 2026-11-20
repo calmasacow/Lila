@@ -436,6 +436,9 @@ struct VSOut
     centroid float4 grungeA : TEXCOORD4; // grunge masks: edge, cavity, ao, dust
     centroid float2 grungeB : TEXCOORD5; // streak, fade
     float4 grungeEdge : TEXCOORD6;        // signed cm to the face's sharp edge lines (render::kGrungeEdgeDistanceAttr)
+    float4 grungeContact : TEXCOORD7;     // signed cm to the face's contact lines (render::kGrungeContactDistanceAttr)
+    float4 grungeStreak : TEXCOORD8;      // two streak sources: cm below, along 0 to 1 (render::kGrungeStreakLinesAttr)
+    float grungeHeight : TEXCOORD9;       // cm above what is below (render::kGrungeHeightAttr)
 };
 
 float4x4 instanceWorld(uint instance)
@@ -504,16 +507,22 @@ VSOut meshVS(VSIn v, uint instanceId: SV_InstanceID, uint vertexId: SV_VertexID)
     o.grungeA = float4(0.0);
     o.grungeB = float2(0.0);
     o.grungeEdge = float4(10000.0);
+    o.grungeContact = float4(10000.0);
+    o.grungeStreak = float4(10000.0, 0.0, 10000.0, 0.0);
+    o.grungeHeight = 10000.0;
     if (!kLean && (pc.flags & kGrunge) != 0)
     {
         const uint b = grungeBlock();
         uint* masks = (uint*)((uint64_t(pc.textureTable[b + 1]) << 32) | uint64_t(pc.textureTable[b]));
         if (masks != nullptr)
         {
-            const uint at = vertexId * 5;
+            const uint at = vertexId * 10;
             o.grungeA = float4(unpackUnorm2(masks[at]), unpackUnorm2(masks[at + 1]));
             o.grungeB = unpackUnorm2(masks[at + 2]);
             o.grungeEdge = float4(f16tof32(masks[at + 3]), f16tof32(masks[at + 3] >> 16), f16tof32(masks[at + 4]), f16tof32(masks[at + 4] >> 16));
+            o.grungeContact = float4(f16tof32(masks[at + 5]), f16tof32(masks[at + 5] >> 16), f16tof32(masks[at + 6]), f16tof32(masks[at + 6] >> 16));
+            o.grungeStreak = float4(f16tof32(masks[at + 7]), f16tof32(masks[at + 7] >> 16), f16tof32(masks[at + 8]), f16tof32(masks[at + 8] >> 16));
+            o.grungeHeight = f16tof32(masks[at + 9]);
         }
     }
     return o;
@@ -1107,7 +1116,25 @@ void applyGrunge(VSOut i, inout float3 baseColor, inout float roughTarget, inout
     const float edgeDist = min(min(i.grungeEdge.x, i.grungeEdge.y), min(i.grungeEdge.z, i.grungeEdge.w));
     const float edgeWidth = asfloat(pc.textureTable[grungeBlock() + 3]);
     const float edge = edgeDist < 5000.0 ? saturate(1.0 - max(edgeDist, 0.0) / edgeWidth) : i.grungeA.x;
-    const float masks[6] = { edge, i.grungeA.y, i.grungeA.z, i.grungeA.w, i.grungeB.x, i.grungeB.y };
+    // Cavity, occlusion, fade and streaks from distances that are exact per pixel on any face, so a wall made of four
+    // corners darkens at its foot and under its sills, not along its whole height. Vertex values are the fallback.
+    const uint reach = grungeBlock() + 8 + 6 * 16;
+    const float cavityWidth = asfloat(pc.textureTable[reach]), aoWidth = asfloat(pc.textureTable[reach + 1]);
+    const float fadeHeight = asfloat(pc.textureTable[reach + 2]), streakLength = asfloat(pc.textureTable[reach + 3]);
+    const float contact = min(min(i.grungeContact.x, i.grungeContact.y), min(i.grungeContact.z, i.grungeContact.w));
+    const bool hasContact = contact < 5000.0;
+    const float cavity = max(hasContact ? saturate(1.0 - max(contact, 0.0) / cavityWidth) : 0.0, i.grungeA.y);
+    const float ao = max(hasContact ? saturate(1.0 - max(contact, 0.0) / aoWidth) : 0.0, i.grungeA.z);
+    const float fade = max(i.grungeHeight < 5000.0 ? saturate(1.0 - max(i.grungeHeight, 0.0) / fadeHeight) : 0.0, i.grungeB.y);
+    float streak = i.grungeB.x;
+    [unroll] for (uint s = 0; s < 2; ++s)
+    {
+        const float drop = s == 0 ? i.grungeStreak.x : i.grungeStreak.z;
+        const float along = s == 0 ? i.grungeStreak.y : i.grungeStreak.w;
+        if (drop < 5000.0 && drop >= 0.0 && along >= 0.0 && along <= 1.0)
+            streak = max(streak, saturate(1.0 - drop / streakLength));
+    }
+    const float masks[6] = { edge, cavity, ao, i.grungeA.w, streak, fade };
     [unroll] for (uint k = 0; k < 6; ++k)
     {
         if ((enabled & (1u << k)) == 0)

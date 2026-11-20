@@ -56,14 +56,21 @@ json instanceParams(const Node& grunge, const Node& mesh, json& warnings)
     }
     vectors["GrungeOutlineColor"] = rgb(grunge.as<glm::dvec3>(at("outlineColor")));
     scalars["EdgeWidth"] = grunge.as<double>(at("edgeWidth"));
+    scalars["CavityWidth"] = grunge.as<double>(at("cavityWidth"));
+    scalars["AoWidth"] = grunge.as<double>(at("aoRadius")) * 0.5;
+    scalars["FadeHeight"] = grunge.as<double>(at("fadeHeight"));
+    scalars["StreakLength"] = grunge.as<double>(at("streakLength"));
     const std::string layout = grunge.as<std::string>(at("unrealLayout"));
     if (layout == "off" || layout.empty())
         warnings.push_back(mesh.name() + ": its masks go to no channel (unrealChannels is off), so the instance shows no grunge");
     else if (grunge.as<int64_t>(at("uvSet")) != 3)
         warnings.push_back(mesh.name() + ": the generated materials read UV 3 onwards (edge distances in UV 4-5, or 6-7 in the uv layout) but its masks start at uv" +
                            std::to_string(grunge.as<int64_t>(at("uvSet"))) + "; wire GrungeMasksA/B yourself or set uvSet=3");
+    if (layout == "uv")
+        warnings.push_back(mesh.name() + ": it has its own vertex colours, so its masks fill uv3-uv7 and cavity, occlusion, fade and streaks are "
+                                         "per vertex in Unreal (per pixel needs the vertex colour layout)");
     const json channels = layout == "uv" ? json{{"masks", "uv3-uv5"}, {"edgeDistance", "uv6-uv7"}}
-                                         : json{{"masks", "vertex colour + uv3"}, {"edgeDistance", "uv4-uv5"}};
+                                         : json{{"masks", "vertex colour + uv3"}, {"edgeDistance", "uv4-uv5"}, {"fields", "uv6-uv7"}};
     return {{"name", instanceName(mesh)}, {"layout", layout == "uv" ? "uv" : "color"}, {"channels", channels}, {"scalars", scalars}, {"vectors", vectors}};
 }
 } // namespace

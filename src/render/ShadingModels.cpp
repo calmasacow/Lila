@@ -150,6 +150,11 @@ std::array<uint32_t, kGrungeBlockWords> packGrunge(const GrungeLook& g, uint64_t
     out[1] = uint32_t(address >> 32);
     out[2] = enabled;
     out[3] = std::bit_cast<uint32_t>(std::max(g.edgeWidth, 1e-3f));
+    const size_t reach = 8 + g.layers.size() * 16;
+    out[reach] = std::bit_cast<uint32_t>(std::max(g.cavityWidth, 1e-3f));
+    out[reach + 1] = std::bit_cast<uint32_t>(std::max(g.aoWidth, 1e-3f));
+    out[reach + 2] = std::bit_cast<uint32_t>(std::max(g.fadeHeight, 1e-3f));
+    out[reach + 3] = std::bit_cast<uint32_t>(std::max(g.streakLength, 1e-3f));
     return out;
 }
 } // namespace lila::render

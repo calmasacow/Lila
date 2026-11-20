@@ -131,7 +131,8 @@ TEST_CASE("grunge edge wear covers a cube's edges only")
         }
         if (extremes >= 2)
         {
-            CHECK(s.v == doctest::Approx(1.0f));
+            // 25 cm faces are past twice the 4 cm reach, so the corner value is off; the per-pixel edge distances carry it.
+            CHECK(s.v == doctest::Approx(0.0f));
             ++onEdge;
         }
         else
@@ -147,8 +148,9 @@ TEST_CASE("grunge edge wear covers a cube's edges only")
 TEST_CASE("grunge edge wear holds per pixel on an 8-vertex block")
 {
     fresh();
+    // Off the ground: an edge resting on something is a contact line, not a worn edge (see the 4-corner wall test).
     const std::string c = subCube("Block", {0, 0, 0}, {200, 200, 200}, 1, 1, 1);
-    masks(c, {{"neighbours", false}});
+    masks(c, {{"neighbours", false}, {"groundPlane", false}});
     const geo::Mesh m = meshOf(c);
     REQUIRE(m.numPoints() == 8);
     const auto d = m.cornerAttrs().get<glm::vec4>(render::kGrungeEdgeDistanceAttr);
@@ -221,25 +223,23 @@ TEST_CASE("grunge fade sits near the ground only")
     const std::string c = subCube("Tower", {0, 0, 0}, {100, 400, 100}, 1, 8, 1);
     masks(c, {{"neighbours", false}, {"fadeHeight", 60.0}});
     const geo::Mesh m = meshOf(c);
+    // Per pixel the fade is 1 - height / 60 from the height field, which must be the corner's height above the ground.
+    const auto h = m.cornerAttrs().get<float>(render::kGrungeHeightAttr);
+    REQUIRE(!h.empty());
     int low = 0;
-    for (const Sampled& s : sampled(m, "grungeFade"))
+    for (geo::Index k = 0; k < m.cornerCapacity(); ++k)
     {
-        if (s.n.y < -0.5)
+        if (!m.cornerValid(k))
             continue;
-        if (s.n.y > 0.5)
+        const glm::dvec3 n = m.faceNormal(m.cornerFace(k));
+        const double y = m.position(m.cornerPoint(k)).y;
+        if (std::abs(n.y) > 0.5)
         {
-            CHECK(s.v == doctest::Approx(0.0f));
+            CHECK(h[k] >= 5000.0f);
             continue;
         }
-        if (near(s.p.y, 0.0))
-        {
-            CHECK(s.v == doctest::Approx(1.0f));
-            ++low;
-        }
-        else if (s.p.y >= 60.0)
-            CHECK(s.v == doctest::Approx(0.0f));
-        else
-            CHECK(s.v == doctest::Approx(1.0f - float(s.p.y) / 60.0f).epsilon(0.01));
+        CHECK(h[k] == doctest::Approx(y).epsilon(0.01));
+        low += near(y, 0.0) ? 1 : 0;
     }
     CHECK(low > 0);
 }
@@ -259,7 +259,8 @@ TEST_CASE("grunge cavity gathers where a wall meets the floor it stands on")
             continue;
         if (near(s.p.y, 0.0))
         {
-            CHECK(s.v == doctest::Approx(1.0f));
+            // 50 cm faces are past twice the 10 cm reach: the per-pixel contact lines carry it.
+            CHECK(s.v == doctest::Approx(0.0f));
             ++foot;
         }
         else if (s.p.y > 20.0)
@@ -432,4 +433,97 @@ TEST_CASE("grunge attribute pass on a 500 block level")
     CHECK(samples == 500 * 24);
     // One block's edit recomputes that block alone: well under a frame.
     CHECK(ms / 500.0 < 16.0);
+}
+
+TEST_CASE("grunge cavity, occlusion and fade hold per pixel on a 4-corner wall")
+{
+    fresh();
+    const std::string c = subCube("Wall", {0, 0, 0}, {600, 300, 30}, 1, 1, 1);
+    masks(c, {{"neighbours", false}, {"fadeHeight", 60.0}, {"cavityWidth", 10.0}});
+    const geo::Mesh m = meshOf(c);
+    REQUIRE(m.numPoints() == 8);
+    const auto contact = m.cornerAttrs().get<glm::vec4>(render::kGrungeContactDistanceAttr);
+    const auto height = m.cornerAttrs().get<float>(render::kGrungeHeightAttr);
+    const auto edge = m.cornerAttrs().get<glm::vec4>(render::kGrungeEdgeDistanceAttr);
+    REQUIRE(!contact.empty());
+    REQUIRE(!height.empty());
+    auto nearest = [](const glm::vec4& v) { return std::min(std::min(v.x, v.y), std::min(v.z, v.w)); };
+    int sides = 0;
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f) || std::abs(m.faceNormal(f).y) > 0.5)
+            continue;
+        ++sides;
+        const std::vector<geo::Index> corners = m.faceCorners(f);
+        REQUIRE(corners.size() == 4);
+        // What the rasterizer interpolates: linear fields, so the face centre is the corners' mean.
+        glm::vec4 cc(0.0f), ec(0.0f);
+        float hc = 0.0f;
+        for (geo::Index k : corners)
+        {
+            cc += contact[k] * 0.25f;
+            ec += edge[k] * 0.25f;
+            hc += height[k] * 0.25f;
+        }
+        CHECK(hc == doctest::Approx(150.0).epsilon(0.01));
+        CHECK(nearest(cc) == doctest::Approx(150.0).epsilon(0.01));
+        // Fade and dirt at the centre of the wall: none.
+        CHECK(std::clamp(1.0 - hc / 60.0, 0.0, 1.0) == doctest::Approx(0.0));
+        CHECK(std::clamp(1.0 - nearest(cc) / 10.0, 0.0, 1.0) == doctest::Approx(0.0));
+        for (size_t k = 0; k < 4; ++k)
+        {
+            const geo::Index a = corners[k], b = corners[(k + 1) % 4];
+            const glm::dvec3 pa = m.position(m.cornerPoint(a)), pb = m.position(m.cornerPoint(b));
+            const float hm = (height[a] + height[b]) * 0.5f;
+            const glm::vec4 cm = (contact[a] + contact[b]) * 0.5f, em = (edge[a] + edge[b]) * 0.5f;
+            if (pa.y < 1.0 && pb.y < 1.0)
+            {
+                // The foot: full fade and dirt, and no edge wear where it rests on the ground.
+                CHECK(hm == doctest::Approx(0.0).epsilon(0.01));
+                CHECK(nearest(cm) == doctest::Approx(0.0).epsilon(0.01));
+                CHECK(nearest(em) > 10.0f);
+            }
+            else if (pa.y > 299.0 && pb.y > 299.0)
+            {
+                CHECK(hm == doctest::Approx(300.0).epsilon(0.01));
+                CHECK(nearest(cm) > 100.0f);
+                CHECK(nearest(em) == doctest::Approx(0.0).epsilon(0.01));
+            }
+        }
+    }
+    CHECK(sides == 4);
+    // The render copy carries the fields after the edge distances.
+    const auto rm = ui::renderMeshFor(std::make_shared<geo::Mesh>(m));
+    REQUIRE(rm);
+    REQUIRE(rm->grunge.size() == rm->vertices.size() * size_t(render::kGrungeWords));
+}
+
+TEST_CASE("grunge mask data never shows as viewport colour")
+{
+    fresh();
+    const std::string c = subCube("Painted", {0, 0, 0}, {100, 100, 100}, 1, 1, 1);
+    masks(c, {{"neighbours", false}, {"unreal", "color"}});
+    const geo::Mesh m = meshOf(c);
+    CHECK(!geo::colors::sets(m).empty());
+    CHECK(geo::colors::displayed(m).empty());
+}
+
+TEST_CASE("grunge lines skip concave faces they would cut across")
+{
+    fresh();
+    // One L-shaped face standing on the ground: its reflex corner's edges must not carry lines across the face.
+    const json pts = json::array({{0, 0, 0}, {300, 0, 0}, {300, 100, 0}, {100, 100, 0}, {100, 300, 0}, {0, 300, 0}});
+    const json made = run("createMesh", {{"points", pts}, {"faces", json::array({json::array({0, 1, 2, 3, 4, 5})})}, {"name", "ElWall"}});
+    const std::string c = made.is_string() ? made.get<std::string>() : made[0].get<std::string>();
+    masks(c, {{"neighbours", false}});
+    const geo::Mesh m = meshOf(c);
+    for (const char* attr : {render::kGrungeContactDistanceAttr, render::kGrungeEdgeDistanceAttr})
+    {
+        const auto d = m.cornerAttrs().get<glm::vec4>(attr);
+        REQUIRE(!d.empty());
+        for (geo::Index k = 0; k < m.cornerCapacity(); ++k)
+            if (m.cornerValid(k))
+                for (int i = 0; i < 4; ++i)
+                    CHECK(d[k][i] > -0.5f);
+    }
 }

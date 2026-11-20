@@ -77,11 +77,11 @@ struct LookDefault
 
 constexpr std::array<LookDefault, kMaskCount> kRealistic = {{
     {0.45, 0.30, 0.60, 6.0, 0.45, {0.62, 0.60, 0.56}, {0.45, 0.43, 0.40}, 0.45, false},
-    {0.35, 0.40, 0.60, 20.0, 0.75, {0.32, 0.29, 0.25}, {0.55, 0.52, 0.48}, 0.90, true},
-    {0.35, 0.60, 0.00, 30.0, 0.55, {0.45, 0.45, 0.45}, {0.70, 0.70, 0.70}, -1.0, true},
-    {0.60, 0.50, 0.50, 30.0, 0.30, {0.50, 0.47, 0.42}, {0.40, 0.37, 0.33}, 0.95, false},
-    {0.35, 0.35, 1.20, 4.0, 0.65, {0.40, 0.37, 0.33}, {0.60, 0.57, 0.52}, 0.75, true},
-    {0.40, 0.60, 0.50, 25.0, 0.55, {0.50, 0.45, 0.36}, {0.70, 0.66, 0.58}, 0.90, true},
+    {0.35, 0.40, 0.60, 20.0, 0.60, {0.40, 0.36, 0.31}, {0.65, 0.62, 0.58}, 0.90, true},
+    {0.35, 0.60, 0.00, 30.0, 0.35, {0.60, 0.60, 0.60}, {0.80, 0.80, 0.80}, -1.0, true},
+    {0.60, 0.50, 0.50, 30.0, 0.20, {0.72, 0.69, 0.63}, {0.62, 0.59, 0.54}, 0.95, false},
+    {0.35, 0.35, 0.80, 4.0, 0.35, {0.55, 0.52, 0.47}, {0.75, 0.72, 0.67}, 0.75, true},
+    {0.40, 0.60, 0.50, 25.0, 0.45, {0.55, 0.50, 0.41}, {0.75, 0.71, 0.63}, 0.90, true},
 }};
 
 /** Painted toon colours: flat, warmer, readable bands. */
@@ -243,6 +243,21 @@ private:
                 if (m.cornerValid(c))
                     v[c] = {r.corners[size_t(a)][c], r.corners[size_t(b)][c]};
         };
+        // Per-pixel fields for Unreal in two more UV sets: (height, the face's longest contact line), (drop below its
+        // first streak source, position along it). One line and one source each, as many as the channels hold.
+        auto fields = [&](int set) {
+            auto a = m.cornerAttrs().getOrAdd<glm::vec2>("uv" + std::to_string(set));
+            auto b = m.cornerAttrs().getOrAdd<glm::vec2>("uv" + std::to_string(set + 1));
+            for (geo::Index c = 0; c < m.cornerCapacity(); ++c)
+            {
+                if (!m.cornerValid(c))
+                    continue;
+                const float h = c < r.height.size() ? r.height[c] : kFarEdge;
+                const float contact = c < r.contactDistance.size() ? r.contactDistance[c].x : kFarEdge;
+                a[c] = {h, contact};
+                b[c] = c < r.streakLines.size() ? glm::vec2(r.streakLines[c].x, r.streakLines[c].y) : glm::vec2(kFarEdge, 0.0f);
+            }
+        };
         // The sharp-edge distances follow the masks in two more UV sets, so Unreal's edge wear holds on plain blocks too.
         auto distances = [&](int set) {
             for (int k = 0; k < 2; ++k)
@@ -256,11 +271,13 @@ private:
         if (color)
         {
             auto v = geo::colors::add(m, kColorSet, glm::vec4(0.0f));
+            geo::colors::setData(m, kColorSet, true);
             for (geo::Index c = 0; c < m.cornerCapacity() && c < v.size(); ++c)
                 if (m.cornerValid(c))
                     v[c] = {r.corners[kEdge][c], r.corners[kCavity][c], r.corners[kAo][c], r.corners[kStreak][c]};
             uv(uvSet, kDust, kFade);
             distances(uvSet + 1);
+            fields(uvSet + 3);
             return "color";
         }
         uv(uvSet, kEdge, kCavity);
@@ -312,6 +329,11 @@ render::GrungeLook lookOf(const Node& n)
     }
     look.outlineColor = glm::vec3(n.as<glm::dvec3>(at(n, "outlineColor")));
     look.edgeWidth = float(n.as<double>(at(n, "edgeWidth")));
+    look.cavityWidth = float(n.as<double>(at(n, "cavityWidth")));
+    // Occlusion from contact lines reaches half the ray radius: the rays' falloff over a flat wall.
+    look.aoWidth = float(n.as<double>(at(n, "aoRadius")) * 0.5);
+    look.fadeHeight = float(n.as<double>(at(n, "fadeHeight")));
+    look.streakLength = float(n.as<double>(at(n, "streakLength")));
     return look;
 }
 

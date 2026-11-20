@@ -22,7 +22,7 @@
 
 namespace
 {
-constexpr int32 Version = 2;
+constexpr int32 Version = 3;
 const TCHAR* VersionTag = TEXT("Lila Grunge v");
 const TCHAR* InstanceFolder = TEXT("/Game/LilaLink/Grunge");
 
@@ -123,6 +123,19 @@ void BuildGrunge(UMaterialFunction* Function)
 		TEXT("Distances, cm, to the face's sharp edge lines: UV channels 4 and 5 when unconnected. Their min is the distance to the nearest "
 			 "sharp edge, so edge wear holds on blocks with no vertices between their edges."));
 	UMaterialExpression* EdgeWidth = G.ScalarInput(TEXT("EdgeWidth"), 4.0f, TEXT("Edge"), TEXT("How far wear runs from a sharp edge, cm."));
+	auto* UV6 = G.New<UMaterialExpressionTextureCoordinate>(-1900);
+	UV6->CoordinateIndex = 6;
+	auto* UV7 = G.New<UMaterialExpressionTextureCoordinate>(-1900);
+	UV7->CoordinateIndex = 7;
+	UMaterialExpression* FieldsDefault = Custom(G, TEXT("fields"), TEXT("return float4(U0, U1);"), CMOT_Float4,
+		{Wire(TEXT("U0"), UV6), Wire(TEXT("U1"), UV7)}, -1700);
+	UMaterialExpression* Fields = G.Input(TEXT("GrungeFields"), FunctionInput_Vector4, FieldsDefault,
+		TEXT("Height above the ground, distance to the face's contact line, drop below a streak source and position along it, cm: UV "
+			 "channels 6 and 7 when unconnected. Exact per pixel, so dirt, fade and streaks hold on blocks with four corners a face."));
+	UMaterialExpression* CavityWidth = G.ScalarInput(TEXT("CavityWidth"), 10.0f, TEXT("Cavity"), TEXT("How far dirt runs from a contact line, cm."));
+	UMaterialExpression* AoWidth = G.ScalarInput(TEXT("AoWidth"), 40.0f, TEXT("Occlusion"), TEXT("How far occlusion runs from a contact line, cm."));
+	UMaterialExpression* FadeHeight = G.ScalarInput(TEXT("FadeHeight"), 60.0f, TEXT("Fade"), TEXT("How high the ground fade reaches, cm."));
+	UMaterialExpression* StreakLength = G.ScalarInput(TEXT("StreakLength"), 150.0f, TEXT("Streaks"), TEXT("How far streaks run down, cm."));
 	auto* World = G.New<UMaterialExpressionWorldPosition>(-1900);
 	UMaterialExpression* Normal = Custom(G, TEXT("normal"), TEXT("return Parameters.TangentToWorld[2];"), CMOT_Float3, {}, -1700);
 
@@ -130,15 +143,19 @@ void BuildGrunge(UMaterialFunction* Function)
 	TArray<FWire> Composite = {Wire(TEXT("Base"), Base), Wire(TEXT("Rough"), BaseRough), Wire(TEXT("OutlineColor"), OutlineColor)};
 	const float Levels[MaskCount] = {0.45f, 0.35f, 0.35f, 0.55f, 0.35f, 0.4f};
 	const float Softness[MaskCount] = {0.3f, 0.4f, 0.6f, 0.5f, 0.35f, 0.6f};
-	const float Breakup[MaskCount] = {0.6f, 0.6f, 0.0f, 0.5f, 1.2f, 0.5f};
+	const float Breakup[MaskCount] = {0.6f, 0.6f, 0.0f, 0.5f, 0.8f, 0.5f};
 	const float Scale[MaskCount] = {6.0f, 20.0f, 30.0f, 30.0f, 4.0f, 25.0f};
-	const float Strength[MaskCount] = {0.45f, 0.75f, 0.55f, 0.3f, 0.65f, 0.55f};
+	const float Strength[MaskCount] = {0.45f, 0.6f, 0.35f, 0.2f, 0.35f, 0.45f};
 	const float Multiply[MaskCount] = {0.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f};
 	const float Rough[MaskCount] = {0.45f, 0.9f, -1.0f, 0.95f, 0.75f, 0.9f};
-	const FLinearColor Colors[MaskCount] = {{0.62f, 0.6f, 0.56f}, {0.32f, 0.29f, 0.25f}, {0.45f, 0.45f, 0.45f}, {0.5f, 0.47f, 0.42f}, {0.4f, 0.37f, 0.33f}, {0.5f, 0.45f, 0.36f}};
-	const FLinearColor Lows[MaskCount] = {{0.45f, 0.43f, 0.4f}, {0.55f, 0.52f, 0.48f}, {0.7f, 0.7f, 0.7f}, {0.4f, 0.37f, 0.33f}, {0.6f, 0.57f, 0.52f}, {0.7f, 0.66f, 0.58f}};
+	const FLinearColor Colors[MaskCount] = {{0.62f, 0.6f, 0.56f}, {0.4f, 0.36f, 0.31f}, {0.6f, 0.6f, 0.6f}, {0.72f, 0.69f, 0.63f}, {0.55f, 0.52f, 0.47f}, {0.55f, 0.5f, 0.41f}};
+	const FLinearColor Lows[MaskCount] = {{0.45f, 0.43f, 0.4f}, {0.65f, 0.62f, 0.58f}, {0.8f, 0.8f, 0.8f}, {0.62f, 0.59f, 0.54f}, {0.75f, 0.72f, 0.67f}, {0.75f, 0.71f, 0.63f}};
 	// Edge wear from the per-pixel distance to the nearest sharp edge where the face has one, else the vertex value.
-	const TCHAR* Raw[MaskCount] = {TEXT("min(min(D.x, D.y), min(D.z, D.w)) < 5000.0 ? saturate(1.0 - max(min(min(D.x, D.y), min(D.z, D.w)), 0.0) / max(EdgeWidth, 1e-3)) : A.x"), TEXT("A.y"), TEXT("A.z"), TEXT("B.x"), TEXT("A.w"), TEXT("B.y")};
+	const TCHAR* Raw[MaskCount] = {TEXT("min(min(D.x, D.y), min(D.z, D.w)) < 5000.0 ? saturate(1.0 - max(min(min(D.x, D.y), min(D.z, D.w)), 0.0) / max(EdgeWidth, 1e-3)) : A.x"),
+		TEXT("max(F.y < 5000.0 ? saturate(1.0 - max(F.y, 0.0) / max(CavityWidth, 1e-3)) : 0.0, A.y)"),
+		TEXT("max(F.y < 5000.0 ? saturate(1.0 - max(F.y, 0.0) / max(AoWidth, 1e-3)) : 0.0, A.z)"), TEXT("B.x"),
+		TEXT("max(A.w, (F.z < 5000.0 && F.z >= 0.0 && F.w >= 0.0 && F.w <= 1.0) ? saturate(1.0 - F.z / max(StreakLength, 1e-3)) : 0.0)"),
+		TEXT("max(F.x < 5000.0 ? saturate(1.0 - max(F.x, 0.0) / max(FadeHeight, 1e-3)) : 0.0, B.y)")};
 	for (int32 K = 0; K < MaskCount; ++K)
 	{
 		const FString M = MaskNames[K];
@@ -167,8 +184,8 @@ void BuildGrunge(UMaterialFunction* Function)
 				 "    + Texture2DSample(Tex, TexSampler, uvw.xy).r * bw.z;\n"
 				 "}\n") +
 			FString::Printf(TEXT("float raw = %s;\n"), Raw[K]) +
-			TEXT("float v = raw + (n - 0.5) * Breakup;\n"
-				 "float s = max(Softness, 1e-4) * 0.5;\n"
+			TEXT("float v = raw + (n - 0.5) * Breakup * saturate(1.5 - length(fwidth(Wt / max(Scale, 0.01))));\n"
+				 "float s = max(max(Softness, 1e-4) * 0.5, fwidth(v));\n"
 				 "float m = smoothstep(Level - s, Level + s, v);\n"
 				 "if (Bands >= 2.0) m = min(floor(m * Bands), Bands - 1.0) / (Bands - 1.0);\n"
 				 "if (Cut > 0.0) m = m >= Cut ? 1.0 : 0.0;\n"
@@ -176,7 +193,9 @@ void BuildGrunge(UMaterialFunction* Function)
 				 "if (Outline > 0.0) line = 1.0 - saturate(abs(v - Level) / max(Outline, max(fwidth(v), 1e-5)));\n"
 				 "return On > 0.5 ? float2(m, line) : float2(0.0, 0.0);");
 		UMaterialExpression* Mask = Custom(G, M.ToLower(), Code, CMOT_Float2,
-			{Wire(TEXT("A"), MasksA), Wire(TEXT("B"), MasksB), Wire(TEXT("D"), EdgeDist), Wire(TEXT("EdgeWidth"), EdgeWidth), Wire(TEXT("W"), World), Wire(TEXT("N"), Normal), Wire(TEXT("Scale"), Sc),
+			{Wire(TEXT("A"), MasksA), Wire(TEXT("B"), MasksB), Wire(TEXT("D"), EdgeDist), Wire(TEXT("EdgeWidth"), EdgeWidth), Wire(TEXT("F"), Fields),
+				Wire(TEXT("CavityWidth"), CavityWidth), Wire(TEXT("AoWidth"), AoWidth), Wire(TEXT("FadeHeight"), FadeHeight), Wire(TEXT("StreakLength"), StreakLength),
+				Wire(TEXT("W"), World), Wire(TEXT("N"), Normal), Wire(TEXT("Scale"), Sc),
 				Wire(TEXT("Seed"), Seed),
 				Wire(TEXT("Tex"), NoiseTex), Wire(TEXT("UseTex"), UseTex), Wire(TEXT("TexScale"), TexScale), Wire(TEXT("Breakup"), Brk),
 				Wire(TEXT("Softness"), Soft), Wire(TEXT("Level"), Level), Wire(TEXT("Bands"), Bands), Wire(TEXT("Cut"), Cut),
@@ -249,6 +268,12 @@ void Master(UMaterial* Material, UMaterialFunction* Function, int32 UVBase, TArr
 		UMaterialEditingLibrary::ConnectMaterialExpressions(U[3], TEXT(""), Dist, TEXT("U3"));
 		UMaterialEditingLibrary::ConnectMaterialExpressions(U[4], TEXT(""), Dist, TEXT("U4"));
 		UMaterialEditingLibrary::ConnectMaterialExpressions(Dist, TEXT(""), Call, TEXT("GrungeEdgeDistance"));
+		// The UV layout has no channels left for the per-pixel fields: far values make the masks use their vertex values.
+		auto* Far = Cast<UMaterialExpressionCustom>(UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionCustom::StaticClass(), -600, 600));
+		Far->Code = TEXT("return float4(10000.0, 10000.0, 10000.0, 0.0);");
+		Far->OutputType = CMOT_Float4;
+		Far->Inputs.Reset();
+		UMaterialEditingLibrary::ConnectMaterialExpressions(Far, TEXT(""), Call, TEXT("GrungeFields"));
 	}
 	Material->PostEditChange();
 	Material->MarkPackageDirty();

@@ -114,9 +114,11 @@ std::vector<double> edgeDistance(const geo::Mesh& w, const std::vector<char>& se
 
 double heightOf(const glm::dvec3& p, const glm::dvec3& up) { return glm::dot(p, up); }
 
-/** Whether an edge wears: on the boundary, or convex past the feature angle. */
-bool sharpConvex(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, Index e, double cosFeature)
+/** Whether an edge wears: on the boundary, or convex past the feature angle; never where it rests on something. */
+bool sharpConvex(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, Index e, double cosFeature, const std::vector<char>& contactEdge)
 {
+    if (contactEdge[e])
+        return false;
     if (w.edgeFaceCount(e) != 2)
         return true;
     const Index c0 = w.edgeCorner(e);
@@ -127,7 +129,8 @@ bool sharpConvex(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, Index
 }
 
 /** Per corner, its signed distance to each of up to four sharp edge lines of its face (the longest ones), kFarEdge for none. */
-std::vector<glm::vec4> sharpEdgeDistances(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, double cosFeature)
+std::vector<glm::vec4> sharpEdgeDistances(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, double cosFeature,
+                                          const std::vector<char>& contactEdge)
 {
     std::vector<glm::vec4> out(w.cornerCapacity(), glm::vec4(kFarEdge));
     for (Index f = 0; f < w.faceCapacity(); ++f)
@@ -142,7 +145,7 @@ std::vector<glm::vec4> sharpEdgeDistances(const geo::Mesh& w, const std::vector<
         std::vector<Line> lines;
         w.forEachFaceCorner(f, [&](Index c) {
             const Index e = w.cornerEdge(c);
-            if (!sharpConvex(w, faceN, e, cosFeature))
+            if (!sharpConvex(w, faceN, e, cosFeature, contactEdge))
                 return;
             const glm::dvec3 a = w.position(w.cornerPoint(c)), b = w.position(w.cornerNextPoint(c));
             const glm::dvec3 along = b - a;
@@ -151,6 +154,52 @@ std::vector<glm::vec4> sharpEdgeDistances(const geo::Mesh& w, const std::vector<
                 return;
             // Corners run counter-clockwise about the normal, so normal x along points into the face.
             lines.push_back({a, glm::normalize(glm::cross(faceN[f], along)), len});
+        });
+        // A line through a reflex edge of a concave face cuts back across it; only lines the whole face lies inside of count.
+        std::erase_if(lines, [&](const Line& l) {
+            bool behind = false;
+            w.forEachFaceCorner(f, [&](Index c) { behind = behind || glm::dot(w.position(w.cornerPoint(c)) - l.a, l.inward) < -0.5; });
+            return behind;
+        });
+        std::sort(lines.begin(), lines.end(), [](const Line& x, const Line& y) { return x.length > y.length; });
+        if (lines.size() > 4)
+            lines.resize(4);
+        w.forEachFaceCorner(f, [&](Index c) {
+            glm::vec4 d(kFarEdge);
+            for (size_t k = 0; k < lines.size(); ++k)
+                d[int(k)] = float(glm::dot(w.position(w.cornerPoint(c)) - lines[k].a, lines[k].inward));
+            out[c] = d;
+        });
+    }
+    return out;
+}
+/** Per corner, signed distances to up to four lines of its face picked by keep (the longest), kFarEdge for none. */
+template <class Keep> std::vector<glm::vec4> faceLineDistances(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, Keep keep)
+{
+    std::vector<glm::vec4> out(w.cornerCapacity(), glm::vec4(kFarEdge));
+    for (Index f = 0; f < w.faceCapacity(); ++f)
+    {
+        if (!w.faceValid(f))
+            continue;
+        struct Line
+        {
+            glm::dvec3 a, inward;
+            double length;
+        };
+        std::vector<Line> lines;
+        w.forEachFaceCorner(f, [&](Index c) {
+            if (!keep(w.cornerEdge(c)))
+                return;
+            const glm::dvec3 a = w.position(w.cornerPoint(c)), b = w.position(w.cornerNextPoint(c));
+            const double len = glm::length(b - a);
+            if (len > 1e-9)
+                lines.push_back({a, glm::normalize(glm::cross(faceN[f], b - a)), len});
+        });
+        // A line through a reflex edge of a concave face cuts back across it; only lines the whole face lies inside of count.
+        std::erase_if(lines, [&](const Line& l) {
+            bool behind = false;
+            w.forEachFaceCorner(f, [&](Index c) { behind = behind || glm::dot(w.position(w.cornerPoint(c)) - l.a, l.inward) < -0.5; });
+            return behind;
         });
         std::sort(lines.begin(), lines.end(), [](const Line& x, const Line& y) { return x.length > y.length; });
         if (lines.size() > 4)
@@ -243,6 +292,30 @@ Result compute(const geo::Mesh& mesh, const glm::dmat4& world, std::span<const N
             if (!convex && glm::dot(on, up) < -0.7)
                 sources.push_back({a, b, wn});
         }
+    }
+    // Contact edges: concave ones, and ones lying on the ground plane or on a neighbour's surface (a wall's foot, a
+    // block against another). Dirt and occlusion run from them per pixel; they never wear.
+    std::vector<char> contactEdge(w.edgeCapacity(), 0);
+    const double touch = std::max(2.0, eps * 4.0);
+    auto onSomething = [&](const glm::dvec3& q) {
+        if (s.groundPlane && std::abs(heightOf(q, up) - s.groundHeight) < touch)
+            return true;
+        geo::BvhClosest c;
+        return sc.hasOthers && sc.othersBvh.closestPoint(q, c, touch);
+    };
+    for (Index e = 0; e < w.edgeCapacity(); ++e)
+    {
+        if (!w.edgeValid(e))
+            continue;
+        const glm::dvec3 a = w.position(w.edgePoint(e, 0)), b = w.position(w.edgePoint(e, 1));
+        bool concave = false;
+        if (w.edgeFaceCount(e) == 2)
+        {
+            const Index c0 = w.edgeCorner(e);
+            const Index f0 = w.cornerFace(c0), f1 = w.cornerFace(w.cornerRadial(c0));
+            concave = glm::dot(faceN[f0], faceN[f1]) <= cosFeature && glm::dot(w.faceCentroid(f1) - w.faceCentroid(f0), faceN[f0]) > 0.0;
+        }
+        contactEdge[e] = concave || (onSomething(a) && onSomething(b) && onSomething((a + b) * 0.5)) ? 1 : 0;
     }
     const std::vector<double> convexD = edgeDistance(w, convexPt, std::max(s.edgeWidth, 1e-6) * 2.0);
     const std::vector<double> concaveD = edgeDistance(w, concavePt, std::max(s.cavityWidth, 1e-6) * 2.0);
@@ -379,16 +452,138 @@ Result compute(const geo::Mesh& mesh, const glm::dmat4& world, std::span<const N
         }
     });
 
+    // Dust is one value per face: open to the sky from its middle, by how much it faces up. Corners differ in what is
+    // above them, which would draw seams across a large roof.
+    std::vector<float> faceDust(w.faceCapacity(), 0.0f);
+    for (Index f = 0; f < w.faceCapacity(); ++f)
+    {
+        if (!w.faceValid(f))
+            continue;
+        const double facing = glm::dot(faceN[f], up);
+        if (facing <= 0.3)
+            continue;
+        const double open = sc.blocked(w.faceCentroid(f) + faceN[f] * eps, up, s.dustCover) ? 0.0 : 1.0;
+        faceDust[f] = float(std::clamp((facing - 0.3) / 0.7, 0.0, 1.0) * open);
+    }
+    // A corner's value stands for its whole face once interpolated: on a face much bigger than a mask's reach that
+    // smears it over the face, so it fades with face size. The per-pixel fields carry those masks on big faces instead.
+    std::vector<double> faceSize(w.faceCapacity(), 0.0);
+    for (Index f = 0; f < w.faceCapacity(); ++f)
+        if (w.faceValid(f))
+            w.forEachFaceCorner(f, [&](Index c) {
+                faceSize[f] = std::max(faceSize[f], glm::length(w.position(w.cornerNextPoint(c)) - w.position(w.cornerPoint(c))));
+            });
+    std::array<double, kMaskCount> reach{};
+    reach[kEdge] = s.edgeWidth;
+    reach[kCavity] = s.cavityWidth;
+    reach[kAo] = s.aoRadius * 0.5;
+    reach[kDust] = 1e30; // set per face below, so it never varies across one
+    reach[kStreak] = s.streakLength;
+    reach[kFade] = s.fadeHeight;
     for (Index c = 0; c < w.cornerCapacity(); ++c)
         if (w.cornerValid(c) && cornerSample[c] != geo::kInvalid)
+        {
+            const double size = faceSize[w.cornerFace(c)];
             for (int k = 0; k < kMaskCount; ++k)
-                r.corners[size_t(k)][c] = values[size_t(k)][cornerSample[c]];
-    r.edgeDistance = sharpEdgeDistances(w, faceN, cosFeature);
+            {
+                // Full up to the mask's reach, gone by twice it.
+                const double keep = std::clamp((2.0 * reach[size_t(k)] - size) / std::max(reach[size_t(k)], 1e-9), 0.0, 1.0);
+                r.corners[size_t(k)][c] = float(values[size_t(k)][cornerSample[c]] * keep);
+            }
+            r.corners[kDust][c] = faceDust[w.cornerFace(c)];
+        }
+    r.edgeDistance = sharpEdgeDistances(w, faceN, cosFeature, contactEdge);
+    r.contactDistance = faceLineDistances(w, faceN, [&](Index e) { return contactEdge[e] != 0; });
+
+    // Height above what is below, per corner of side faces, from one base per face (what is under its lowest corner),
+    // so it stays linear over the face and ground fade holds per pixel without seams.
+    r.height.assign(w.cornerCapacity(), kFarEdge);
+    for (Index f = 0; f < w.faceCapacity(); ++f)
+    {
+        if (!w.faceValid(f) || std::abs(glm::dot(faceN[f], up)) >= 0.5)
+            continue;
+        Index lowest = geo::kInvalid;
+        w.forEachFaceCorner(f, [&](Index c) {
+            if (lowest == geo::kInvalid || heightOf(w.position(w.cornerPoint(c)), up) < heightOf(w.position(w.cornerPoint(lowest)), up))
+                lowest = c;
+        });
+        const glm::dvec3 low = w.position(w.cornerPoint(lowest));
+        double below = std::numeric_limits<double>::max();
+        double t;
+        glm::dvec3 hn;
+        if (sc.cast(low + faceN[f] * eps, -up, 1e5, false, t, hn))
+            below = t;
+        if (s.groundPlane && heightOf(low, up) - s.groundHeight > -eps)
+            below = std::min(below, std::max(heightOf(low, up) - s.groundHeight, 0.0));
+        if (below >= 1e5)
+            continue;
+        const double base = heightOf(low, up) - below;
+        w.forEachFaceCorner(f, [&](Index c) { r.height[c] = float(heightOf(w.position(w.cornerPoint(c)), up) - base); });
+    }
+
+    // Streak sources over each side face: the two nearest above it that share its plane and overlap it sideways.
+    r.streakLines.assign(w.cornerCapacity(), glm::vec4(kFarEdge, 0.0f, kFarEdge, 0.0f));
+    for (Index f = 0; f < w.faceCapacity(); ++f)
+    {
+        if (!w.faceValid(f) || std::abs(glm::dot(faceN[f], up)) >= 0.5 || sources.empty())
+            continue;
+        double top = -1e300;
+        w.forEachFaceCorner(f, [&](Index c) { top = std::max(top, heightOf(w.position(w.cornerPoint(c)), up)); });
+        struct Pick
+        {
+            const StreakSource* src;
+            double above;
+        };
+        std::vector<Pick> picks;
+        for (const StreakSource& src : sources)
+        {
+            if (glm::dot(src.wallNormal, faceN[f]) < 0.8 || std::abs(glm::dot(w.faceCentroid(f) - src.a, faceN[f])) > std::max(2.0, s.edgeWidth))
+                continue;
+            const double h = std::max(heightOf(src.a, up), heightOf(src.b, up));
+            if (h < top - s.streakLength - 1.0 || h > top + s.streakLength)
+                continue;
+            picks.push_back({&src, std::abs(h - top)});
+        }
+        std::sort(picks.begin(), picks.end(), [](const Pick& x, const Pick& y) { return x.above < y.above; });
+        w.forEachFaceCorner(f, [&](Index c) {
+            glm::vec4 v(kFarEdge, 0.0f, kFarEdge, 0.0f);
+            const glm::dvec3 p = w.position(w.cornerPoint(c));
+            for (size_t k = 0; k < picks.size() && k < 2; ++k)
+            {
+                const StreakSource& src = *picks[k].src;
+                glm::dvec3 along = (src.b - src.a) - up * glm::dot(src.b - src.a, up);
+                const double len = glm::length(along);
+                if (len < 1e-6)
+                    continue;
+                along /= len;
+                const double u = glm::dot(p - src.a, along) / len;
+                const double drop = heightOf(src.a, up) + (heightOf(src.b, up) - heightOf(src.a, up)) * u - heightOf(p, up);
+                v[int(k) * 2] = float(drop);
+                v[int(k) * 2 + 1] = float(u);
+            }
+            r.streakLines[c] = v;
+        });
+    }
     return r;
 }
 
 void writeAttributes(geo::Mesh& mesh, const Result& r)
 {
+    auto vec4s = [&](const char* name, const std::vector<glm::vec4>& src) {
+        if (src.empty())
+            return;
+        auto d = mesh.cornerAttrs().getOrAdd<glm::vec4>(name);
+        for (size_t c = 0; c < d.size() && c < src.size(); ++c)
+            d[c] = src[c];
+    };
+    vec4s("grungeContactDistance", r.contactDistance);
+    vec4s("grungeStreakLines", r.streakLines);
+    if (!r.height.empty())
+    {
+        auto d = mesh.cornerAttrs().getOrAdd<float>("grungeHeight");
+        for (size_t c = 0; c < d.size() && c < r.height.size(); ++c)
+            d[c] = r.height[c];
+    }
     if (!r.edgeDistance.empty())
     {
         auto d = mesh.cornerAttrs().getOrAdd<glm::vec4>("grungeEdgeDistance");

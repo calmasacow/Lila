@@ -69,8 +69,23 @@ inline constexpr std::array<const char*, kGrungeMasks> kGrungeAttrs = {"grungeEd
  */
 inline constexpr const char* kGrungeEdgeDistanceAttr = "grungeEdgeDistance";
 inline constexpr float kGrungeFarEdge = 10000.0f;
-/** RenderMesh::grunge words per vertex: the six masks as 16-bit unorms two to a word, then the four edge distances as halves. */
-inline constexpr int kGrungeWords = 5;
+/**
+ * Vec4 corner attribute: signed distances, cm, to up to four lines where the corner's face meets something (a concave
+ * edge, the ground, a neighbouring object); kGrungeFarEdge where unused. Carries cavity dirt and occlusion per pixel.
+ */
+inline constexpr const char* kGrungeContactDistanceAttr = "grungeContactDistance";
+/**
+ * Vec4 corner attribute: up to two streak sources over the corner's face, as (cm below the source, position along it
+ * 0 to 1) pairs; kGrungeFarEdge drop where unused. Streaks fall per pixel below sills and overhangs.
+ */
+inline constexpr const char* kGrungeStreakLinesAttr = "grungeStreakLines";
+/** Float corner attribute: height, cm, above the ground or whatever is below; kGrungeFarEdge for none. Ground fade per pixel. */
+inline constexpr const char* kGrungeHeightAttr = "grungeHeight";
+/**
+ * RenderMesh::grunge words per vertex: the six masks as 16-bit unorms two to a word, the four edge distances, the four
+ * contact distances and the two streak lines as halves, then the height as a half.
+ */
+inline constexpr int kGrungeWords = 10;
 
 /**
  * Vertices edited in place while the topology stays (sculpting a dense mesh): the editor writes vertices and marks
@@ -370,12 +385,17 @@ struct GrungeLook
     glm::vec3 outlineColor{0.03f}; // linear
     /** Edge wear runs this far from a sharp edge, cm, where the mesh carries edge distances. */
     float edgeWidth = 4.0f;
+    /** Per-pixel reaches, cm: cavity dirt and occlusion from contact lines, ground fade, streak length. */
+    float cavityWidth = 10.0f;
+    float aoWidth = 40.0f;
+    float fadeHeight = 60.0f;
+    float streakLength = 150.0f;
 
     bool operator==(const GrungeLook&) const = default;
 };
 
 /** Words in a packed grunge block (packGrunge); mesh.slang reads it after the draw's style block. */
-constexpr int kGrungeBlockWords = 8 + kGrungeMasks * 16;
+constexpr int kGrungeBlockWords = 8 + kGrungeMasks * 16 + 4;
 
 /** A grunge block: the per-vertex mask buffer's device address, then the look. mesh.slang reads it. */
 LILA_UI_API std::array<uint32_t, kGrungeBlockWords> packGrunge(const GrungeLook& g, uint64_t address);

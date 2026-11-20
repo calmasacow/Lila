@@ -291,6 +291,9 @@ void fillGrunge(const geo::Mesh& m, const geo::RenderMesh& layout, render::Rende
     if (!corners && !points)
         return;
     const auto edgeDistance = m.cornerAttrs().get<glm::vec4>(render::kGrungeEdgeDistanceAttr);
+    const auto contactDistance = m.cornerAttrs().get<glm::vec4>(render::kGrungeContactDistanceAttr);
+    const auto streakLines = m.cornerAttrs().get<glm::vec4>(render::kGrungeStreakLinesAttr);
+    const auto height = m.cornerAttrs().get<float>(render::kGrungeHeightAttr);
     for (int k = 0; k < render::kGrungeMasks; ++k)
         masks[size_t(k)] = (corners ? m.cornerAttrs() : m.pointAttrs()).get<float>(render::kGrungeAttrs[size_t(k)]);
     const auto& source = corners ? layout.vertexCorner : layout.vertexPoint;
@@ -309,6 +312,14 @@ void fillGrunge(const geo::Mesh& m, const geo::RenderMesh& layout, render::Rende
         const glm::vec4 d = c < edgeDistance.size() ? edgeDistance[c] : glm::vec4(render::kGrungeFarEdge);
         words[3] = glm::packHalf2x16(glm::vec2(d.x, d.y));
         words[4] = glm::packHalf2x16(glm::vec2(d.z, d.w));
+        const float far = render::kGrungeFarEdge;
+        const glm::vec4 cd = c < contactDistance.size() ? contactDistance[c] : glm::vec4(far);
+        words[5] = glm::packHalf2x16(glm::vec2(cd.x, cd.y));
+        words[6] = glm::packHalf2x16(glm::vec2(cd.z, cd.w));
+        const glm::vec4 sl = c < streakLines.size() ? streakLines[c] : glm::vec4(far, 0.0f, far, 0.0f);
+        words[7] = glm::packHalf2x16(glm::vec2(sl.x, sl.y));
+        words[8] = glm::packHalf2x16(glm::vec2(sl.z, sl.w));
+        words[9] = glm::packHalf2x16(glm::vec2(c < height.size() ? height[c] : far, 0.0f));
     });
 }
 
@@ -399,6 +410,7 @@ Entry build(const scene::MeshPtr& source, bool tangents)
     opts.colors = true;
     opts.sections = true;
     opts.tangents = tangents;
+    opts.splitLayers = {render::kGrungeEdgeDistanceAttr, render::kGrungeContactDistanceAttr, render::kGrungeStreakLinesAttr, render::kGrungeHeightAttr};
     auto pick = std::make_shared<geo::RenderMesh>(geo::buildRenderMesh(*source, opts));
     const geo::RenderMesh& rm = *pick;
 
