@@ -27,7 +27,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <map>
 #include <mutex>
+#include <set>
 
 using namespace lila;
 using namespace lila::scene;
@@ -74,6 +76,9 @@ struct LookDefault
     double roughness;
     bool multiply; // grime darkens the surface by its colour; worn edges and dust lay their own colour over it
 };
+
+/** Raised whenever the default looks change: grungeMask resets older nodes to them. */
+constexpr int kLookVersion = 3;
 
 constexpr std::array<LookDefault, kMaskCount> kRealistic = {{
     {0.45, 0.30, 0.60, 6.0, 0.45, {0.62, 0.60, 0.56}, {0.45, 0.43, 0.40}, 0.45, false},
@@ -398,24 +403,57 @@ std::vector<Node*> allMeshes(Graph& g)
     return out;
 }
 
-/** Connects the meshes near target (within radius of its bounds) as its grunge node's neighbours. */
-int wireNeighbours(Graph& g, Node& mesh, GrungeNode& grunge, const std::vector<Node*>& meshes, double radius)
+/** Every node downstream of a mesh: what is built from it (its dressing, ivy, decals), which must never feed its masks. */
+std::set<NodeId> madeFrom(Graph& g, NodeId mesh)
+{
+    std::multimap<NodeId, PlugRef> out;
+    for (const auto& [dst, src] : g.connections())
+        out.insert({src.node, dst});
+    std::set<NodeId> seen{mesh};
+    std::vector<NodeId> todo{mesh};
+    while (!todo.empty())
+    {
+        const NodeId at = todo.back();
+        todo.pop_back();
+        const auto [lo, hi] = out.equal_range(at);
+        for (auto it = lo; it != hi; ++it)
+        {
+            const Node* n = g.node(it->second.node);
+            // Other meshes' masks and ground tints read this one as a neighbour without being made from it.
+            if (!n || n->type().name == kGrungeType || n->type().name == "groundTintModifier")
+                continue;
+            if (seen.insert(n->id()).second)
+                todo.push_back(n->id());
+        }
+    }
+    seen.erase(mesh);
+    return seen;
+}
+
+/**
+ * Connects the meshes near target (within radius of its bounds) as its grunge node's neighbours. bounds were taken
+ * before anything was connected: reading a mesh built from the target here would recompute the masks once per neighbour.
+ */
+int wireNeighbours(Graph& g, Node& mesh, GrungeNode& grunge, const std::vector<Node*>& meshes, const std::map<NodeId, geo::Bounds>& bounds,
+                   double radius)
 {
     const int nAttr = at(grunge, "neighbours"), namesAttr = at(grunge, "neighbourNames");
     for (const PlugRef& e : g.elements({grunge.id(), nAttr, -1}))
         g.disconnect(e);
     for (const PlugRef& e : g.elements({grunge.id(), namesAttr, -1}))
         g.setValue(e, std::string());
-    const geo::Bounds self = worldBounds(g, mesh);
-    if (!self.valid())
+    const auto selfIt = bounds.find(mesh.id());
+    if (selfIt == bounds.end() || !selfIt->second.valid())
         return 0;
+    const geo::Bounds self = selfIt->second;
+    const std::set<NodeId> derived = madeFrom(g, mesh.id());
     int count = 0;
     for (Node* other : meshes)
     {
-        if (other->id() == mesh.id())
+        if (other->id() == mesh.id() || derived.contains(other->id()))
             continue;
-        const geo::Bounds b = worldBounds(g, *other);
-        if (!b.valid() || !boundsNear(self, b, radius))
+        const auto it = bounds.find(other->id());
+        if (it == bounds.end() || !it->second.valid() || !boundsNear(self, it->second, radius))
             continue;
         // A neighbour built from this mesh (its own base dressing, ivy or decals) would read back into it: left out.
         try
@@ -686,6 +724,8 @@ bool registerMaskNode(ext::Context& ctx)
     for (int k = 0; k < kMaskCount; ++k)
         for (AttrDef& d : lookAttrs(k))
             t.ownAttrs.push_back(std::move(d));
+    t.ownAttrs.push_back({.name = "lookVersion", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrInput | AttrStorable | AttrHidden,
+                          .doc = "Which defaults the look was last reset to."});
     t.ownAttrs.push_back({.name = "outMesh", .type = PlugType::Mesh, .defaultValue = MeshPtr(), .flags = AttrOutput | AttrHidden});
     t.ownAttrs.push_back({.name = "samples", .type = PlugType::Int, .defaultValue = int64_t(0), .flags = AttrOutput, .doc = "Surface samples evaluated."});
     t.ownAttrs.push_back({.name = "unrealLayout", .type = PlugType::String, .defaultValue = std::string(), .flags = AttrOutput,
@@ -722,8 +762,16 @@ bool registerMaskNode(ext::Context& ctx)
 json addMasks(Graph& g, const Args& a, const char* cmd)
 {
     LILA_ZONE();
+    // One notification for the whole command: listeners re-evaluate the scene on every change otherwise, rebuilding
+    // whatever is made from these meshes once per setting and per neighbour.
+    Graph::Batch batch(g);
     const std::vector<Node*> targets = meshesOf(g, a, cmd);
     const std::vector<Node*> meshes = allMeshes(g);
+    g.evaluate();
+
+    std::map<NodeId, geo::Bounds> bounds;
+    for (Node* m : meshes)
+        bounds[m->id()] = worldBounds(g, *m);
     const Style style = styleArg(a);
     json mods = json::array(), objects = json::array(), neighbours = json::object();
     std::vector<std::pair<Node*, GrungeNode*>> made;
@@ -736,9 +784,12 @@ json addMasks(Graph& g, const Args& a, const char* cmd)
             const std::string mod = ops::execute("addModifier", {{"args", {mesh->path()}}, {"kind", "grunge"}});
             grunge = static_cast<GrungeNode*>(g.find(mod));
         }
-        // A style resets the look once, when first given or changed, so look edits survive running the command again.
-        if (fresh || a.get<std::string>("style", "realistic") != grunge->as<std::string>(at(*grunge, "style")))
+        // A style resets the look once, when first given or changed, so look edits survive running the command again;
+        // a node whose look predates the current defaults takes them too.
+        if (fresh || a.get<std::string>("style", "realistic") != grunge->as<std::string>(at(*grunge, "style")) ||
+            grunge->as<int64_t>(at(*grunge, "lookVersion")) < kLookVersion)
         {
+            g.setValue({grunge->id(), at(*grunge, "lookVersion"), -1}, int64_t(kLookVersion));
             g.setValue({grunge->id(), at(*grunge, "style"), -1}, std::string(styleName(style)));
             const json look = styleLook(style);
             for (const auto& [k, v] : look.items())
@@ -776,7 +827,7 @@ json addMasks(Graph& g, const Args& a, const char* cmd)
         rewireReaders(g, mesh->id());
     if (a.get<bool>("neighbours", true))
         for (auto& [mesh, grunge] : made)
-            neighbours[mesh->path()] = wireNeighbours(g, *mesh, *grunge, meshes, a.get<double>("radius", 100.0));
+            neighbours[mesh->path()] = wireNeighbours(g, *mesh, *grunge, meshes, bounds, a.get<double>("radius", 100.0));
     g.evaluate();
     for (auto& [mesh, grunge] : made)
         syncMatrices(g, *grunge);

@@ -430,7 +430,7 @@ void registerPresetCommands(ext::Context& ctx)
             }
             return {{"drawn", drawn}, {"skipped", skipped}};
         },
-        .examples = {"arrangementThumbnails()", "arrangementThumbnails('Abandoned', force=True)"},
+        .examples = {"arrangementThumbnails()", "arrangementThumbnails('Leaning Planks', force=True)"},
     });
 
     ctx.registerCommand({
@@ -471,6 +471,8 @@ void registerPresetCommands(ext::Context& ctx)
                 throw CommandError("arrangePreset: slots is a dict of slot: value");
             const Filled f = fillSlots(g, spec, given, "arrangePreset");
             const int64_t seed = a.get<int64_t>("seed", 1);
+            // One notification for all the steps, so nothing rebuilds between them.
+            Graph::Batch batch(g);
             json steps = json::array();
             std::vector<std::string> groups;
             int64_t k = 0;
