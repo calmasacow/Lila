@@ -351,6 +351,12 @@ TEST_CASE("weathering generators: roofing uses the user's pieces, is determinist
     json toon = run("roofing", {{"args", {shed}}, {"style", "toon"}, {"kind", "tiles"}});
     CHECK(toon["count"].get<int64_t>() > 0);
     CHECK(toon["style"] == "toon");
+
+    // realize: scene objects in the result's group, the live mesh gone.
+    const json real = run("roofing", {{"args", {shed}}, {"pieces", json::array({tile})}, {"ridge", false}, {"realize", true}, {"name", "ShedReal"}});
+    CHECK(real["objects"].size() == size_t(real["count"].get<int64_t>()));
+    CHECK(g().find(real["group"].get<std::string>()));
+    CHECK(real["group"].get<std::string>().find("ShedReal") != std::string::npos);
 }
 
 TEST_CASE("weathering generators: fitWindows fills a carved wall")
@@ -364,6 +370,14 @@ TEST_CASE("weathering generators: fitWindows fills a carved wall")
     const json boarded = run("fitWindows", {{"args", {wall}}, {"glass", "boarded"}, {"interior", "none"}, {"style", "toon"}});
     CHECK(boarded["boarded"] == 1);
     CHECK_THROWS(run("fitWindows", {{"args", {cube("Solid", {900, 0, 0}, {100, 100, 100})}}}));
+
+    // A card interior with the user's image: its material slot is the Unreal instance windowInteriorSend makes.
+    const json card = run("fitWindows", {{"args", {wall}}, {"interior", "card"}, {"interiorImage", "D:/refs/shop_room.png"}});
+    CHECK(card["cardMaterial"] == "MI_shop_roomInterior");
+    const json plan = run("windowInteriorSend", {{"args", {card["mesh"]}}, {"dryRun", true}});
+    REQUIRE(plan["request"]["interiors"].size() == 1);
+    CHECK(plan["request"]["interiors"][0]["name"] == "MI_shop_roomInterior");
+    CHECK(plan["request"]["interiors"][0]["textures"].contains("InteriorRoomMap"));
 }
 
 TEST_CASE("weathering generators: wires sag within limits and stay out of colliders")
@@ -418,4 +432,15 @@ TEST_CASE("weathering generators: rooftop clutter only on flat tops, piles from 
     const json pile = run("themedPile", {{"theme", "bricks"}, {"settle", false}, {"count", 12}, {"at", json::array({0, 0, 2000})}});
     CHECK(pile["count"] == 12);
     CHECK(pile["group"].is_string());
+}
+
+TEST_CASE("weathering generators: curveToTruss builds a live closed truss on a curve")
+{
+    fresh();
+    const json c = run("curve", {{"points", json::array({json::array({0, 0, 0}), json::array({0, 300, 0})})}, {"degree", 1}, {"name", "Mast"}});
+    const std::string curve = c.is_array() ? c[0].get<std::string>() : c.get<std::string>();
+    const json r = run("curveToTruss", {{"args", {curve}}, {"chords", 3}, {"width", 60}, {"segment", 60}});
+    const geo::Mesh m = meshOf(r["mesh"].get<std::string>());
+    CHECK(wg::closedAndConnected(m));
+    CHECK(wg::boundsOf(m).size().y > 290.0);
 }
