@@ -7,6 +7,7 @@
 #include <lila/Prefs.h>
 #include <lila/Profile.h>
 
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -18,7 +19,7 @@ namespace weathering
 {
 namespace
 {
-constexpr int kVersion = 4;
+constexpr int kVersion = 5;
 
 std::vector<Placeholder>& registry()
 {
@@ -135,7 +136,21 @@ json buildPlaceholders(bool force)
         const fs::path folder = dir / p.collection / p.name;
         fs::create_directories(folder, ec);
         const glm::vec3 c = p.color.r >= 0.0f ? p.color : roleColor(p.role, p.style == "toon");
-        const std::string material = "M_" + p.name;
+        // One material per role and style, shared by its pieces, under a prefix tools can leave out of material lists.
+        std::string material = kPieceMaterialPrefix;
+        bool upper = true;
+        for (char ch : p.role)
+        {
+            if (!std::isalnum(static_cast<unsigned char>(ch)))
+            {
+                upper = true;
+                continue;
+            }
+            material += upper ? char(std::toupper(static_cast<unsigned char>(ch))) : ch;
+            upper = false;
+        }
+        if (p.style == "toon")
+            material += "Toon";
         std::ofstream(folder / (p.name + ".mtl"), std::ios::binary)
             << "newmtl " << material << "\nKd " << std::pow(c.r, 1.0f / 2.2f) << " " << std::pow(c.g, 1.0f / 2.2f) << " " << std::pow(c.b, 1.0f / 2.2f)
             << "\nKs 0 0 0\nNs 10\n";

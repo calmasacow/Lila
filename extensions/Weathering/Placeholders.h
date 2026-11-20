@@ -24,6 +24,9 @@ class Context;
  */
 namespace weathering
 {
+/** Materials of placeholder pieces start with this; they are the pieces' own, not ones to paint with. */
+inline constexpr const char* kPieceMaterialPrefix = "PiecePlaceholder_";
+
 struct Placeholder
 {
     std::string collection; // "Weathering/Rubble"
