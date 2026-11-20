@@ -19,6 +19,7 @@ using namespace lila;
 namespace weathering
 {
 void registerBasePieces();
+void registerUnreal(ext::Context& ctx);
 
 namespace age
 {
@@ -162,6 +163,7 @@ bool registerAge(ext::Context& ctx)
 {
     using namespace age;
     registerBasePieces();
+    registerUnreal(ctx);
     for (const char* style : {"realistic", "toon"})
         for (json& p : builtins(style))
         {
