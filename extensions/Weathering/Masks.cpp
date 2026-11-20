@@ -390,7 +390,15 @@ int wireNeighbours(Graph& g, Node& mesh, GrungeNode& grunge, const std::vector<N
         const geo::Bounds b = worldBounds(g, *other);
         if (!b.valid() || !boundsNear(self, b, radius))
             continue;
-        g.connect(unmaskedPlug(g, other->id()), {grunge.id(), nAttr, -1, count}, true);
+        // A neighbour built from this mesh (its own base dressing, ivy or decals) would read back into it: left out.
+        try
+        {
+            g.connect(unmaskedPlug(g, other->id()), {grunge.id(), nAttr, -1, count}, true);
+        }
+        catch (const std::exception&)
+        {
+            continue;
+        }
         g.setValue({grunge.id(), namesAttr, -1, count}, other->path());
         ++count;
     }

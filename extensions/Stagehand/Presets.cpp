@@ -443,6 +443,7 @@ void registerPresetCommands(ext::Context& ctx)
         .positionalDoc = "preset name",
         .flags = {{"slots", "sl", T::Any, nullptr, "Slot values: {slot: mesh name, [meshes] or [items]}."},
                   {"seed", "s", T::Int, int64_t(1), "Another seed gives another arrangement; each step adds its index to it."},
+                  {"skipCommands", "sc", T::List, json::array(), "Steps running these commands are skipped and reported, e.g. when what they need is off."},
                   {"name", "n", T::String, nullptr, "Name of the group made (default the preset's name)."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
@@ -465,6 +466,13 @@ void registerPresetCommands(ext::Context& ctx)
                 bool skip = false;
                 for (const json& need : step.value("needs", json::array()))
                     skip = skip || !f.values.contains(need.get<std::string>());
+                const json skipCommands = a.flags.value("skipCommands", json::array());
+                if (std::ranges::find(skipCommands, step["command"]) != skipCommands.end())
+                {
+                    steps.push_back({{"command", step["command"]}, {"skipped", true}, {"reason", "skipped by the caller"}});
+                    ++k;
+                    continue;
+                }
                 if (skip)
                 {
                     steps.push_back({{"command", step["command"]}, {"skipped", true}});

@@ -13,10 +13,6 @@ using namespace lila::ui;
 
 namespace weathering::masks
 {
-namespace
-{
-} // namespace
-
 void registerMaskUi(ext::Context& ctx)
 {
     actions::add(ctx, {.id = "weathering.grungeMask",

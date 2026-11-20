@@ -20,6 +20,16 @@ glm::dvec3 worldPos(const std::string& path)
 }
 
 /** Distance in x, z from a point to an axis-aligned box footprint (0 inside). */
+/** The result of a preset run's first step running command. */
+json stepOf(const json& r, const char* command)
+{
+    for (const json& s : r["steps"])
+        if (s["command"] == command)
+            return s.value("result", json());
+    FAIL("no " << command << " step");
+    return json();
+}
+
 double outside(const glm::dvec3& p, const glm::dvec3& lo, const glm::dvec3& hi)
 {
     const double dx = std::max({lo.x - p.x, 0.0, p.x - hi.x});
@@ -169,7 +179,7 @@ TEST_CASE("weathering: age runs a preset in either style, with the user's pieces
     CHECK(g().find(r["group"].get<std::string>()));
 
     const json mine = run("weather", {{"args", {"House"}}, {"preset", "Concrete Debris"}, {"slots", {{"rubble", {"ChunkA", "ChunkB"}}}}, {"seed", 3}});
-    const json step = mine["steps"][0]["result"];
+    const json step = stepOf(mine, "baseDressing");
     CHECK(step["perItem"].contains("ChunkA"));
     CHECK(step["perItem"].contains("ChunkB"));
     CHECK(step["perItem"].size() == 2);
@@ -220,7 +230,7 @@ TEST_CASE("weathering: age in tiles rebuilds only the edited block's tile")
     REQUIRE(r["tileCount"].get<int>() == 16);
     std::vector<std::string> hosts;
     for (const json& t : r["tiles"])
-        hosts.push_back(t["steps"][0]["result"]["host"].get<std::string>());
+        hosts.push_back(stepOf(t, "baseDressing")["host"].get<std::string>());
     auto bounds = [&](const std::string& h) {
         const geo::Mesh m = meshOf(h);
         glm::dvec3 lo(1e300);
@@ -237,4 +247,27 @@ TEST_CASE("weathering: age in tiles rebuilds only the edited block's tile")
     for (size_t k = 0; k < hosts.size(); ++k)
         changed += glm::length(bounds(hosts[k]) - before[k]) > 1e-6 ? 1 : 0;
     CHECK(changed == 1);
+}
+
+TEST_CASE("weathering: every Age preset runs in both styles")
+{
+    houseScene();
+    int ran = 0;
+    for (const json& p : run("weatherPresets"))
+    {
+        if (!p["slots"].contains("targets"))
+            continue;
+        const std::string name = p["name"].get<std::string>();
+        INFO(name);
+        const std::string box = cube(("Box" + std::to_string(ran)).c_str(), {1000.0 * (ran + 1), 0, 0}, {300, 250, 300});
+        json r;
+        CHECK_NOTHROW(r = run("weather", {{"args", {box}}, {"preset", name}, {"visgroup", ""}}));
+        // Trim Sheets isn't loaded here, so edge decals are skipped and the result says so.
+        for (const json& s : r["steps"])
+            CHECK(s.value("skipped", false) == (s["command"] == "edgeDecals"));
+        if (r.contains("notes"))
+            CHECK(r["notes"][0].get<std::string>().find("Trim Sheets") != std::string::npos);
+        ++ran;
+    }
+    CHECK(ran == 20);
 }

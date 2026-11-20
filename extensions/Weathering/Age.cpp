@@ -109,6 +109,40 @@ std::vector<json> builtins(const std::string& style)
                          json::array({baseStep("moss", {{"width", 40.0}, {"density", 14.0 * few}, {"falloff", 2.5}, {"name", "Moss"}}),
                                       baseStep("plants", {{"width", 90.0 * big}, {"density", 16.0 * few}, {"falloff", 1.2}, {"name", "Plants"}}),
                                       baseStep("bushes", {{"width", 140.0 * big}, {"density", 0.8 * few}, {"falloff", 0.8}, {"spacing", 1.1}, {"name", "Bushes"}})})));
+    // Surface steps: grunge, edge wear and growth on the targets themselves, before the dressing round them.
+    auto step = [&](const char* command, json flags) {
+        flags["style"] = style;
+        return json{{"command", command}, {"args", json::array({"$targets"})}, {"flags", std::move(flags)}};
+    };
+    const std::map<std::string, std::vector<json>> surface = {
+        {"Concrete Debris", {step("grungeMask", json::object())}},
+        {"Demolished Building", {step("edgeChip", {{"amount", 0.8}, {"depth", 6.0}, {"size", 14.0}}), step("grungeMask", json::object())}},
+        {"Burned Yard", {step("grungeMask", json::object())}},
+        {"Abandoned", {step("grungeMask", json::object()), step("edgeDecals", {{"edges", "convex"}})}},
+        {"Overgrown", {step("ivy", {{"plant", "ivy"}}), step("edgeDecals", {{"edges", "concave"}})}},
+    };
+    for (json& p : out)
+    {
+        std::string base = p["name"].get<std::string>();
+        if (toon)
+            base = base.substr(0, base.size() - suffix.size());
+        if (const auto it = surface.find(base); it != surface.end())
+        {
+            json steps = json::array();
+            for (const json& sstep : it->second)
+                steps.push_back(sstep);
+            for (const json& sstep : p["steps"])
+                steps.push_back(sstep);
+            p["steps"] = std::move(steps);
+        }
+    }
+    out.push_back(preset("Weathered Concrete", "Chipped edges, worn corners and grime on concrete, nothing round it.", json::object(),
+                         json::array({step("edgeChip", {{"amount", 0.4}, {"depth", 3.0}}), step("grungeMask", json::object()),
+                                      step("edgeDecals", {{"edges", "both"}})})));
+    out.push_back(preset("Rusted Metal", "Worn paint along edges and streaks of grime down the faces.", json::object(),
+                         json::array({step("grungeMask", json::object()), step("edgeDecals", {{"edges", "convex"}})})));
+    out.push_back(preset("Industrial Grime", "Dirt packed into corners and seams, streaks under ledges.", json::object(),
+                         json::array({step("grungeMask", json::object()), step("edgeDecals", {{"edges", "concave"}})})));
     return out;
 }
 
@@ -256,7 +290,7 @@ bool registerAge(ext::Context& ctx)
     ctx.registerCommand({
         .name = "weatherPresets",
         .doc = "The weathering presets Age offers: built in (Concrete Debris, Bricks and Rocks, Leaning Planks, Demolished "
-               "Building, Burned Yard, Abandoned, Overgrown, each with a Toon version) and any arrangement preset saved with "
+               "Building, Burned Yard, Abandoned, Overgrown, Weathered Concrete, Rusted Metal, Industrial Grime, each with a Toon version) and any arrangement preset saved with "
                "category 'Weathering'. Each has name, description, style, slots and steps, as arrangementPresets gives them.",
         .undoable = false,
         .run = [](const Args&) -> json { return agePresetList(); },
@@ -299,6 +333,13 @@ bool registerAge(ext::Context& ctx)
             if (!slots.is_object())
                 throw CommandError("weather: slots is a dict of slot: pieces");
             const double tileSize = a.get<double>("tile", meshes.size() > 12 ? 1500.0 : 0.0);
+            // Steps whose extension is off are skipped and said so, rather than failing the whole preset.
+            json skipCommands = json::array(), notes = json::array();
+            if (!ops::registry().find("trimSheetCreate"))
+            {
+                skipCommands.push_back("edgeDecals");
+                notes.push_back("edge decals skipped: they need the Trim Sheets extension, which is off");
+            }
             const std::vector<Tile> tiles = tileMeshes(g, meshes, tileSize);
             json results = json::array();
             std::vector<std::string> groups;
@@ -307,7 +348,7 @@ bool registerAge(ext::Context& ctx)
                 json s = slots;
                 s["targets"] = tiles[k].meshes;
                 s["blockers"] = tiles[k].blockers;
-                json call = {{"args", {preset}}, {"slots", s}, {"seed", a.get<int64_t>("seed", 1) + int64_t(k) * 1000}};
+                json call = {{"args", {preset}}, {"slots", s}, {"seed", a.get<int64_t>("seed", 1) + int64_t(k) * 1000}, {"skipCommands", skipCommands}};
                 if (tiles.size() == 1 && a.has("name"))
                     call["name"] = a.get<std::string>("name");
                 else if (tiles.size() > 1)
@@ -319,6 +360,8 @@ bool registerAge(ext::Context& ctx)
             }
             json out = tiles.size() == 1 ? results[0] : json{{"preset", preset}, {"tiles", results}};
             out["tileCount"] = int64_t(tiles.size());
+            if (!notes.empty())
+                out["notes"] = notes;
             std::string group = out.value("group", std::string());
             if (tiles.size() > 1)
             {
