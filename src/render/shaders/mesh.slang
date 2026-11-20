@@ -407,6 +407,7 @@ static const uint kColorChannelShift = 13; // 3 bits: 0 rgb, 1 r, 2 g, 3 b, 4 a
 static const uint kOneSidedLighting = 1 << 16;
 static const uint kNormalXY = 1 << 17; // the normal map stores X and Y only (BC5)
 static const uint kGreyBase = 1 << 18;  // the base colour map supplies opacity only
+static const uint kGrunge = 1 << 19;    // a grunge block (render::packGrunge) follows the style block
 
 /** The lean pipelines: the section reads no tangent, vertex colour or second uv (Renderer.cpp's leanPush). */
 [vk::constant_id(0)] const bool kLean = false;
@@ -432,6 +433,9 @@ struct VSOut
     float2 uv : TEXCOORD;
     centroid float4 color : COLOR;
     nointerpolation uint instance : TEXCOORD3; // index into pc.instances
+    centroid float4 grungeA : TEXCOORD4; // grunge masks: edge, cavity, ao, dust
+    centroid float2 grungeB : TEXCOORD5; // streak, fade
+    float4 grungeEdge : TEXCOORD6;        // signed cm to the face's sharp edge lines (render::kGrungeEdgeDistanceAttr)
 };
 
 float4x4 instanceWorld(uint instance)
@@ -467,8 +471,19 @@ float3 objectNormal(VSOut i)
 
 #include "draw_offset.slang"
 
+float2 unpackUnorm2(uint w)
+{
+    return float2(float(w & 0xffff), float(w >> 16)) / 65535.0;
+}
+
+/** Word offset of the draw's grunge block in the frame's table. */
+uint grungeBlock()
+{
+    return pc.style + 32;
+}
+
 [shader("vertex")]
-VSOut meshVS(VSIn v, uint instanceId: SV_InstanceID)
+VSOut meshVS(VSIn v, uint instanceId: SV_InstanceID, uint vertexId: SV_VertexID)
 {
     VSOut o;
     o.instance = pc.firstInstance + instanceId;
@@ -486,6 +501,21 @@ VSOut meshVS(VSIn v, uint instanceId: SV_InstanceID)
     float2 uv = !kLean && (pc.flags & kUv1) != 0 ? v.uv1 : v.uv;
     o.uv = float2(uv.x, 1.0 - uv.y);
     o.color = kLean ? float4(1.0) : v.color;
+    o.grungeA = float4(0.0);
+    o.grungeB = float2(0.0);
+    o.grungeEdge = float4(10000.0);
+    if (!kLean && (pc.flags & kGrunge) != 0)
+    {
+        const uint b = grungeBlock();
+        uint* masks = (uint*)((uint64_t(pc.textureTable[b + 1]) << 32) | uint64_t(pc.textureTable[b]));
+        if (masks != nullptr)
+        {
+            const uint at = vertexId * 5;
+            o.grungeA = float4(unpackUnorm2(masks[at]), unpackUnorm2(masks[at + 1]));
+            o.grungeB = unpackUnorm2(masks[at + 2]);
+            o.grungeEdge = float4(f16tof32(masks[at + 3]), f16tof32(masks[at + 3] >> 16), f16tof32(masks[at + 4]), f16tof32(masks[at + 4] >> 16));
+        }
+    }
     return o;
 }
 
@@ -1028,6 +1058,93 @@ float3 tintBack(float3 c, bool front)
     return lerp(c, t.rgb, t.a);
 }
 
+/** Value noise in 0..1 over world space, two octaves. */
+float grungeHash(float3 c)
+{
+    return frac(sin(dot(c, float3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+
+float grungeValueNoise(float3 p)
+{
+    float3 i = floor(p);
+    float3 f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n = 0.0;
+    [unroll] for (int k = 0; k < 8; ++k)
+    {
+        float3 o = float3(k & 1, (k >> 1) & 1, (k >> 2) & 1);
+        float3 w = lerp(1.0 - f, f, o);
+        n += grungeHash(i + o) * w.x * w.y * w.z;
+    }
+    return n;
+}
+
+float grungeNoise(float3 p)
+{
+    return grungeValueNoise(p) * 0.65 + grungeValueNoise(p * 2.03 + 17.0) * 0.35;
+}
+
+float4 grungeVec(uint i)
+{
+    uint b = grungeBlock() + i * 4;
+    return asfloat(uint4(pc.textureTable[b], pc.textureTable[b + 1], pc.textureTable[b + 2], pc.textureTable[b + 3]));
+}
+
+/**
+ * The grunge masks over the base colour and roughness (render::GrungeLook): each enabled mask is remapped as the baked
+ * generators' Mask Remap does (level, softness, breakup noise), posterized into bands, cut, outlined along its level,
+ * and laid over as a two-stop colour ramp. Streaks (mask 4) stretch their noise along up, so the breakup runs as drips.
+ */
+void applyGrunge(VSOut i, inout float3 baseColor, inout float roughTarget, inout float roughWeight)
+{
+    const uint enabled = pc.textureTable[grungeBlock() + 2];
+    if (enabled == 0)
+        return;
+    const float3 world = i.worldPos + (pc.lights != nullptr ? ((GpuFrame*)pc.lights)->worldOffset.xyz : float3(0.0));
+    const float3 up = pc.params.y > 0.5 ? float3(0, 0, 1) : float3(0, 1, 0);
+    const float3 outlineColor = grungeVec(1).rgb;
+    // Edge wear from the distance to the face's nearest sharp edge where it has one, else the vertex value.
+    const float edgeDist = min(min(i.grungeEdge.x, i.grungeEdge.y), min(i.grungeEdge.z, i.grungeEdge.w));
+    const float edgeWidth = asfloat(pc.textureTable[grungeBlock() + 3]);
+    const float edge = edgeDist < 5000.0 ? saturate(1.0 - max(edgeDist, 0.0) / edgeWidth) : i.grungeA.x;
+    const float masks[6] = { edge, i.grungeA.y, i.grungeA.z, i.grungeA.w, i.grungeB.x, i.grungeB.y };
+    [unroll] for (uint k = 0; k < 6; ++k)
+    {
+        if ((enabled & (1u << k)) == 0)
+            continue;
+        const float4 a = grungeVec(2 + k * 4), b = grungeVec(3 + k * 4), c = grungeVec(4 + k * 4), d = grungeVec(5 + k * 4);
+        float3 p = world * a.w + d.w;
+        if (k == 4)
+            p = p - up * dot(p, up) * 0.9;
+        float v = masks[k] + (grungeNoise(p) - 0.5) * a.z;
+        float s = a.y * 0.5;
+        float m = smoothstep(a.x - s, a.x + s, v);
+        if (b.x >= 2.0)
+            m = min(floor(m * b.x), b.x - 1.0) / (b.x - 1.0);
+        if (b.y > 0.0)
+            m = m >= b.y ? 1.0 : 0.0;
+        float3 col = lerp(d.rgb, c.rgb, m);
+        float w = m * b.w;
+        if (b.z > 0.0)
+        {
+            // The outline holds its width on screen: the distance to the level in pixels of the mask's own change.
+            float fw = max(fwidth(v), 1e-5);
+            float line = 1.0 - saturate(abs(v - a.x) / max(b.z, fw));
+            if (line > 0.0)
+            {
+                col = lerp(col, outlineColor, line);
+                w = max(w, line * b.w);
+            }
+        }
+        baseColor = lerp(baseColor, col, w);
+        if (c.w >= 0.0 && w > 0.0)
+        {
+            roughTarget = roughWeight > 0.0 ? lerp(roughTarget, c.w, w) : c.w;
+            roughWeight = max(roughWeight, w);
+        }
+    }
+}
+
 /**
  * The normal and uv at the pixel centre, for screen derivatives: centroid values jump along every triangle edge. The
  * shading reads them at the centroid, evaluated per pixel rather than interpolated twice per vertex.
@@ -1089,6 +1206,9 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
         discard;
     if ((flags & kVertexColorShaded) != 0)
         baseColor *= vertexColor(i.color, flags);
+    float grungeRough = 0.0, grungeRoughWeight = 0.0;
+    if (!kLean && (flags & kGrunge) != 0)
+        applyGrunge(i, baseColor, grungeRough, grungeRoughWeight);
 #ifdef LILA_HEIGHTFIELD
     baseColor = lerp(baseColor, gTerrainBase.rgb, gTerrainBase.a);
 #endif
@@ -1164,6 +1284,8 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
 #ifdef LILA_HEIGHTFIELD
     s.rough = lerp(s.rough, gTerrainRough, gTerrainBase.a);
 #endif
+    if (grungeRoughWeight > 0.0)
+        s.rough = lerp(s.rough, grungeRough, grungeRoughWeight);
     s.rough = specularAntialias(n, clamp(s.rough, 0.04, 1.0));
     metallic = saturate(metallic);
     s.diffuse = baseColor * (1.0 - metallic);

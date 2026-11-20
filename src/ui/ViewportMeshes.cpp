@@ -112,7 +112,11 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     if (previewed)
         d.materials = std::move(hooked);
     else if (textured && !instanced)
-        d.materials = drawMaterials(*shown);
+    {
+        std::vector<render::Material> materials = drawMaterials(*shown);
+        viewportHooks::decorateMaterials(id, *shown, materials);
+        d.materials = std::move(materials);
+    }
     e.world = shownWorld(n);
     e.shown = shown;
     d.world = e.world;
