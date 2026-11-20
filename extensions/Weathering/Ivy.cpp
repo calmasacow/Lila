@@ -1108,13 +1108,18 @@ void registerCommands(ext::Context& ctx)
                     for (const json& s : slots)
                     {
                         const std::string slot = s.get<std::string>();
-                        const bool leafy = slot != ivy::kStemSlot;
                         const json in = link::materialInputs(g, slot);
+                        // A slot with no Lila material gets a plant colour; one with a material sends its colour and map.
+                        glm::dvec3 tint = slot == ivy::kStemSlot ? glm::dvec3(0.22, 0.15, 0.09)
+                                                                 : (slot == ivy::kFlowerSlot ? glm::dvec3(0.9, 0.85, 0.6) : glm::dvec3(0.12, 0.26, 0.05));
+                        if (in.contains("baseColor") && in["baseColor"].is_array() && in["baseColor"].size() >= 3)
+                            tint = {in["baseColor"][0].get<double>(), in["baseColor"][1].get<double>(), in["baseColor"][2].get<double>()};
                         json inst = {{"name", "MI_" + mesh->name() + "_" + slot},
                                      {"slot", slot},
-                                     {"leaf", leafy},
-                                     {"scalars", {{"WindStrength", a.get<double>("windStrength", 1.0)}}},
-                                     {"material", in}};
+                                     {"scalars", {{"WindStrength", a.get<double>("windStrength", 1.0)}, {"Roughness", in.value("roughness", 0.6)}}},
+                                     {"vectors", {{"Tint", {tint.x, tint.y, tint.z}}}}};
+                        if (in.contains("baseColorMap") && in["baseColorMap"].is_string() && !in["baseColorMap"].get<std::string>().empty())
+                            inst["files"] = {{"BaseColorMap", {{"file", in["baseColorMap"]}}}};
                         instances.push_back(std::move(inst));
                     }
                     json req = {{"folder", cp.substr(0, cp.find_last_of('/')) + "/Materials"}, {"meshes", {objectPath}}, {"instances", instances}};
