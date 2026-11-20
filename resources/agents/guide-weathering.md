@@ -4,13 +4,13 @@ Weathering (an extension that ships enabled, on top of Stagehand) ages, damages 
 
 ## The loop
 
-1. `agePresets()` lists the presets (name, description, style, slots). Each comes in a realistic and a ` Toon` version.
-2. `age(objects, preset="Abandoned", style="realistic"|"toon", seed=)` runs one as one undo step and returns `group`. Objects may be meshes, groups (every mesh under them) or object sets such as Blockwork visgroups.
+1. `weatherPresets()` lists the presets (name, description, style, slots). Each comes in a realistic and a ` Toon` version.
+2. `weather(objects, preset="Abandoned", style="realistic"|"toon", seed=)` runs one as one undo step and returns `group`. Objects may be meshes, groups (every mesh under them) or object sets such as Blockwork visgroups.
 3. `capture_view` the result. Change `seed`, the preset or a slot and run again.
 
 ## Pieces: the user's own first
 
-- Every step that places or builds from pieces takes the user's meshes. In `age`, fill a slot: `slots={"rubble": ["MyChunks_grp"]}`. In single commands, the `items=` / pieces flag takes scene meshes, groups, object sets, library ids, `tag:<a+b>` and weighted entries `{"piece": name, "weight": 3}`.
+- Every step that places or builds from pieces takes the user's meshes. In `weather`, fill a slot: `slots={"rubble": ["MyChunks_grp"]}`. In single commands, the `items=` / pieces flag takes scene meshes, groups, object sets, library ids, `tag:<a+b>` and weighted entries `{"piece": name, "weight": 3}`.
 - `weatheringAddPieces(meshes, role="rubble", style="toon")` puts meshes in the library tagged `weathering` + role + style; from then on every preset using that role picks them instead of the placeholders.
 - Placeholders (procedural, tier `placeholder`) fill any role nobody supplied: `librarySearch(tags=["weathering", "rubble"])`. `weatheringPlaceholders(force=True)` rebuilds them.
 - Roles: rubble, rock, brick, plank, beam, charred, plant, grass, moss, bush, pebble, litter, leaf.
@@ -27,7 +27,7 @@ Weathering (an extension that ships enabled, on top of Stagehand) ages, damages 
 
 ## Levels
 
-- `age` on more than 12 meshes dresses in tiles (`tile=1500` cm) so editing one block rebuilds only its tile; neighbours become `blockers` so no tile dresses inside another's blocks. When Blockwork is loaded the result joins the `Weathering` visgroup (`visgroup=""` to skip).
+- `weather` on more than 12 meshes dresses in tiles (`tile=1500` cm) so editing one block rebuilds only its tile; neighbours become `blockers` so no tile dresses inside another's blocks. When Blockwork is loaded the result joins the `Weathering` visgroup (`visgroup=""` to skip).
 
 ## Unreal
 

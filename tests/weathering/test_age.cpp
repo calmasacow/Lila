@@ -154,7 +154,7 @@ TEST_CASE("weathering: placeholders by role and style, and the user's own pieces
 TEST_CASE("weathering: age runs a preset in either style, with the user's pieces swapped in")
 {
     houseScene();
-    const json presets = run("agePresets");
+    const json presets = run("weatherPresets");
     std::set<std::string> names;
     for (const json& p : presets)
         names.insert(p["name"].get<std::string>());
@@ -163,12 +163,12 @@ TEST_CASE("weathering: age runs a preset in either style, with the user's pieces
         CHECK(names.contains(n));
         CHECK(names.contains(std::string(n) + " Toon"));
     }
-    const json r = run("age", {{"args", {"House"}}, {"preset", "Concrete Debris"}, {"style", "toon"}});
+    const json r = run("weather", {{"args", {"House"}}, {"preset", "Concrete Debris"}, {"style", "toon"}});
     CHECK(r["preset"] == "Concrete Debris Toon");
     CHECK(!r["group"].get<std::string>().empty());
     CHECK(g().find(r["group"].get<std::string>()));
 
-    const json mine = run("age", {{"args", {"House"}}, {"preset", "Concrete Debris"}, {"slots", {{"rubble", {"ChunkA", "ChunkB"}}}}, {"seed", 3}});
+    const json mine = run("weather", {{"args", {"House"}}, {"preset", "Concrete Debris"}, {"slots", {{"rubble", {"ChunkA", "ChunkB"}}}}, {"seed", 3}});
     const json step = mine["steps"][0]["result"];
     CHECK(step["perItem"].contains("ChunkA"));
     CHECK(step["perItem"].contains("ChunkB"));
@@ -216,7 +216,7 @@ TEST_CASE("weathering: age in tiles rebuilds only the edited block's tile")
     for (int x = 0; x < 4; ++x)
         for (int z = 0; z < 4; ++z)
             blocks.push_back(cube(("Block" + std::to_string(x) + std::to_string(z)).c_str(), {x * 1000.0, 0, z * 1000.0}, {300, 250, 300}));
-    const json r = run("age", {{"args", blocks}, {"preset", "Concrete Debris"}, {"tile", 1000.0}});
+    const json r = run("weather", {{"args", blocks}, {"preset", "Concrete Debris"}, {"tile", 1000.0}});
     REQUIRE(r["tileCount"].get<int>() == 16);
     std::vector<std::string> hosts;
     for (const json& t : r["tiles"])

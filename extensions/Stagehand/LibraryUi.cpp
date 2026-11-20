@@ -113,7 +113,7 @@ json presetNamed(const std::string& name)
 }
 
 /**
- * Runs a preset on objects: weathering presets through age (every mesh under them), others with the objects in their
+ * Runs a preset on objects: weathering presets through weather (every mesh under them), others with the objects in their
  * first place slot (the floor, the boards, the ground).
  */
 void applyPreset(const std::string& name, const std::vector<std::string>& targets)
@@ -129,7 +129,7 @@ void applyPreset(const std::string& name, const std::vector<std::string>& target
     const json slots = spec.value("slots", json::object());
     if (spec.value("category", std::string()) == "Weathering" && slots.contains("targets"))
     {
-        runUi("age", {{"args", targets}, {"preset", name}});
+        runUi("weather", {{"args", targets}, {"preset", name}});
         return;
     }
     json fill = json::object();

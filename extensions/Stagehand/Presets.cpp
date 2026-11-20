@@ -327,8 +327,11 @@ json drawThumbnail(Graph& g, const json& spec)
     if (undo.chunkOpen())
         return {{"preset", name}, {"note", "skipped inside another command"}};
     json slots = json::object();
-    for (const auto& [slot, s] : spec.value("slots", json::object()).items())
+    const json specSlots = spec.contains("slots") && spec["slots"].is_object() ? spec["slots"] : json::object();
+    for (const auto& [slot, s] : specSlots.items())
     {
+        if (!s.is_object())
+            continue;
         const std::string kind = s.value("kind", std::string());
         if (kind == "items" && !s.contains("default") && !s.value("optional", false))
             return {{"preset", name}, {"note", "slot " + slot + " has no default pieces to show"}};

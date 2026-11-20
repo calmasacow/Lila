@@ -29,8 +29,8 @@ void registerWeatheringUi(ext::Context& ctx)
         std::vector<std::string> keywords;
     };
     const Entry entries[] = {
-        {"weathering.age", "Age", "age", "wand", "Age the selection with a weathering preset: dressing round its base and whatever else the preset adds.",
-         "age('Shed', preset='Abandoned')", {"weather", "ruin", "abandoned", "overgrown", "grunge", "destroy", "damage", "dirty"}},
+        {"weathering.age", "Age", "weather", "wand", "Age the selection with a weathering preset: dressing round its base and whatever else the preset adds.",
+         "weather('Shed', preset='Abandoned')", {"weather", "ruin", "abandoned", "overgrown", "grunge", "destroy", "damage", "dirty"}},
         {"weathering.baseDressing", "Base Dressing", "baseDressing", "stack-2",
          "Scatter pieces in a band round where the selection meets the ground: rubble, planks leaning on walls, weeds.",
          "baseDressing('Shed', items=['tag:weathering+rubble'])", {"scatter around", "debris", "rubble", "foot of wall", "skirt"}},

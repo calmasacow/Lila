@@ -43,7 +43,7 @@ json targetsSlot() { return {{"kind", "meshes"}, {"doc", "What to age: walls, bu
 
 json blockersSlot()
 {
-    return {{"kind", "meshes"}, {"doc", "Neighbours nothing is put on (set by age when it dresses a level in tiles)."}, {"optional", true},
+    return {{"kind", "meshes"}, {"doc", "Neighbours nothing is put on (set by weather when it dresses a level in tiles)."}, {"optional", true},
             {"default", json::array()}};
 }
 
@@ -254,24 +254,24 @@ bool registerAge(ext::Context& ctx)
         }
 
     ctx.registerCommand({
-        .name = "agePresets",
+        .name = "weatherPresets",
         .doc = "The weathering presets Age offers: built in (Concrete Debris, Bricks and Rocks, Leaning Planks, Demolished "
                "Building, Burned Yard, Abandoned, Overgrown, each with a Toon version) and any arrangement preset saved with "
                "category 'Weathering'. Each has name, description, style, slots and steps, as arrangementPresets gives them.",
         .undoable = false,
         .run = [](const Args&) -> json { return agePresetList(); },
-        .examples = {"[p['name'] for p in agePresets()]"},
+        .examples = {"[p['name'] for p in weatherPresets()]"},
     });
 
     ctx.registerCommand({
-        .name = "age",
+        .name = "weather",
         .doc = "Age things in one step with a weathering preset: dressing round their base, and whatever else the preset "
                "does, as one undo step gathered into one group. Objects may be meshes, groups (every mesh under them) or "
                "object sets such as Blockwork visgroups. Piece slots left out use the library's pieces for their role: your "
                "own assets tagged 'weathering' and the role win over the placeholders. Returns group, preset and each step's "
                "result.",
         .positionalDoc = "objects to age (default the selection)",
-        .flags = {{"preset", "p", T::String, "Abandoned", "Preset name (agePresets lists them)."},
+        .flags = {{"preset", "p", T::String, "Abandoned", "Preset name (weatherPresets lists them)."},
                   styleFlag(),
                   {"slots", "sl", T::Any, nullptr, "Piece slots to fill yourself: {slot: [meshes, library ids or tag:a+b]}."},
                   {"seed", "s", T::Int, int64_t(1), "Another seed gives another result."},
@@ -286,18 +286,18 @@ bool registerAge(ext::Context& ctx)
             Graph& g = Graph::current();
             const std::vector<std::string> objects = a.objects();
             if (objects.empty())
-                throw CommandError("age: select or name what to age");
+                throw CommandError("weather: select or name what to age");
             std::vector<std::string> meshes;
             for (const std::string& o : objects)
-                expandMeshes(g, o, meshes, "age");
+                expandMeshes(g, o, meshes, "weather");
             if (meshes.empty())
-                throw CommandError("age: the objects have no meshes");
-            const std::string preset = styledPreset(a.get<std::string>("preset", "Abandoned"), a.get<std::string>("style", "realistic"), "age");
+                throw CommandError("weather: the objects have no meshes");
+            const std::string preset = styledPreset(a.get<std::string>("preset", "Abandoned"), a.get<std::string>("style", "realistic"), "weather");
             // Placeholders must exist before slot defaults name them by tag.
             buildPlaceholders(false);
             json slots = a.has("slots") ? a.flags["slots"] : json::object();
             if (!slots.is_object())
-                throw CommandError("age: slots is a dict of slot: pieces");
+                throw CommandError("weather: slots is a dict of slot: pieces");
             const double tileSize = a.get<double>("tile", meshes.size() > 12 ? 1500.0 : 0.0);
             const std::vector<Tile> tiles = tileMeshes(g, meshes, tileSize);
             json results = json::array();
@@ -341,8 +341,8 @@ bool registerAge(ext::Context& ctx)
             }
             return out;
         },
-        .examples = {"age('Shed', preset='Abandoned')", "age(['Tower', 'Wall'], preset='Overgrown', style='toon', seed=3)",
-                     "age('Visgroup_Ruins', preset='Demolished Building', slots={'rubble': ['MyRubble_grp']})"},
+        .examples = {"weather('Shed', preset='Abandoned')", "weather(['Tower', 'Wall'], preset='Overgrown', style='toon', seed=3)",
+                     "weather('Visgroup_Ruins', preset='Demolished Building', slots={'rubble': ['MyRubble_grp']})"},
     });
 
     ctx.registerCommand({

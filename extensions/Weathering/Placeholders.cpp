@@ -135,6 +135,8 @@ json buildPlaceholders(bool force)
 void registerPlaceholderCommands(ext::Context& ctx)
 {
     addRoot();
+    // Built at load (only when missing or out of date), so presets run from Stagehand's library find them by tag.
+    buildPlaceholders(false);
     ctx.registerCommand({
         .name = "weatheringPlaceholders",
         .doc = "Write Weathering's placeholder pieces (rubble, planks, plants, leaves, roof sheets, tiles, frames, insulators, "
