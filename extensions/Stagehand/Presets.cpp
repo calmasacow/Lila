@@ -349,9 +349,9 @@ json drawThumbnail(Graph& g, const json& spec)
     try
     {
         const double far = 100000.0;
-        ops::execute("polyCube", {{"name", "PresetThumbBlock"}, {"position", json::array({far, 0.0, far})}, {"width", 300.0}, {"height", 260.0},
-                                  {"depth", 300.0}, {"baseAtOrigin", true}, {"generator", false}});
-        ops::execute("polyPlane", {{"name", "PresetThumbGround"}, {"width", 900.0}, {"depth", 900.0}, {"subdivisionsX", 12}, {"subdivisionsZ", 12},
+        ops::execute("polyCube", {{"name", "PresetThumbBlock"}, {"position", json::array({far, 0.0, far})}, {"width", 200.0}, {"height", 180.0},
+                                  {"depth", 200.0}, {"baseAtOrigin", true}, {"generator", false}});
+        ops::execute("polyPlane", {{"name", "PresetThumbGround"}, {"width", 560.0}, {"depth", 560.0}, {"subdivisionsX", 14}, {"subdivisionsZ", 14},
                                    {"position", json::array({far, 0.0, far})}});
         ops::execute("arrangePreset", {{"args", {name}}, {"slots", slots}, {"seed", 1}});
         json shown = json::array();

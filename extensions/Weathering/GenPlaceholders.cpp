@@ -367,6 +367,7 @@ struct RoleInfo
     const char* description;
 };
 
+// Rubble, plank and brick pieces for piles are base dressing's placeholders (BasePieces.cpp).
 const RoleInfo kRoles[] = {
     {role::kRoofSheet, "Weathering/Roof", "CorrugatedSheet", "metal", "dynamic", "A corrugated roof sheet, longer side down the slope."},
     {role::kRidgeCap, "Weathering/Roof", "RidgeCap", "metal", "dynamic", "A ridge cap laid along a roof's ridge."},
@@ -381,9 +382,6 @@ const RoleInfo kRoles[] = {
     {role::kInsulator, "Weathering/Wires", "Insulator", "ceramic", "static", "An insulator a wire leaves from, on a pole top."},
     {role::kBracket, "Weathering/Wires", "WallBracket", "metal", "static", "A wall bracket, its arm along X out of the wall."},
     {role::kPole, "Weathering/Wires", "Pole", "wood", "static", "A utility pole with a crossarm."},
-    {role::kRubble, "Weathering/Pile", "PileRubble", "stone", "dynamic", "A chunk of rubble."},
-    {role::kPlank, "Weathering/Pile", "PilePlank", "wood", "dynamic", "A loose plank."},
-    {role::kBrick, "Weathering/Pile", "PileBrick", "stone", "dynamic", "A brick."},
     {role::kVent, "Weathering/Rooftop", "Vent", "metal", "static", "A roof vent."},
     {role::kAcUnit, "Weathering/Rooftop", "AcUnit", "metal", "static", "An air conditioning unit."},
     {role::kPipe, "Weathering/Rooftop", "Pipe", "metal", "static", "A pipe run lying on a roof, turning up at one end."},

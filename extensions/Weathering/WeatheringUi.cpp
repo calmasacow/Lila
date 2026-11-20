@@ -69,12 +69,24 @@ void registerWeatheringUi(ext::Context& ctx)
                                       {"weathering.unreal", "world-upload", "Unreal Materials", {}, {}, true}},
                             .order = 44,
                             .docs = "weathering"});
+    // The whole Weathering menu, in one order: every area registers only its actions.
     menus::addItem(ctx, {.id = "weathering.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Weathering",
                          .before = levelToolkit::kAssetsSection});
-    for (const char* a : {"weathering.age", "weathering.baseDressing", "weathering.groundDressing", "weathering.groundTint"})
-        menus::addItem(ctx, {.id = std::string("weathering.menu.") + a, .menu = kWeatheringMenu, .action = a});
-    menus::addItem(ctx, {.id = "weathering.menu.sepPieces", .menu = kWeatheringMenu, .kind = menus::Kind::Separator});
-    for (const char* a : {"weathering.addPieces", "weathering.unreal"})
-        menus::addItem(ctx, {.id = std::string("weathering.menu.") + a, .menu = kWeatheringMenu, .action = a});
+    const std::vector<std::pair<const char*, std::vector<const char*>>> sections = {
+        {"", {"weathering.age"}},
+        {"Dressing", {"weathering.baseDressing", "weathering.groundDressing", "weathering.groundTint", "weathering.pile", "weathering.rooftop"}},
+        {"Surfaces", {"weathering.grungeMask", "weathering.grungeBake", "weathering.edgeDecals", "weathering.edgeChip"}},
+        {"Growth", {"weathering.ivy", "weathering.ivyBrush"}},
+        {"Generators", {"weathering.roofing", "weathering.windows", "weathering.wires", "weathering.truss"}},
+        {"Pieces and Unreal", {"weathering.addPieces", "weathering.unreal", "weathering.grungeSend", "weathering.ivySend", "weathering.interiorSend"}},
+    };
+    for (const auto& [title, ids] : sections)
+    {
+        if (*title)
+            menus::addItem(ctx, {.id = std::string("weathering.menu.section.") + title, .menu = kWeatheringMenu, .kind = menus::Kind::Section, .label = title});
+        for (const char* a : ids)
+            if (actions::find(a))
+                menus::addItem(ctx, {.id = std::string("weathering.menu.") + a, .menu = kWeatheringMenu, .action = a});
+    }
 }
 } // namespace weathering

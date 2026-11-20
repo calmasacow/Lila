@@ -17,7 +17,7 @@ namespace weathering
 {
 namespace
 {
-constexpr int kVersion = 1;
+constexpr int kVersion = 2;
 
 std::vector<Placeholder>& registry()
 {
@@ -63,6 +63,33 @@ glm::dvec3 sizeOf(const geo::Mesh& m)
     return lo.x > hi.x ? glm::dvec3(0.0) : hi - lo;
 }
 
+/** A readable stand-in colour per role, brighter and more saturated in toon, so placeholders tell apart at a glance. */
+glm::vec3 roleColor(const std::string& role, bool toon)
+{
+    static const std::vector<std::pair<std::string, glm::vec3>> colors = {
+        {"rubble", {0.42f, 0.4f, 0.36f}},  {"rock", {0.36f, 0.35f, 0.33f}},   {"brick", {0.45f, 0.17f, 0.1f}},
+        {"plank", {0.36f, 0.24f, 0.14f}},  {"beam", {0.3f, 0.2f, 0.12f}},     {"charred", {0.05f, 0.045f, 0.04f}},
+        {"plant", {0.17f, 0.3f, 0.08f}},   {"grass", {0.22f, 0.36f, 0.1f}},   {"moss", {0.14f, 0.26f, 0.06f}},
+        {"bush", {0.12f, 0.24f, 0.07f}},   {"pebble", {0.4f, 0.39f, 0.37f}},  {"litter", {0.75f, 0.72f, 0.66f}},
+        {"leaf", {0.45f, 0.25f, 0.08f}},   {"ivy-leaf", {0.1f, 0.25f, 0.06f}}, {"vine-leaf", {0.16f, 0.3f, 0.08f}},
+        {"ivy-flower", {0.8f, 0.78f, 0.7f}}, {"moss-tuft", {0.14f, 0.26f, 0.06f}}, {"roof-sheet", {0.35f, 0.33f, 0.3f}},
+        {"ridge-cap", {0.3f, 0.29f, 0.27f}}, {"roof-tile", {0.48f, 0.2f, 0.12f}}, {"roof-plank", {0.32f, 0.22f, 0.13f}},
+        {"window-frame", {0.5f, 0.47f, 0.42f}}, {"window-sill", {0.55f, 0.53f, 0.5f}}, {"window-board", {0.34f, 0.24f, 0.15f}},
+        {"wire-insulator", {0.6f, 0.62f, 0.6f}}, {"wire-bracket", {0.2f, 0.2f, 0.21f}}, {"pole", {0.3f, 0.22f, 0.15f}},
+        {"roof-vent", {0.5f, 0.5f, 0.52f}}, {"ac-unit", {0.62f, 0.62f, 0.6f}}, {"roof-pipe", {0.35f, 0.36f, 0.38f}},
+        {"railing", {0.25f, 0.25f, 0.26f}}, {"tower", {0.45f, 0.45f, 0.47f}},
+    };
+    glm::vec3 c(0.5f);
+    for (const auto& [r, v] : colors)
+        if (r == role)
+            c = v;
+    if (!toon)
+        return c;
+    // Toon: lifted and pushed away from grey.
+    const float grey = (c.r + c.g + c.b) / 3.0f;
+    return glm::clamp(glm::vec3(grey) + (c - glm::vec3(grey)) * 1.6f + 0.12f, glm::vec3(0.0f), glm::vec3(1.0f));
+}
+
 void addRoot()
 {
     try
@@ -106,7 +133,11 @@ json buildPlaceholders(bool force)
         const geo::Mesh m = p.build();
         const fs::path folder = dir / p.collection / p.name;
         fs::create_directories(folder, ec);
-        std::ofstream(folder / (p.name + ".obj"), std::ios::binary) << geo::writeObj(m);
+        const glm::vec3 c = p.color.r >= 0.0f ? p.color : roleColor(p.role, p.style == "toon");
+        const std::string material = "M_" + p.name;
+        std::ofstream(folder / (p.name + ".mtl"), std::ios::binary)
+            << "newmtl " << material << "\nKd " << c.r << " " << c.g << " " << c.b << "\nKs 0 0 0\nNs 10\n";
+        std::ofstream(folder / (p.name + ".obj"), std::ios::binary) << "mtllib " << p.name << ".mtl\nusemtl " << material << "\n" << geo::writeObj(m);
         json tags = json::array({"weathering", "placeholder", p.role, p.style});
         for (const std::string& t : p.tags)
             tags.push_back(t);

@@ -35,6 +35,8 @@ struct Placeholder
     std::string physicsRole = "dynamic";
     std::string physicsMaterial = "stone"; // wood, book, paper, cardboard, stone, ceramic, metal, glass, plastic, rubber, fabric
     std::string physicsShape = "hull";
+    /** Linear base colour of its material; negative picks one from the role and style. */
+    glm::vec3 color{-1.0f};
     /** The mesh in cm, Y up, standing on y = 0 unless it is a card or strip. */
     std::function<lila::geo::Mesh()> build;
 };

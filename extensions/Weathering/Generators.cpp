@@ -1248,10 +1248,6 @@ void registerOptionBoxes()
 
 void registerUi(ext::Context& ctx)
 {
-    // Weathering's submenu; whichever area registers first adds it.
-    if (!menus::itemRegistry().find("weathering.menu"))
-        menus::addItem(ctx, {.id = "weathering.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Weathering",
-                             .before = levelToolkit::kAssetsSection});
     const struct
     {
         const char* id;
@@ -1277,18 +1273,10 @@ void registerUi(ext::Context& ctx)
         {"weathering.interiorSend", "Send Interiors", "windowInteriorSend", "send", "Send window interior cards to Unreal as MF_LilaInterior instances.",
          "windowInteriorSend('Shop_Windows')", {"interior mapping", "fake interior", "parallax interior"}},
     };
-    bool sectioned = false;
+    // Menu placement is WeatheringUi.cpp's, so the whole Weathering menu reads in one order.
     for (const auto& e : entries)
-    {
         actions::add(ctx, {.id = e.id, .label = e.label, .category = "Weathering", .doc = e.doc, .python = e.python, .command = e.command,
                            .call = json::object(), .icon = e.icon, .keywords = e.keywords});
-        if (!sectioned)
-        {
-            menus::addItem(ctx, {.id = "weathering.menu.generators", .menu = "Level/Weathering", .kind = menus::Kind::Section, .label = "Generators"});
-            sectioned = true;
-        }
-        menus::addItem(ctx, {.menu = "Level/Weathering", .action = e.id});
-    }
 }
 } // namespace generators
 

@@ -29,7 +29,7 @@ namespace wg = weathering::gen;
 namespace
 {
 /** A box mesh from lo to hi, closed. */
-geo::Mesh box(const glm::dvec3& lo, const glm::dvec3& hi)
+geo::Mesh boxBetween(const glm::dvec3& lo, const glm::dvec3& hi)
 {
     geo::Mesh m;
     wg::addBox(m, lo, hi);
@@ -48,8 +48,8 @@ geo::Mesh slope(double width, double run, double rise)
 /** A wall from x 0 to 400, y 0 to 300, z 0 to 30, with a hole through it. */
 geo::Mesh wallWithHole(const glm::dvec3& lo, const glm::dvec3& hi)
 {
-    const geo::Mesh wall = box({0, 0, 0}, {400, 300, 30});
-    const geo::Mesh hole = box(lo, hi);
+    const geo::Mesh wall = boxBetween({0, 0, 0}, {400, 300, 30});
+    const geo::Mesh hole = boxBetween(lo, hi);
     const scene::BooleanOperand ops[] = {{&wall, glm::dmat4(1.0)}, {&hole, glm::dmat4(1.0)}};
     scene::BooleanOptions bo;
     bo.op = scene::BooleanOp::Difference;

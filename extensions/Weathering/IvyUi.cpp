@@ -513,9 +513,5 @@ void registerIvyUi(lila::ext::Context& ctx)
                        .call = json::object(),
                        .icon = "send",
                        .keywords = {"export ivy", "ivy unreal"}});
-    menus::addItem(ctx, {.id = "weathering.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Weathering",
-                         .before = levelToolkit::kAssetsSection});
-    for (const char* a : {"weathering.ivy", "weathering.ivyBrush", "weathering.ivySend"})
-        menus::addItem(ctx, {.id = std::string("weathering.menu.") + a, .menu = "Level/Weathering", .action = a});
 }
 } // namespace weathering
