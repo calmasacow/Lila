@@ -6,6 +6,7 @@
 #include "LilaLinkMorphPaths.h"
 #include "LilaLinkMLDeformer.h"
 #include "LilaLinkGeometryCollection.h"
+#include "LilaLinkIvy.h"
 #include "LilaLinkMasonry.h"
 #include "LilaLinkGeoreference.h"
 #include "LilaLinkPlacements.h"
@@ -127,7 +128,7 @@ TSharedPtr<FJsonValue> Hello(const TSharedPtr<FJsonObject>&, FString&)
 	Out->SetArrayField(TEXT("features"), {Str(TEXT("progress")), Str(TEXT("materials")), Str(TEXT("meshSequence")), Str(TEXT("geometryCache")),
 		Str(TEXT("vertexAnimation")), Str(TEXT("textures")), Str(TEXT("materialInstances")),
 		Str(TEXT("stylisedInstances")), Str(TEXT("mlDeformer")), Str(TEXT("splines")), Str(TEXT("placements")), Str(TEXT("landscape")), Str(TEXT("landscapeRegions")), Str(TEXT("terrainWater")), Str(TEXT("landscapeVolume")),
-		Str(TEXT("masonryMaterials")), Str(TEXT("trimMaterials")), Str(TEXT("imposters")), Str(TEXT("components")), Str(TEXT("lights")), Str(TEXT("lightingChannels")),
+		Str(TEXT("masonryMaterials")), Str(TEXT("ivyMaterials")), Str(TEXT("trimMaterials")), Str(TEXT("imposters")), Str(TEXT("components")), Str(TEXT("lights")), Str(TEXT("lightingChannels")),
 		Str(TEXT("geometryCollection")), Str(TEXT("trimDecals")), Str(TEXT("physics")), Str(TEXT("levelInstances")),
 		Str(TEXT("collision")), Str(TEXT("instanceData")), Str(TEXT("expressionRig")), Str(TEXT("morphPaths")), Str(TEXT("terrainRoads")), Str(TEXT("terrainMaterial")), Str(TEXT("render")), Str(TEXT("seams")), Str(TEXT("panelLines")), Str(TEXT("cliffMaterial")), Str(TEXT("cliffTiles")), Str(TEXT("groom")), Str(TEXT("georeference")), Str(TEXT("pointClouds")), Str(TEXT("groundTint"))});
 	// Features of the optional plugins that registered methods, such as LilaLinkSettlement's "settlement".
@@ -454,6 +455,7 @@ TMap<FString, FLilaLinkMethod> LilaLink::MakeMethods()
 	LilaLink::AddPlacementMethods(Methods);
 	LilaLink::AddGeoreferenceMethods(Methods);
 	LilaLink::AddMasonryMethods(Methods);
+	LilaLink::AddIvyMethods(Methods);
 	LilaLink::AddTrimMethods(Methods);
 	LilaLink::AddGeometryCollectionMethods(Methods);
 	LilaLink::AddRenderMethods(Methods);
