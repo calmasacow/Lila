@@ -504,7 +504,8 @@ template <class F> void forTriangles(const Mesh& m, F&& f)
 }
 } // namespace
 
-BandResult band(std::span<const Mesh* const> hosts, std::span<const Mesh* const> ground, std::span<const Item> items, const BandOptions& o)
+BandResult band(std::span<const Mesh* const> hosts, std::span<const Mesh* const> ground, std::span<const Item> items, const BandOptions& o,
+                std::span<const Mesh* const> blockers)
 {
     LILA_ZONE();
 
@@ -572,6 +573,21 @@ BandResult band(std::span<const Mesh* const> hosts, std::span<const Mesh* const>
             });
         });
 
+    // Neighbours' footprints: nothing goes there, but no band grows round them either (their own dressing does that).
+    std::vector<uint8_t> blocked(cells, 0);
+    for (const Mesh* m : blockers)
+        forTriangles(*m, [&](const glm::dvec3& a, const glm::dvec3& b, const glm::dvec3& c) {
+            sampleTriangle(a, b, c, r.cell * 0.5, [&](const glm::dvec3& p) {
+                int ix, iz;
+                if (r.cellOf(p.x, p.z, ix, iz) && p.y <= groundY[r.index(ix, iz)] + o.contactHeight)
+                    blocked[r.index(ix, iz)] = 1;
+            });
+        });
+    auto isBlocked = [&](const glm::dvec2& p) {
+        int ix, iz;
+        return r.cellOf(p.x, p.y, ix, iz) && blocked[r.index(ix, iz)];
+    };
+
     // Nearest footprint cell for every cell (two-pass vector propagation).
     auto d2 = [&](int x, int z, int sx, int sz) { return double(x - sx) * (x - sx) + double(z - sz) * (z - sz); };
     auto relax = [&](int x, int z, int nx, int nz) {
@@ -628,7 +644,7 @@ BandResult band(std::span<const Mesh* const> hosts, std::span<const Mesh* const>
         for (int x = 0; x < r.nx; ++x)
         {
             const size_t k = r.index(x, z);
-            if (siteX[k] < 0 || (siteX[k] == x && siteZ[k] == z))
+            if (siteX[k] < 0 || (siteX[k] == x && siteZ[k] == z) || blocked[k])
                 continue;
             double d;
             glm::dvec2 dir;
@@ -703,6 +719,12 @@ BandResult band(std::span<const Mesh* const> hosts, std::span<const Mesh* const>
         }
         if (d > o.width + radius)
             continue;
+        if (!blockers.empty())
+        {
+            const glm::dvec2 side(-dir.y, dir.x);
+            if (isBlocked(p) || isBlocked(p + dir * radius) || isBlocked(p - dir * radius) || isBlocked(p + side * radius) || isBlocked(p - side * radius))
+                continue;
+        }
         const int64_t gx = int64_t(std::floor(p.x / gridCell)), gz = int64_t(std::floor(p.y / gridCell));
         bool clear = true;
         for (int64_t dx = -1; dx <= 1 && clear; ++dx)

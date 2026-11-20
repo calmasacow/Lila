@@ -256,7 +256,10 @@ void bandExec(ExecContext& c)
     o.maxCount = int(std::max<int64_t>(0, c.i("maxCount")));
     o.weights = weightsOf(c.s("weights"));
     o.seed = uint32_t(c.i("seed"));
-    std::vector<geo::Mesh> hosts, ground;
+    std::vector<geo::Mesh> hosts, ground, blockers;
+    for (const GeometryPtr& g : c.geometries("blockers"))
+        if (g)
+            blockers.push_back(gn::toOutputMesh(*g));
     for (const GeometryPtr& g : c.geometries("hosts"))
         if (g)
             hosts.push_back(gn::toOutputMesh(*g));
@@ -268,7 +271,10 @@ void bandExec(ExecContext& c)
         hp.push_back(&m);
     for (const geo::Mesh& m : ground)
         gp.push_back(&m);
-    const arrange::BandResult r = arrange::band(hp, gp, items.bounds, o);
+    std::vector<const geo::Mesh*> bp;
+    for (const geo::Mesh& m : blockers)
+        bp.push_back(&m);
+    const arrange::BandResult r = arrange::band(hp, gp, items.bounds, o, bp);
     c.out("instances", instancesOf(items, r.placed, &r.distance));
 }
 
@@ -416,6 +422,7 @@ bool registerArrangeNodes(ext::Context& ctx)
 
     std::vector<gn::SocketDecl> band = {geoIn("hosts", "What the band runs round (world space): walls, buildings, rocks, Blockwork blocks.", true),
                                         geoIn("ground", "The ground (world space); none: a plane at the hosts' lowest point.", true),
+                                        geoIn("blockers", "Neighbours (world space) nothing goes on, though no band grows round them.", true),
                                         geoIn("items", kItemsDoc, true),
                                         in("weights", Socket::String, "", "How often each item is picked, in order, comma separated (missing ones are 1)."),
                                         in("width", Socket::Float, 80.0, "How far out from the footprint the band reaches, cm.", 1.0),

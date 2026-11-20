@@ -10,9 +10,13 @@
 #include <lila/Command.h>
 #include <lila/Extension.h>
 #include <lila/Log.h>
+#include <lila/Mesh.h>
 #include <lila/Profile.h>
+#include <lila/Transform.h>
 
 #include <algorithm>
+#include <cmath>
+#include <map>
 
 using namespace lila;
 
@@ -37,9 +41,16 @@ json roleSlot(const char* doc, std::initializer_list<const char*> roles, const s
 
 json targetsSlot() { return {{"kind", "meshes"}, {"doc", "What to age: walls, buildings, Blockwork blocks, rocks."}}; }
 
+json blockersSlot()
+{
+    return {{"kind", "meshes"}, {"doc", "Neighbours nothing is put on (set by age when it dresses a level in tiles)."}, {"optional", true},
+            {"default", json::array()}};
+}
+
 json baseStep(const char* slot, json flags)
 {
     flags["items"] = std::string("$") + slot;
+    flags["blockers"] = "$blockers";
     return {{"command", "baseDressing"}, {"args", json::array({"$targets"})}, {"flags", std::move(flags)}};
 }
 
@@ -52,6 +63,7 @@ std::vector<json> builtins(const std::string& style)
     const std::string suffix = toon ? " Toon" : "";
     auto preset = [&](const std::string& name, const std::string& description, json slots, json steps) {
         slots["targets"] = targetsSlot();
+        slots["blockers"] = blockersSlot();
         return json{{"name", name + suffix},
                     {"description", description},
                     {"category", "Weathering"},
@@ -137,6 +149,74 @@ std::string styledPreset(const std::string& name, const std::string& style, cons
     throw CommandError(std::string(cmd) + ": no weathering preset named '" + name + "' (there are " + names + ")");
 }
 
+/** A part of a level aged on its own: its meshes, and the neighbours its dressing must keep off. */
+struct Tile
+{
+    std::vector<std::string> meshes;
+    std::vector<std::string> blockers;
+};
+
+/**
+ * Splits meshes into square tiles by their bounds' centre, so a live result depends only on its tile: editing a block
+ * rebuilds that tile's dressing alone. Neighbours within reach of a tile become its blockers. tile <= 0 keeps one tile.
+ */
+std::vector<Tile> tileMeshes(Graph& g, const std::vector<std::string>& meshes, double tile)
+{
+    if (tile <= 0.0)
+        return {Tile{meshes, {}}};
+    struct Box
+    {
+        glm::dvec3 lo{1e300}, hi{-1e300};
+    };
+    std::vector<Box> boxes(meshes.size());
+    for (size_t k = 0; k < meshes.size(); ++k)
+    {
+        scene::Node* n = g.find(meshes[k]);
+        const auto m = n ? n->as<scene::MeshPtr>(n->type().attrIndex("outMesh")) : scene::MeshPtr();
+        if (!m)
+            continue;
+        const glm::dmat4 w = n->as<glm::dmat4>(scene::Transform::kWorldMatrix);
+        for (geo::Index p = 0; p < m->pointCapacity(); ++p)
+            if (m->pointValid(p))
+            {
+                const glm::dvec3 q(w * glm::dvec4(m->position(p), 1.0));
+                boxes[k].lo = glm::min(boxes[k].lo, q);
+                boxes[k].hi = glm::max(boxes[k].hi, q);
+            }
+    }
+    std::map<std::pair<int64_t, int64_t>, std::vector<size_t>> byTile;
+    for (size_t k = 0; k < meshes.size(); ++k)
+    {
+        const glm::dvec3 c = boxes[k].lo.x <= boxes[k].hi.x ? (boxes[k].lo + boxes[k].hi) * 0.5 : glm::dvec3(0.0);
+        byTile[{int64_t(std::floor(c.x / tile)), int64_t(std::floor(c.z / tile))}].push_back(k);
+    }
+    // Further than the widest band any preset lays, nothing a neighbour has can reach.
+    const double reach = 250.0;
+    std::vector<Tile> out;
+    for (const auto& [_, members] : byTile)
+    {
+        Tile t;
+        Box b;
+        for (size_t k : members)
+        {
+            t.meshes.push_back(meshes[k]);
+            b.lo = glm::min(b.lo, boxes[k].lo);
+            b.hi = glm::max(b.hi, boxes[k].hi);
+        }
+        for (size_t k = 0; k < meshes.size(); ++k)
+        {
+            if (std::ranges::find(members, k) != members.end())
+                continue;
+            const Box& o = boxes[k];
+            if (o.hi.x < b.lo.x - reach || o.lo.x > b.hi.x + reach || o.hi.z < b.lo.z - reach || o.lo.z > b.hi.z + reach)
+                continue;
+            t.blockers.push_back(meshes[k]);
+        }
+        out.push_back(std::move(t));
+    }
+    return out;
+}
+
 /** Every mesh an object stands for: itself, the meshes under a group, or an object set's members. */
 void expandMeshes(Graph& g, const std::string& name, std::vector<std::string>& out, const char* cmd)
 {
@@ -195,6 +275,10 @@ bool registerAge(ext::Context& ctx)
                   styleFlag(),
                   {"slots", "sl", T::Any, nullptr, "Piece slots to fill yourself: {slot: [meshes, library ids or tag:a+b]}."},
                   {"seed", "s", T::Int, int64_t(1), "Another seed gives another result."},
+                  {"tile", "ti", T::Float, nullptr,
+                   "Dress in tiles this wide (cm), so editing one block rebuilds only its tile; 0 for one piece. Default 1500 "
+                   "when there are more than 12 meshes, else 0.", {}, {}, 0.0},
+                  {"visgroup", "vg", T::String, "Weathering", "Blockwork visgroup the result joins, so it hides in one click; empty for none."},
                   {"name", "n", T::String, nullptr, "Name of the group made (default the preset's name)."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
@@ -214,11 +298,48 @@ bool registerAge(ext::Context& ctx)
             json slots = a.has("slots") ? a.flags["slots"] : json::object();
             if (!slots.is_object())
                 throw CommandError("age: slots is a dict of slot: pieces");
-            slots["targets"] = meshes;
-            json call = {{"args", {preset}}, {"slots", slots}, {"seed", a.get<int64_t>("seed", 1)}};
-            if (a.has("name"))
-                call["name"] = a.get<std::string>("name");
-            return ops::execute("arrangePreset", call);
+            const double tileSize = a.get<double>("tile", meshes.size() > 12 ? 1500.0 : 0.0);
+            const std::vector<Tile> tiles = tileMeshes(g, meshes, tileSize);
+            json results = json::array();
+            std::vector<std::string> groups;
+            for (size_t k = 0; k < tiles.size(); ++k)
+            {
+                json s = slots;
+                s["targets"] = tiles[k].meshes;
+                s["blockers"] = tiles[k].blockers;
+                json call = {{"args", {preset}}, {"slots", s}, {"seed", a.get<int64_t>("seed", 1) + int64_t(k) * 1000}};
+                if (tiles.size() == 1 && a.has("name"))
+                    call["name"] = a.get<std::string>("name");
+                else if (tiles.size() > 1)
+                    call["name"] = "Tile" + std::to_string(k + 1);
+                json r = ops::execute("arrangePreset", call);
+                if (const std::string grp = r.value("group", std::string()); !grp.empty())
+                    groups.push_back(grp);
+                results.push_back(std::move(r));
+            }
+            json out = tiles.size() == 1 ? results[0] : json{{"preset", preset}, {"tiles", results}};
+            out["tileCount"] = int64_t(tiles.size());
+            std::string group = out.value("group", std::string());
+            if (tiles.size() > 1)
+            {
+                std::string name = a.get<std::string>("name", preset);
+                std::ranges::replace(name, ' ', '_');
+                const json made = ops::execute("group", {{"empty", true}, {"name", name}});
+                group = made.is_array() ? made[0].get<std::string>() : made.get<std::string>();
+                const NodeId id = g.find(group)->id();
+                for (const std::string& grp : groups)
+                    if (g.find(grp))
+                        ops::execute("parent", {{"args", {grp, group}}});
+                group = g.node(id)->path();
+                out["group"] = group;
+            }
+            const std::string visgroup = a.get<std::string>("visgroup", "Weathering");
+            if (!group.empty() && !visgroup.empty() && ops::registry().find("blockworkVisgroup"))
+            {
+                ops::execute("blockworkVisgroup", {{"args", {visgroup}}, {"add", json::array({group})}});
+                out["visgroup"] = visgroup;
+            }
+            return out;
         },
         .examples = {"age('Shed', preset='Abandoned')", "age(['Tower', 'Wall'], preset='Overgrown', style='toon', seed=3)",
                      "age('Visgroup_Ruins', preset='Demolished Building', slots={'rubble': ['MyRubble_grp']})"},

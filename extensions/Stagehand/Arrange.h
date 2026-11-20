@@ -172,7 +172,7 @@ struct BandResult
  * ground is a plane at the hosts' lowest point.
  */
 BandResult band(std::span<const lila::geo::Mesh* const> hosts, std::span<const lila::geo::Mesh* const> ground, std::span<const Item> items,
-                const BandOptions& o);
+                const BandOptions& o, std::span<const lila::geo::Mesh* const> blockers = {});
 
 struct SettleOptions
 {

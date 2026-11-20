@@ -932,6 +932,7 @@ void registerArrangeCommands(ext::Context& ctx)
         {"items", "it", T::List, nullptr, "What to place: library asset ids and/or scene meshes (default the starter library's stone chunks)."},
         {"weights", "wt", T::List, json::array(), "How often each item is picked, in the order of items (missing ones are 1)."},
         nodeFlag({"ground", "gr", T::List, nullptr, "Ground meshes; default the meshes the objects stand on, or a plane at their lowest point."}, "mesh"),
+        nodeFlag({"blockers", "bl", T::List, nullptr, "Neighbouring objects nothing is put on, though no band grows round them (when dressing a level in parts)."}, "mesh"),
         {"width", "w", T::Float, 80.0, "How far out from the footprint the band reaches, cm.", {}, {}, 1.0},
         {"density", "de", T::Float, 6.0, "Per square metre, at the wall.", {}, {}, 0.0},
         {"falloff", "fo", T::Float, 1.5, "0 even across the band; higher keeps it close to the wall.", {}, {}, 0.0, 8.0},
@@ -1039,6 +1040,22 @@ void registerArrangeCommands(ext::Context& ctx)
             std::vector<geo::Mesh> groundMeshes;
             for (NodeId id : ground)
                 groundMeshes.push_back(meshOf(g, id, true));
+            std::vector<NodeId> blockers;
+            for (const json& b : a.flags.value("blockers", json::array()))
+            {
+                Node* node = g.find(b.get<std::string>());
+                if (!node)
+                    throw CommandError("baseDressing: no node named '" + b.get<std::string>() + "'");
+                for (NodeId m : meshesOf(g, node->id()))
+                    if (!hostSet.contains(m))
+                        blockers.push_back(m);
+            }
+            std::vector<geo::Mesh> blockerMeshes;
+            for (NodeId id : blockers)
+                blockerMeshes.push_back(meshOf(g, id, true));
+            std::vector<const geo::Mesh*> bp;
+            for (const geo::Mesh& m : blockerMeshes)
+                bp.push_back(&m);
             std::vector<const geo::Mesh*> hp, gp;
             for (const geo::Mesh& m : hostMeshes)
                 hp.push_back(&m);
@@ -1047,7 +1064,7 @@ void registerArrangeCommands(ext::Context& ctx)
             std::vector<arrange::Item> bounds;
             for (const ItemSource& it : items)
                 bounds.push_back(arrange::itemOf(meshOf(g, it.mesh, false)));
-            const arrange::BandResult band = arrange::band(hp, gp, bounds, o);
+            const arrange::BandResult band = arrange::band(hp, gp, bounds, o, bp);
             const bool doSettle = a.get<bool>("settle", false);
             arrange::SettleOptions so = settleOptions(a);
             so.density = a.get<double>("massDensity", 600.0);
@@ -1055,6 +1072,7 @@ void registerArrangeCommands(ext::Context& ctx)
             so.groundHeight = lo.y;
             std::vector<NodeId> colliders = hosts;
             colliders.insert(colliders.end(), ground.begin(), ground.end());
+            colliders.insert(colliders.end(), blockers.begin(), blockers.end());
             const Result r = settleIf(band.placed, g, items, colliders, so, doSettle);
             json groundOut = json::array();
             for (NodeId id : ground)
@@ -1086,6 +1104,13 @@ void registerArrangeCommands(ext::Context& ctx)
                 nodes.push_back({{"name", info}, {"type", "ObjectInfo"}, {"position", json::array({0, -200 - 120 * double(k)})},
                                  {"props", {{"object", g.node(hosts[k])->path()}, {"transformSpace", "world"}}}});
                 links.push_back(info + ".geometry -> Band.hosts");
+            }
+            for (size_t k = 0; k < blockers.size(); ++k)
+            {
+                const std::string info = "Blocker" + std::to_string(k + 1);
+                nodes.push_back({{"name", info}, {"type", "ObjectInfo"}, {"position", json::array({0, -1000 - 120 * double(k)})},
+                                 {"props", {{"object", g.node(blockers[k])->path()}, {"transformSpace", "world"}}}});
+                links.push_back(info + ".geometry -> Band.blockers");
             }
             for (size_t k = 0; k < ground.size(); ++k)
             {

@@ -192,3 +192,49 @@ TEST_CASE("weathering: preset thumbnails leave no trace in the scene")
     CHECK(r["drawn"].size() + r["skipped"].size() == 1);
     CHECK(g().nodes().size() == before);
 }
+
+TEST_CASE("weathering: base dressing keeps off blockers without dressing round them")
+{
+    fresh();
+    cube("A", {0, 0, 0}, {200, 200, 200});
+    cube("B", {260, 0, 0}, {200, 200, 200});
+    cube("Chunk", {3000, 0, 0}, {12, 10, 12});
+    const json r = run("baseDressing", {{"args", {"A"}}, {"blockers", {"B"}}, {"items", {"Chunk"}}, {"width", 120.0}, {"density", 30.0}, {"realize", true}});
+    REQUIRE(r["count"].get<int>() > 10);
+    for (const json& n : r["nodes"])
+    {
+        const glm::dvec3 p = worldPos(n.get<std::string>());
+        CHECK(outside(p, {160, 0, -100}, {360, 200, 100}) > 0.0);
+        CHECK(outside(p, {-100, 0, -100}, {100, 200, 100}) > 0.0);
+    }
+}
+
+TEST_CASE("weathering: age in tiles rebuilds only the edited block's tile")
+{
+    fresh();
+    std::vector<std::string> blocks;
+    for (int x = 0; x < 4; ++x)
+        for (int z = 0; z < 4; ++z)
+            blocks.push_back(cube(("Block" + std::to_string(x) + std::to_string(z)).c_str(), {x * 1000.0, 0, z * 1000.0}, {300, 250, 300}));
+    const json r = run("age", {{"args", blocks}, {"preset", "Concrete Debris"}, {"tile", 1000.0}});
+    REQUIRE(r["tileCount"].get<int>() == 16);
+    std::vector<std::string> hosts;
+    for (const json& t : r["tiles"])
+        hosts.push_back(t["steps"][0]["result"]["host"].get<std::string>());
+    auto bounds = [&](const std::string& h) {
+        const geo::Mesh m = meshOf(h);
+        glm::dvec3 lo(1e300);
+        for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+            if (m.pointValid(p))
+                lo = glm::min(lo, m.position(p));
+        return lo;
+    };
+    std::vector<glm::dvec3> before;
+    for (const std::string& h : hosts)
+        before.push_back(bounds(h));
+    run("move", {{"args", {blocks[0]}}, {"by", {0, 0, 120}}});
+    int changed = 0;
+    for (size_t k = 0; k < hosts.size(); ++k)
+        changed += glm::length(bounds(hosts[k]) - before[k]) > 1e-6 ? 1 : 0;
+    CHECK(changed == 1);
+}

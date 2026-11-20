@@ -269,6 +269,12 @@ Filled fillSlots(Graph& g, const json& spec, const json& given, const char* cmd)
         json v = given.contains(name) ? given[name] : s.value("default", json());
         if (v.is_null() || (v.is_array() && v.empty()))
         {
+            // An optional list slot given (or defaulting to) [] is set, and empty: steps that pass it get [] rather than being skipped.
+            if (s.value("optional", false) && (given.contains(name) || s.contains("default")) && v.is_array() && s.value("kind", std::string()) != "mesh")
+            {
+                f.values[name] = json::array();
+                continue;
+            }
             if (s.value("optional", false))
                 continue;
             throw CommandError(std::string(cmd) + ": " + spec.value("name", std::string()) + " needs slot " + name + " (" + s.value("kind", std::string()) +
