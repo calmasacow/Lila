@@ -4,7 +4,7 @@ set(WEATHERING_CORE_SOURCES Weathering.cpp Weathering.h Pieces.cpp Pieces.h Plac
 set(WEATHERING_AGE_SOURCES Age.cpp Ground.cpp)
 set(WEATHERING_MASK_SOURCES Masks.cpp)
 set(WEATHERING_EDGE_SOURCES Edges.cpp)
-set(WEATHERING_IVY_SOURCES Ivy.cpp)
+set(WEATHERING_IVY_SOURCES Ivy.cpp Ivy.h IvyGrow.cpp IvyGrow.h IvyUi.cpp IvyPanelKit.h)
 set(WEATHERING_GENERATOR_SOURCES Generators.cpp)
 lila_add_extension(lila_weathering_extension ID Weathering MANIFEST extension.json UI
     SOURCES ${WEATHERING_CORE_SOURCES} ${WEATHERING_AGE_SOURCES} ${WEATHERING_MASK_SOURCES} ${WEATHERING_EDGE_SOURCES}
