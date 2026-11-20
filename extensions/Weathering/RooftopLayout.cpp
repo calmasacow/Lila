@@ -97,7 +97,6 @@ Result layout(const Mesh& host, std::span<const Bounds> railings, std::span<cons
         top.y /= std::max(top.area, 1e-12);
         if (top.area < o.minArea * 10000.0 || open * 2 < int(grp.size()))
             continue;
-        const int topIndex = int(r.tops.size());
 
         // Edges of the top: face edges whose other side is not in it.
         std::vector<std::pair<glm::dvec3, glm::dvec3>> edges;
@@ -208,7 +207,6 @@ Result layout(const Mesh& host, std::span<const Bounds> railings, std::span<cons
                 if (top.inside({lo.x + cx * (i + 0.5), lo.y + cz * (j + 0.5)}))
                     r.surface.addFace({point(i, j), point(i, j + 1), point(i + 1, j + 1), point(i + 1, j)});
         r.tops.push_back(std::move(top));
-        (void)topIndex;
         // Corners close to the edge are not free.
         auto free = r.surface.pointAttrs().getOrAdd<float>(kFreeAttr);
         for (const auto& [ij, p] : points)

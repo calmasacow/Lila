@@ -10,7 +10,7 @@
  * lifted corners, a sagging middle, and jitter from neat stylized rows (neatness 1) to a messy roof (neatness 0).
  *
  * Pieces are fitted by their bounds: Y is out of the roof, the longer horizontal side runs down the slope. Rows step by
- * the longest piece, so a chunky toon tile gives fewer, bigger rows than a realistic one.
+ * the shortest piece and columns by each piece's width, so a chunky toon tile gives fewer, bigger rows than a realistic one.
  */
 namespace weathering::roof
 {
