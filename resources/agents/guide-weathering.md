@@ -4,13 +4,14 @@ Weathering (an extension that ships enabled, on top of Stagehand) ages, damages 
 
 ## The loop
 
-1. `weatherPresets()` lists the presets (name, description, style, slots). Each comes in a realistic and a ` Toon` version.
-2. `weather(objects, preset="Abandoned", style="realistic"|"toon", seed=)` runs one as one undo step and returns `group`. Objects may be meshes, groups (every mesh under them) or object sets such as Blockwork visgroups.
+1. `weatherPresets()` lists the presets (name, description, kind, style, slots). Each is one effect (a scatter, a surface effect, a growth or a generator) and comes in a realistic and a ` Toon` version.
+2. `weather(objects, preset="Concrete Debris", style="realistic"|"toon", seed=)` applies one as one undo step and returns `group`. Objects may be meshes, groups (every mesh under them) or object sets such as Blockwork visgroups. Build a look by calling it once per effect: `Concrete Debris`, then `Grunge`, then `Worn Edges`, then `Ivy`.
 3. `capture_view` the result. Change `seed`, the preset or a slot and run again.
+4. Users do the same by dragging presets from the Library's Presets tab (`window.libraryPresets`) onto meshes.
 
 ## Pieces: the user's own first
 
-- Every step that places or builds from pieces takes the user's meshes. In `weather`, fill a slot: `slots={"rubble": ["MyChunks_grp"]}`. In single commands, the `items=` / pieces flag takes scene meshes, groups, object sets, library ids, `tag:<a+b>` and weighted entries `{"piece": name, "weight": 3}`.
+- Every step that places or builds from pieces takes the user's meshes. In `weather`, fill the scatter presets' slot: `slots={"pieces": ["MyChunks_grp"]}`. In single commands, the `items=` / pieces flag takes scene meshes, groups, object sets, library ids, `tag:<a+b>` and weighted entries `{"piece": name, "weight": 3}`.
 - `weatheringAddPieces(meshes, role="rubble", style="toon")` puts meshes in the library tagged `weathering` + role + style; from then on every preset using that role picks them instead of the placeholders.
 - Placeholders (procedural, tier `placeholder`) fill any role nobody supplied: `librarySearch(tags=["weathering", "rubble"])`. `weatheringPlaceholders(force=True)` rebuilds them.
 - Roles: rubble, rock, brick, plank, beam, charred, plant, grass, moss, bush, pebble, litter, leaf.

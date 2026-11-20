@@ -171,7 +171,7 @@ TEST_CASE("weathering: age runs a preset in either style, with the user's pieces
     std::set<std::string> names;
     for (const json& p : presets)
         names.insert(p["name"].get<std::string>());
-    for (const char* n : {"Concrete Debris", "Bricks and Rocks", "Leaning Planks", "Demolished Building", "Burned Yard", "Abandoned", "Overgrown"})
+    for (const char* n : {"Concrete Debris", "Heavy Rubble", "Leaning Planks", "Weeds", "Grunge", "Worn Edges", "Chipped Edges", "Ivy", "Roof Sheets", "Windows"})
     {
         CHECK(names.contains(n));
         CHECK(names.contains(std::string(n) + " Toon"));
@@ -181,7 +181,7 @@ TEST_CASE("weathering: age runs a preset in either style, with the user's pieces
     CHECK(!r["group"].get<std::string>().empty());
     CHECK(g().find(r["group"].get<std::string>()));
 
-    const json mine = run("weather", {{"args", {"House"}}, {"preset", "Concrete Debris"}, {"slots", {{"rubble", {"ChunkA", "ChunkB"}}}}, {"seed", 3}});
+    const json mine = run("weather", {{"args", {"House"}}, {"preset", "Concrete Debris"}, {"slots", {{"pieces", {"ChunkA", "ChunkB"}}}}, {"seed", 3}});
     const json step = stepOf(mine, "baseDressing");
     CHECK(step["perItem"].contains("ChunkA"));
     CHECK(step["perItem"].contains("ChunkB"));
@@ -201,7 +201,7 @@ TEST_CASE("weathering: preset thumbnails leave no trace in the scene")
 {
     houseScene();
     const size_t before = g().nodes().size();
-    const json r = run("arrangementThumbnails", {{"args", {"Abandoned"}}});
+    const json r = run("arrangementThumbnails", {{"args", {"Leaning Planks"}}});
     CHECK(r["drawn"].size() + r["skipped"].size() == 1);
     CHECK(g().nodes().size() == before);
 }
@@ -262,6 +262,11 @@ TEST_CASE("weathering: every Age preset runs in both styles")
             continue;
         const std::string name = p["name"].get<std::string>();
         INFO(name);
+        // One effect each: a preset is what one drag onto a mesh applies.
+        CHECK(p["steps"].size() == 1);
+        // Windows needs a wall with openings; its own tests cover it.
+        if (name.rfind("Windows", 0) == 0)
+            continue;
         const std::string box = cube(("Box" + std::to_string(ran)).c_str(), {1000.0 * (ran + 1), 0, 0}, {300, 250, 300});
         json r;
         CHECK_NOTHROW(r = run("weather", {{"args", {box}}, {"preset", name}, {"visgroup", ""}}));
@@ -272,18 +277,21 @@ TEST_CASE("weathering: every Age preset runs in both styles")
             CHECK(r["notes"][0].get<std::string>().find("Trim Sheets") != std::string::npos);
         ++ran;
     }
-    CHECK(ran == 20);
+    CHECK(ran == 46);
 }
 
 TEST_CASE("weathering: weatheringLive pauses and resumes what weather made")
 {
     houseScene();
-    const json r = run("weather", {{"args", {"House"}}, {"preset", "Demolished Building"}, {"visgroup", ""}});
+    const json r = run("weather", {{"args", {"House"}}, {"preset", "Leaning Planks"}, {"visgroup", ""}});
+    run("weather", {{"args", {"House"}}, {"preset", "Grunge"}, {"visgroup", ""}});
+    run("weather", {{"args", {"House"}}, {"preset", "Chipped Edges"}, {"visgroup", ""}});
     const std::string group = r["group"].get<std::string>();
-    const json off = run("weatheringLive", {{"args", {group}}, {"live", false}});
+    // Named by the weathered object: its grunge and chipping go off and the group made for it hides.
+    const json off = run("weatheringLive", {{"args", {"House"}}, {"live", false}});
     CHECK(off["modifiers"].get<int>() == 2);
     CHECK(run("getAttr", {{"args", {group + ".visibility"}}}) == false);
-    run("weatheringLive", {{"args", {group}}});
+    run("weatheringLive", {{"args", {"House"}}});
     CHECK(run("getAttr", {{"args", {group + ".visibility"}}}) == true);
 }
 

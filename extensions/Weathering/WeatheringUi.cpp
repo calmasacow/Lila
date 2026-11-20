@@ -1,5 +1,5 @@
-// The Level > Weathering menu: Age and the dressing commands as actions, so they are searchable, scriptable and get
-// option boxes from their flags. Presets themselves are picked from the Presets tab of the Prop Library.
+// The Level > Weathering menu and toolkit section: the library of presets to drag onto meshes, and each effect as an
+// action, so they are searchable, scriptable and get option boxes from their flags.
 
 #include "Weathering.h"
 
@@ -29,8 +29,6 @@ void registerWeatheringUi(ext::Context& ctx)
         std::vector<std::string> keywords;
     };
     const Entry entries[] = {
-        {"weathering.age", "Age", "weather", "wand", "Age the selection with a weathering preset: dressing round its base and whatever else the preset adds.",
-         "weather('Shed', preset='Abandoned')", {"weather", "ruin", "abandoned", "overgrown", "grunge", "destroy", "damage", "dirty"}},
         {"weathering.baseDressing", "Base Dressing", "baseDressing", "stack-2",
          "Scatter pieces in a band round where the selection meets the ground: rubble, planks leaning on walls, weeds.",
          "baseDressing('Shed', items=['tag:weathering+rubble'])", {"scatter around", "debris", "rubble", "foot of wall", "skirt"}},
@@ -61,18 +59,17 @@ void registerWeatheringUi(ext::Context& ctx)
         actions::add(ctx, {.id = live ? "weathering.resume" : "weathering.pause",
                            .label = live ? "Resume Weathering" : "Pause Weathering",
                            .category = "Weathering",
-                           .doc = live ? "Bring back the selected weather groups, rebuilt for the blocks as they are now."
-                                       : "Hide the selected weather groups and turn off their grunge and chipping while you block out.",
-                           .python = live ? "weatheringLive('Abandoned')" : "weatheringLive('Abandoned', live=False)",
+                           .doc = live ? "Bring the selection's weathering back, rebuilt for the blocks as they are now."
+                                       : "Hide the selection's weathering and turn off its grunge and chipping while you block out.",
+                           .python = live ? "weatheringLive('Level')" : "weatheringLive('Level', live=False)",
                            .command = "weatheringLive",
                            .call = {{"live", live}},
                            .icon = live ? "player-play" : "player-pause",
                            .keywords = {"freeze weathering", "disable weathering", "performance", "blockout"}});
-    // Age is the daily entry; the rest are its parts, used when a preset isn't wanted.
+    // The library is the daily entry: drag a preset onto a mesh. The rest run one effect on the selection with options.
     levelToolkit::add(ctx, {.id = "weathering",
                             .title = "Weathering",
-                            .items = {{"weathering.age", "wand", "Age", "Age"},
-                                      {"window.propLibrary", "photo", "Presets", "Presets"},
+                            .items = {{"window.libraryPresets", "photo", "Library", "Weathering"},
                                       {"weathering.baseDressing", "stack-2", "Base", {}, "Dressing"},
                                       {"weathering.groundDressing", "grain", "Ground", {}, "Dressing"},
                                       {"weathering.groundTint", "droplet", "Tint", {}, "Dressing"},
@@ -101,7 +98,7 @@ void registerWeatheringUi(ext::Context& ctx)
     menus::addItem(ctx, {.id = "weathering.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Weathering",
                          .before = levelToolkit::kAssetsSection});
     const std::vector<std::pair<const char*, std::vector<const char*>>> sections = {
-        {"", {"weathering.age"}},
+        {"", {"window.libraryPresets"}},
         {"Dressing", {"weathering.baseDressing", "weathering.groundDressing", "weathering.groundTint", "weathering.pile", "weathering.rooftop"}},
         {"Surfaces", {"weathering.grungeMask", "weathering.grungeBake", "weathering.edgeDecals", "weathering.edgeChip"}},
         {"Growth", {"weathering.ivy", "weathering.ivyBrush"}},

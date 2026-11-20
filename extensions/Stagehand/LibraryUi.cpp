@@ -240,7 +240,7 @@ public:
         mSearch->setPlaceholderText("Search presets");
         mSearch->setClearButtonEnabled(true);
         mKind = new QComboBox(this);
-        mKind->addItems({"All", "Age", "Ground", "Set Dressing"});
+        mKind->addItems({"All", "Scatter", "Ground", "Surface", "Growth", "Generators", "Set Dressing"});
         mKind->setToolTip("Kind: Age presets dress round objects, Ground presets dress a ground, Set Dressing fills a place");
         mStyle = new QComboBox(this);
         mStyle->addItems({"Any Style", "Realistic", "Toon"});
@@ -287,7 +287,8 @@ private:
     {
         if (p.value("category", std::string()) != "Weathering")
             return "Set Dressing";
-        return p.value("kind", std::string()) == "ground" ? "Ground" : "Age";
+        const std::string kind = p.value("kind", std::string());
+        return kind == "ground" ? "Ground" : kind == "surface" ? "Surface" : kind == "growth" ? "Growth" : kind == "generator" ? "Generators" : "Scatter";
     }
 
     void fillList()
@@ -349,6 +350,10 @@ private:
     QLabel* mStatus = nullptr;
 };
 
+class LibraryPanel;
+/** The open Library panel, for actions that show one of its tabs. */
+LibraryPanel* gLibraryPanel = nullptr;
+
 class LibraryPanel final : public QWidget
 {
 public:
@@ -357,7 +362,9 @@ public:
         auto* outer = new QVBoxLayout(this);
         outer->setContentsMargins(12, 8, 12, 8);
         outer->setSpacing(4);
+        gLibraryPanel = this;
         auto* tabs = new QTabBar(this);
+        mTabs = tabs;
         tabs->addTab("Props");
         tabs->addTab("Presets");
         tabs->setExpanding(false);
@@ -554,6 +561,15 @@ private:
     AssetList* mList = nullptr;
     QLabel* mStatus = nullptr;
     PresetsPage* mPresets = nullptr;
+    QTabBar* mTabs = nullptr;
+
+public:
+    ~LibraryPanel() override
+    {
+        if (gLibraryPanel == this)
+            gLibraryPanel = nullptr;
+    }
+    void showPresets() { mTabs->setCurrentIndex(1); }
 };
 
 /** Where a drag would put an asset: on the surface under the cursor, else on the ground plane. */
@@ -599,9 +615,12 @@ bool onDrop(const QMimeData& mime, const viewportHooks::DropTarget& t, bool comm
     {
         if (!commit)
             return true;
-        // Dropped on an object: dress it; dropped on empty space: the selection.
+        // Dropped on an object: that object; dropped on empty space: the selection. Applied once the drag has ended, so
+        // the drop itself returns at once.
         Node* n = t.face != UINT32_MAX ? Graph::current().node(t.node) : nullptr;
-        applyPreset(QString::fromUtf8(mime.data(kPresetMime)).toStdString(), n ? std::vector<std::string>{n->path()} : selectedPaths());
+        const std::string name = QString::fromUtf8(mime.data(kPresetMime)).toStdString();
+        const std::vector<std::string> targets = n ? std::vector<std::string>{n->path()} : selectedPaths();
+        QTimer::singleShot(0, qApp, [name, targets] { applyPreset(name, targets); });
         return true;
     }
     if (!mime.hasFormat(kMime))
@@ -680,6 +699,17 @@ void registerLibraryUi(ext::Context& ctx)
                       .open = false,
                       .toggleAction = "window.propLibrary",
                       .docs = "stagehand"});
+    actions::add(ctx, {.id = "window.libraryPresets",
+                       .label = "Library Presets",
+                       .category = "Windows",
+                       .run = [] {
+                           runUi("showPanel", {{"args", {kPanel}}});
+                           if (gLibraryPanel)
+                               gLibraryPanel->showPresets();
+                       },
+                       .doc = "Open the Prop Library on its Presets tab: scatter sets, grunge, edge decals, ivy and generators to drag onto meshes.",
+                       .icon = "photo",
+                       .keywords = {"weathering", "presets", "scatter", "grunge", "asset browser", "drag and drop"}});
     viewportHooks::setDropHandler("stagehand.library", onDrop);
     ctx.track("drop:stagehand.library", [] { viewportHooks::removeDropHandler("stagehand.library"); });
     viewportHooks::addDrawer(ctx, "stagehand.libraryGhost", drawGhost);

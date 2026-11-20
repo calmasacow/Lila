@@ -55,96 +55,77 @@ json baseStep(const char* slot, json flags)
     return {{"command", "baseDressing"}, {"args", json::array({"$targets"})}, {"flags", std::move(flags)}};
 }
 
-/** The built-in presets in one style. Toon versions keep the shapes chunkier: fewer, bigger pieces. */
+/**
+ * The built-in presets in one style: each is ONE effect (a scatter set, grunge, edge decals, ivy, a roof), dragged
+ * onto a mesh from the library and applied alone. Toon versions are chunkier: fewer, bigger pieces.
+ */
 std::vector<json> builtins(const std::string& style)
 {
     const bool toon = style == "toon";
     const double few = toon ? 0.6 : 1.0;  // toon dressing is sparser
     const double big = toon ? 1.25 : 1.0; // and its pieces bigger
     const std::string suffix = toon ? " Toon" : "";
-    auto preset = [&](const std::string& name, const std::string& description, json slots, json steps) {
+    auto preset = [&](const std::string& name, const char* kind, const std::string& description, json slots, json steps) {
         slots["targets"] = targetsSlot();
         slots["blockers"] = blockersSlot();
         return json{{"name", name + suffix},
                     {"description", description},
                     {"category", "Weathering"},
+                    {"kind", kind},
                     {"style", style},
-                    {"thumbnailVersion", 2},
-                    {"tags", json::array({"weathering", "age", style})},
+                    {"thumbnailVersion", 4},
+                    {"tags", json::array({"weathering", kind, style})},
                     {"slots", std::move(slots)},
                     {"steps", std::move(steps)}};
     };
-    std::vector<json> out;
-    out.push_back(preset("Concrete Debris", "Broken concrete heaped at the foot of walls, thinning outward.",
-                         {{"rubble", roleSlot("Rubble pieces.", {"rubble"}, style)}},
-                         json::array({baseStep("rubble", {{"width", 90.0 * big}, {"density", 9.0 * few}, {"falloff", 1.8}, {"name", "Debris"}})})));
-    out.push_back(preset("Bricks and Rocks", "Loose bricks and stones along the base.",
-                         {{"bricks", roleSlot("Bricks.", {"brick"}, style)}, {"rocks", roleSlot("Rocks.", {"rock"}, style)}},
-                         json::array({baseStep("bricks", {{"width", 70.0 * big}, {"density", 6.0 * few}, {"name", "Bricks"}}),
-                                      baseStep("rocks", {{"width", 110.0 * big}, {"density", 3.0 * few}, {"falloff", 1.0}, {"name", "Rocks"}})})));
-    out.push_back(preset("Leaning Planks", "Boards and beams leaning on the walls.",
-                         {{"planks", roleSlot("Planks and beams.", {"plank", "beam"}, style)}},
-                         json::array({baseStep("planks", {{"width", 70.0}, {"density", 2.5 * few}, {"leanChance", 0.85}, {"name", "Planks"}})})));
-    out.push_back(preset("Demolished Building", "The heaviest: rubble, bricks and broken timber piled round the base.",
-                         {{"rubble", roleSlot("Rubble pieces.", {"rubble"}, style)},
-                          {"bricks", roleSlot("Bricks.", {"brick"}, style)},
-                          {"timber", roleSlot("Planks and beams.", {"plank", "beam"}, style)}},
-                         json::array({baseStep("rubble", {{"width", 170.0 * big}, {"density", 14.0 * few}, {"falloff", 1.2}, {"name", "Rubble"}}),
-                                      baseStep("bricks", {{"width", 130.0 * big}, {"density", 6.0 * few}, {"name", "Bricks"}}),
-                                      baseStep("timber", {{"width", 110.0}, {"density", 2.0 * few}, {"leanChance", 0.5}, {"name", "Timber"}})})));
-    out.push_back(preset("Burned Yard", "Charred boards and ash-dark rubble round a burned-out shell.",
-                         {{"charred", roleSlot("Burned boards.", {"charred"}, style)}, {"rubble", roleSlot("Rubble pieces.", {"rubble"}, style)}},
-                         json::array({baseStep("charred", {{"width", 100.0}, {"density", 3.0 * few}, {"leanChance", 0.4}, {"name", "Charred"}}),
-                                      baseStep("rubble", {{"width", 80.0 * big}, {"density", 5.0 * few}, {"scaleNear", 0.8}, {"name", "Rubble"}})})));
-    out.push_back(preset("Abandoned", "Boards leaning on the walls, weeds coming up along the base, litter blown against it.",
-                         {{"planks", roleSlot("Planks.", {"plank"}, style)},
-                          {"weeds", roleSlot("Weeds and grass.", {"plant", "grass"}, style)},
-                          {"litter", roleSlot("Litter.", {"litter"}, style)}},
-                         json::array({baseStep("planks", {{"width", 60.0}, {"density", 1.5 * few}, {"leanChance", 0.9}, {"name", "Planks"}}),
-                                      baseStep("weeds", {{"width", 50.0 * big}, {"density", 12.0 * few}, {"falloff", 2.0}, {"name", "Weeds"}}),
-                                      baseStep("litter", {{"width", 120.0}, {"density", 1.0 * few}, {"falloff", 0.6}, {"scaleNear", 1.0}, {"scaleFar", 1.0},
-                                                          {"name", "Litter"}})})));
-    out.push_back(preset("Overgrown", "Moss at the foot of the walls, weeds and bushes taking over the ground round it.",
-                         {{"moss", roleSlot("Moss.", {"moss"}, style)},
-                          {"plants", roleSlot("Weeds and grass.", {"plant", "grass"}, style)},
-                          {"bushes", roleSlot("Bushes.", {"bush"}, style)}},
-                         json::array({baseStep("moss", {{"width", 40.0}, {"density", 14.0 * few}, {"falloff", 2.5}, {"name", "Moss"}}),
-                                      baseStep("plants", {{"width", 90.0 * big}, {"density", 16.0 * few}, {"falloff", 1.2}, {"name", "Plants"}}),
-                                      baseStep("bushes", {{"width", 140.0 * big}, {"density", 0.8 * few}, {"falloff", 0.8}, {"spacing", 1.1}, {"name", "Bushes"}})})));
-    // Surface steps: grunge, edge wear and growth on the targets themselves, before the dressing round them.
-    auto step = [&](const char* command, json flags) {
+    auto scatter = [&](const std::string& name, const std::string& description, std::initializer_list<const char*> roles, json flags) {
+        std::string node = name;
+        std::ranges::replace(node, ' ', '_');
+        flags["name"] = node + "_Scatter";
+        return preset(name, "scatter", description, {{"pieces", roleSlot("Pieces to scatter.", roles, style)}}, json::array({baseStep("pieces", std::move(flags))}));
+    };
+    auto effect = [&](const std::string& name, const char* kind, const std::string& description, const char* command, json flags) {
         flags["style"] = style;
-        return json{{"command", command}, {"args", json::array({"$targets"})}, {"flags", std::move(flags)}};
+        return preset(name, kind, description, json::object(),
+                      json::array({json{{"command", command}, {"args", json::array({"$targets"})}, {"flags", std::move(flags)}}}));
     };
-    const std::map<std::string, std::vector<json>> surface = {
-        {"Concrete Debris", {step("grungeMask", json::object())}},
-        {"Demolished Building", {step("edgeChip", {{"amount", 0.8}, {"depth", 6.0}, {"size", 14.0}}), step("grungeMask", json::object())}},
-        {"Burned Yard", {step("grungeMask", json::object())}},
-        {"Abandoned", {step("grungeMask", json::object()), step("edgeDecals", {{"edges", "convex"}})}},
-        {"Overgrown", {step("ivy", {{"plant", "ivy"}}), step("edgeDecals", {{"edges", "concave"}})}},
-    };
-    for (json& p : out)
-    {
-        std::string base = p["name"].get<std::string>();
-        if (toon)
-            base = base.substr(0, base.size() - suffix.size());
-        if (const auto it = surface.find(base); it != surface.end())
-        {
-            json steps = json::array();
-            for (const json& sstep : it->second)
-                steps.push_back(sstep);
-            for (const json& sstep : p["steps"])
-                steps.push_back(sstep);
-            p["steps"] = std::move(steps);
-        }
-    }
-    out.push_back(preset("Weathered Concrete", "Chipped edges, worn corners and grime on concrete, nothing round it.", json::object(),
-                         json::array({step("edgeChip", {{"amount", 0.4}, {"depth", 3.0}}), step("grungeMask", json::object()),
-                                      step("edgeDecals", {{"edges", "both"}})})));
-    out.push_back(preset("Rusted Metal", "Worn paint along edges and streaks of grime down the faces.", json::object(),
-                         json::array({step("grungeMask", json::object()), step("edgeDecals", {{"edges", "convex"}})})));
-    out.push_back(preset("Industrial Grime", "Dirt packed into corners and seams, streaks under ledges.", json::object(),
-                         json::array({step("grungeMask", json::object()), step("edgeDecals", {{"edges", "concave"}})})));
+    std::vector<json> out;
+    out.push_back(scatter("Concrete Debris", "Broken concrete heaped at the foot of walls, thinning outward.", {"rubble"},
+                          {{"width", 90.0 * big}, {"density", 9.0 * few}, {"falloff", 1.8}}));
+    out.push_back(scatter("Heavy Rubble", "A deep bank of rubble round the base, as after a collapse.", {"rubble", "rock"},
+                          {{"width", 170.0 * big}, {"density", 14.0 * few}, {"falloff", 1.2}}));
+    out.push_back(scatter("Bricks", "Loose bricks along the base.", {"brick"}, {{"width", 80.0 * big}, {"density", 7.0 * few}}));
+    out.push_back(scatter("Rocks", "Stones scattered round the base.", {"rock"}, {{"width", 110.0 * big}, {"density", 3.0 * few}, {"falloff", 1.0}}));
+    out.push_back(scatter("Leaning Planks", "Boards and beams leaning on the walls.", {"plank", "beam"},
+                          {{"width", 70.0}, {"density", 2.5 * few}, {"leanChance", 0.85}}));
+    out.push_back(scatter("Charred Timber", "Burned boards fallen against the walls.", {"charred"},
+                          {{"width", 100.0}, {"density", 3.0 * few}, {"leanChance", 0.4}}));
+    out.push_back(scatter("Weeds", "Weeds and grass coming up along the base.", {"plant", "grass"},
+                          {{"width", 60.0 * big}, {"density", 14.0 * few}, {"falloff", 1.8}}));
+    out.push_back(scatter("Moss Clumps", "Moss gathered at the foot of the walls.", {"moss"}, {{"width", 40.0}, {"density", 14.0 * few}, {"falloff", 2.5}}));
+    out.push_back(scatter("Bushes", "Bushes grown up beside the walls.", {"bush"},
+                          {{"width", 140.0 * big}, {"density", 0.8 * few}, {"falloff", 0.8}, {"spacing", 1.1}}));
+    out.push_back(scatter("Litter", "Paper, cans and leaves blown against the walls.", {"litter", "leaf"},
+                          {{"width", 120.0}, {"density", 1.2 * few}, {"falloff", 0.6}, {"scaleNear", 1.0}, {"scaleFar", 1.0}}));
+
+    out.push_back(effect("Grunge", "surface", "Grime at the foot and in the corners, worn edges, dust and streaks; keeps the surface's own texture.",
+                         "grungeMask", json::object()));
+    out.push_back(effect("Worn Edges", "surface", "Chipped and worn decal strips along the outer edges.", "edgeDecals", {{"edges", "convex"}}));
+    out.push_back(effect("Corner Dirt", "surface", "Dirt and moss decal strips packed into the inner corners.", "edgeDecals", {{"edges", "concave"}}));
+    out.push_back(effect("Chipped Edges", "surface", "Small chips broken out of the outer edges.", "edgeChip", {{"amount", 0.4}, {"depth", 3.0}}));
+    out.push_back(effect("Broken Edges", "surface", "Big chunks broken out of the outer edges.", "edgeChip",
+                         {{"amount", 0.8}, {"depth", 6.0}, {"size", 14.0}}));
+
+    out.push_back(effect("Ivy", "growth", "Leafy ivy climbing from the ground.", "ivy", {{"plant", "ivy"}}));
+    out.push_back(effect("Vines", "growth", "Long vines that drape over ledges.", "ivy", {{"plant", "vine"}}));
+    out.push_back(effect("Roots", "growth", "Bare roots spreading over the surface.", "ivy", {{"plant", "roots"}}));
+    out.push_back(effect("Moss Strands", "growth", "Flat, dense moss creeping over the surface.", "ivy", {{"plant", "moss"}}));
+
+    out.push_back(effect("Roof Sheets", "generator", "Corrugated sheets laid over the roof, some missing or lifted.", "roofing", {{"kind", "sheets"}}));
+    out.push_back(effect("Roof Tiles", "generator", "Tiles laid over the roof in rows.", "roofing", {{"kind", "tiles"}}));
+    out.push_back(effect("Roof Planks", "generator", "Boards laid over the roof.", "roofing", {{"kind", "planks"}}));
+    out.push_back(effect("Windows", "generator", "Frames, glass and interiors fitted into the wall's openings.", "fitWindows", json::object()));
+    out.push_back(effect("Rooftop Clutter", "generator", "Vents, AC units, pipes and railings on flat roofs.", "rooftopClutter", json::object()));
     return out;
 }
 
@@ -164,7 +145,7 @@ std::string lower(std::string s)
     return s;
 }
 
-/** The preset's name in a style: "Abandoned" in toon is "Abandoned Toon" when there is one. */
+/** The preset's name in a style: "Ivy" in toon is "Ivy Toon" when there is one. */
 std::string styledPreset(const std::string& name, const std::string& style, const char* cmd)
 {
     const json all = agePresetList();
@@ -291,9 +272,10 @@ bool registerAge(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "weatherPresets",
-        .doc = "The weathering presets Age offers: built in (Concrete Debris, Bricks and Rocks, Leaning Planks, Demolished "
-               "Building, Burned Yard, Abandoned, Overgrown, Weathered Concrete, Rusted Metal, Industrial Grime, each with a Toon version) and any arrangement preset saved with "
-               "category 'Weathering'. Each has name, description, style, slots and steps, as arrangementPresets gives them.",
+        .doc = "The weathering presets in the library, each one effect: scatter sets (Concrete Debris, Leaning Planks, Weeds, ...), "
+               "surface (Grunge, Worn Edges, Corner Dirt, Chipped Edges), growth (Ivy, Vines, Roots), generators (Roof Sheets, "
+               "Windows, Rooftop Clutter), each with a Toon version, and any arrangement preset saved with category 'Weathering'. "
+               "Each has name, kind, description, style, slots and steps, as arrangementPresets gives them.",
         .undoable = false,
         .run = [](const Args&) -> json { return agePresetList(); },
         .examples = {"[p['name'] for p in weatherPresets()]"},
@@ -301,13 +283,12 @@ bool registerAge(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "weather",
-        .doc = "Age things in one step with a weathering preset: dressing round their base, and whatever else the preset "
-               "does, as one undo step gathered into one group. Objects may be meshes, groups (every mesh under them) or "
-               "object sets such as Blockwork visgroups. Piece slots left out use the library's pieces for their role: your "
-               "own assets tagged 'weathering' and the role win over the placeholders. Returns group, preset and each step's "
-               "result.",
+        .doc = "Apply one weathering preset to objects, as dragging its tile onto them does: one effect (a scatter set, grunge, "
+               "edge decals, ivy, a roof), one undo step. Objects may be meshes, groups (every mesh under them) or object sets "
+               "such as Blockwork visgroups. Piece slots left out use the library's pieces for their role: your own assets "
+               "tagged 'weathering' and the role win over the placeholders. Returns group, preset and each step's result.",
         .positionalDoc = "objects to age (default the selection)",
-        .flags = {{"preset", "p", T::String, "Abandoned", "Preset name (weatherPresets lists them)."},
+        .flags = {{"preset", "p", T::String, "Concrete Debris", "Preset name (weatherPresets lists them)."},
                   styleFlag(),
                   {"slots", "sl", T::Any, nullptr, "Piece slots to fill yourself: {slot: [meshes, library ids or tag:a+b]}."},
                   {"seed", "s", T::Int, int64_t(1), "Another seed gives another result."},
@@ -328,7 +309,7 @@ bool registerAge(ext::Context& ctx)
                 expandMeshes(g, o, meshes, "weather");
             if (meshes.empty())
                 throw CommandError("weather: the objects have no meshes");
-            const std::string preset = styledPreset(a.get<std::string>("preset", "Abandoned"), a.get<std::string>("style", "realistic"), "weather");
+            const std::string preset = styledPreset(a.get<std::string>("preset", "Concrete Debris"), a.get<std::string>("style", "realistic"), "weather");
             // Placeholders must exist before slot defaults name them by tag.
             buildPlaceholders(false);
             json slots = a.has("slots") ? a.flags["slots"] : json::object();
@@ -392,59 +373,86 @@ bool registerAge(ext::Context& ctx)
             }
             return out;
         },
-        .examples = {"weather('Shed', preset='Abandoned')", "weather(['Tower', 'Wall'], preset='Overgrown', style='toon', seed=3)",
-                     "weather('Visgroup_Ruins', preset='Demolished Building', slots={'rubble': ['MyRubble_grp']})"},
+        .examples = {"weather('Shed', preset='Leaning Planks')", "weather(['Tower', 'Wall'], preset='Ivy', style='toon', seed=3)",
+                     "weather('Visgroup_Ruins', preset='Heavy Rubble', slots={'pieces': ['MyRubble_grp']})"},
     });
 
     ctx.registerCommand({
         .name = "weatheringLive",
-        .doc = "Pause or resume weathering while blocking out: live=False hides what weather made and turns off the grunge and "
-               "edge chipping it put on its targets, so editing blocks costs nothing; live=True brings it all back, rebuilt for "
-               "the blocks as they are now. Objects are the groups weather returned (default the selection). Returns groups and "
-               "modifiers (how many were switched).",
-        .positionalDoc = "weather groups (default the selection)",
+        .doc = "Pause or resume weathering while blocking out: live=False hides what the presets made for the objects and turns "
+               "off their grunge and edge chipping, so editing blocks costs nothing; live=True brings it all back, rebuilt for "
+               "the blocks as they are now. Objects are weathered meshes or groups, or the groups a preset made (default the "
+               "selection). Returns groups and modifiers (how many were switched).",
+        .positionalDoc = "weathered objects or weathering groups (default the selection)",
         .flags = {{"live", "l", T::Bool, true, "True resumes, False pauses."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
             const bool live = a.get<bool>("live", true);
             const std::vector<std::string> objects = a.objects();
             if (objects.empty())
-                throw CommandError("weatheringLive: select or name the weather groups");
+                throw CommandError("weatheringLive: select or name what to pause or resume");
             json groups = json::array();
             int64_t switched = 0;
-            for (const std::string& o : objects)
-            {
-                scene::Node* n = g.find(o);
-                if (!n || n->type().attrIndex("weatheringTargets") < 0)
-                    throw CommandError("weatheringLive: '" + o + "' is not a group weather made");
-                ops::execute("setAttr", {{"args", {n->path() + ".visibility", live}}});
-                json targets = json::array();
+            auto targetsOf = [&](const scene::Node& group) {
                 try
                 {
-                    targets = json::parse(n->as<std::string>(n->type().attrIndex("weatheringTargets")));
+                    return json::parse(group.as<std::string>(group.type().attrIndex("weatheringTargets")));
                 }
                 catch (const std::exception&)
                 {
+                    return json(json::array());
                 }
-                for (const json& t : targets)
+            };
+            auto switchMesh = [&](scene::Node& m) {
+                for (NodeId id : scene::modifiers::stack(g, m.id()))
                 {
-                    scene::Node* m = t.is_string() ? g.find(t.get<std::string>()) : nullptr;
-                    if (!m)
+                    scene::Node* mod = g.node(id);
+                    if (!mod || (mod->type().name != "grungeModifier" && mod->type().name != "edgeChipModifier"))
                         continue;
-                    for (NodeId id : scene::modifiers::stack(g, m->id()))
+                    ops::execute("setAttr", {{"args", {mod->path() + ".enabled", live}}});
+                    ++switched;
+                }
+            };
+            auto switchGroup = [&](scene::Node& group) {
+                ops::execute("setAttr", {{"args", {group.path() + ".visibility", live}}});
+                if (std::ranges::find(groups, json(group.path())) == groups.end())
+                    groups.push_back(group.path());
+            };
+            for (const std::string& o : objects)
+            {
+                scene::Node* n = g.find(o);
+                if (!n)
+                    throw CommandError("weatheringLive: no node named '" + o + "'");
+                if (n->type().attrIndex("weatheringTargets") >= 0)
+                {
+                    // A group weather made: it, and what it put on its targets.
+                    switchGroup(*n);
+                    for (const json& t : targetsOf(*n))
+                        if (scene::Node* m = t.is_string() ? g.find(t.get<std::string>()) : nullptr)
+                            switchMesh(*m);
+                    continue;
+                }
+                // A weathered object: its grunge and chipping, and every group made for it.
+                std::vector<std::string> meshes;
+                expandMeshes(g, o, meshes, "weatheringLive");
+                for (const std::string& path : meshes)
+                {
+                    if (scene::Node* m = g.find(path))
+                        switchMesh(*m);
+                    for (NodeId id : g.nodes())
                     {
-                        scene::Node* mod = g.node(id);
-                        if (!mod || (mod->type().name != "grungeModifier" && mod->type().name != "edgeChipModifier"))
+                        scene::Node* group = g.node(id);
+                        if (!group || group->type().attrIndex("weatheringTargets") < 0)
                             continue;
-                        ops::execute("setAttr", {{"args", {mod->path() + ".enabled", live}}});
-                        ++switched;
+                        const json targets = targetsOf(*group);
+                        if (std::ranges::find(targets, json(path)) != targets.end())
+                            switchGroup(*group);
                     }
                 }
-                groups.push_back(n->path());
             }
             return {{"live", live}, {"groups", groups}, {"modifiers", switched}};
         },
-        .examples = {"weatheringLive('Abandoned', live=False)", "weatheringLive('Abandoned')"},
+        .examples = {"weatheringLive('Level', live=False)", "weatheringLive('Level')"},
     });
 
     ctx.registerCommand({

@@ -777,7 +777,7 @@ void registerCommands(ext::Context& ctx)
         {"spec", "", T::Any, nullptr, "The building: a JSON object (or its text). See the lila://masonry/spec-schema resource; masonrySpec reads one back."},
         {"name", "n", T::String, "MasonryBuilding", "Name of the mesh made to hold a new building."},
         nodeFlag({"node", "", T::String, nullptr, "An existing building (its mesh or modifier) to rebuild with this spec and these flags instead of making one."}, "mesh"),
-        {"weather", "wt", T::String, nullptr, "A weathering preset (weatherPresets lists them) to age a new building with: dressing at its foot, grunge, ivy."},
+        {"weather", "wt", T::String, nullptr, "A weathering preset (weatherPresets lists them) to apply to a new building, such as Concrete Debris, Grunge or Ivy."},
         {"weatherStyle", "ws", T::String, "realistic", "Style of that preset: realistic or toon.", {"realistic", "toon"}},
     };
     for (FlagDef& f : flagsOf(InputSet::Building, true))
