@@ -1227,6 +1227,7 @@ Result grow(const geo::Mesh& surfaceMesh, std::span<const D3> seedsIn, std::span
         geo::colors::add(out, kWindSet, glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
         geo::colors::setFromPoints(out, kWindSet, wind);
         geo::colors::move(out, kWindSet, 0);
+        geo::colors::setData(out, kWindSet, true);
     }
     if (r.leaves > 150000)
         r.warnings.push_back("over 150000 leaves; lower the leaf density for a lighter mesh");

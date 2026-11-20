@@ -250,6 +250,7 @@ public:
         auto out = std::make_shared<geo::Mesh>(*in);
         std::span<glm::vec4> colors = geo::colors::has(*out, kColorSet) ? geo::colors::values(*out, kColorSet)
                                                                             : geo::colors::add(*out, kColorSet, glm::vec4(0, 0, 0, 1));
+        geo::colors::setData(*out, kColorSet, true);
         auto ta = out->pointAttrs().getOrAdd<float>("weatheringTint");
         auto wa = out->pointAttrs().getOrAdd<float>("weatheringWet");
         // The viewport draws them through the grunge layers: tint as occlusion, wet as dust (see the decorator).

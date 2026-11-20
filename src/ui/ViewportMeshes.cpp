@@ -124,7 +124,7 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     d.lightingChannels = scene::lightingChannels::mask(n);
     if (!set.render)
         d.drawOffset = scene::drawOffset(n);
-    if (set.vertexColors != render::VertexColorMode::Off && shown && !geo::colors::current(*shown).empty())
+    if (set.vertexColors != render::VertexColorMode::Off && shown && !geo::colors::displayed(*shown).empty())
     {
         d.vertexColors = set.vertexColors;
         d.colorChannel = set.colorChannel;
