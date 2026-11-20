@@ -56,6 +56,16 @@ struct MeshSection
 LILA_FOUNDATION_API uint64_t nextResourceKey();
 
 /**
+ * Live grunge masks a mesh carries as float point attributes (0 to 1), in this order: edge wear, cavity dirt, ambient
+ * occlusion, top-down dust, streaks below openings and ledges, fade near the ground. Weathering's grungeMasks modifier
+ * writes them; a material's GrungeLook says how they show.
+ */
+inline constexpr int kGrungeMasks = 6;
+inline constexpr std::array<const char*, kGrungeMasks> kGrungeAttrs = {"grungeEdge", "grungeCavity", "grungeAo", "grungeDust", "grungeStreak", "grungeFade"};
+/** RenderMesh::grunge words per vertex: the six masks as 16-bit unorms, two to a word. */
+inline constexpr int kGrungeWords = 3;
+
+/**
  * Vertices edited in place while the topology stays (sculpting a dense mesh): the editor writes vertices and marks
  * them dirty under the mutex, and the renderer copies only the dirty ones to its GPU copy before the next frame.
  */
@@ -115,6 +125,9 @@ struct RenderMesh
      */
     std::vector<glm::vec4> displaceDirs;
     std::vector<glm::uvec2> displaceRanges;
+
+    /** Per vertex kGrungeWords words of grunge masks (kGrungeAttrs); empty for meshes without them. */
+    std::vector<uint32_t> grunge;
 
     size_t edgeVertexCount() const { return edgeIndices.empty() ? edgePoints.size() : edgeIndices.size(); }
     const glm::vec3& edgePoint(size_t k) const { return edgeIndices.empty() ? edgePoints[k] : edgePoints[edgeIndices[k]]; }
@@ -316,6 +329,46 @@ LILA_UI_API std::array<uint32_t, kStyleWords> packStyle(const MaterialStyle& s, 
  */
 LILA_UI_API std::array<uint32_t, kStyleWords> packExtended(const ExtendedShading& e, const std::array<uint32_t, kExtendedMaps>& handles);
 
+/**
+ * How one grunge mask shows over a material, per pixel from its interpolated vertex value. As the baked generators' Mask
+ * Remap: a smooth step softness wide round level after breakup world noise; then bands (posterize, 0 off), cut (below it
+ * nothing, above it full, 0 off) and an outline that wide (in mask units) along the level. The result blends low to
+ * color as a two-stop ramp, laid over the base colour by strength; roughness >= 0 is laid over the roughness too.
+ */
+struct GrungeLayer
+{
+    bool enabled = false;
+    float level = 0.5f;
+    float softness = 0.2f;
+    float breakup = 0.0f;
+    float noiseScale = 50.0f; // cm per noise cell
+    int bands = 0;
+    float cut = 0.0f;
+    float outline = 0.0f;
+    float strength = 1.0f;
+    glm::vec3 color{0.0f}; // linear
+    glm::vec3 low{0.0f};   // linear
+    float roughness = -1.0f;
+    uint32_t seed = 0;
+
+    bool operator==(const GrungeLayer&) const = default;
+};
+
+/** A material's grunge masks, one layer per kGrungeAttrs entry, drawn over the mesh's own shading. */
+struct GrungeLook
+{
+    std::array<GrungeLayer, kGrungeMasks> layers{};
+    glm::vec3 outlineColor{0.03f}; // linear
+
+    bool operator==(const GrungeLook&) const = default;
+};
+
+/** Words in a packed grunge block (packGrunge); mesh.slang reads it after the draw's style block. */
+constexpr int kGrungeBlockWords = 8 + kGrungeMasks * 16;
+
+/** A grunge block: the per-vertex mask buffer's device address, then the look. mesh.slang reads it. */
+LILA_UI_API std::array<uint32_t, kGrungeBlockWords> packGrunge(const GrungeLook& g, uint64_t address);
+
 /** Unreal default lit inputs for one slot. A map flag set means that map replaces its constant. */
 struct Material
 {
@@ -350,6 +403,8 @@ struct Material
     float displacementMid = 0.5f;
     /** Shaded when style.model is ShadingModel::Extended. */
     ExtendedShading ext;
+    /** Grunge masks over the shading, drawn on meshes carrying them (RenderMesh::grunge); null for none. */
+    std::shared_ptr<const GrungeLook> grunge;
 };
 
 /**
