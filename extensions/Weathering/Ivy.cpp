@@ -17,6 +17,7 @@
 #include <lila/Mesh.h>
 #include <lila/Node.h>
 #include <lila/Profile.h>
+#include <lila/Relocate.h>
 #include <lila/Transform.h>
 #include <lila/UnrealLink.h>
 
@@ -376,7 +377,10 @@ bool registerNode(ext::Context& ctx)
         {.name = "warning", .type = PlugType::String, .defaultValue = std::string(), .flags = AttrOutput, .doc = "Problems with the last build."},
     };
     t.create = [] { return std::make_unique<IvyNode>(); };
-    return types::registerType(ctx, std::move(t)) != nullptr;
+    if (!types::registerType(ctx, std::move(t)))
+        return false;
+    relocate::registerWorldAttrs(kIvyNodeType, {.worldOutput = true});
+    return true;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

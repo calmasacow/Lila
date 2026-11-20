@@ -21,8 +21,6 @@ namespace weathering::masks
 {
 namespace
 {
-using T = ArgType;
-
 /** Lila's mask attribute prefixes and the parameter names MF_LilaGrunge gives them. */
 constexpr std::array<std::pair<const char*, const char*>, 6> kUnrealMasks = {
     {{"edge", "Edge"}, {"cavity", "Cavity"}, {"ao", "Occlusion"}, {"dust", "Dust"}, {"streak", "Streaks"}, {"fade", "Fade"}}};
@@ -85,8 +83,8 @@ void registerMaskUnreal(ext::Context& ctx)
                "itself on any mesh send. To use your own material, drop MF_LilaGrunge into it and feed BaseColor and Roughness "
                "through. dryRun returns the instances without sending. Returns {materials, instances, warnings}; dryRun instances name the channels they read.",
         .positionalDoc = "meshes",
-        .flags = {{"regenerate", "rg", T::Bool, false, "Rebuild the function and materials even when current."},
-                  {"dryRun", "dr", T::Bool, false, "Only return what would be sent."}},
+        .flags = {{"regenerate", "rg", ArgType::Bool, false, "Rebuild the function and materials even when current."},
+                  {"dryRun", "dr", ArgType::Bool, false, "Only return what would be sent."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             LILA_ZONE();
