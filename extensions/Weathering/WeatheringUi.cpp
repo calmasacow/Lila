@@ -57,6 +57,17 @@ void registerWeatheringUi(ext::Context& ctx)
                            .call = json::object(),
                            .icon = e.icon,
                            .keywords = e.keywords});
+    for (const bool live : {false, true})
+        actions::add(ctx, {.id = live ? "weathering.resume" : "weathering.pause",
+                           .label = live ? "Resume Weathering" : "Pause Weathering",
+                           .category = "Weathering",
+                           .doc = live ? "Bring back the selected weather groups, rebuilt for the blocks as they are now."
+                                       : "Hide the selected weather groups and turn off their grunge and chipping while you block out.",
+                           .python = live ? "weatheringLive('Abandoned')" : "weatheringLive('Abandoned', live=False)",
+                           .command = "weatheringLive",
+                           .call = {{"live", live}},
+                           .icon = live ? "player-play" : "player-pause",
+                           .keywords = {"freeze weathering", "disable weathering", "performance", "blockout"}});
     // Age is the daily entry; the rest are its parts, used when a preset isn't wanted.
     levelToolkit::add(ctx, {.id = "weathering",
                             .title = "Weathering",
@@ -76,6 +87,8 @@ void registerWeatheringUi(ext::Context& ctx)
                                       {"weathering.wires", "line-dashed", "Wires", {}, "Generators"},
                                       {"weathering.rooftop", "building", "Rooftop", {}, "Generators"},
                                       {"weathering.truss", "building-broadcast-tower", "Truss", {}, "Generators"},
+                                      {"weathering.pause", "player-pause", "Pause", {}, {}, true},
+                                      {"weathering.resume", "player-play", "Resume", {}, {}, true},
                                       {"weathering.addPieces", "books", "Add Pieces", {}, {}, true},
                                       {"weathering.grungeBake", "", "Bake Grunge", {}, {}, true},
                                       {"weathering.unreal", "world-upload", "Unreal Materials", {}, {}, true},
@@ -93,7 +106,7 @@ void registerWeatheringUi(ext::Context& ctx)
         {"Surfaces", {"weathering.grungeMask", "weathering.grungeBake", "weathering.edgeDecals", "weathering.edgeChip"}},
         {"Growth", {"weathering.ivy", "weathering.ivyBrush"}},
         {"Generators", {"weathering.roofing", "weathering.windows", "weathering.wires", "weathering.truss"}},
-        {"Pieces and Unreal", {"weathering.addPieces", "weathering.unreal", "weathering.grungeSend", "weathering.ivySend", "weathering.interiorSend"}},
+        {"Manage", {"weathering.pause", "weathering.resume", "weathering.addPieces", "weathering.unreal", "weathering.grungeSend", "weathering.ivySend", "weathering.interiorSend"}},
     };
     for (const auto& [title, ids] : sections)
     {

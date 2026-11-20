@@ -8,6 +8,7 @@
 #include "Weathering.h"
 
 #include <lila/Command.h>
+#include <lila/Deformer.h>
 #include <lila/Extension.h>
 #include <lila/Log.h>
 #include <lila/Mesh.h>
@@ -376,6 +377,12 @@ bool registerAge(ext::Context& ctx)
                 group = g.node(id)->path();
                 out["group"] = group;
             }
+            if (!group.empty())
+            {
+                // The targets, so weatheringLive can pause what the preset put on them (grunge, chips) as well as its group.
+                ops::execute("addAttr", {{"args", {group}}, {"longName", "weatheringTargets"}, {"dataType", "string"}});
+                ops::execute("setAttr", {{"args", {group + ".weatheringTargets", json(meshes).dump()}}});
+            }
             const std::string visgroup = a.get<std::string>("visgroup", "Weathering");
             if (!group.empty() && !visgroup.empty() && ops::registry().find("blockworkVisgroup"))
             {
@@ -386,6 +393,57 @@ bool registerAge(ext::Context& ctx)
         },
         .examples = {"weather('Shed', preset='Abandoned')", "weather(['Tower', 'Wall'], preset='Overgrown', style='toon', seed=3)",
                      "weather('Visgroup_Ruins', preset='Demolished Building', slots={'rubble': ['MyRubble_grp']})"},
+    });
+
+    ctx.registerCommand({
+        .name = "weatheringLive",
+        .doc = "Pause or resume weathering while blocking out: live=False hides what weather made and turns off the grunge and "
+               "edge chipping it put on its targets, so editing blocks costs nothing; live=True brings it all back, rebuilt for "
+               "the blocks as they are now. Objects are the groups weather returned (default the selection). Returns groups and "
+               "modifiers (how many were switched).",
+        .positionalDoc = "weather groups (default the selection)",
+        .flags = {{"live", "l", T::Bool, true, "True resumes, False pauses."}},
+        .run = [](const Args& a) -> json {
+            Graph& g = Graph::current();
+            const bool live = a.get<bool>("live", true);
+            const std::vector<std::string> objects = a.objects();
+            if (objects.empty())
+                throw CommandError("weatheringLive: select or name the weather groups");
+            json groups = json::array();
+            int64_t switched = 0;
+            for (const std::string& o : objects)
+            {
+                scene::Node* n = g.find(o);
+                if (!n || n->type().attrIndex("weatheringTargets") < 0)
+                    throw CommandError("weatheringLive: '" + o + "' is not a group weather made");
+                ops::execute("setAttr", {{"args", {n->path() + ".visibility", live}}});
+                json targets = json::array();
+                try
+                {
+                    targets = json::parse(n->as<std::string>(n->type().attrIndex("weatheringTargets")));
+                }
+                catch (const std::exception&)
+                {
+                }
+                for (const json& t : targets)
+                {
+                    scene::Node* m = t.is_string() ? g.find(t.get<std::string>()) : nullptr;
+                    if (!m)
+                        continue;
+                    for (NodeId id : scene::modifiers::stack(g, m->id()))
+                    {
+                        scene::Node* mod = g.node(id);
+                        if (!mod || (mod->type().name != "grungeModifier" && mod->type().name != "edgeChipModifier"))
+                            continue;
+                        ops::execute("setAttr", {{"args", {mod->path() + ".enabled", live}}});
+                        ++switched;
+                    }
+                }
+                groups.push_back(n->path());
+            }
+            return {{"live", live}, {"groups", groups}, {"modifiers", switched}};
+        },
+        .examples = {"weatheringLive('Abandoned', live=False)", "weatheringLive('Abandoned')"},
     });
 
     ctx.registerCommand({

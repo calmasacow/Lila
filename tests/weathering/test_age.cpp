@@ -5,6 +5,9 @@
 #include "scene/Transform.h"
 
 #include <algorithm>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <set>
 
 using namespace weatheringtest;
@@ -270,4 +273,30 @@ TEST_CASE("weathering: every Age preset runs in both styles")
         ++ran;
     }
     CHECK(ran == 20);
+}
+
+TEST_CASE("weathering: weatheringLive pauses and resumes what weather made")
+{
+    houseScene();
+    const json r = run("weather", {{"args", {"House"}}, {"preset", "Demolished Building"}, {"visgroup", ""}});
+    const std::string group = r["group"].get<std::string>();
+    const json off = run("weatheringLive", {{"args", {group}}, {"live", false}});
+    CHECK(off["modifiers"].get<int>() == 2);
+    CHECK(run("getAttr", {{"args", {group + ".visibility"}}}) == false);
+    run("weatheringLive", {{"args", {group}}});
+    CHECK(run("getAttr", {{"args", {group + ".visibility"}}}) == true);
+}
+
+TEST_CASE("weathering: OBJ import makes materials from the .mtl")
+{
+    fresh();
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "lila_weathering_obj";
+    std::filesystem::create_directories(dir);
+    std::ofstream(dir / "piece.mtl") << "newmtl M_Piece\nKd 0.5 0.25 0.1\n";
+    std::ofstream(dir / "piece.obj") << "mtllib piece.mtl\no piece\nusemtl M_Piece\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n";
+    run("importObj", {{"args", {(dir / "piece.obj").generic_string()}}});
+    const json info = run("materialInfo", {{"args", {"M_Piece"}}});
+    const json c = info["baseColor"];
+    CHECK(c[0].get<double>() == doctest::Approx(std::pow(0.5, 2.2)).epsilon(0.01));
+    CHECK(c[1].get<double>() < c[0].get<double>());
 }
