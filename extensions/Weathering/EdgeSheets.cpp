@@ -20,7 +20,7 @@ using namespace lila;
 
 namespace
 {
-constexpr int kSheetVersion = 2;
+constexpr int kSheetVersion = 3;
 constexpr int kWidth = 1024;
 constexpr int kRows = 8;
 constexpr int kRowPx = 64;
@@ -42,17 +42,19 @@ struct Row
     const char* name;
     Look look;
     const char* tag;
+    /** Feature size: above 1 is finer. */
+    double scale = 1.0;
 };
 
 constexpr std::array<Row, kRows> kLayout = {{
     {"ChippedPaint", Look::Chips, "chips"},
-    {"SmallChips", Look::Chips, "chips"},
+    {"SmallChips", Look::Chips, "chips", 1.8},
     {"WornCorner", Look::Worn, "worn"},
     {"Crack", Look::Crack, "crack"},
     {"CornerDirt", Look::Dirt, "dirt"},
     {"Grime", Look::Dirt, "dirt"},
     {"MossSeam", Look::Moss, "moss"},
-    {"MossClumps", Look::Moss, "moss"},
+    {"MossClumps", Look::Moss, "moss", 0.7},
 }};
 
 fs::path sheetDir() { return PrefStore::get().userDir() / "weathering-decals"; }
@@ -107,11 +109,11 @@ struct Texel
  * A strip texel at (x, y) cm, x along the strip's length, y across it with the edge at the middle; d is 0 on the
  * edge and 1 at the strip's sides.
  */
-Texel paint(Look look, bool toon, double x, double y, double d, uint32_t seed)
+Texel paint(Look look, bool toon, double x, double y, double d, uint32_t seed, double scale)
 {
     Texel t;
     // Toon shapes are bigger and cut hard; realistic ones are fine and soft.
-    const double grain = toon ? 0.35 : 1.0;
+    const double grain = (toon ? 0.35 : 1.0) * scale;
     switch (look)
     {
     case Look::Chips:
@@ -244,9 +246,10 @@ json writeSheet(const fs::path& dir, const std::string& name, bool toon)
                     const double x = (px - x0 + 0.5) * cmPerPx, y = (py - y0 + 0.5) * cmPerPx;
                     const double across = double(py - y0 + 0.5) / kRowPx;
                     const double d = std::abs(across - 0.5) * 2.0;
-                    Texel t = paint(r.look, toon, x, y, d, seed);
-                    // Fade toward the strip's ends and sides so no piece shows a box edge.
+                    // Shapes thin out toward the strip's ends as they do toward its sides, so no piece shows a box edge.
                     const double along = double(px - x0 + 0.5) / (x1 - x0);
+                    const double ends = smoothstep(0.0, 0.15, along) * smoothstep(0.0, 0.15, 1.0 - along);
+                    Texel t = paint(r.look, toon, x, y, std::max(d, 1.0 - ends), seed, r.scale);
                     const double border = smoothstep(0.0, 0.06, along) * smoothstep(0.0, 0.06, 1.0 - along) * smoothstep(0.0, 0.12, 1.0 - d);
                     t.alpha = std::clamp(t.alpha * (toon ? (border > 0.5 ? 1.0 : 0.0) : border), 0.0, 1.0);
                     const size_t i = size_t(py) * kWidth + size_t(px);

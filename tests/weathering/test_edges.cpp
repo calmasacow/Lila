@@ -5,6 +5,7 @@
 
 #include "geo/Bvh.h"
 #include "geo/Primitives.h"
+#include "geo/Triangulate.h"
 #include "scene/Materials.h"
 
 #include <glm/gtc/constants.hpp>
@@ -83,6 +84,38 @@ bool closed(const geo::Mesh& m)
     if (bad)
         MESSAGE("open edges " << bad << " boundary " << one << " of " << m.numEdges());
     return bad == 0 && m.numFaces() > 0;
+}
+
+/** Faces whose triangles (as the viewport draws them) don't cover the face: folded or degenerate n-gons. */
+int badlyTriangulated(const geo::Mesh& m)
+{
+    const geo::Triangulation t = geo::triangulate(m);
+    std::vector<double> area(m.faceCapacity(), 0.0);
+    for (size_t k = 0; k < t.faces.size(); ++k)
+    {
+        const glm::dvec3 a = m.position(m.cornerPoint(t.corners[k * 3])), b = m.position(m.cornerPoint(t.corners[k * 3 + 1])),
+                         c = m.position(m.cornerPoint(t.corners[k * 3 + 2]));
+        area[t.faces[k]] += glm::dot(glm::cross(b - a, c - a) * 0.5, m.faceNormal(t.faces[k]));
+    }
+    int bad = 0;
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+        if (m.faceValid(f) && std::abs(area[f] - m.faceArea(f)) > 1e-3 * std::max(1.0, m.faceArea(f)))
+            ++bad;
+    return bad;
+}
+
+double signedVolume(const geo::Mesh& m)
+{
+    double v = 0.0;
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f))
+            continue;
+        const std::vector<geo::Index> p = m.facePoints(f);
+        for (size_t k = 1; k + 1 < p.size(); ++k)
+            v += glm::dot(m.position(p[0]), glm::cross(m.position(p[k]), m.position(p[k + 1]))) / 6.0;
+    }
+    return v;
 }
 
 double positionSum(const geo::Mesh& m)
@@ -226,6 +259,10 @@ TEST_CASE("weathering edges: chipped mesh stays closed and within depth of the o
     const geo::Mesh after = meshOf(box);
     CHECK(closed(after));
     CHECK(after.numFaces() > before.numFaces());
+    CHECK(badlyTriangulated(after) == 0);
+    CHECK(signedVolume(before) > 0.0);
+    CHECK(signedVolume(after) > 0.9 * signedVolume(before));
+    CHECK(signedVolume(after) < signedVolume(before));
     const geo::MeshBvh original(before);
     double worst = 0.0;
     for (geo::Index p = 0; p < after.pointCapacity(); ++p)
@@ -385,4 +422,24 @@ TEST_CASE("weathering edges: strips send to Unreal as mesh decals on the decal m
     CHECK(tex.contains("DecalOpacityMap"));
     CHECK(plan["request"]["decals"].empty());
     CHECK(plan["newlyMapped"].size() == 1);
+}
+
+TEST_CASE("weathering edges: decals follow the clean edges of a chipped mesh, in either order")
+{
+    fresh();
+    loadEdgeDeps();
+    const std::string first = cube("ChipFirst", {0, 0, 0}, {100, 100, 100});
+    run("edgeChip", {{"args", {first}}, {"amount", 0.8}});
+    const json a = run("edgeDecals", {{"args", {first}}});
+    CHECK(a["stats"]["ChipFirst"]["edges"] == 12);
+
+    const std::string later = cube("ChipLater", {300, 0, 0}, {100, 100, 100});
+    const json b = run("edgeDecals", {{"args", {later}}});
+    run("edgeChip", {{"args", {later}}, {"amount", 0.8}});
+    g().evaluate();
+    scene::Node* strip = g().find(b["nodes"][0].get<std::string>());
+    REQUIRE(strip);
+    const json st = json::parse(strip->as<std::string>(strip->type().attrIndex("stats")));
+    CHECK(st["edges"] == 12);
+    CHECK(closed(meshOf(later)));
 }

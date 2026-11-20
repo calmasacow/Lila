@@ -564,6 +564,31 @@ EdgeChipNode* chipOn(Graph& g, NodeId mesh)
     return nullptr;
 }
 
+/**
+ * Where edge decals read a host: its mesh before any Edge Chip, so strips follow the clean edges instead of every chip
+ * facet (and float over the chips like paint lifting off them).
+ */
+PlugRef decalSource(Graph& g, NodeId host)
+{
+    if (EdgeChipNode* chip = chipOn(g, host))
+        if (const std::optional<PlugRef> src = g.source({chip->id(), chip->inAttr, -1}))
+            return *src;
+    return {host, MeshNode::kOutMesh, -1};
+}
+
+/** Points the host's edge decal nodes at decalSource, after its stack changed. */
+void rewireDecals(Graph& g, NodeId host)
+{
+    const PlugRef to = decalSource(g, host);
+    std::vector<PlugRef> readers = g.destinations({host, MeshNode::kOutMesh, -1});
+    if (EdgeChipNode* chip = chipOn(g, host))
+        for (const PlugRef& r : g.destinations({chip->id(), attrOf(*chip, "outMesh"), -1}))
+            readers.push_back(r);
+    for (const PlugRef& r : readers)
+        if (Node* n = g.node(r.node); n && n->type().name == kDecalType && r.attr == attrOf(*n, "inMesh") && g.source(r) != to)
+            g.connect(to, r, true);
+}
+
 void registerEdgeCommands(ext::Context& ctx)
 {
     ctx.registerCommand({
@@ -629,7 +654,7 @@ void registerEdgeCommands(ext::Context& ctx)
                 Node* host = g.node(hid);
                 Node* strip = g.createNode(*types::find(kDecalType), host->name() + "EdgeStrips");
                 const NodeId sid = strip->id();
-                g.connect({hid, MeshNode::kOutMesh, -1}, {sid, attrOf(*strip, "inMesh"), -1}, true);
+                g.connect(decalSource(g, hid), {sid, attrOf(*strip, "inMesh"), -1}, true);
                 g.connect({hid, Transform::kWorldMatrix, -1}, {sid, attrOf(*strip, "inMatrix"), -1}, true);
                 auto setValue = [&](const char* attr, PlugValue v) { g.setValue({sid, attrOf(*g.node(sid), attr), -1}, std::move(v)); };
                 setValue("mode", int64_t(meshMode ? 1 : 0));
@@ -742,6 +767,7 @@ void registerEdgeCommands(ext::Context& ctx)
                     for (const auto& [k, v] : params.items())
                         ops::execute("setAttr", {{"args", {mod->path() + "." + k, v}}});
                 const NodeId modId = mod->id();
+                rewireDecals(g, id);
                 g.setValue({modId, attrOf(*mod, "uvSpace"), -1}, g.node(id)->as<glm::dmat4>(Transform::kWorldMatrix));
                 if (a.has("cutters"))
                 {

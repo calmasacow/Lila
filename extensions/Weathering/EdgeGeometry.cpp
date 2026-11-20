@@ -365,20 +365,22 @@ Mesh decalStrips(const Mesh& m, const std::vector<Chain>& chains, const std::vec
                 const double half = 0.5 * width * widthScale * tp;
                 const glm::dvec3 up = unitOr(f.nA + f.nB, f.nA);
                 pts.push_back(f.p + f.aA * half + f.nA * o.offset);
+                // The crest twice, once per side, so each side shades flat.
+                pts.push_back(f.p + up * o.offset);
                 pts.push_back(f.p + up * o.offset);
                 pts.push_back(f.p + f.aB * half + f.nB * o.offset);
                 const double along = (s - s0) / (s1 - s0);
-                for (int r = 0; r < 3; ++r)
+                for (int r = 0; r < 4; ++r)
                 {
                     if (!trim.alongV)
                     {
                         const double u = trim.uvMin.x + along * (trim.uvMax.x - trim.uvMin.x);
-                        uvs.emplace_back(float(u), float(r == 0 ? trim.uvMin.y : r == 1 ? vMid : trim.uvMax.y));
+                        uvs.emplace_back(float(u), float(r == 0 ? trim.uvMin.y : r == 3 ? trim.uvMax.y : vMid));
                     }
                     else
                     {
                         const double v = trim.uvMin.y + along * (trim.uvMax.y - trim.uvMin.y);
-                        uvs.emplace_back(float(r == 0 ? trim.uvMin.x : r == 1 ? uMid : trim.uvMax.x), float(v));
+                        uvs.emplace_back(float(r == 0 ? trim.uvMin.x : r == 3 ? trim.uvMax.x : uMid), float(v));
                     }
                     alpha.push_back(float(tp));
                 }
@@ -387,7 +389,7 @@ Mesh decalStrips(const Mesh& m, const std::vector<Chain>& chains, const std::vec
             for (size_t i = 0; i + 1 < samples.size(); ++i)
                 for (int side = 0; side < 2; ++side)
                 {
-                    const Index a = Index(i * 3 + side), b = Index((i + 1) * 3 + side), cc = Index((i + 1) * 3 + side + 1), d = Index(i * 3 + side + 1);
+                    const Index a = Index(i * 4 + side * 2), b = Index((i + 1) * 4 + side * 2), cc = Index((i + 1) * 4 + side * 2 + 1), d = Index(i * 4 + side * 2 + 1);
                     Index quad[4] = {a, b, cc, d};
                     const glm::dvec3 qn = glm::cross(pts[cc] - pts[a], pts[d] - pts[b]);
                     const Station f = frameAt(st, samples[i]);
@@ -495,7 +497,7 @@ Mesh sweepPieces(const Mesh& m, const std::vector<Chain>& chains, const std::vec
 Mesh chipCutter(double length, double radius, double shape, uint32_t seed, uint32_t index)
 {
     shape = std::clamp(shape, 0.0, 1.0);
-    const int rings = std::max(1, int(std::round(glm::mix(5.0, 1.0, shape))));
+    const int rings = std::max(1, int(std::round(glm::mix(5.0, 2.0, shape))));
     const int around = std::max(3, int(std::round(glm::mix(9.0, 4.0, shape))));
     const double noise = glm::mix(0.45, 0.08, shape);
     std::vector<glm::dvec3> pts;
@@ -503,7 +505,7 @@ Mesh chipCutter(double length, double radius, double shape, uint32_t seed, uint3
     auto h = [&] { return edgeHash(seed, index, 7, k++); };
     for (int end : {-1, 1})
     {
-        const double rr = radius * 0.2 * h();
+        const double rr = radius * glm::mix(0.2, 0.6, shape) * h();
         const double a = glm::two_pi<double>() * h();
         pts.emplace_back(end * length * 0.5 * (0.85 + 0.15 * h()), rr * std::cos(a), rr * std::sin(a));
     }
@@ -512,7 +514,8 @@ Mesh chipCutter(double length, double radius, double shape, uint32_t seed, uint3
     {
         const double x = -length * 0.5 + length * double(r + 1) / double(rings + 1) + (h() - 0.5) * length * 0.1;
         const double t = std::clamp(2.0 * x / length, -1.0, 1.0);
-        const double profile = std::sqrt(std::max(0.0, 1.0 - t * t)) * (shape > 0.5 ? 1.0 : 0.9 + 0.1 * h());
+        // Realistic chips taper to points; toon chunks stay blocky to their ends.
+        const double profile = glm::mix(std::sqrt(std::max(0.0, 1.0 - t * t)), 1.0 - 0.25 * std::abs(t), shape) * (shape > 0.5 ? 1.0 : 0.9 + 0.1 * h());
         for (int i = 0; i < around; ++i)
         {
             const double a = phase + glm::two_pi<double>() * (double(i) + (h() - 0.5) * 0.6) / double(around);
