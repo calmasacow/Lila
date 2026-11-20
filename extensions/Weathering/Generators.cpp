@@ -1152,8 +1152,10 @@ void registerOptionBoxes()
                       {"overhang", "Layout"}, {"stagger", "Layout"}, {"scale", "Layout"}, {"ridge", "Layout"}, {"maxSlope", "Layout"},
                       {"pieces", "Pieces"}, {"caps", "Pieces"}, {"seed", "Advanced"}, {"realize", "Advanced"}};
         o.choices["kind"] = {{"sheets", "Sheets"}, {"planks", "Planks"}, {"tiles", "Tiles"}};
+        o.editors["kind"] = "segmented";
+        o.editors["style"] = "segmented";
         o.choices["style"] = styles;
-        o.labels = {{"sag", "Sag"}, {"liftAngle", "Lift Angle"}, {"caps", "Ridge Caps"}, {"ridge", "Ridge Caps On"}, {"realize", "Make Objects"}};
+        o.labels = {{"sag", "Sag"}, {"liftAngle", "Lift Angle"}, {"caps", "Cap Pieces"}, {"ridge", "Ridge Caps"}, {"realize", "Make Objects"}};
         o.ranges["sag"] = {0.0, 100.0, 0.5, " cm"};
         o.ranges["overhang"] = {0.0, 100.0, 0.5, " cm"};
         o.ranges["liftAngle"] = {0.0, 90.0, 1.0, "°"};
@@ -1172,7 +1174,8 @@ void registerOptionBoxes()
         o.choices["glass"] = {{"intact", "Intact"}, {"cracked", "Cracked"}, {"broken", "Broken"}, {"boarded", "Boarded"}, {"none", "None"}, {"mixed", "Mixed"}};
         o.choices["interior"] = {{"room", "Room"}, {"card", "Card"}, {"mesh", "Mesh"}, {"none", "None"}};
         o.choices["style"] = styles;
-        o.editors["interiorImage"] = "image";
+        o.editors["interior"] = "segmented";
+        o.editors["style"] = "segmented";
         o.enabledWhen["interiorImage"] = {"interior", {"card"}};
         o.enabledWhen["interiors"] = {"interior", {"mesh"}};
         o.enabledWhen["interiorDepth"] = {"interior", {"room", "mesh"}};
@@ -1192,6 +1195,7 @@ void registerOptionBoxes()
                       {"maxSpan", "Anchors"}, {"spacing", "Along Curve"}, {"height", "Along Curve"}, {"placePoles", "Along Curve"},
                       {"insulators", "Pieces"}, {"brackets", "Pieces"}, {"poles", "Pieces"}, {"seed", "Advanced"}};
         o.choices["style"] = styles;
+        o.editors["style"] = "segmented";
         o.labels = {{"count", "Wires per Span"}, {"sag", "Sag Depth"}, {"placePoles", "Place Poles"}};
         o.ranges["sag"] = {0.0, 1000.0, 1.0, " cm"};
         o.ranges["spread"] = {0.0, 100.0, 0.5, " cm"};
@@ -1209,6 +1213,8 @@ void registerOptionBoxes()
         o.shown = {"items"};
         o.sections = {{"seed", "Advanced"}, {"realize", "Advanced"}};
         o.choices["theme"] = {{"rubble", "Rubble"}, {"planks", "Planks"}, {"bricks", "Bricks"}, {"mixed", "Mixed"}};
+        o.editors["theme"] = "segmented";
+        o.editors["style"] = "segmented";
         o.choices["style"] = styles;
         o.ranges["radius"] = {1.0, 1000.0, 1.0, " cm"};
         o.labels = {{"realize", "Make Objects"}};
@@ -1222,6 +1228,7 @@ void registerOptionBoxes()
         o.sections = {{"vents", "Pieces"}, {"acUnits", "Pieces"}, {"pipes", "Pieces"}, {"railings", "Pieces"}, {"towers", "Pieces"},
                       {"maxCount", "Advanced"}, {"slopeMax", "Advanced"}, {"minArea", "Advanced"}, {"seed", "Advanced"}, {"realize", "Advanced"}};
         o.choices["style"] = styles;
+        o.editors["style"] = "segmented";
         o.labels = {{"acUnits", "AC Units"}, {"railingChance", "Railings"}, {"towerChance", "Towers"}, {"realize", "Make Objects"}};
         o.ranges["edgeMargin"] = {0.0, 500.0, 1.0, " cm"};
         o.ranges["turn"] = {0.0, 180.0, 1.0, "°"};
@@ -1231,6 +1238,7 @@ void registerOptionBoxes()
         opt::Override o;
         o.hidden = {"name"};
         o.choices["bracing"] = {{"x", "X"}, {"zigzag", "Zigzag"}, {"none", "None"}};
+        o.editors["bracing"] = "segmented";
         o.ranges["width"] = {0.1, 2000.0, 1.0, " cm"};
         o.ranges["member"] = {0.05, 100.0, 0.5, " cm"};
         o.ranges["segment"] = {1.0, 2000.0, 5.0, " cm"};

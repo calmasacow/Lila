@@ -15,6 +15,9 @@
 #include "gn/Geometry.h"
 #include "scene/MeshBoolean.h"
 #include "scene/Transform.h"
+#include "ops/CommandOptions.h"
+#include "ui/Actions.h"
+#include "ui/Menus.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -443,4 +446,22 @@ TEST_CASE("weathering generators: curveToTruss builds a live closed truss on a c
     const geo::Mesh m = meshOf(r["mesh"].get<std::string>());
     CHECK(wg::closedAndConnected(m));
     CHECK(wg::boundsOf(m).size().y > 290.0);
+}
+
+TEST_CASE("weathering generators: menu entries under Level > Weathering with option boxes")
+{
+    fresh();
+    std::vector<std::string> actionsIn;
+    for (const ui::menus::Item* i : ui::menus::itemsIn("Level/Weathering"))
+        actionsIn.push_back(i->action);
+    for (const char* id : {"weathering.roofing", "weathering.windows", "weathering.wires", "weathering.pile", "weathering.rooftop", "weathering.truss"})
+    {
+        INFO(id);
+        const ui::Action* a = ui::actions::find(id);
+        REQUIRE(a);
+        CHECK(!a->command.empty());
+        CHECK(!a->keywords.empty());
+        CHECK(ops::options::findOverride(a->command));
+        CHECK(std::ranges::find(actionsIn, std::string(id)) != actionsIn.end());
+    }
 }
