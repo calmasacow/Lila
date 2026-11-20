@@ -418,17 +418,17 @@ json placedJson(Graph& g, NodeId root, const Asset& a, const std::string& mode)
 }
 
 /**
- * Renders thumb.png for starter props that have none (or all, with force): each model is brought into the scene,
+ * Renders thumb.png for a tier's assets that have none (or all, with force): each model is brought into the scene,
  * captured alone and taken out again with undo recording off, so neither the scene nor undo keeps a trace. Needs
  * captureView, which the app and batch mode have.
  */
-json renderStarterThumbnails(Graph& g, bool force)
+json renderTierThumbnails(Graph& g, bool force, const std::string& tier)
 {
     LILA_ZONE();
 
     std::vector<Asset> todo;
     for (const Asset& a : library::all())
-        if (a.tier == "starter" && !a.model.empty() && (force || a.thumbnail.empty()))
+        if (a.tier == tier && !a.model.empty() && (force || a.thumbnail.empty()))
             todo.push_back(a);
     json out = {{"thumbnails", 0}, {"missing", int64_t(todo.size())}};
     if (todo.empty())
@@ -687,10 +687,24 @@ void registerLibraryCommands(ext::Context& ctx)
             json out = library::buildStarter(a.get<bool>("rebuild", false));
             library::reload();
             if (a.get<bool>("thumbnails", true))
-                out.update(renderStarterThumbnails(Graph::current(), out.value("built", false)));
+                out.update(renderTierThumbnails(Graph::current(), out.value("built", false), "starter"));
             return out;
         },
         .examples = {"libraryStarter()['assets']", "place('Industrial/Barrel', on='Floor', count=6, spacing=[70, 0, 0])"},
+    });
+
+    ctx.registerCommand({
+        .name = "libraryThumbnails",
+        .doc = "Render thumb.png for a tier's assets that have none (or all, with force): starter, or an extension's tier such as "
+               "placeholder. Each model is brought in, captured alone and taken out again, with no trace in the scene or undo; "
+               "the library panel runs this in a background batch process so the open scene is never touched. Returns "
+               "thumbnails (rendered) and missing.",
+        .flags = {{"tier", "t", T::String, "starter", "Which tier's assets."}, {"force", "f", T::Bool, false, "Render them all again."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            return renderTierThumbnails(Graph::current(), a.get<bool>("force", false), a.get<std::string>("tier", "starter"));
+        },
+        .examples = {"libraryThumbnails(tier='placeholder')"},
     });
 
     ctx.registerCommand({

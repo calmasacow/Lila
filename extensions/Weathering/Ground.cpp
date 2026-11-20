@@ -695,6 +695,7 @@ bool registerGround(ext::Context& ctx)
             const json spec = {{"description", p.description},
                                {"category", "Weathering"},
                                {"kind", "ground"},
+                               {"thumbnailVersion", 2},
                                {"style", style},
                                {"tags", json::array({"weathering", "ground", style})},
                                {"slots", {{"ground", {{"kind", "mesh"}, {"doc", "The ground to dress."}}},

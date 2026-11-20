@@ -69,6 +69,7 @@ std::vector<json> builtins(const std::string& style)
                     {"description", description},
                     {"category", "Weathering"},
                     {"style", style},
+                    {"thumbnailVersion", 2},
                     {"tags", json::array({"weathering", "age", style})},
                     {"slots", std::move(slots)},
                     {"steps", std::move(steps)}};

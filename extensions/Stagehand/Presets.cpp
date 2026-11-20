@@ -110,7 +110,7 @@ std::string lower(std::string s)
 
 fs::path thumbnailDir() { return userPresetDir() / "thumbs"; }
 
-fs::path thumbnailFile(const std::string& name);
+fs::path thumbnailFile(const json& spec);
 
 /** Every preset, workspace first, then the user's, then the built-ins; the first of a name wins. */
 std::vector<json> allPresets()
@@ -124,7 +124,7 @@ std::vector<json> allPresets()
         if (!spec.contains("thumbnail"))
         {
             std::error_code ec;
-            if (const fs::path t = thumbnailFile(spec.value("name", std::string())); fs::exists(t, ec))
+            if (const fs::path t = thumbnailFile(spec); fs::exists(t, ec))
                 spec["thumbnail"] = t.generic_string();
         }
         spec["source"] = source;
@@ -160,7 +160,12 @@ std::vector<json> allPresets()
     return out;
 }
 
-fs::path thumbnailFile(const std::string& name) { return thumbnailDir() / (fileSafe(name) + ".png"); }
+/** A preset's thumbnail file; a spec's thumbnailVersion goes in the name, so a changed look is drawn afresh. */
+fs::path thumbnailFile(const json& spec)
+{
+    const int64_t version = spec.value("thumbnailVersion", int64_t(0));
+    return thumbnailDir() / (fileSafe(spec.value("name", std::string())) + (version > 0 ? ".v" + std::to_string(version) : std::string()) + ".png");
+}
 
 json findPreset(const std::string& name, const char* cmd)
 {
@@ -320,7 +325,7 @@ std::string madeGroup(Graph& g, const json& r)
 json drawThumbnail(Graph& g, const json& spec)
 {
     const std::string name = spec.value("name", std::string());
-    const fs::path file = thumbnailFile(name);
+    const fs::path file = thumbnailFile(spec);
     if (!ops::registry().find("captureView"))
         return {{"preset", name}, {"note", "no renderer here: thumbnails are drawn by the app or batch mode"}};
     UndoStack& undo = UndoStack::get();
@@ -414,11 +419,11 @@ void registerPresetCommands(ext::Context& ctx)
                 std::error_code ec;
                 if (a.get<bool>("clear", false))
                 {
-                    if (fs::remove(thumbnailFile(name), ec))
+                    if (fs::remove(thumbnailFile(spec), ec))
                         skipped.push_back({{"preset", name}, {"note", "cleared"}});
                     continue;
                 }
-                if (!a.get<bool>("force", false) && fs::exists(thumbnailFile(name), ec))
+                if (!a.get<bool>("force", false) && fs::exists(thumbnailFile(spec), ec))
                     continue;
                 json r = drawThumbnail(g, spec);
                 (r.contains("thumbnail") ? drawn : skipped).push_back(std::move(r));
@@ -520,7 +525,8 @@ void registerPresetCommands(ext::Context& ctx)
         .name = "arrangementRegister",
         .doc = "Add a built-in arrangement preset for this session, as an extension does at load: the spec's shape is "
                "arrangementSave's. A saved user or workspace preset of the same name still wins. Optional spec fields shown in "
-               "the library's Presets tab: category, style (realistic, toon), tags, thumbnail (an image path).",
+               "the library's Presets tab: category, style (realistic, toon), tags, thumbnail (an image path), thumbnailVersion (raise it "
+               "when the preset's look changes, so drawn thumbnails are redrawn).",
         .positionalDoc = "preset name",
         .flags = {{"spec", "sp", T::Any, nullptr, "{description, slots: {...}, steps: [{command, args, flags, needs}]}."},
                   {"source", "src", T::String, "extension", "Who added it, shown as the preset's source."},

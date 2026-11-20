@@ -30,9 +30,13 @@
 #include <QListWidget>
 #include <QMenu>
 #include <QMimeData>
+#include <QCoreApplication>
+#include <QFileInfo>
 #include <QPixmap>
+#include <QProcess>
 #include <QStackedWidget>
 #include <QTabBar>
+#include <QPointer>
 #include <QToolButton>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -101,6 +105,70 @@ protected:
     }
     QStringList mimeTypes() const override { return {kPresetMime}; }
 };
+
+/**
+ * Draws missing thumbnails (starter props, extension tiers such as placeholder pieces, arrangement presets) in a
+ * lilabatch process beside lila, so the open scene and the UI are never touched while they render. One run at a time;
+ * done is called on the UI thread when it finishes.
+ */
+class ThumbnailBatch
+{
+public:
+    static ThumbnailBatch& get()
+    {
+        static ThumbnailBatch b;
+        return b;
+    }
+
+    bool running() const { return mProcess && mProcess->state() != QProcess::NotRunning; }
+
+    /** Starts a run of the Python in script unless one is going; done runs when it ends either way. */
+    void start(const QString& script, std::function<void()> done)
+    {
+        mDone.push_back(std::move(done));
+        if (running())
+            return;
+        const QString exe = QCoreApplication::applicationDirPath() + "/lilabatch" +
+#ifdef Q_OS_WIN
+                            ".exe";
+#else
+                            "";
+#endif
+        if (!QFileInfo::exists(exe))
+        {
+            log::write(LogLevel::Warning, "Library: thumbnails need lilabatch beside lila (" + exe.toStdString() + "); they stay blank");
+            finish();
+            return;
+        }
+        mProcess = std::make_unique<QProcess>();
+#ifdef Q_OS_WIN
+        // No console window flashing up while it runs.
+        mProcess->setCreateProcessArgumentsModifier([](QProcess::CreateProcessArguments* a) { a->flags |= 0x08000000; });
+#endif
+        QObject::connect(mProcess.get(), &QProcess::finished, [this](int code, QProcess::ExitStatus) {
+            if (code != 0)
+                log::write(LogLevel::Warning, "Library: drawing thumbnails stopped: " + QString::fromUtf8(mProcess->readAllStandardError()).trimmed().toStdString());
+            finish();
+        });
+        mProcess->start(exe, {"-c", script});
+    }
+
+private:
+    void finish()
+    {
+        library::reload();
+        std::vector<std::function<void()>> done;
+        done.swap(mDone);
+        for (auto& f : done)
+            f();
+    }
+
+    std::unique_ptr<QProcess> mProcess;
+    std::vector<std::function<void()>> mDone;
+};
+
+/** Every thumbnail the library shows that is still missing. */
+const char* kAllThumbnails = "libraryStarter()\nlibraryThumbnails(tier='placeholder')\narrangementThumbnails()\n";
 
 /** The preset's spec by name, or null. */
 json presetNamed(const std::string& name)
@@ -205,39 +273,16 @@ public:
         QObject::connect(mList, &QWidget::customContextMenuRequested, this, [this](QPoint pos) { contextMenu(pos); });
     }
 
-    /** Fills the list and draws missing thumbnails one at a time, so the panel stays responsive while they come in. */
-    void showing()
+    void showing() { fill(); }
+
+    void fill()
     {
-        fill();
-        if (mDrawn)
-            return;
-        mDrawn = true;
-        const json all = runUi("arrangementPresets", json::object());
-        for (const json& p : all.is_array() ? all : json::array())
-            if (!p.contains("thumbnail"))
-                mPending.push_back(p.value("name", std::string()));
-        mPendingTotal = int(mPending.size());
-        drawNext();
+        fillList();
+        if (ThumbnailBatch::get().running())
+            mStatus->setText(mStatus->text() + ", drawing thumbnails");
     }
 
 private:
-    void drawNext()
-    {
-        if (mPending.empty())
-        {
-            fill();
-            return;
-        }
-        mStatus->setText(QString("Drawing thumbnails, %1 of %2").arg(mPendingTotal - int(mPending.size()) + 1).arg(mPendingTotal));
-        QTimer::singleShot(0, this, [this] {
-            const std::string name = mPending.front();
-            mPending.erase(mPending.begin());
-            runUi("arrangementThumbnails", {{"args", {name}}});
-            fill();
-            drawNext();
-        });
-    }
-
     static std::string kindOf(const json& p)
     {
         if (p.value("category", std::string()) != "Weathering")
@@ -245,7 +290,7 @@ private:
         return p.value("kind", std::string()) == "ground" ? "Ground" : "Age";
     }
 
-    void fill()
+    void fillList()
     {
         const json all = runUi("arrangementPresets", json::object());
         const QString words = mSearch->text().trimmed().toLower();
@@ -284,7 +329,12 @@ private:
         QMenu m(this);
         m.addAction("Dress Selection", [name] { applyPreset(name, selectedPaths()); });
         m.addAction("Redraw Thumbnail", [this, name] {
-            runUi("arrangementThumbnails", {{"args", {name}}, {"force", true}});
+            QPointer<PresetsPage> self(this);
+            const QString literal = QString::fromStdString(json(name).dump());
+            ThumbnailBatch::get().start("arrangementThumbnails([" + literal + "], force=True)\n", [self] {
+                if (self)
+                    self->fill();
+            });
             fill();
         });
         m.addSeparator();
@@ -297,9 +347,6 @@ private:
     QComboBox* mStyle = nullptr;
     PresetList* mList = nullptr;
     QLabel* mStatus = nullptr;
-    bool mDrawn = false;
-    std::vector<std::string> mPending;
-    int mPendingTotal = 0;
 };
 
 class LibraryPanel final : public QWidget
@@ -382,26 +429,28 @@ public:
         fillCollections();
         fill();
         // The starter props come without thumbnails; the first time the panel shows, they are drawn.
-        QTimer::singleShot(0, this, [this] { drawStarterThumbnails(); });
+        QTimer::singleShot(0, this, [this] { drawThumbnails(); });
     }
 
 private:
-    void drawStarterThumbnails()
+    /** Starts the background run for whatever thumbnails are missing; both tabs refill when it ends. */
+    void drawThumbnails()
     {
-        if (!library::starterEnabled())
+        const bool props = std::ranges::any_of(library::all(), [](const library::Asset& a) {
+            return (a.tier == "starter" || a.tier == "placeholder") && a.thumbnail.empty();
+        });
+        const json presets = runUi("arrangementPresets", json::object());
+        const bool presetsMissing = std::ranges::any_of(presets.is_array() ? presets : json::array(), [](const json& p) { return !p.contains("thumbnail"); });
+        if (!props && !presetsMissing)
             return;
-        const bool missing = std::ranges::any_of(library::all(), [](const library::Asset& a) { return a.tier == "starter" && a.thumbnail.empty(); });
-        if (!missing)
-            return;
-        try
-        {
-            ops::execute("libraryStarter", json::object());
-        }
-        catch (const std::exception& e)
-        {
-            log::write(LogLevel::Warning, std::string("Library: starter thumbnails: ") + e.what());
-        }
-        fill();
+        QPointer<LibraryPanel> self(this);
+        ThumbnailBatch::get().start(kAllThumbnails, [self] {
+            if (!self)
+                return;
+            self->fill();
+            self->mPresets->fill();
+        });
+        mPresets->fill();
     }
 
     void fillCollections()
@@ -422,7 +471,10 @@ private:
         q.text = mSearch->text().toStdString();
         if (mCollection->currentIndex() > 0)
             q.collection = mCollection->currentText().toStdString();
-        const std::vector<library::Asset> found = library::search(q);
+        std::vector<library::Asset> found = library::search(q);
+        // Placeholder pieces are stand-ins presets use; they show when their collection is picked or searched for.
+        if (q.collection.empty() && q.text.empty())
+            std::erase_if(found, [](const library::Asset& a) { return a.tier == "placeholder"; });
         mList->clear();
         for (const library::Asset& a : found)
         {
