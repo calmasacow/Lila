@@ -239,6 +239,16 @@ private:
                 if (m.cornerValid(c))
                     v[c] = {r.corners[size_t(a)][c], r.corners[size_t(b)][c]};
         };
+        // The sharp-edge distances follow the masks in two more UV sets, so Unreal's edge wear holds on plain blocks too.
+        auto distances = [&](int set) {
+            for (int k = 0; k < 2; ++k)
+            {
+                auto v = m.cornerAttrs().getOrAdd<glm::vec2>("uv" + std::to_string(set + k));
+                for (geo::Index c = 0; c < m.cornerCapacity() && c < r.edgeDistance.size(); ++c)
+                    if (m.cornerValid(c))
+                        v[c] = {r.edgeDistance[c][k * 2], r.edgeDistance[c][k * 2 + 1]};
+            }
+        };
         if (color)
         {
             auto v = geo::colors::add(m, kColorSet, glm::vec4(0.0f));
@@ -246,11 +256,13 @@ private:
                 if (m.cornerValid(c))
                     v[c] = {r.corners[kEdge][c], r.corners[kCavity][c], r.corners[kAo][c], r.corners[kStreak][c]};
             uv(uvSet, kDust, kFade);
+            distances(uvSet + 1);
             return "color";
         }
         uv(uvSet, kEdge, kCavity);
         uv(uvSet + 1, kAo, kStreak);
         uv(uvSet + 2, kDust, kFade);
+        distances(uvSet + 3);
         return "uv";
     }
 
@@ -294,6 +306,7 @@ render::GrungeLook lookOf(const Node& n)
         l.seed = uint32_t(n.as<int64_t>(at(n, "seed")) * 7 + k);
     }
     look.outlineColor = glm::vec3(n.as<glm::dvec3>(at(n, "outlineColor")));
+    look.edgeWidth = float(n.as<double>(at(n, "edgeWidth")));
     return look;
 }
 
@@ -623,10 +636,14 @@ bool registerMaskNode(ext::Context& ctx)
         AttrDef unreal = maskParam("unrealChannels", PlugType::Enum, int64_t(0),
                                    "Where the masks go for Unreal: auto takes vertex colour unless the mesh has its own colour set, then UV sets.", "Unreal");
         unreal.enumNames = kUnrealModes;
-        unreal.enumDocs = {"Vertex colour (edge, cavity, occlusion, streaks) plus one UV set (dust, fade); UV sets when the mesh has colours.",
-                           "Vertex colour plus one UV set.", "Three UV sets from uvSet: edge/cavity, occlusion/streaks, dust/fade.", "None."};
+        unreal.enumDocs = {"Vertex colour (edge, cavity, occlusion, streaks) plus UV sets for dust/fade and the edge distances; UV sets when the "
+                           "mesh has colours.",
+                           "Vertex colour plus three UV sets.", "Five UV sets from uvSet: edge/cavity, occlusion/streaks, dust/fade, edge distances.",
+                           "None."};
         t.ownAttrs.push_back(unreal);
-        t.ownAttrs.push_back(maskParam("uvSet", PlugType::Int, int64_t(3), "First UV set the masks write, uv<n>.", "Unreal", 1.0, 5.0));
+        t.ownAttrs.push_back(maskParam("uvSet", PlugType::Int, int64_t(3),
+                                       "First UV set the masks write, uv<n>: color layout uses it and the next two (masks, edge distances), "
+                                       "uv layout it and the next four.", "Unreal", 1.0, 3.0));
     }
     for (int k = 0; k < kMaskCount; ++k)
         for (AttrDef& d : lookAttrs(k))

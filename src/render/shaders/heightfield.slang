@@ -420,6 +420,7 @@ VSOut hfMeshInput(HfOut i)
     o.instance = 0;
     o.grungeA = float4(0.0);
     o.grungeB = float2(0.0);
+    o.grungeEdge = float4(10000.0);
     return o;
 }
 

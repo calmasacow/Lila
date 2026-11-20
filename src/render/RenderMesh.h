@@ -62,8 +62,15 @@ LILA_FOUNDATION_API uint64_t nextResourceKey();
  */
 inline constexpr int kGrungeMasks = 6;
 inline constexpr std::array<const char*, kGrungeMasks> kGrungeAttrs = {"grungeEdge", "grungeCavity", "grungeAo", "grungeDust", "grungeStreak", "grungeFade"};
-/** RenderMesh::grunge words per vertex: the six masks as 16-bit unorms, two to a word. */
-inline constexpr int kGrungeWords = 3;
+/**
+ * Vec4 corner attribute beside the masks: signed distances, cm, to up to four sharp edge lines of the corner's face
+ * (kGrungeFarEdge where a slot is unused). Linear over a planar face, so the per-pixel min is the distance to the
+ * nearest sharp edge, which carries edge wear on blocks with no vertices between their edges.
+ */
+inline constexpr const char* kGrungeEdgeDistanceAttr = "grungeEdgeDistance";
+inline constexpr float kGrungeFarEdge = 10000.0f;
+/** RenderMesh::grunge words per vertex: the six masks as 16-bit unorms two to a word, then the four edge distances as halves. */
+inline constexpr int kGrungeWords = 5;
 
 /**
  * Vertices edited in place while the topology stays (sculpting a dense mesh): the editor writes vertices and marks
@@ -359,6 +366,8 @@ struct GrungeLook
 {
     std::array<GrungeLayer, kGrungeMasks> layers{};
     glm::vec3 outlineColor{0.03f}; // linear
+    /** Edge wear runs this far from a sharp edge, cm, where the mesh carries edge distances. */
+    float edgeWidth = 4.0f;
 
     bool operator==(const GrungeLook&) const = default;
 };

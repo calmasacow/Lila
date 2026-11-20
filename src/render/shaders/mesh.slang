@@ -435,6 +435,7 @@ struct VSOut
     nointerpolation uint instance : TEXCOORD3; // index into pc.instances
     centroid float4 grungeA : TEXCOORD4; // grunge masks: edge, cavity, ao, dust
     centroid float2 grungeB : TEXCOORD5; // streak, fade
+    float4 grungeEdge : TEXCOORD6;        // signed cm to the face's sharp edge lines (render::kGrungeEdgeDistanceAttr)
 };
 
 float4x4 instanceWorld(uint instance)
@@ -502,15 +503,17 @@ VSOut meshVS(VSIn v, uint instanceId: SV_InstanceID, uint vertexId: SV_VertexID)
     o.color = kLean ? float4(1.0) : v.color;
     o.grungeA = float4(0.0);
     o.grungeB = float2(0.0);
+    o.grungeEdge = float4(10000.0);
     if (!kLean && (pc.flags & kGrunge) != 0)
     {
         const uint b = grungeBlock();
         uint* masks = (uint*)((uint64_t(pc.textureTable[b + 1]) << 32) | uint64_t(pc.textureTable[b]));
         if (masks != nullptr)
         {
-            const uint at = vertexId * 3;
+            const uint at = vertexId * 5;
             o.grungeA = float4(unpackUnorm2(masks[at]), unpackUnorm2(masks[at + 1]));
             o.grungeB = unpackUnorm2(masks[at + 2]);
+            o.grungeEdge = float4(f16tof32(masks[at + 3]), f16tof32(masks[at + 3] >> 16), f16tof32(masks[at + 4]), f16tof32(masks[at + 4] >> 16));
         }
     }
     return o;
@@ -1100,7 +1103,11 @@ void applyGrunge(VSOut i, inout float3 baseColor, inout float roughTarget, inout
     const float3 world = i.worldPos + (pc.lights != nullptr ? ((GpuFrame*)pc.lights)->worldOffset.xyz : float3(0.0));
     const float3 up = pc.params.y > 0.5 ? float3(0, 0, 1) : float3(0, 1, 0);
     const float3 outlineColor = grungeVec(1).rgb;
-    const float masks[6] = { i.grungeA.x, i.grungeA.y, i.grungeA.z, i.grungeA.w, i.grungeB.x, i.grungeB.y };
+    // Edge wear from the distance to the face's nearest sharp edge where it has one, else the vertex value.
+    const float edgeDist = min(min(i.grungeEdge.x, i.grungeEdge.y), min(i.grungeEdge.z, i.grungeEdge.w));
+    const float edgeWidth = asfloat(pc.textureTable[grungeBlock() + 3]);
+    const float edge = edgeDist < 5000.0 ? saturate(1.0 - max(edgeDist, 0.0) / edgeWidth) : i.grungeA.x;
+    const float masks[6] = { edge, i.grungeA.y, i.grungeA.z, i.grungeA.w, i.grungeB.x, i.grungeB.y };
     [unroll] for (uint k = 0; k < 6; ++k)
     {
         if ((enabled & (1u << k)) == 0)

@@ -68,6 +68,12 @@ struct Neighbour
 struct Result
 {
     std::array<std::vector<float>, kMaskCount> corners;
+    /**
+     * Per corner, signed distances in cm (world) from the corner to up to four lines of its face's sharp convex or
+     * boundary edges, kFarEdge for unused slots. Each is linear over a planar face, so interpolated per pixel and taken
+     * the min of, it is the distance to the nearest sharp edge of the face: edge wear that holds on an 8-vertex block.
+     */
+    std::vector<glm::vec4> edgeDistance;
     /** Distinct (point, normal) samples evaluated. */
     size_t samples = 0;
 };
@@ -75,6 +81,12 @@ struct Result
 /** The six masks over a mesh placed at world among its neighbours. Deterministic for a seed. */
 Result compute(const lila::geo::Mesh& mesh, const glm::dmat4& world, std::span<const Neighbour> neighbours, const Settings& s);
 
-/** Writes a result as float corner attributes named render::kGrungeAttrs ("grungeEdge", ...). */
+/** An edge-distance slot with no sharp edge in it, cm. */
+inline constexpr float kFarEdge = 10000.0f;
+
+/**
+ * Writes a result as float corner attributes named render::kGrungeAttrs ("grungeEdge", ...) and the edge distances as
+ * the vec4 corner attribute "grungeEdgeDistance".
+ */
 void writeAttributes(lila::geo::Mesh& mesh, const Result& r);
 } // namespace weathering::masks

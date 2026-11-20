@@ -54,13 +54,16 @@ json instanceParams(const Node& grunge, const Node& mesh, json& warnings)
         vectors[u + "Low"] = rgb(grunge.as<glm::dvec3>(at(l + "Low")));
     }
     vectors["GrungeOutlineColor"] = rgb(grunge.as<glm::dvec3>(at("outlineColor")));
+    scalars["EdgeWidth"] = grunge.as<double>(at("edgeWidth"));
     const std::string layout = grunge.as<std::string>(at("unrealLayout"));
     if (layout == "off" || layout.empty())
         warnings.push_back(mesh.name() + ": its masks go to no channel (unrealChannels is off), so the instance shows no grunge");
     else if (grunge.as<int64_t>(at("uvSet")) != 3)
-        warnings.push_back(mesh.name() + ": the generated materials read UV 3 onwards but its masks start at uv" +
+        warnings.push_back(mesh.name() + ": the generated materials read UV 3 onwards (edge distances in UV 4-5, or 6-7 in the uv layout) but its masks start at uv" +
                            std::to_string(grunge.as<int64_t>(at("uvSet"))) + "; wire GrungeMasksA/B yourself or set uvSet=3");
-    return {{"name", instanceName(mesh)}, {"layout", layout == "uv" ? "uv" : "color"}, {"scalars", scalars}, {"vectors", vectors}};
+    const json channels = layout == "uv" ? json{{"masks", "uv3-uv5"}, {"edgeDistance", "uv6-uv7"}}
+                                         : json{{"masks", "vertex colour + uv3"}, {"edgeDistance", "uv4-uv5"}};
+    return {{"name", instanceName(mesh)}, {"layout", layout == "uv" ? "uv" : "color"}, {"channels", channels}, {"scalars", scalars}, {"vectors", vectors}};
 }
 } // namespace
 
@@ -69,10 +72,10 @@ void registerMaskUnreal(ext::Context& ctx)
     ctx.registerCommand({
         .name = "grungeSend",
         .doc = "Send meshes' grunge looks to Unreal: builds MF_LilaGrunge with its materials (M_LilaGrunge reads vertex colour and "
-               "UV 3, M_LilaGrungeUV reads UV 3 to 5) when missing or older, and a material instance per mesh (MI_Grunge_<mesh> in "
+               "UV 3, M_LilaGrungeUV reads UV 3 to 5; edge wear takes the per-pixel distance to sharp edges from UV 4-5, or 6-7) when missing or older, and a material instance per mesh (MI_Grunge_<mesh> in "
                "/Game/LilaLink/Grunge) with the mesh's levels, bands, cuts, outlines and colours. The masks travel with the mesh "
                "itself on any mesh send. To use your own material, drop MF_LilaGrunge into it and feed BaseColor and Roughness "
-               "through. dryRun returns the instances without sending. Returns {materials, instances, warnings}.",
+               "through. dryRun returns the instances without sending. Returns {materials, instances, warnings}; dryRun instances name the channels they read.",
         .positionalDoc = "meshes",
         .flags = {{"regenerate", "rg", T::Bool, false, "Rebuild the function and materials even when current."},
                   {"dryRun", "dr", T::Bool, false, "Only return what would be sent."}},

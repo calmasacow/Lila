@@ -2981,16 +2981,16 @@ struct Renderer::Impl
             const RenderMesh* grungeMesh = grungeSource(d);
             for (uint32_t slot = 0; slot < d.materials.size(); ++slot)
             {
-                const Material& m = d.materials[slot];
-                const bool grunge = m.grunge && grungeMesh;
-                if (m.style.model != ShadingModel::DefaultLit || grunge)
-                    writeStyle(&d, slot, m.style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp, &m);
+                const Material& mat = d.materials[slot];
+                const bool grunge = mat.grunge && grungeMesh;
+                if (mat.style.model != ShadingModel::DefaultLit || grunge)
+                    writeStyle(&d, slot, mat.style, d.mesh->boundsMin, d.mesh->boundsMax, s.zUp, &mat);
                 if (grunge)
                 {
                     // Right after the style block, where mesh.slang looks for it; the address is filled in once the mesh uploads.
                     frameGrunge.insert({&d, slot});
                     grungePatches.push_back({uint32_t(frameTable.size()), grungeMesh->key});
-                    const auto block = packGrunge(*m.grunge, 0);
+                    const auto block = packGrunge(*mat.grunge, 0);
                     frameTable.insert(frameTable.end(), block.begin(), block.end());
                 }
             }

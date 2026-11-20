@@ -113,6 +113,57 @@ std::vector<double> edgeDistance(const geo::Mesh& w, const std::vector<char>& se
 }
 
 double heightOf(const glm::dvec3& p, const glm::dvec3& up) { return glm::dot(p, up); }
+
+/** Whether an edge wears: on the boundary, or convex past the feature angle. */
+bool sharpConvex(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, Index e, double cosFeature)
+{
+    if (w.edgeFaceCount(e) != 2)
+        return true;
+    const Index c0 = w.edgeCorner(e);
+    const Index f0 = w.cornerFace(c0), f1 = w.cornerFace(w.cornerRadial(c0));
+    if (glm::dot(faceN[f0], faceN[f1]) > cosFeature)
+        return false;
+    return glm::dot(w.faceCentroid(f1) - w.faceCentroid(f0), faceN[f0]) < 0.0;
+}
+
+/** Per corner, its signed distance to each of up to four sharp edge lines of its face (the longest ones), kFarEdge for none. */
+std::vector<glm::vec4> sharpEdgeDistances(const geo::Mesh& w, const std::vector<glm::dvec3>& faceN, double cosFeature)
+{
+    std::vector<glm::vec4> out(w.cornerCapacity(), glm::vec4(kFarEdge));
+    for (Index f = 0; f < w.faceCapacity(); ++f)
+    {
+        if (!w.faceValid(f))
+            continue;
+        struct Line
+        {
+            glm::dvec3 a, inward;
+            double length;
+        };
+        std::vector<Line> lines;
+        w.forEachFaceCorner(f, [&](Index c) {
+            const Index e = w.cornerEdge(c);
+            if (!sharpConvex(w, faceN, e, cosFeature))
+                return;
+            const glm::dvec3 a = w.position(w.cornerPoint(c)), b = w.position(w.cornerNextPoint(c));
+            const glm::dvec3 along = b - a;
+            const double len = glm::length(along);
+            if (len < 1e-9)
+                return;
+            // Corners run counter-clockwise about the normal, so normal x along points into the face.
+            lines.push_back({a, glm::normalize(glm::cross(faceN[f], along)), len});
+        });
+        std::sort(lines.begin(), lines.end(), [](const Line& x, const Line& y) { return x.length > y.length; });
+        if (lines.size() > 4)
+            lines.resize(4);
+        w.forEachFaceCorner(f, [&](Index c) {
+            glm::vec4 d(kFarEdge);
+            for (size_t k = 0; k < lines.size(); ++k)
+                d[int(k)] = float(glm::dot(w.position(w.cornerPoint(c)) - lines[k].a, lines[k].inward));
+            out[c] = d;
+        });
+    }
+    return out;
+}
 } // namespace
 
 Result compute(const geo::Mesh& mesh, const glm::dmat4& world, std::span<const Neighbour> neighbours, const Settings& s)
@@ -332,11 +383,18 @@ Result compute(const geo::Mesh& mesh, const glm::dmat4& world, std::span<const N
         if (w.cornerValid(c) && cornerSample[c] != geo::kInvalid)
             for (int k = 0; k < kMaskCount; ++k)
                 r.corners[size_t(k)][c] = values[size_t(k)][cornerSample[c]];
+    r.edgeDistance = sharpEdgeDistances(w, faceN, cosFeature);
     return r;
 }
 
 void writeAttributes(geo::Mesh& mesh, const Result& r)
 {
+    if (!r.edgeDistance.empty())
+    {
+        auto d = mesh.cornerAttrs().getOrAdd<glm::vec4>("grungeEdgeDistance");
+        for (size_t c = 0; c < d.size() && c < r.edgeDistance.size(); ++c)
+            d[c] = r.edgeDistance[c];
+    }
     for (int k = 0; k < kMaskCount; ++k)
     {
         auto v = mesh.cornerAttrs().getOrAdd<float>(kCornerAttrs[size_t(k)]);

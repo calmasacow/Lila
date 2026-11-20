@@ -144,6 +144,48 @@ TEST_CASE("grunge edge wear covers a cube's edges only")
     CHECK(inside > 0);
 }
 
+TEST_CASE("grunge edge wear holds per pixel on an 8-vertex block")
+{
+    fresh();
+    const std::string c = subCube("Block", {0, 0, 0}, {200, 200, 200}, 1, 1, 1);
+    masks(c, {{"neighbours", false}});
+    const geo::Mesh m = meshOf(c);
+    REQUIRE(m.numPoints() == 8);
+    const auto d = m.cornerAttrs().get<glm::vec4>(render::kGrungeEdgeDistanceAttr);
+    REQUIRE(!d.empty());
+    auto nearest = [](const glm::vec4& v) { return std::min(std::min(v.x, v.y), std::min(v.z, v.w)); };
+    const double edgeWidth = 4.0;
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f))
+            continue;
+        const std::vector<geo::Index> corners = m.faceCorners(f);
+        REQUIRE(corners.size() == 4);
+        // What the rasterizer interpolates: the face centre is the corners' mean, an edge midpoint its two corners' mean.
+        glm::vec4 centre(0.0f);
+        for (geo::Index k : corners)
+            centre += d[k] * 0.25f;
+        CHECK(nearest(centre) == doctest::Approx(100.0).epsilon(0.001));
+        CHECK(std::clamp(1.0 - nearest(centre) / edgeWidth, 0.0, 1.0) == doctest::Approx(0.0));
+        for (size_t k = 0; k < 4; ++k)
+        {
+            const glm::vec4 mid = (d[corners[k]] + d[corners[(k + 1) % 4]]) * 0.5f;
+            CHECK(nearest(mid) == doctest::Approx(0.0).epsilon(0.001));
+        }
+    }
+    // The render copy carries them as halves after the masks.
+    const auto rm = ui::renderMeshFor(std::make_shared<geo::Mesh>(m));
+    REQUIRE(rm);
+    REQUIRE(rm->grunge.size() == rm->vertices.size() * size_t(render::kGrungeWords));
+    for (size_t v = 0; v < rm->vertices.size(); ++v)
+    {
+        const glm::vec2 a = glm::unpackHalf2x16(rm->grunge[v * render::kGrungeWords + 3]);
+        const glm::vec2 b = glm::unpackHalf2x16(rm->grunge[v * render::kGrungeWords + 4]);
+        CHECK(std::min(std::min(a.x, a.y), std::min(b.x, b.y)) == doctest::Approx(0.0).epsilon(0.001));
+        CHECK(std::max(std::max(a.x, a.y), std::max(b.x, b.y)) == doctest::Approx(200.0).epsilon(0.001));
+    }
+}
+
 TEST_CASE("grunge streaks run below a window opening only")
 {
     fresh();
@@ -358,6 +400,9 @@ TEST_CASE("grunge sends its look as MF_LilaGrunge instance parameters and writes
     const geo::Mesh m = meshOf(c);
     CHECK(geo::colors::has(m, "Grunge"));
     CHECK(m.cornerAttrs().find("uv3") != nullptr);
+    CHECK(m.cornerAttrs().find("uv5") != nullptr);
+    CHECK(i["channels"]["edgeDistance"] == "uv4-uv5");
+    CHECK(i["scalars"].contains("EdgeWidth"));
 }
 
 TEST_CASE("grunge attribute pass on a 500 block level")

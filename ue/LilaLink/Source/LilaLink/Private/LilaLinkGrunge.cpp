@@ -113,6 +113,16 @@ void BuildGrunge(UMaterialFunction* Function)
 	auto* UV3 = G.New<UMaterialExpressionTextureCoordinate>(-1900);
 	UV3->CoordinateIndex = 3;
 	UMaterialExpression* MasksB = G.Input(TEXT("GrungeMasksB"), FunctionInput_Vector2, UV3, TEXT("Dust, fade: UV channel 3 when unconnected."));
+	auto* UV4 = G.New<UMaterialExpressionTextureCoordinate>(-1900);
+	UV4->CoordinateIndex = 4;
+	auto* UV5 = G.New<UMaterialExpressionTextureCoordinate>(-1900);
+	UV5->CoordinateIndex = 5;
+	UMaterialExpression* DistDefault = Custom(G, TEXT("edge distances"), TEXT("return float4(U0, U1);"), CMOT_Float4,
+		{Wire(TEXT("U0"), UV4), Wire(TEXT("U1"), UV5)}, -1700);
+	UMaterialExpression* EdgeDist = G.Input(TEXT("GrungeEdgeDistance"), FunctionInput_Vector4, DistDefault,
+		TEXT("Distances, cm, to the face's sharp edge lines: UV channels 4 and 5 when unconnected. Their min is the distance to the nearest "
+			 "sharp edge, so edge wear holds on blocks with no vertices between their edges."));
+	UMaterialExpression* EdgeWidth = G.ScalarInput(TEXT("EdgeWidth"), 4.0f, TEXT("Edge"), TEXT("How far wear runs from a sharp edge, cm."));
 	auto* World = G.New<UMaterialExpressionWorldPosition>(-1900);
 	UMaterialExpression* Normal = Custom(G, TEXT("normal"), TEXT("return Parameters.TangentToWorld[2];"), CMOT_Float3, {}, -1700);
 
@@ -126,7 +136,8 @@ void BuildGrunge(UMaterialFunction* Function)
 	const float Rough[MaskCount] = {0.45f, 0.9f, -1.0f, 0.95f, 0.75f, 0.9f};
 	const FLinearColor Colors[MaskCount] = {{0.62f, 0.6f, 0.56f}, {0.07f, 0.06f, 0.045f}, {0.03f, 0.03f, 0.03f}, {0.5f, 0.47f, 0.42f}, {0.08f, 0.07f, 0.06f}, {0.16f, 0.13f, 0.1f}};
 	const FLinearColor Lows[MaskCount] = {{0.45f, 0.43f, 0.4f}, {0.12f, 0.1f, 0.08f}, {0.08f, 0.08f, 0.08f}, {0.4f, 0.37f, 0.33f}, {0.15f, 0.13f, 0.11f}, {0.25f, 0.21f, 0.16f}};
-	const TCHAR* Raw[MaskCount] = {TEXT("A.x"), TEXT("A.y"), TEXT("A.z"), TEXT("B.x"), TEXT("A.w"), TEXT("B.y")};
+	// Edge wear from the per-pixel distance to the nearest sharp edge where the face has one, else the vertex value.
+	const TCHAR* Raw[MaskCount] = {TEXT("min(min(D.x, D.y), min(D.z, D.w)) < 5000.0 ? saturate(1.0 - max(min(min(D.x, D.y), min(D.z, D.w)), 0.0) / max(EdgeWidth, 1e-3)) : A.x"), TEXT("A.y"), TEXT("A.z"), TEXT("B.x"), TEXT("A.w"), TEXT("B.y")};
 	for (int32 K = 0; K < MaskCount; ++K)
 	{
 		const FString M = MaskNames[K];
@@ -163,7 +174,7 @@ void BuildGrunge(UMaterialFunction* Function)
 				 "if (Outline > 0.0) line = 1.0 - saturate(abs(v - Level) / max(Outline, max(fwidth(v), 1e-5)));\n"
 				 "return On > 0.5 ? float2(m, line) : float2(0.0, 0.0);");
 		UMaterialExpression* Mask = Custom(G, M.ToLower(), Code, CMOT_Float2,
-			{Wire(TEXT("A"), MasksA), Wire(TEXT("B"), MasksB), Wire(TEXT("W"), World), Wire(TEXT("N"), Normal), Wire(TEXT("Scale"), Sc),
+			{Wire(TEXT("A"), MasksA), Wire(TEXT("B"), MasksB), Wire(TEXT("D"), EdgeDist), Wire(TEXT("EdgeWidth"), EdgeWidth), Wire(TEXT("W"), World), Wire(TEXT("N"), Normal), Wire(TEXT("Scale"), Sc),
 				Wire(TEXT("Seed"), Seed),
 				Wire(TEXT("Tex"), NoiseTex), Wire(TEXT("UseTex"), UseTex), Wire(TEXT("TexScale"), TexScale), Wire(TEXT("Breakup"), Brk),
 				Wire(TEXT("Softness"), Soft), Wire(TEXT("Level"), Level), Wire(TEXT("Bands"), Bands), Wire(TEXT("Cut"), Cut),
@@ -199,7 +210,7 @@ void BuildGrunge(UMaterialFunction* Function)
 	G.Finish();
 }
 
-/** The generated material on MF_LilaGrunge; UVBase above 0 feeds the masks from three UV sets from that index instead. */
+/** The generated material on MF_LilaGrunge; UVBase above 0 feeds the masks and edge distances from five UV sets from that index instead. */
 void Master(UMaterial* Material, UMaterialFunction* Function, int32 UVBase, TArray<FString>& OutWarnings)
 {
 	UMaterialExpressionMaterialFunctionCall* Call = LilaLink::ResetToFunctionCall(Material, Function);
@@ -209,8 +220,8 @@ void Master(UMaterial* Material, UMaterialFunction* Function, int32 UVBase, TArr
 	}
 	if (UVBase > 0)
 	{
-		UMaterialExpressionTextureCoordinate* U[3];
-		for (int32 K = 0; K < 3; ++K)
+		UMaterialExpressionTextureCoordinate* U[5];
+		for (int32 K = 0; K < 5; ++K)
 		{
 			U[K] = Cast<UMaterialExpressionTextureCoordinate>(
 				UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionTextureCoordinate::StaticClass(), -900, K * 150));
@@ -226,6 +237,15 @@ void Master(UMaterial* Material, UMaterialFunction* Function, int32 UVBase, TArr
 		UMaterialEditingLibrary::ConnectMaterialExpressions(U[1], TEXT(""), Pack, TEXT("U1"));
 		UMaterialEditingLibrary::ConnectMaterialExpressions(Pack, TEXT(""), Call, TEXT("GrungeMasksA"));
 		UMaterialEditingLibrary::ConnectMaterialExpressions(U[2], TEXT(""), Call, TEXT("GrungeMasksB"));
+		auto* Dist = Cast<UMaterialExpressionCustom>(UMaterialEditingLibrary::CreateMaterialExpression(Material, UMaterialExpressionCustom::StaticClass(), -600, 300));
+		Dist->Code = TEXT("return float4(U3, U4);");
+		Dist->OutputType = CMOT_Float4;
+		Dist->Inputs.Reset();
+		Dist->Inputs.AddDefaulted_GetRef().InputName = TEXT("U3");
+		Dist->Inputs.AddDefaulted_GetRef().InputName = TEXT("U4");
+		UMaterialEditingLibrary::ConnectMaterialExpressions(U[3], TEXT(""), Dist, TEXT("U3"));
+		UMaterialEditingLibrary::ConnectMaterialExpressions(U[4], TEXT(""), Dist, TEXT("U4"));
+		UMaterialEditingLibrary::ConnectMaterialExpressions(Dist, TEXT(""), Call, TEXT("GrungeEdgeDistance"));
 	}
 	Material->PostEditChange();
 	Material->MarkPackageDirty();

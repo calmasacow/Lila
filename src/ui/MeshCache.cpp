@@ -290,6 +290,7 @@ void fillGrunge(const geo::Mesh& m, const geo::RenderMesh& layout, render::Rende
     out.grunge.clear();
     if (!corners && !points)
         return;
+    const auto edgeDistance = m.cornerAttrs().get<glm::vec4>(render::kGrungeEdgeDistanceAttr);
     for (int k = 0; k < render::kGrungeMasks; ++k)
         masks[size_t(k)] = (corners ? m.cornerAttrs() : m.pointAttrs()).get<float>(render::kGrungeAttrs[size_t(k)]);
     const auto& source = corners ? layout.vertexCorner : layout.vertexPoint;
@@ -301,8 +302,13 @@ void fillGrunge(const geo::Mesh& m, const geo::RenderMesh& layout, render::Rende
         std::array<uint32_t, render::kGrungeMasks> q{};
         for (size_t k = 0; k < q.size(); ++k)
             q[k] = e < masks[k].size() ? unorm(masks[k][e]) : 0u;
-        for (size_t w = 0; w < size_t(render::kGrungeWords); ++w)
-            out.grunge[v * render::kGrungeWords + w] = q[w * 2] | (q[w * 2 + 1] << 16);
+        uint32_t* words = &out.grunge[v * render::kGrungeWords];
+        for (size_t w = 0; w < 3; ++w)
+            words[w] = q[w * 2] | (q[w * 2 + 1] << 16);
+        const size_t c = size_t(layout.vertexCorner[v]);
+        const glm::vec4 d = c < edgeDistance.size() ? edgeDistance[c] : glm::vec4(render::kGrungeFarEdge);
+        words[3] = glm::packHalf2x16(glm::vec2(d.x, d.y));
+        words[4] = glm::packHalf2x16(glm::vec2(d.z, d.w));
     });
 }
 
