@@ -282,10 +282,15 @@ Filled fillSlots(Graph& g, const json& spec, const json& given, const char* cmd)
     return f;
 }
 
-std::string madeGroup(const json& r)
+/** What a step made, to gather under the preset's group: a live arrangement's host mesh, or the scene group it made. */
+std::string madeGroup(Graph& g, const json& r)
 {
-    if (r.is_object() && r.contains("group") && r["group"].is_string())
-        return r["group"].get<std::string>();
+    if (!r.is_object())
+        return {};
+    for (const char* key : {"host", "group"})
+        if (r.contains(key) && r[key].is_string())
+            if (Node* n = g.find(r[key].get<std::string>()); n && n->type().isA("transform"))
+                return n->path();
     return {};
 }
 } // namespace
@@ -349,7 +354,7 @@ void registerPresetCommands(ext::Context& ctx)
                 if (!call.contains("seed"))
                     call["seed"] = seed + k;
                 const json r = ops::execute(step["command"].get<std::string>(), call);
-                if (const std::string grp = madeGroup(r); !grp.empty())
+                if (const std::string grp = madeGroup(g, r); !grp.empty())
                     groups.push_back(grp);
                 steps.push_back({{"command", step["command"]}, {"result", r}});
                 ++k;

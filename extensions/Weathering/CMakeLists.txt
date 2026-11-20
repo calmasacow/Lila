@@ -1,7 +1,7 @@
 # Weathering, built as <bin>/<config>/extensions/Weathering.lilaext next to lila.exe, which loads it by default after
 # Stagehand. One sources line per area.
 set(WEATHERING_CORE_SOURCES Weathering.cpp Weathering.h Pieces.cpp Pieces.h Placeholders.cpp Placeholders.h)
-set(WEATHERING_AGE_SOURCES Age.cpp Ground.cpp)
+set(WEATHERING_AGE_SOURCES Age.cpp Ground.cpp BasePieces.cpp)
 set(WEATHERING_MASK_SOURCES Masks.cpp)
 set(WEATHERING_EDGE_SOURCES Edges.cpp)
 set(WEATHERING_IVY_SOURCES Ivy.cpp)

@@ -52,17 +52,53 @@ struct ItemSource
     std::string name;
 };
 
+/**
+ * Library ids carrying every tag in "a+b+c". Placeholder pieces an extension ships (tier "placeholder") yield to the
+ * user's own: when any other asset matches, placeholders are left out.
+ */
+std::vector<std::string> taggedAssets(const std::string& query)
+{
+    library::Query q;
+    for (size_t start = 0; start <= query.size();)
+    {
+        const size_t plus = query.find('+', start);
+        const std::string tag = query.substr(start, plus == std::string::npos ? std::string::npos : plus - start);
+        if (!tag.empty())
+            q.tags.push_back(tag);
+        if (plus == std::string::npos)
+            break;
+        start = plus + 1;
+    }
+    std::vector<std::string> own, placeholders;
+    for (const library::Asset& x : library::search(q))
+        (x.tier == "placeholder" ? placeholders : own).push_back(x.id);
+    return own.empty() ? placeholders : own;
+}
+
 std::vector<ItemSource> itemsArg(Graph& g, const Args& a, const char* cmd)
 {
     if (!a.has("items"))
         throw CommandError(std::string(cmd) + ": give items=[...] (library asset ids or meshes)");
     std::vector<ItemSource> out;
     const json& list = a.flags["items"];
+    std::vector<std::string> names;
     for (const json& j : list.is_array() ? list : json::array({list}))
     {
         if (!j.is_string())
             throw CommandError(std::string(cmd) + ": items are names");
         const std::string s = j.get<std::string>();
+        if (s.rfind("tag:", 0) != 0)
+        {
+            names.push_back(s);
+            continue;
+        }
+        const std::vector<std::string> ids = taggedAssets(s.substr(4));
+        if (ids.empty())
+            throw CommandError(std::string(cmd) + ": no library asset is tagged " + s.substr(4));
+        names.insert(names.end(), ids.begin(), ids.end());
+    }
+    for (const std::string& s : names)
+    {
         ItemSource it;
         it.name = s;
         if (Node* n = g.find(s))
@@ -265,7 +301,14 @@ json finishLive(Graph& g, const Args& a, json nodes, json links, json inputs, co
     }
     links.push_back(end + " -> GroupOutput.geometry");
 
-    const json made = ops::execute("createMesh", {{"points", json::array()}, {"faces", json::array()}, {"name", hostName}});
+    // A name no other node has anywhere, so later commands can find the host by it even after it is parented.
+    std::string unique = hostName;
+    auto taken = [&](const std::string& n) {
+        return std::ranges::any_of(g.nodes(), [&](NodeId id) { return g.node(id) && g.node(id)->name() == n; });
+    };
+    for (int k = 2; taken(unique); ++k)
+        unique = hostName + std::to_string(k);
+    const json made = ops::execute("createMesh", {{"points", json::array()}, {"faces", json::array()}, {"name", unique}});
     const std::string host = made.is_string() ? made.get<std::string>() : made.at(0).get<std::string>();
     g.setValue({g.find(host)->id(), scene::MeshNode::kInMesh, -1}, scene::MeshPtr(std::make_shared<geo::Mesh>(std::move(hostMesh))));
     const std::string group = uniqueGroupName(identifier(host, "Set") + "_Arrange");
@@ -298,7 +341,7 @@ arrange::SettleOptions settleOptions(const Args& a)
 std::vector<FlagDef> commonFlags(bool settle, const char* densityFlag = "density")
 {
     return {
-        {"items", "it", T::List, nullptr, "What to place: library asset ids and/or scene meshes; each is picked at random."},
+        {"items", "it", T::List, nullptr, "What to place: library asset ids, scene meshes, or tag:<a+b> (every asset with those tags); each is picked at random."},
         {"realize", "rz", T::Bool, false, "Place scene instances of the items instead of a live geometry-nodes arrangement."},
         {"mode", "m", T::String, "instance", "With realize: instance (shared meshes) or copy.", {"instance", "copy"}},
         {"variants", "va", T::String, "pool", "Live only: pool (a few bowed variants, shared), unique (one each) or none.", {"pool", "unique", "none"}},

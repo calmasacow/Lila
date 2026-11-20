@@ -33,7 +33,7 @@ struct Placeholder
     std::vector<std::string> tags; // extra words to find it by
     std::string description;
     std::string physicsRole = "dynamic";
-    std::string physicsMaterial = "concrete";
+    std::string physicsMaterial = "stone"; // wood, book, paper, cardboard, stone, ceramic, metal, glass, plastic, rubber, fabric
     std::string physicsShape = "hull";
     /** The mesh in cm, Y up, standing on y = 0 unless it is a card or strip. */
     std::function<lila::geo::Mesh()> build;
