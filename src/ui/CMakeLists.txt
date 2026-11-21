@@ -178,6 +178,7 @@ lila_module(lila_ui UI
     Updater.cpp Updater.h
     WelcomeNews.cpp WelcomeNews.h
     FeatureStatus.cpp FeatureStatus.h
+    SceneLights.cpp SceneLights.h
     Credits.cpp Credits.h
     CreditsDialog.cpp CreditsDialog.h
     ProgressOverlay.cpp ProgressOverlay.h

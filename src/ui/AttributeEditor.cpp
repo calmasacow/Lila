@@ -30,6 +30,7 @@
 #include "ui/CodeEdit.h"
 #include "ui/MultilineEdit.h"
 #include "ui/NumberExpr.h"
+#include "ui/SceneLights.h"
 #include "ui/ScrubGesture.h"
 #include "ui/SpinScrub.h"
 #include "ui/Theme.h"
@@ -1553,6 +1554,8 @@ void AttributeEditor::rebuild()
     }
     if (QWidget* list = issueList())
         mBodyLayout->addWidget(aeSection("Issues", list).box);
+    if (n->type().isA("light"))
+        mBodyLayout->addWidget(sceneLights::attributeNote(mBody));
     /** The issues on a component as a whole: a type, a category or a section by its title. */
     auto componentIssues = [&](std::string_view typeName, std::string_view category, const QString& title) {
         std::vector<const dx::Issue*> out;

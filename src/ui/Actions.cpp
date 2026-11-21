@@ -17,6 +17,7 @@
 #include "ui/Hotkeys.h"
 #include "ui/MaterialDraw.h"
 #include "ui/OptionBox.h"
+#include "ui/SceneLights.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportTool.h"
 
@@ -965,12 +966,7 @@ void registerBuiltins()
                   .doc = "Switches the viewport to sculpt lighting, or back to the lighting it had before.",
                   .python = "lila.ui.run_action(\"viewport.toggleSculptLighting\")",
                   .checked = [] { return PrefStore::get().value<std::string>("general", vd::kLighting, "environment") == "sculpt"; }});
-    actions::add({.id = "viewport.toggleLighting", .label = "Scene Lights", .category = "Display", .run = [] {
-                      PrefStore& p = PrefStore::get();
-                      p.set("general", vd::kSceneLights, !p.value<bool>("general", vd::kSceneLights, true));
-                  },
-                  .doc = "Turns the scene's lights off and on in the viewport, as if hidden. The environment still lights.",
-                  .python = "lila.prefs.set(\"general\", \"/viewport/sceneLights\", False)"});
+    sceneLights::registerActions();
     for (auto [mode, label, doc] : {std::tuple{"off", "Hide Vertex Colors", "Meshes draw without their vertex colors."},
                                     {"shaded", "Vertex Colors (Shaded)", "Multiplies each mesh's current color set into its lit base color."},
                                     {"unlit", "Vertex Colors (Unlit)", "Shows each mesh's current color set flat, without lighting."}})
