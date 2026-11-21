@@ -293,11 +293,22 @@ bool runTarget(const json& target)
             return false;
         // A copy, since running it may remove the action (an extension unloading itself).
         std::function<void()> fn = a->run;
+        const std::string name = a->label.empty() ? a->id : a->label;
         ViewportTool* toolBefore = viewportTools::active();
         static unsigned toolRecords = 0;
         const unsigned recordsBefore = toolRecords;
         if (fn)
-            fn();
+        {
+            try
+            {
+                fn();
+            }
+            catch (const std::exception& e)
+            {
+                log::error("{}: {}", name, e.what());
+                return false;
+            }
+        }
         // The innermost action that started the tool, not one that ran it (Repeat Last Tool, a key's release).
         if (ViewportTool* t = viewportTools::active(); t && t != toolBefore && toolRecords == recordsBefore)
         {
