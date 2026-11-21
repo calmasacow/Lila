@@ -105,8 +105,9 @@ Consent readConsent(const fs::path& file)
     json j = readJsonFile(file);
     if (!j.is_object())
         return c;
-    c.send = j.value("send", false);
-    c.always = j.value("always", false);
+    c.offer = j.value("offer", false);
+    c.send = c.offer && j.value("send", false);
+    c.userOff = !c.offer && j.value("userOff", false);
     c.prefsFile = fs::path(std::u8string(reinterpret_cast<const char8_t*>(j.value("prefsFile", std::string()).c_str())));
     return c;
 }
@@ -114,21 +115,36 @@ Consent readConsent(const fs::path& file)
 void writeConsent(const fs::path& file, const Consent& c)
 {
     std::u8string prefs = c.prefsFile.u8string();
-    writeJsonFile(file, {{"send", c.send}, {"always", c.always}, {"prefsFile", std::string(prefs.begin(), prefs.end())}});
+    writeJsonFile(file, {{"offer", c.offer}, {"send", c.send}, {"userOff", c.userOff}, {"prefsFile", std::string(prefs.begin(), prefs.end())}});
 }
 
-void setAlways(const fs::path& consentFile, bool on)
+void setSend(const fs::path& consentFile, bool on)
 {
     Consent c = readConsent(consentFile);
-    c.always = on;
+    c.send = c.offer && on;
     writeConsent(consentFile, c);
     if (c.prefsFile.empty())
         return;
     json prefs = readJsonFile(c.prefsFile);
     if (!prefs.is_object())
         prefs = json::object();
-    prefs["telemetry"]["crashAlways"] = on;
+    prefs["telemetry"]["crashSend"] = c.send ? "auto" : "ask";
     writeJsonFile(c.prefsFile, prefs);
+}
+
+/** "12:04:03.342 polyCube(name='x')" to "12:04:03.342 polyCube": the time and the command, never its arguments. */
+static std::string commandNameOnly(std::string_view line)
+{
+    const size_t start = line.find_first_not_of(' ');
+    if (start == std::string_view::npos)
+        return std::string();
+    size_t name = start;
+    if (const size_t gap = line.find(' ', start); gap != std::string_view::npos &&
+        line.substr(start, gap - start).find_first_not_of("0123456789:.") == std::string_view::npos)
+        name = line.find_first_not_of(' ', gap);
+    if (name == std::string_view::npos)
+        return std::string(line);
+    return std::string(line.substr(0, std::min(line.size(), line.find_first_of("( ", name))));
 }
 
 std::string sanitize(std::string_view reportText, const std::vector<std::string>& secrets)
@@ -142,7 +158,7 @@ std::string sanitize(std::string_view reportText, const std::vector<std::string>
     for (Section& s : r.sections)
         if (s.name == "commands")
             for (std::string& line : s.lines)
-                line = line.substr(0, line.find_first_of("( "));
+                line = commandNameOnly(line);
     return redactPaths(replaceSecrets(renderReport(r), secrets));
 }
 

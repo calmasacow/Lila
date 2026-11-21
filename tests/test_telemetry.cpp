@@ -178,7 +178,7 @@ TEST_CASE("crash report upload strips identifying details")
                                "\n[stack]\n  lila_scene.dll!lila::Foo::bar (X:/Lila/src/scene/Foo.cpp:12)\n"
                                R"(  opened D:\Projects\Secret\hero.lila for JANE-PC)" "\n"
                                "\n[log]\n  Saved D:/Projects/Secret/hero.lila\n"
-                               "\n[commands]\n  polyCube(name='secretThing')\n";
+                               "\n[commands]\n  polyCube(name='secretThing')\n  11:02:47.515 polySphere(name='hiddenBall')\n  11:02:48.001 undo\n";
     std::string out = crash::upload::sanitize(report, {"Jane Doe", "JANE-PC"});
     CHECK(out.find("Jane") == std::string::npos);
     CHECK(out.find("JANE-PC") == std::string::npos);
@@ -187,29 +187,42 @@ TEST_CASE("crash report upload strips identifying details")
     CHECK(out.find("secretThing") == std::string::npos);
     CHECK(out.find("Foo.cpp:12") != std::string::npos);
     CHECK(out.find("polyCube") != std::string::npos);
+    CHECK(out.find("11:02:47.515 polySphere\n") != std::string::npos);
+    CHECK(out.find("hiddenBall") == std::string::npos);
+    CHECK(out.find("11:02:48.001 undo") != std::string::npos);
     CHECK(out.find("version: 0.1.0") != std::string::npos);
     CHECK(out.find("tool: move") != std::string::npos);
 }
 
-TEST_CASE("crash consent round trip and always-send writes the prefs")
+TEST_CASE("crash consent round trip, and sending without asking writes the prefs")
 {
     fs::path dir = telemetryDir("consent");
     fs::path consent = dir / "crash-consent.json";
     fs::path prefs = dir / "general.json";
     std::ofstream(prefs) << R"({"telemetry": {"usage": true}})";
-    crash::upload::writeConsent(consent, {.send = true, .always = false, .prefsFile = prefs});
+    crash::upload::writeConsent(consent, {.offer = true, .send = false, .prefsFile = prefs});
     crash::upload::Consent c = crash::upload::readConsent(consent);
-    CHECK(c.send);
-    CHECK_FALSE(c.always);
+    CHECK(c.offer);
+    CHECK_FALSE(c.send);
     CHECK(c.prefsFile == prefs);
 
-    crash::upload::setAlways(consent, true);
-    CHECK(crash::upload::readConsent(consent).always);
-    std::ifstream in(prefs);
-    json j = json::parse(in);
-    CHECK(j["telemetry"]["crashAlways"] == true);
-    CHECK(j["telemetry"]["usage"] == true);
+    crash::upload::setSend(consent, true);
+    CHECK(crash::upload::readConsent(consent).send);
+    {
+        std::ifstream in(prefs);
+        json j = json::parse(in);
+        CHECK(j["telemetry"]["crashSend"] == "auto");
+        CHECK(j["telemetry"]["usage"] == true);
+    }
+    CHECK_FALSE(crash::upload::readConsent(dir / "missing.json").offer);
     CHECK_FALSE(crash::upload::readConsent(dir / "missing.json").send);
+
+    // Where sending may not be offered, nothing turns it on.
+    crash::upload::writeConsent(consent, {.offer = false, .send = true, .userOff = true, .prefsFile = prefs});
+    CHECK_FALSE(crash::upload::readConsent(consent).send);
+    CHECK(crash::upload::readConsent(consent).userOff);
+    crash::upload::setSend(consent, true);
+    CHECK_FALSE(crash::upload::readConsent(consent).send);
 }
 
 TEST_CASE("support bundle zips the session and redacts secrets from prefs")
