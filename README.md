@@ -46,7 +46,7 @@ The viewport uses X11; Wayland desktops need XWayland. A full build, Python scen
 
 ### Linux packages
 
-The **Linux packages** GitHub Actions workflow builds x86_64 `.deb`, `.rpm`, `.pkg.tar.zst` (Arch), and `.AppImage` files from a selected branch or tag. Run it manually for downloadable Actions artifacts; the Release workflow also attaches these packages and SHA256 checksums after publishing a tagged release. To add Linux packages to an existing release, select its tag and enable `publish`.
+The fork publishes Linux packages through the **Linux packages** GitHub Actions workflow. Push a version tag matching `CMakeLists.txt` to publish x86_64 `.deb`, `.rpm`, `.pkg.tar.zst` (Arch), and `.AppImage` files with SHA256 checksums. Run the workflow manually for downloadable Actions artifacts, or select a version tag and enable `publish` to publish the packages to that release.
 
 Packages bundle Qt, Python/NumPy, extensions, shaders, resources and runtime libraries. They require glibc 2.39 or newer (Ubuntu 24.04+, Fedora 40+, current Arch), Vulkan-capable graphics drivers, and X11/XWayland. ARM builds and older glibc distributions are not supported by this workflow. USD and NanoVDB are disabled, matching the verified Linux configuration.
 

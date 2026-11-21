@@ -1,22 +1,16 @@
 name: Linux packages
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       ref:
-        description: Branch, commit, or existing release tag to build
+        description: Branch, commit, or tag to build
         default: main
         required: true
       publish:
-        description: Attach packages to the existing release matching ref
-        type: boolean
-        default: false
-  workflow_call:
-    inputs:
-      ref:
-        type: string
-        required: true
-      publish:
+        description: Publish packages to the release matching the tag in ref
         type: boolean
         default: false
 
@@ -38,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
           submodules: recursive
 
@@ -119,18 +113,21 @@ jobs:
             build-linux/packages/SHA256SUMS
           if-no-files-found: error
 
-      - name: Attach to existing GitHub release
-        if: inputs.publish
+      - name: Publish the Linux release
+        if: github.event_name == 'push' || inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.ref }}
+          RELEASE_TAG: ${{ inputs.ref || github.ref_name }}
         run: |
           version="$(sed -n 's/^project(Lila VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)"
           test "$RELEASE_TAG" = "v$version"
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
-          gh release upload "$RELEASE_TAG" build-linux/packages/*.deb build-linux/packages/*.rpm \
-            build-linux/packages/*.pkg.tar.zst build-linux/packages/*.AppImage build-linux/packages/SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          assets=(build-linux/packages/*.{deb,rpm,pkg.tar.zst,AppImage} build-linux/packages/SHA256SUMS)
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"; then
+            gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY" \
+              --verify-tag --title "Lila $version" --generate-notes
+          fi
 
       - name: Preserve dependency cache even when the build fails
         if: always() && steps.vcpkg-cache.outputs.cache-primary-key != '' && steps.vcpkg-cache.outputs.cache-hit != 'true'
