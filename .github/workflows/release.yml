@@ -26,12 +26,18 @@ jobs:
         with:
           ref: ${{ env.TAG }}
 
-      - name: Skip if already released
+      - name: Check for an existing Windows installer
         id: existing
-        shell: pwsh
+        shell: bash
         run: |
-          gh release view $env:TAG --repo ${{ github.repository }} *> $null
-          "released=$([int]($LASTEXITCODE -eq 0))" >> $env:GITHUB_OUTPUT
+          if assets=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name') &&
+            grep -Fxq "Lila-${TAG#v}-Setup.exe" <<< "$assets" &&
+            grep -Fxq "files-${TAG#v}.json" <<< "$assets" &&
+            grep -Fxq latest.json <<< "$assets"; then
+            echo 'released=1' >> "$GITHUB_OUTPUT"
+          else
+            echo 'released=0' >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Check the tag matches the version
         if: steps.existing.outputs.released == '0'
@@ -48,13 +54,6 @@ jobs:
       - name: Python packages Lila bundles
         if: steps.existing.outputs.released == '0'
         run: python -m pip install numpy
-
-      - uses: jurplel/install-qt-action@v4
-        if: steps.existing.outputs.released == '0'
-        with:
-          version: "6.11.1"
-          arch: win64_msvc2022_64
-          cache: true
 
       - uses: ilammy/msvc-dev-cmd@v1
         if: steps.existing.outputs.released == '0'
@@ -73,7 +72,6 @@ jobs:
           $env:VCPKG_ROOT = $env:VCPKG_INSTALLATION_ROOT
           # vcpkg.json's builtin-baseline must be in the runner's vcpkg history.
           git -C $env:VCPKG_ROOT fetch --quiet origin
-          $env:LILA_QT_DIR = $env:QT_ROOT_DIR
           $env:LILA_PYTHON_DIR = $env:pythonLocation
           cmake --preset windows
 
@@ -91,7 +89,7 @@ jobs:
         run: |
           choco install innosetup -y --no-progress
           $env:LILA_PYTHON_DIR = $env:pythonLocation
-          & scripts\installer\build.ps1 -Config Release
+          & scripts\installer\build.ps1 -Config Release -Repository $env:GITHUB_REPOSITORY
 
       - name: Publish
         if: steps.existing.outputs.released == '0'
@@ -99,7 +97,11 @@ jobs:
         run: |
           $version = $env:TAG.Substring(1)
           $assets = @("build-installer\Lila-$version-Setup.exe", "build-installer\latest.json", "build-installer\files-$version.json") + @(Get-ChildItem "build-installer\Lila-$version-Patch-*.exe" | ForEach-Object FullName)
-          gh release create $env:TAG @assets --title "Lila $version" --generate-notes
+          if (gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json tagName 2>$null) {
+            gh release upload $env:TAG @assets --repo $env:GITHUB_REPOSITORY --clobber
+          } else {
+            gh release create $env:TAG @assets --repo $env:GITHUB_REPOSITORY --verify-tag --title "Lila $version" --generate-notes
+          }
 
   linux:
     needs: release

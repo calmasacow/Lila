@@ -6,6 +6,7 @@ param(
     [string]$Config = "Release",
     [string]$BuildDir = "build",
     [string]$Notes = "",
+    [string]$Repository = "lila-3d/Lila",
     # How many earlier releases get a patch. 0 builds only the full installer.
     [int]$Patches = 3,
     [string]$Iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
@@ -28,7 +29,7 @@ Copy-Item "$stage\lila-files.json" "$output\files-$version.json"
 & $Iscc /Q "/DAppVersion=$version" "/DSourceDir=$stage" "/DRepoDir=$repo" "/DOutputDir=$output" "$PSScriptRoot\Lila.iss"
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 $exe = "$output\Lila-$version-Setup.exe"
-$release = "https://github.com/lila-3d/Lila/releases"
+$release = "https://github.com/$Repository/releases"
 
 # Earlier releases' file lists come from their GitHub releases; one without a list (older than the patch system) gets no patch.
 $patchList = @()
@@ -38,10 +39,10 @@ Get-ChildItem $output -Filter "Lila-$version-Patch-*.exe" | Remove-Item
 if ($Patches -gt 0 -and (Get-Command gh -ErrorAction SilentlyContinue)) {
     # A release without the asset makes gh fail; that only means no patch from it.
     $ErrorActionPreference = "Continue"
-    $tags = gh release list --repo lila-3d/Lila --limit 20 --json tagName --jq ".[].tagName" | Where-Object { $_ -ne "v$version" } | Select-Object -First $Patches
+    $tags = gh release list --repo $Repository --limit 20 --json tagName --jq ".[].tagName" | Where-Object { $_ -ne "v$version" } | Select-Object -First $Patches
     foreach ($tag in $tags) {
         $from = $tag.Substring(1)
-        gh release download $tag --repo lila-3d/Lila --pattern "files-$from.json" --dir $previous --clobber 2>$null
+        gh release download $tag --repo $Repository --pattern "files-$from.json" --dir $previous --clobber 2>$null
         $old = "$previous\files-$from.json"
         if (-not (Test-Path $old)) { "No file list in $tag, so no patch from $from"; continue }
         $patchDir = "$output\patch-$from"
