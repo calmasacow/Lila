@@ -5,6 +5,8 @@
 #include <QPointF>
 #include <QRectF>
 
+#include <glm/vec4.hpp>
+
 class QWidget;
 
 namespace lila::ui
@@ -31,6 +33,9 @@ LILA_UI_API QRectF badgeRect(const ViewportWidget* view, double width);
 QRectF drawBadge(OverlayPainter& p, const ViewportWidget* view, double width);
 /** Turns scene lights back on when at is on the badge. Returns whether it was. */
 LILA_UI_API bool clickBadge(const ViewportWidget* view, QPointF at);
+
+/** The badge icon's linear tint, the theme's warning colour; light handles mark the off state with it too. */
+LILA_UI_API glm::vec4 iconColor();
 
 /** A warning strip with a Turn On button, for a light's Attribute Editor; it hides itself while scene lights are on. */
 LILA_UI_API QWidget* attributeNote(QWidget* parent);

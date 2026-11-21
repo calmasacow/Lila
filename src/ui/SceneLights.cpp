@@ -107,7 +107,7 @@ QRectF drawBadge(OverlayPainter& p, const ViewportWidget* view, double width)
     const glm::vec4 text(0.95f, 0.95f, 0.95f, 1.0f), dim(0.62f, 0.62f, 0.62f, 1.0f);
     const double baseline = bar.center().y() + 5.0;
     double x = bar.left() + kPad;
-    p.icon(QRectF(x, bar.center().y() - kIcon * 0.5, kIcon, kIcon), "sceneLightsOff", themeLinear("issueWarning", {0.9f, 0.55f, 0.1f, 1.0f}));
+    p.icon(QRectF(x, bar.center().y() - kIcon * 0.5, kIcon, kIcon), "sceneLightsOff", iconColor());
     x += kIcon + kGap;
     if (l.title)
         p.text({x, baseline}, kTitle, text);
@@ -123,6 +123,11 @@ bool clickBadge(const ViewportWidget* view, QPointF at)
         return false;
     setOn(true);
     return true;
+}
+
+glm::vec4 iconColor()
+{
+    return themeLinear("issueWarning", {0.9f, 0.55f, 0.1f, 1.0f});
 }
 
 QWidget* attributeNote(QWidget* parent)
