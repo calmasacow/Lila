@@ -1,5 +1,7 @@
 #include "ui/NodeCanvas.h"
 #include "ui/ColorPopup.h"
+#include "ui/ScrubGesture.h"
+#include "ui/ValueReset.h"
 
 namespace lila::ui
 {
@@ -97,13 +99,14 @@ double clampFieldValue(double v, const json& limits)
 }
 
 /** How far one pixel of travel moves a number: a bounded slider spans its field, else its step, else a small fixed amount. */
-double fieldPerPixel(const json& limits, bool integer, double fieldPx)
+double fieldPerPixel(const json& limits, double fieldPx)
 {
     if (auto range = fieldRange(limits))
         return (range->second - range->first) / std::max(20.0, fieldPx);
+    // A step per kScrubPixelsPerStep pixels, as on every other number field.
     if (auto it = limits.find("step"); it != limits.end() && it->is_number() && it->get<double>() > 0.0)
-        return it->get<double>() / 4.0;
-    return integer ? 0.125 : 0.01;
+        return it->get<double>() / kScrubPixelsPerStep;
+    return 1.0 / kScrubPixelsPerStep;
 }
 } // namespace
 
@@ -158,14 +161,14 @@ void NodeCanvas::dragField(QMouseEvent* e)
     FieldDrag& d = *mField;
     if (!d.dragging)
     {
-        if (std::abs(e->pos().x() - d.press.x()) < 3)
+        if (std::abs(e->pos().x() - d.press.x()) < valueReset::kMaxTravel)
             return;
         d.dragging = true;
         d.last = d.press;
         UndoStack::get().openChunk("Drag " + pretty(d.socket).toStdString());
     }
     double mult = (e->modifiers() & Qt::ShiftModifier) ? 10.0 : (e->modifiers() & Qt::ControlModifier) ? 0.1 : 1.0;
-    double perPx = fieldPerPixel(d.limits, d.integer, d.pxPerField) * mult;
+    double perPx = fieldPerPixel(d.limits, d.pxPerField) * mult;
     d.value = clampFieldValue(d.value + double(e->pos().x() - d.last.x()) * perPx, d.limits);
     d.last = e->pos();
     // Rounded to a tenth of a pixel's worth, so a float doesn't show its last bits.
@@ -190,8 +193,17 @@ void NodeCanvas::dragField(QMouseEvent* e)
 void NodeCanvas::releaseField()
 {
     std::optional<FieldDrag> d = std::exchange(mField, std::nullopt);
-    if (!d || !d->dragging)
+    if (!d)
         return;
+    // A click without a drag types, as on every other number field.
+    if (!d->dragging)
+    {
+        if (auto it = mNodes.find(d->node); it != mNodes.end())
+            for (int i = 0; i < int(it->second->inputs.size()); ++i)
+                if (it->second->inputs[size_t(i)].id == d->socket)
+                    editFieldText(it->second, i);
+        return;
+    }
     UndoStack::get().closeChunk();
     if (onValuesEdited)
         onValuesEdited();

@@ -100,6 +100,7 @@ lila_module(lila_ui UI
     PythonSdk.cpp
     PythonViewport.cpp
     Owner.h
+    ScrubGesture.cpp ScrubGesture.h
     SpinScrub.cpp SpinScrub.h
     NumberExpr.cpp NumberExpr.h
     PanelFilter.cpp PanelFilter.h
