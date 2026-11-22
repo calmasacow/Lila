@@ -3518,7 +3518,9 @@ struct Renderer::Impl
         v.keptRecordsValid = false;
         prepareRecords(v, s, false);
         v.keptRecordsValid = false;
+        // An empty scene next frame would match the cleared list and reuse batches pointing at this frame's draws.
         v.keptMeshes = {};
+        v.keptBatches = {};
         return true;
     }
 
@@ -7909,7 +7911,7 @@ struct Renderer::Impl
                 if (b.count == 0)
                     continue;
                 const MeshDraw& d = *b.draw;
-                GpuMesh* g = gpuMesh(d.mesh);
+                GpuMesh* g = d.mesh ? gpuMesh(d.mesh) : nullptr;
                 if (!g)
                     continue;
                 v.keptGpuMeshes.push_back(g);
