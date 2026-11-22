@@ -415,6 +415,8 @@ QString hdrShiftHint(const std::string& action)
         return "Reference Images menu";
     if (action == "view.presenter")
         return "edit the Presenter layout";
+    if (optionBox::available(action))
+        return "options";
     return {};
 }
 
@@ -525,6 +527,11 @@ bool hdrShiftClick(QToolButton* b, const std::string& action)
     if (action == "view.presenter" && actions::find("view.presenterLayout"))
     {
         actions::run("view.presenterLayout");
+        return true;
+    }
+    if (optionBox::available(action))
+    {
+        optionBox::open(action);
         return true;
     }
     return false;
@@ -1291,6 +1298,7 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
     for (const char* id : {"viewport.defaultMaterial", "viewport.greyBaseColor"})
         if (hdrRelevant(vc::Materials, id, mView))
             row(id);
+    row("viewport.randomColors");
     hdrSubmenu(m, "Vertex Colors", [this](QMenu* s) {
         hdrRadioRows(s, {"viewport.vertexColors.off", "viewport.vertexColors.shaded", "viewport.vertexColors.unlit"}, mView, {});
         s->addSeparator();

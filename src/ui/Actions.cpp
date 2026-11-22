@@ -14,7 +14,9 @@
 #include "scene/Relocate.h"
 #include "ui/Deletion.h"
 #include "ui/FeatureStatus.h"
+#include "ui/Controls.h"
 #include "ui/Hotkeys.h"
+#include "ui/LocateFlash.h"
 #include "ui/MaterialDraw.h"
 #include "ui/OptionBox.h"
 #include "ui/SceneLights.h"
@@ -22,7 +24,13 @@
 #include "ui/ViewportTool.h"
 
 #include <QApplication>
+#include <QComboBox>
 #include <QCursor>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QFormLayout>
+#include <QPointer>
+#include <QVBoxLayout>
 
 #include <algorithm>
 #include <cctype>
@@ -478,6 +486,53 @@ std::string pythonFor(const json& target)
     return "";
 }
 
+namespace
+{
+void openRandomColorsOptions()
+{
+    namespace vd = viewportDisplay;
+    static QPointer<QDialog> dialog;
+    if (!dialog)
+    {
+        QWidget* parent = nullptr;
+        for (QWidget* w : QApplication::topLevelWidgets())
+            if (w->inherits("QMainWindow") && w->isVisible())
+                parent = w;
+        dialog = new QDialog(parent);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setWindowTitle("Random Colors Options");
+        auto* layout = new QVBoxLayout(dialog);
+        auto* form = new QFormLayout;
+        auto* palette = new QComboBox(dialog);
+        palette->addItem("High Contrast", int(vd::RandomPalette::Contrast));
+        palette->addItem("Pastel", int(vd::RandomPalette::Pastel));
+        palette->setCurrentIndex(palette->findData(int(vd::randomPalette())));
+        palette->setToolTip("High Contrast: strong colours across every hue. Pastel: soft, light colours.");
+        QObject::connect(palette, &QComboBox::currentIndexChanged, dialog, [palette](int) {
+            vd::setRandomPalette(vd::RandomPalette(palette->currentData().toInt()));
+            PrefStore::get().set("general", vd::kRandomColors, true);
+        });
+        form->addRow("Palette", palette);
+        QDoubleSpinBox* seed = controls::valueField(0.0, 99999.0, 0, QString(), dialog);
+        seed->setValue(vd::randomSeed());
+        seed->setToolTip("Gives every mesh a different colour from the same palette.");
+        QObject::connect(seed, &QDoubleSpinBox::valueChanged, dialog, [](double v) {
+            PrefStore::get().set("general", vd::kRandomColorsSeed, int(v));
+            PrefStore::get().set("general", vd::kRandomColors, true);
+        });
+        form->addRow("Seed", seed);
+        layout->addLayout(form);
+        auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+        QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
+        layout->addWidget(buttons);
+    }
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
+    flashLocate(dialog);
+}
+} // namespace
+
 void registerBuiltins()
 {
     viewportKeys::registerBuiltins();
@@ -910,6 +965,9 @@ void registerBuiltins()
     togglePref("viewport.modifierEdges", "Show Modifier Edges", vd::kModifierEdges, false,
                "Editing components on a mesh with modifiers (bevel, subdivide) also draws the edges the modifiers add, faintly.");
     togglePref("viewport.defaultMaterial", "Use Default Material", vd::kDefaultMaterial, false, "Shades every mesh with the plain default material.");
+    togglePref("viewport.randomColors", "Random Colors", vd::kRandomColors, false,
+               "Shades every mesh with the default material in a colour of its own, to tell objects apart.");
+    optionBox::addCustom("viewport.randomColors", openRandomColorsOptions);
     togglePref("viewport.greyBaseColor", "Grey Base Color", vd::kGreyBaseColor, false,
                "Materials shade with a 50% grey base color, keeping their normal, packed and other maps, opacity and shading model.");
     togglePref("viewport.toggleEnvBackground", "Environment Background", "/viewport/env/background", true, "Shows the HDRI behind the scene.");

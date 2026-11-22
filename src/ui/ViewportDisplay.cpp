@@ -608,6 +608,57 @@ bool defaultMaterial()
     return PrefStore::get().value<bool>("general", kDefaultMaterial, false);
 }
 
+bool randomColors()
+{
+    return PrefStore::get().value<bool>("general", kRandomColors, false);
+}
+
+RandomPalette randomPalette()
+{
+    return PrefStore::get().value<std::string>("general", kRandomColorsPalette, "contrast") == "pastel" ? RandomPalette::Pastel : RandomPalette::Contrast;
+}
+
+void setRandomPalette(RandomPalette palette)
+{
+    PrefStore::get().set("general", kRandomColorsPalette, std::string(palette == RandomPalette::Pastel ? "pastel" : "contrast"));
+}
+
+int randomSeed()
+{
+    return PrefStore::get().value<int>("general", kRandomColorsSeed, 0);
+}
+
+glm::vec3 randomColor(std::string_view name, RandomPalette palette, int seed)
+{
+    uint64_t h = 1469598103934665603ull ^ (uint64_t(uint32_t(seed)) * 0x9e3779b97f4a7c15ull); // FNV-1a
+    for (unsigned char ch : name)
+        h = (h ^ ch) * 1099511628211ull;
+    // Finalise so names differing in one character (pCube1, pCube2) land far apart.
+    h = (h ^ (h >> 30)) * 0xbf58476d1ce4e5b9ull;
+    h = (h ^ (h >> 27)) * 0x94d049bb133111ebull;
+    h ^= h >> 31;
+    auto unit = [h](int shift) { return float((h >> shift) & 0xffff) / 65535.0f; };
+    float hue = unit(0) * 6.0f, sat = 0.35f + 0.3f * unit(16), val = 0.7f + 0.2f * unit(32);
+    if (palette == RandomPalette::Pastel)
+    {
+        sat = 0.12f + 0.18f * unit(16);
+        val = 0.85f + 0.1f * unit(32);
+    }
+    const float f = hue - std::floor(hue), p = val * (1.0f - sat), q = val * (1.0f - sat * f), t = val * (1.0f - sat * (1.0f - f));
+    glm::vec3 rgb;
+    switch (int(hue) % 6)
+    {
+    case 0: rgb = {val, t, p}; break;
+    case 1: rgb = {q, val, p}; break;
+    case 2: rgb = {p, val, t}; break;
+    case 3: rgb = {p, q, val}; break;
+    case 4: rgb = {t, p, val}; break;
+    default: rgb = {val, p, q}; break;
+    }
+    // HSV is picked in display space; draws take linear colour.
+    return glm::pow(rgb, glm::vec3(2.2f));
+}
+
 bool highlightSelection()
 {
     return PrefStore::get().value<bool>("general", kHighlightSelection, true);
