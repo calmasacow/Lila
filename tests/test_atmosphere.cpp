@@ -2,6 +2,8 @@
 
 #include "render/Atmosphere.h"
 
+#include <glm/gtc/constants.hpp>
+
 #include <cmath>
 
 using namespace lila;
