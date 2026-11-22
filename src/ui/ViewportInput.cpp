@@ -578,9 +578,12 @@ bool ViewportWidget::selectLoopAt(QPointF at, Qt::KeyboardModifiers mods)
                         from = id;
                         break;
                     }
-            // Nothing selected on this mesh to run a path from: vertices and faces add their connected piece.
+            // Nothing else selected on this mesh to run a path from: an edge adds its loop, vertices and faces their connected piece.
             if (!from && mode == ComponentMode::Edge)
-                return false;
+            {
+                ops::execute("selectLoopThrough", {{"args", {n->path()}}, {"edge", h.id}, {"add", true}, {"symmetric", symmetric}}, CallSource::UI);
+                return true;
+            }
             if (!from)
             {
                 addConnected();
