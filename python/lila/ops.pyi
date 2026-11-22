@@ -2063,7 +2063,7 @@ def createGroom(*objects: Any, guides: str | None = None, count: int | None = No
         sides: Points around each lock.
     """
 
-def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, bc: Sequence[float] | None = None) -> Any:
+def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, metallic: float | None = None, roughness: float | None = None, specular: float | None = None, emissive: Sequence[float] | None = None, emissiveIntensity: float | None = None, opacity: float | None = None, opacityMaskClipValue: float | None = None, blendMode: Any | None = None, twoSided: bool | None = None, uvSet: int | None = None, normalFormat: Any | None = None, flipGreen: bool | None = None, baseColorMap: str | None = None, metallicMap: str | None = None, roughnessMap: str | None = None, normalMap: str | None = None, ambientOcclusionMap: str | None = None, ormMap: str | None = None, packedLayout: Any | None = None, emissiveMap: str | None = None, shadingModel: Any | None = None, painterlyStrength: float | None = None, strokeNormal: float | None = None, strokeScale: float | None = None, strokeLayerRatio: float | None = None, strokeMapping: Any | None = None, strokeMap: str | None = None, paletteCount: int | None = None, paletteShadow: Sequence[float] | None = None, paletteLight: Sequence[float] | None = None, paletteAccent: Sequence[float] | None = None, paletteContrast: float | None = None, paletteSpread: float | None = None, specularTint: float | None = None, boil: bool | None = None, boilFps: float | None = None, toonShadowColor: Sequence[float] | None = None, toonLightTint: Sequence[float] | None = None, toonThreshold: float | None = None, toonSoftness: float | None = None, toonOuterOffset: float | None = None, toonOuterColor: Sequence[float] | None = None, rimColor: Sequence[float] | None = None, rimWidth: float | None = None, rimStrength: float | None = None, foliageBottomColor: Sequence[float] | None = None, foliageTopColor: Sequence[float] | None = None, foliageGradient: float | None = None, foliageBottomShadow: float | None = None, foliageTopHighlight: float | None = None, foliageTranslucency: float | None = None, foliageWrap: float | None = None, subsurfaceColor: Sequence[float] | None = None, subsurfaceAmount: float | None = None, sheenColor: Sequence[float] | None = None, sheenRoughness: float | None = None, clearcoat: float | None = None, clearcoatRoughness: float | None = None, anisotropy: float | None = None, anisotropyRotation: float | None = None, hairShift: float | None = None, irisRadius: float | None = None, irisDepth: float | None = None, limbalRing: float | None = None, bevelRadius: float | None = None, heightMap: str | None = None, normalFromHeight: bool | None = None, heightDepth: float | None = None, heightUvWidth: float | None = None, heightUvHeight: float | None = None, baseColorMapWrapU: Any | None = None, baseColorMapWrapV: Any | None = None, baseColorMapFilter: Any | None = None, baseColorMapColorSpace: Any | None = None, metallicMapWrapU: Any | None = None, metallicMapWrapV: Any | None = None, metallicMapFilter: Any | None = None, metallicMapColorSpace: Any | None = None, roughnessMapWrapU: Any | None = None, roughnessMapWrapV: Any | None = None, roughnessMapFilter: Any | None = None, roughnessMapColorSpace: Any | None = None, normalMapWrapU: Any | None = None, normalMapWrapV: Any | None = None, normalMapFilter: Any | None = None, normalMapColorSpace: Any | None = None, ambientOcclusionMapWrapU: Any | None = None, ambientOcclusionMapWrapV: Any | None = None, ambientOcclusionMapFilter: Any | None = None, ambientOcclusionMapColorSpace: Any | None = None, ormMapWrapU: Any | None = None, ormMapWrapV: Any | None = None, ormMapFilter: Any | None = None, ormMapColorSpace: Any | None = None, emissiveMapWrapU: Any | None = None, emissiveMapWrapV: Any | None = None, emissiveMapFilter: Any | None = None, emissiveMapColorSpace: Any | None = None, baseColorMapOcioSpace: str | None = None, emissiveMapOcioSpace: str | None = None, textureSet: str | None = None, volumeDensity: float | None = None, volumeScatterColor: Sequence[float] | None = None, volumeAbsorptionColor: Sequence[float] | None = None, volumeAnisotropy: float | None = None, volumeEmissionColor: Sequence[float] | None = None, volumeEmissionStrength: float | None = None, volumeVoxelSize: float | None = None, bc: Sequence[float] | None = None) -> Any:
     """Create a material (Unreal default lit inputs). Faces use it through a slot of the same name. Returns its name.
 
     Args:
@@ -2089,7 +2089,7 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         ormMap: Packed occlusion/roughness/metallic texture path.
         packedLayout: orm or mro: the packed map's channel order.
         emissiveMap: Texture path.
-        shadingModel: Lighting model: defaultLit (Unreal's default lit), painterly (brush strokes and a colour palette), toon (stepped ramp with tinted light and shadow), foliage (soft gradient shading, lit through), unlit (the base colour as it is, plus emissive, with no lighting), skin (light scattering under the surface), cloth (velvet sheen), clearcoat (a glossy layer on top), hair (stretched strand highlights, for hair cards) or eye (an iris under a glossy cornea; UVs centred on the pupil).
+        shadingModel: Lighting model: defaultLit (Unreal's default lit), painterly (brush strokes and a colour palette), toon (stepped ramp with tinted light and shadow), foliage (soft gradient shading, lit through), unlit (the base colour as it is, plus emissive, with no lighting), skin (light scattering under the surface), cloth (velvet sheen), clearcoat (a glossy layer on top), hair (stretched strand highlights, for hair cards) or eye (an iris under a glossy cornea; UVs centred on the pupil) or volume (fog, smoke or cloud filling the mesh, or its geometry nodes' density grid, in place of a surface).
         painterlyStrength: Painterly: scales the whole effect; 0 shades exactly like defaultLit.
         strokeNormal: Painterly: how far the stroke sheet bends the shading normal; 0 is the plain surface.
         strokeScale: Painterly: size of one stroke sheet tile, cm (UV mode: tiles per UV unit is 100 / this).
@@ -2170,6 +2170,13 @@ def createMaterial(*objects: Any, baseColor: Sequence[float] | None = None, meta
         baseColorMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
         emissiveMapOcioSpace: With OCIO colour management on: the config colour space the map is in (Utility - sRGB - Texture, ACEScg); empty reads it by its ColorSpace.
         textureSet: Texture set whose maps draw this material, in place of the maps it has. Any number of materials can use one set; painting a mesh with this material paints the set.
+        volumeDensity: Volume: how thick it is, per metre: 1 dims light to a third over a metre. Scales a density grid's values.
+        volumeScatterColor: Volume: the colour of light it scatters (its albedo); white is cloud, grey is smoke.
+        volumeAbsorptionColor: Volume: light it swallows by colour on top of what it scatters; dark smoke absorbs.
+        volumeAnisotropy: Volume: 0 scatters evenly, toward 1 forward (glowing toward the light), toward -1 back.
+        volumeEmissionColor: Volume: colour of light it gives off, for fire and glowing gas.
+        volumeEmissionStrength: Volume: brightness of its own light, scaled by density; 0 gives none.
+        volumeVoxelSize: Volume: voxel size a mesh is filled at, cm; 0 picks one from its size. Density grids keep their own.
     """
 
 def createMesh(points: Sequence[Any] | None = None, faces: Sequence[Any] | None = None, uvs: Sequence[Any] | None = None, name: str | None = None, *, n: str | None = None) -> Any:
@@ -3708,6 +3715,15 @@ def flushUndo(which: str | None = None, *, w: str | None = None) -> Any:
 
     Args:
         which: past, future or all. Short form w. One of 'past', 'future', 'all'. Default 'past'.
+    """
+
+def fogVolume(name: str | None = None, size: float | None = None, density: float | None = None, *, n: str | None = None, sz: float | None = None, d: float | None = None) -> Any:
+    """Create a box filled with fog: a cube with a new volume material. Returns the box.
+
+    Args:
+        name: Name of the box; made unique. Short form n. Default 'fogVolume'.
+        size: Edge length, cm. Short form sz. Default 400.0.
+        density: The material's volumeDensity, per metre. Short form d. Default 0.5.
     """
 
 def fontList() -> Any:
@@ -9629,6 +9645,17 @@ def skinningMethod(*objects: Any, method: str | None = None, m: str | None = Non
         method: linear | dualQuaternion | centresOfRotation | directDeltaMush. Short form m. One of 'linear', 'dualQuaternion', 'centresOfRotation', 'directDeltaMush'. Default 'linear'.
     """
 
+def skyAtmosphere(name: str | None = None, existing: bool | None = None, sun: bool | None = None, sunElevation: float | None = None, sunAzimuth: float | None = None, *, n: str | None = None, e: bool | None = None, s: bool | None = None, se: float | None = None, sa: float | None = None) -> Any:
+    """Create a sky atmosphere and, when the scene has no directional light, a sun to light it, and select the sky. Returns its name.
+
+    Args:
+        name: Name; made unique. Short form n.
+        existing: Return the active sky if there is one instead of creating another. Short form e. Default False.
+        sun: Add a sun when the scene has no directional light. Short form s. Default True.
+        sunElevation: The new sun's height above the horizon, degrees. Short form se. Default 35.0.
+        sunAzimuth: The new sun's turn about the up axis, degrees. Short form sa. Default 30.0.
+    """
+
 def slideMedia(*objects: Any, frames: float | None = None, f: float | None = None) -> Any:
     """Move audio nodes and image planes along the timeline by a number of frames: an audio node's offset, an image plane's start frame. Trims stay with the sound.
 
@@ -11714,6 +11741,14 @@ def unrealSendPointCloud(*objects: Any, spacing: float | None = None, clip: bool
         folder: Content folder for the asset. Default '/Game/Lila/PointClouds'.
     """
 
+def unrealSendSky(sun: bool | None = None, fog: bool | None = None, *, s: bool | None = None, f: bool | None = None) -> Any:
+    """Send the scene's sky to Unreal's open level: the sky atmosphere as a SkyAtmosphere (Unreal's own model, settings unchanged), a SkyLight capturing it in real time, the sun as its atmosphere sun light, and the active post process's height fog as an ExponentialHeightFog with volumetric fog. Each is made when the level has none. Returns what was set.
+
+    Args:
+        sun: Place the sun light too, marked as the atmosphere's sun. Short form s. Default True.
+        fog: Send the height fog too. Short form f. Default True.
+    """
+
 def unrealSendTextureSet(*objects: Any, folder: str | None = None, materialParent: str | None = None, materialFolder: str | None = None, exportFolder: str | None = None, preset: str | None = None, all: bool | None = None, remember: bool | None = None, save: bool | None = None, wait: bool | None = None, fo: str | None = None, mp: str | None = None, mf: str | None = None, ef: str | None = None, pr: str | None = None, a: bool | None = None, rm: bool | None = None, sv: bool | None = None, w: bool | None = None) -> Any:
     """Send a texture set to Unreal: exports it through the Unreal preset (only tiles and channels that changed since the last export are rewritten and sent, unless all=True) and updates the textures and the material instance of the set's slot (MI_<slot>), set on the slot of every mapped mesh using it. Painterly and Toon materials become instances of LilaLink's stylised masters with their palette values; others need materialParent (or the unreal pref), else only textures go. The set then also goes on every save. Returns {queued, textures} or, with wait=True, Unreal's {assets, warnings, errors}.
 
@@ -11745,6 +11780,14 @@ def unrealSendTextures(project: str | None = None, folder: str | None = None, ma
         assign: Run bakeAssign first. Short form as. Default True.
         save: Save the packages in Unreal afterwards. Short form sv.
         wait: Block until Unreal finishes and return its reply. Short form w. Default False.
+    """
+
+def unrealSendVolumes(*objects: Any, folder: str | None = None, fo: str | None = None) -> Any:
+    """Send meshes with a volume material to Unreal's open level: each grid written as OpenVDB, imported as a Sparse Volume Texture and shown by a Heterogeneous Volume with a material instance of M_LilaVolume (built on MF_LilaVolume, which your own Volume materials can use). With no objects, the selected volumes, else every volume in the scene. Needs the NanoVDB extension. Returns one entry per volume.
+
+    Args:
+        objects: objects.
+        folder: Content folder for the textures and material instances. Short form fo. Default '/Game/Lila/Volumes'.
     """
 
 def unrealSetGeoreference() -> Any:
