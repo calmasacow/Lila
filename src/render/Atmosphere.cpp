@@ -14,7 +14,7 @@ namespace lila::render
 {
 namespace
 {
-constexpr double kPi = 3.14159265358979323846;
+constexpr double kPiD = 3.14159265358979323846;
 constexpr double kCmPerKm = 1.0e5;
 constexpr const char* kKeyPrefix = "atmosphere:";
 
@@ -113,13 +113,13 @@ glm::dvec3 lutMultiScatter(const AtmosphereSettings& a, const AtmosphereLuts& l,
 
 double rayleighPhase(double nu)
 {
-    return 3.0 / (16.0 * kPi) * (1.0 + nu * nu);
+    return 3.0 / (16.0 * kPiD) * (1.0 + nu * nu);
 }
 
 double hgPhase(double g, double nu)
 {
     const double d = std::max(1.0 + g * g - 2.0 * g * nu, 1e-6);
-    return (1.0 - g * g) / (4.0 * kPi * d * std::sqrt(d));
+    return (1.0 - g * g) / (4.0 * kPiD * d * std::sqrt(d));
 }
 
 /** The sun's light at p after the atmosphere and the planet's shadow. */
@@ -178,7 +178,7 @@ AtmosphereLuts buildAtmosphereLuts(const AtmosphereSettings& a)
                 for (int i = 0; i < dirSide; ++i)
                 {
                     const double cosTheta = 1.0 - 2.0 * (double(j) + 0.5) / dirSide;
-                    const double phi = 2.0 * kPi * (double(i) + 0.5) / dirSide;
+                    const double phi = 2.0 * kPiD * (double(i) + 0.5) / dirSide;
                     const double sinTheta = std::sqrt(std::max(1.0 - cosTheta * cosTheta, 0.0));
                     const glm::dvec3 dir(sinTheta * std::cos(phi), cosTheta, sinTheta * std::sin(phi));
                     const double tGround = raySphere(pos, dir, a.bottomRadius);
@@ -192,7 +192,7 @@ AtmosphereLuts buildAtmosphereLuts(const AtmosphereSettings& a)
                         const glm::dvec3 scatter = m.rayleigh + m.mie;
                         const glm::dvec3 segT = glm::exp(-m.extinction * dt);
                         const glm::dvec3 integ = (glm::dvec3(1.0) - segT) / glm::max(m.extinction, glm::dvec3(1e-12));
-                        L += throughput * scatter * sunAt(a, l, p, sun) / (4.0 * kPi) * integ;
+                        L += throughput * scatter * sunAt(a, l, p, sun) / (4.0 * kPiD) * integ;
                         f += throughput * scatter * integ;
                         throughput *= segT;
                     }
@@ -200,7 +200,7 @@ AtmosphereLuts buildAtmosphereLuts(const AtmosphereSettings& a)
                     {
                         const glm::dvec3 p = pos + dir * tGround;
                         const glm::dvec3 nrm = p / glm::length(p);
-                        L += throughput * sunAt(a, l, p, sun) * std::max(glm::dot(nrm, sun), 0.0) * glm::dvec3(a.groundAlbedo) / kPi;
+                        L += throughput * sunAt(a, l, p, sun) * std::max(glm::dot(nrm, sun), 0.0) * glm::dvec3(a.groundAlbedo) / kPiD;
                     }
                     lum += L;
                     fms += f;
@@ -272,7 +272,7 @@ glm::vec3 skyRadiance(const AtmosphereSettings& a, const AtmosphereLuts& luts, c
     {
         const glm::dvec3 p = pos + dir * tGround;
         const glm::dvec3 nrm = p / glm::length(p);
-        L += throughput * sunAt(a, luts, p, sunDir) * std::max(glm::dot(nrm, sunDir), 0.0) * glm::dvec3(a.groundAlbedo) / kPi;
+        L += throughput * sunAt(a, luts, p, sunDir) * std::max(glm::dot(nrm, sunDir), 0.0) * glm::dvec3(a.groundAlbedo) / kPiD;
     }
     return glm::vec3(L * glm::dvec3(a.skyLuminanceFactor));
 }

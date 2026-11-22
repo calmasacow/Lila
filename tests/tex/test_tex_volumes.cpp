@@ -20,7 +20,7 @@ std::shared_ptr<RenderMesh> sphere(float radius, int rings, int segments);
 
 namespace
 {
-constexpr int kSize = 64;
+constexpr int kFrameSize = 64;
 
 /** Looking at the origin from +Z with nothing but the given volumes, under a uniform environment of radiance 1. */
 FrameState volumeFrame(bool pathTraced)
@@ -80,8 +80,8 @@ std::vector<float> renderVolumes(const FrameState& s, int frames)
 {
     Renderer::OffscreenResult out;
     std::string err;
-    REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kSize, kSize, frames, true, out, &err), err);
-    REQUIRE(out.hdr.size() == size_t(kSize) * kSize * 4);
+    REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kFrameSize, kFrameSize, frames, true, out, &err), err);
+    REQUIRE(out.hdr.size() == size_t(kFrameSize) * kFrameSize * 4);
     return out.hdr;
 }
 
@@ -89,10 +89,10 @@ std::vector<float> renderVolumes(const FrameState& s, int frames)
 double centre(const std::vector<float>& hdr)
 {
     double sum = 0.0;
-    for (int y = kSize / 2 - 4; y < kSize / 2 + 4; ++y)
-        for (int x = kSize / 2 - 4; x < kSize / 2 + 4; ++x)
+    for (int y = kFrameSize / 2 - 4; y < kFrameSize / 2 + 4; ++y)
+        for (int x = kFrameSize / 2 - 4; x < kFrameSize / 2 + 4; ++x)
             for (int c = 0; c < 3; ++c)
-                sum += hdr[(size_t(y) * kSize + x) * 4 + c];
+                sum += hdr[(size_t(y) * kFrameSize + x) * 4 + c];
     return sum / (8 * 8 * 3);
 }
 
@@ -147,7 +147,7 @@ TEST_CASE("volumes: emission adds light where there is density")
     v.emission = glm::vec3(10.0f, 0.0f, 0.0f);
     s.volumes.push_back(v);
     const std::vector<float> hdr = renderVolumes(s, 1);
-    const float* mid = &hdr[(size_t(kSize / 2) * kSize + kSize / 2) * 4];
+    const float* mid = &hdr[(size_t(kFrameSize / 2) * kFrameSize + kFrameSize / 2) * 4];
     CHECK(mid[0] > mid[2] + 0.3f);
     // Outside the cube only the environment shows.
     CHECK(hdr[0] == doctest::Approx(1.0f).epsilon(0.02));
@@ -167,7 +167,7 @@ TEST_CASE("atmosphere: the path tracer and the viewport draw the same sky behind
         s.atmosphere = a;
         s.envPath = atmosphereEnvironmentKey(a, s.eye);
         const std::vector<float> hdr = renderVolumes(s, traced ? 4 : 1);
-        const float* mid = &hdr[(size_t(kSize / 2) * kSize + kSize / 2) * 4];
+        const float* mid = &hdr[(size_t(kFrameSize / 2) * kFrameSize + kFrameSize / 2) * 4];
         CHECK(mid[2] > mid[0]);
         blueOverRed.push_back(double(mid[2]) / std::max(double(mid[0]), 1e-6));
     }
@@ -183,8 +183,8 @@ TEST_CASE("volumes: the path tracer's denoiser smooths a volume like a surface")
         s.pathTrace.seed = seed;
         Renderer::OffscreenResult out;
         std::string err;
-        REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kSize, kSize, 1, false, out, &err), err);
-        REQUIRE(out.bgra.size() == size_t(kSize) * kSize * 4);
+        REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kFrameSize, kFrameSize, 1, false, out, &err), err);
+        REQUIRE(out.bgra.size() == size_t(kFrameSize) * kFrameSize * 4);
         return out.bgra;
     };
     std::vector<double> noise;
@@ -208,11 +208,11 @@ TEST_CASE("volumes: the path tracer's denoiser smooths a volume like a surface")
         const std::vector<uint8_t> a = picture(s, 5), b = picture(s, 6);
         double sq = 0.0;
         int n = 0;
-        for (int y = kSize / 2 - 6; y < kSize / 2 + 6; ++y)
-            for (int x = kSize / 2 - 6; x < kSize / 2 + 6; ++x)
+        for (int y = kFrameSize / 2 - 6; y < kFrameSize / 2 + 6; ++y)
+            for (int x = kFrameSize / 2 - 6; x < kFrameSize / 2 + 6; ++x)
                 for (int c = 0; c < 3; ++c)
                 {
-                    const double d = (double(a[(size_t(y) * kSize + x) * 4 + c]) - double(b[(size_t(y) * kSize + x) * 4 + c])) / 255.0;
+                    const double d = (double(a[(size_t(y) * kFrameSize + x) * 4 + c]) - double(b[(size_t(y) * kFrameSize + x) * 4 + c])) / 255.0;
                     sq += d * d;
                     ++n;
                 }
@@ -244,13 +244,13 @@ TEST_CASE("volumes: a scene of only volumes path traces")
         s.volumes.push_back(v);
         Renderer::OffscreenResult out;
         std::string err;
-        REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kSize, kSize, 1, false, out, &err), err);
+        REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kFrameSize, kFrameSize, 1, false, out, &err), err);
         double sq = 0.0;
         int n = 0;
-        for (int y = kSize / 2 - 6; y < kSize / 2 + 6; ++y)
-            for (int x = kSize / 2 - 6; x < kSize / 2 + 5; ++x)
+        for (int y = kFrameSize / 2 - 6; y < kFrameSize / 2 + 6; ++y)
+            for (int x = kFrameSize / 2 - 6; x < kFrameSize / 2 + 5; ++x)
             {
-                const double d = (double(out.bgra[(size_t(y) * kSize + x) * 4 + 1]) - double(out.bgra[(size_t(y) * kSize + x + 1) * 4 + 1])) / 255.0;
+                const double d = (double(out.bgra[(size_t(y) * kFrameSize + x) * 4 + 1]) - double(out.bgra[(size_t(y) * kFrameSize + x + 1) * 4 + 1])) / 255.0;
                 sq += d * d;
                 ++n;
             }
@@ -283,16 +283,16 @@ TEST_CASE("atmosphere: path traced samples keep adding up from frame to frame un
             s.pathTrace.maxSamples = 4096;
             Renderer::OffscreenResult out;
             std::string err;
-            REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kSize, kSize, draws, true, out, &err), err);
+            REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kFrameSize, kFrameSize, draws, true, out, &err), err);
             pictures[seed - 1] = out.hdr;
         }
         double sq = 0.0;
         int n = 0;
-        for (int y = kSize / 2 - 8; y < kSize / 2 + 8; ++y)
-            for (int x = kSize / 2 - 8; x < kSize / 2 + 8; ++x)
+        for (int y = kFrameSize / 2 - 8; y < kFrameSize / 2 + 8; ++y)
+            for (int x = kFrameSize / 2 - 8; x < kFrameSize / 2 + 8; ++x)
                 for (int c = 0; c < 3; ++c)
                 {
-                    const size_t i = (size_t(y) * kSize + x) * 4 + c;
+                    const size_t i = (size_t(y) * kFrameSize + x) * 4 + c;
                     sq += double(pictures[0][i] - pictures[1][i]) * double(pictures[0][i] - pictures[1][i]);
                     ++n;
                 }
