@@ -74,6 +74,15 @@ bool moveComponentSpace() { return PrefStore::get().value<std::string>("general"
 /** "world", "object" or "component" (the selection's average normal and tangent). Objects always scale on their pivot's axes. */
 std::string scaleSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/scaleSpace", "world"); }
 
+/** The whole gizmo stays drawn while one of its handles is dragged; otherwise only the dragged handle does. */
+bool wholeWhileDragging(Tool t)
+{
+    const char* key = t == Tool::Rotate ? "/manipulator/wholeWhileDragging/rotate"
+                      : t == Tool::Scale ? "/manipulator/wholeWhileDragging/scale"
+                                         : "/manipulator/wholeWhileDragging/move";
+    return PrefStore::get().value<bool>("general", key, false);
+}
+
 /**
  * A pivot placed with Edit Pivot on a component selection, shared by every viewport. It lasts until that selection
  * changes, or while pinned until it is reset.
@@ -1719,10 +1728,11 @@ void Manipulator::drawPlanes(OverlayPainter& p, glm::dvec3 scale)
 {
     const double L = handleLength();
     const H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(effectiveTool()) ? H::None : active;
     for (int i = 0; i < 3; ++i)
     {
         const H h = H(int(H::PlaneYZ) + i);
-        if (active != H::None && active != h)
+        if (only != H::None && only != h)
             continue;
         const auto quad = planeQuad(i, L, scale);
         if (quad.empty())
@@ -1741,6 +1751,7 @@ void Manipulator::drawMove(OverlayPainter& p)
     double L = handleLength();
     bool pivotMode = mDrag ? mDrag->pivotEdit : tools::pivotEdit();
     H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(Tool::Move) ? H::None : active;
 
     if (!pivotMode && !mNormal)
         drawPlanes(p, glm::dvec3(1.0));
@@ -1748,9 +1759,9 @@ void Manipulator::drawMove(OverlayPainter& p)
     for (int i = 0; i < 3; ++i)
     {
         H h = H(int(H::X) + i);
-        if (active != H::None && active != h && active != H::Center && !isPlane(active))
+        if (only != H::None && only != h && only != H::Center && !isPlane(only))
             continue;
-        if (isPlane(active) && handleAxis(active) == i)
+        if (isPlane(only) && handleAxis(only) == i)
             continue;
         auto tip = mView.project(mPivot + axis(i) * L);
         if (!tip || dist(*tip, *c) < 12)
@@ -1792,6 +1803,7 @@ void Manipulator::drawRotate(OverlayPainter& p)
     if (!c)
         return;
     H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(Tool::Rotate) ? H::None : active;
     double ringPx = 0.85 * generalPref("/manipulator/size", 100.0);
     bool pivotMode = mDrag ? mDrag->pivotEdit : tools::pivotEdit();
     auto stroke = [&](const std::vector<QPointF>& pts, float w, const glm::vec4& col, bool closed) {
@@ -1804,13 +1816,13 @@ void Manipulator::drawRotate(OverlayPainter& p)
     std::vector<QPointF> circle;
     for (int k = 0; k < 64; ++k)
         circle.push_back(*c + QPointF(std::cos(k * std::numbers::pi / 32), std::sin(k * std::numbers::pi / 32)) * ringPx);
-    if (active == H::None || active == H::Free)
+    if (only == H::None || only == H::Free)
         stroke(circle, mHover == H::Free || active == H::Free ? 1.5f : 1.0f, {0.6f, 0.6f, 0.6f, 0.35f}, true);
 
     for (int i = 0; i < 3; ++i)
     {
         H h = H(int(H::X) + i);
-        if (active != H::None && active != h)
+        if (only != H::None && only != h)
             continue;
         auto pts = ringPoints(i, active != h);
         glm::vec4 col = handleColor(h, i);
@@ -1831,7 +1843,7 @@ void Manipulator::drawRotate(OverlayPainter& p)
         flush();
     }
 
-    if (active == H::None || active == H::ViewRing)
+    if (only == H::None || only == H::ViewRing)
     {
         std::vector<QPointF> outer;
         for (int k = 0; k < 64; ++k)
@@ -1867,13 +1879,14 @@ void Manipulator::drawScale(OverlayPainter& p)
         return;
     double L = handleLength();
     H active = mDrag ? mDrag->handle : H::None;
+    const H only = wholeWhileDragging(Tool::Scale) ? H::None : active;
     glm::dvec3 s = mDrag ? mDrag->scale : glm::dvec3(1.0);
     if (!(mDrag ? mDrag->pivotEdit : tools::pivotEdit()))
         drawPlanes(p, s);
     for (int i = 0; i < 3; ++i)
     {
         H h = H(int(H::X) + i);
-        if (active != H::None && active != h && active != H::Center && !(isPlane(active) && handleAxis(active) != i))
+        if (only != H::None && only != h && only != H::Center && !(isPlane(only) && handleAxis(only) != i))
             continue;
         auto tip = mView.project(mPivot + axis(i) * L * std::clamp(s[i], 0.05, 20.0));
         if (!tip || dist(*tip, *c) < 12)
