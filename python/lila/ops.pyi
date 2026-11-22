@@ -10296,6 +10296,15 @@ def texAddGenerator(*objects: Any, name: str | None = None, mode: str | None = N
         index: Position in the mask stack, 0 the bottom; the top when left out.
     """
 
+def texAddIdLayers(*objects: Any, names: Sequence[Any] | None = None, folder: str | None = None) -> Any:
+    """Add a fill layer per entry of the set's baked ID map (its bake project's id map: per material, object or group), each masked by an ID Select set to that entry's colour and shaded in it as a placeholder. Bake the id map first. Returns {name: layer id}.
+
+    Args:
+        objects: set.
+        names: Only these entries of the ID map.
+        folder: Folder to put the layers in, made when missing; empty puts them at the root. Default 'IDs'.
+    """
+
 def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, material: Any | None = None, graph: Any | None = None, source: str | None = None, filter: str | None = None, values: Any | None = None, channels: Any | None = None, projection: Any | None = None, decal: Any | None = None, text: Any | None = None, scatter: Any | None = None) -> Any:
     """Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another layer's values and mask), filter (a filter node applied to the composite below), decal (pictures per channel placed by projection), text (words drawn in the material's base colour, placed like a decal) and scatter (copies of a pattern over the uvs). A graph made by hand joins the stack as its bottom layer. Returns {id}.
 
@@ -12417,6 +12426,16 @@ def vertexColorGradient(*objects: Any, colorSet: str | None = None, type: str | 
         colorB: Linear RGBA at the end. Default [1.0, 1.0, 1.0, 1.0].
         channels: Channels to change: some of r, g, b, a. Default 'rgba'.
         target: auto (the component selection, or everything without one), all, selection, or element (whole shells of the selection). One of 'auto', 'all', 'selection', 'element'. Default 'auto'.
+    """
+
+def vertexColorMasks(*objects: Any, source: str | None = None, channels: int | None = None, prefix: str | None = None) -> Any:
+    """Writes a 0/1 mask per object or per material into vertex color channels, packed into sets named prefix0, prefix1, ... Masks are numbered by name, alphabetically, so the bake's masks map packs the same names into the same channels. Every mesh gets every set, so one material can read them all. Works on the given meshes, else the selected ones, else every mesh. Returns {name: "set.channel"}.
+
+    Args:
+        objects: meshes.
+        source: What gets a mask: object or material. One of 'object', 'material'. Default 'object'.
+        channels: Masks per set: 3 (RGB) or 4 (RGBA). Default 4.
+        prefix: Set names: the prefix, then the set's number. Default 'mask'.
     """
 
 def vertexColorSample(*objects: Any, colorSet: str | None = None, at: Sequence[float] | None = None) -> Any:
