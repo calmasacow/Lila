@@ -221,3 +221,41 @@ TEST_CASE("volumes: the path tracer's denoiser smooths a volume like a surface")
     CHECK(noise[0] > 0.0);
     CHECK(noise[1] < noise[0] * 0.5);
 }
+
+TEST_CASE("volumes: a scene of only volumes path traces")
+{
+    if (!pathtest::tracing())
+        return;
+    // Path traced, a lit volume is noisy from pixel to pixel at one sample; the raster view's march is smooth.
+    auto spread = [](FrameState s) {
+        s.meshes = {};
+        s.pathTrace.samplesPerFrame = 1;
+        s.pathTrace.maxSamples = 1;
+        s.pathTrace.denoise = false;
+        s.post.dither = false;
+        LightDraw sun;
+        sun.kind = LightDraw::Directional;
+        sun.direction = glm::normalize(glm::vec3(0.3f, -1.0f, -0.4f));
+        sun.radiance = glm::vec3(3.0f);
+        s.lights.push_back(sun);
+        VolumeDraw v = cube();
+        v.density = 0.01f;
+        v.scatter = glm::vec3(0.9f);
+        s.volumes.push_back(v);
+        Renderer::OffscreenResult out;
+        std::string err;
+        REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kSize, kSize, 1, false, out, &err), err);
+        double sq = 0.0;
+        int n = 0;
+        for (int y = kSize / 2 - 6; y < kSize / 2 + 6; ++y)
+            for (int x = kSize / 2 - 6; x < kSize / 2 + 5; ++x)
+            {
+                const double d = (double(out.bgra[(size_t(y) * kSize + x) * 4 + 1]) - double(out.bgra[(size_t(y) * kSize + x + 1) * 4 + 1])) / 255.0;
+                sq += d * d;
+                ++n;
+            }
+        return std::sqrt(sq / n);
+    };
+    const double raster = spread(volumeFrame(false)), traced = spread(volumeFrame(true));
+    CHECK(traced > raster * 4.0);
+}

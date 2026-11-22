@@ -4751,13 +4751,12 @@ struct Renderer::Impl
                 table.push_back(ti);
             }
         }
-        if (instances.empty())
-            return false;
+        // An empty structure still traces: the path tracer draws a scene of only volumes against it.
         if (built)
             compute::memoryBarrier(cmd, VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                                    VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR | VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR);
 
-        const size_t bytes = instances.size() * sizeof(VkAccelerationStructureInstanceKHR);
+        const size_t bytes = std::max<size_t>(instances.size(), 1) * sizeof(VkAccelerationStructureInstanceKHR);
         try
         {
             if (f.tlasInstances.size < bytes)
@@ -4772,12 +4771,13 @@ struct Renderer::Impl
             log::error("render: {}", e.what());
             return false;
         }
-        std::memcpy(f.tlasInstances.mapped, instances.data(), bytes);
+        if (!instances.empty())
+            std::memcpy(f.tlasInstances.mapped, instances.data(), instances.size() * sizeof(VkAccelerationStructureInstanceKHR));
         vmaFlushAllocation(vk.allocator, f.tlasInstances.alloc, 0, VK_WHOLE_SIZE);
         try
         {
             const size_t tableBytes = table.size() * sizeof(TraceInstance);
-            const size_t totalBytes = tableBytes + sections.size() * sizeof(TraceSection);
+            const size_t totalBytes = std::max<size_t>(tableBytes + sections.size() * sizeof(TraceSection), sizeof(TraceInstance));
             if (f.traceTable.size < totalBytes)
             {
                 compute::destroy(vk, f.traceTable);
@@ -4785,7 +4785,8 @@ struct Renderer::Impl
             }
             for (TraceInstance& ti : table)
                 ti.sections = f.traceTable.address + tableBytes + ti.sections * sizeof(TraceSection);
-            std::memcpy(f.traceTable.mapped, table.data(), tableBytes);
+            if (tableBytes)
+                std::memcpy(f.traceTable.mapped, table.data(), tableBytes);
             if (!sections.empty())
                 std::memcpy(static_cast<char*>(f.traceTable.mapped) + tableBytes, sections.data(), sections.size() * sizeof(TraceSection));
             vmaFlushAllocation(vk.allocator, f.traceTable.alloc, 0, VK_WHOLE_SIZE);
