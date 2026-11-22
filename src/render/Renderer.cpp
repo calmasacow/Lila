@@ -3477,7 +3477,18 @@ struct Renderer::Impl
         const uint64_t versions = textureVersions(s);
         mix(&versions, sizeof(versions));
         if (frameLightAddress && f.lights.mapped)
-            mix(f.lights.mapped, sizeof(GpuLight) * (size_t(frameLightCount) + 1));
+        {
+            // The header's buffer addresses change with the frame in flight; what they point at is what counts.
+            GpuFrame header;
+            std::memcpy(&header, f.lights.mapped, sizeof(header));
+            header.atmosphere = header.aerial = header.volumes = header.volumeParams = 0;
+            mix(&header, sizeof(header));
+            mix(static_cast<const GpuLight*>(f.lights.mapped) + 1, sizeof(GpuLight) * size_t(frameLightCount));
+            if (frameAtmosphereAddress && f.atmosphere.mapped)
+                mix(f.atmosphere.mapped, sizeof(GpuAtmosphere));
+            if (frameVolumeParams && f.volumeParams.mapped)
+                mix(f.volumeParams.mapped, sizeof(GpuVolume) * frameVolumeCount);
+        }
         in.signature = sig;
 
         if (!v.pathTrace)

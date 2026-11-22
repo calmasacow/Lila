@@ -259,3 +259,46 @@ TEST_CASE("volumes: a scene of only volumes path traces")
     const double raster = spread(volumeFrame(false)), traced = spread(volumeFrame(true));
     CHECK(traced > raster * 4.0);
 }
+
+namespace pathtest
+{
+FrameState sphereFrame(const std::string& env, uint32_t seed, int samplesPerFrame);
+}
+
+TEST_CASE("atmosphere: path traced samples keep adding up from frame to frame under a sky")
+{
+    if (!pathtest::tracing())
+        return;
+    // Noise between two seeds after some one-sample draws: the sum restarting every frame would leave it at one draw's.
+    auto noise = [](int draws) {
+        std::vector<float> pictures[2];
+        for (uint32_t seed : {1u, 2u})
+        {
+            FrameState s = pathtest::sphereFrame(pathtest::uniformHdr(1.0f), seed, 1);
+            AtmosphereFrame a;
+            a.sunDir = glm::normalize(glm::dvec3(0.3, 0.6, 0.7));
+            a.sunRadiance = glm::vec3(3.0f);
+            s.atmosphere = a;
+            s.envPath = atmosphereEnvironmentKey(a, s.eye);
+            s.pathTrace.maxSamples = 4096;
+            Renderer::OffscreenResult out;
+            std::string err;
+            REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kSize, kSize, draws, true, out, &err), err);
+            pictures[seed - 1] = out.hdr;
+        }
+        double sq = 0.0;
+        int n = 0;
+        for (int y = kSize / 2 - 8; y < kSize / 2 + 8; ++y)
+            for (int x = kSize / 2 - 8; x < kSize / 2 + 8; ++x)
+                for (int c = 0; c < 3; ++c)
+                {
+                    const size_t i = (size_t(y) * kSize + x) * 4 + c;
+                    sq += double(pictures[0][i] - pictures[1][i]) * double(pictures[0][i] - pictures[1][i]);
+                    ++n;
+                }
+        return std::sqrt(sq / n);
+    };
+    const double one = noise(1), sixteen = noise(16);
+    CHECK(one > 0.0);
+    CHECK(sixteen < one * 0.5);
+}
