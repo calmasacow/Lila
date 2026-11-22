@@ -1,5 +1,5 @@
 # ONNX Runtime for the motion engine (src/motion): the official prebuilt release, pinned by version and SHA-256.
-# Windows takes the DirectML package (CPU and DirectML execution providers) plus DirectML.dll; Linux the CPU release.
+# Windows takes the DirectML package plus DirectML.dll; Linux takes the CPU NuGet package.
 # The library is loaded at run time, so only the headers are needed to build; the DLLs are copied beside LilaScene.
 # Set LILA_ONNXRUNTIME_ARCHIVE_DIR to a folder holding the archives to build offline.
 set(LILA_ORT_VERSION 1.24.4)
@@ -7,6 +7,9 @@ set(LILA_DIRECTML_VERSION 1.15.4)
 set(LILA_ONNXRUNTIME_ARCHIVE_DIR "$ENV{LILA_ONNXRUNTIME_ARCHIVE_DIR}" CACHE PATH "Folder with pre-downloaded ONNX Runtime archives")
 
 set(_ort_root ${CMAKE_BINARY_DIR}/_deps/onnxruntime-${LILA_ORT_VERSION})
+if(NOT WIN32)
+    string(APPEND _ort_root "-nuget")
+endif()
 
 function(_lila_fetch_archive name url sha256 out)
     set(_file ${CMAKE_BINARY_DIR}/_deps/downloads/${name})
@@ -44,15 +47,17 @@ if(NOT EXISTS ${_ort_root}/.done)
         file(COPY_FILE ${_ort_root}/ort/LICENSE ${_ort_root}/LICENSE-onnxruntime.txt)
         file(COPY_FILE ${_ort_root}/dml/LICENSE.txt ${_ort_root}/LICENSE-directml.txt)
     else()
-        _lila_fetch_archive(onnxruntime-linux-x64-${LILA_ORT_VERSION}.tgz
-            https://github.com/microsoft/onnxruntime/releases/download/v${LILA_ORT_VERSION}/onnxruntime-linux-x64-${LILA_ORT_VERSION}.tgz
-            3a211fbea252c1e66290658f1b735b772056149f28321e71c308942cdb54b747 _ort)
-        file(ARCHIVE_EXTRACT INPUT ${_ort} DESTINATION ${_ort_root}/ort)
-        set(_src ${_ort_root}/ort/onnxruntime-linux-x64-${LILA_ORT_VERSION})
-        file(COPY ${_src}/include/ DESTINATION ${_ort_root}/include)
-        file(GLOB _bins ${_src}/lib/libonnxruntime*.so*)
-        file(COPY ${_bins} DESTINATION ${_ort_root}/bin)
-        file(COPY_FILE ${_src}/LICENSE ${_ort_root}/LICENSE-onnxruntime.txt)
+        _lila_fetch_archive(microsoft.ml.onnxruntime.${LILA_ORT_VERSION}.nupkg
+            https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${LILA_ORT_VERSION}/microsoft.ml.onnxruntime.${LILA_ORT_VERSION}.nupkg
+            4b978d5065b85e7004b6c6f60ca494bd978fbe6836cbf0a0b52d82b61ab99638 _ort)
+        file(ARCHIVE_EXTRACT INPUT ${_ort} DESTINATION ${_ort_root}/ort
+            PATTERNS build/native/include runtimes/linux-x64/native LICENSE)
+        set(_native ${_ort_root}/ort/runtimes/linux-x64/native)
+        file(COPY ${_ort_root}/ort/build/native/include/ DESTINATION ${_ort_root}/include)
+        file(COPY ${_native}/libonnxruntime_providers_shared.so DESTINATION ${_ort_root}/bin)
+        # The NuGet filename is unversioned; Lila's loader opens the ELF SONAME.
+        file(COPY_FILE ${_native}/libonnxruntime.so ${_ort_root}/bin/libonnxruntime.so.1)
+        file(COPY_FILE ${_ort_root}/ort/LICENSE ${_ort_root}/LICENSE-onnxruntime.txt)
     endif()
     file(TOUCH ${_ort_root}/.done)
 endif()
