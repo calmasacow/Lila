@@ -1853,7 +1853,6 @@ void registerBuiltins()
     registerWorldAttrs("kelvinlet", {.matrices = {"bindMatrix", "geomMatrix"}});
     registerWorldAttrs("softMod", {.matrices = {"bindMatrix", "geomMatrix"}, .points = {"falloffCenter"}});
     registerWorldAttrs("jiggle", {.directions = {"gravity"}});
-    registerWorldAttrs("skyAtmosphere", {.points = {"position"}});
     for (const char* t : {"arrayModifier", "booleanModifier", "surfaceFlowModifier", "transferAttributesModifier"})
         registerWorldAttrs(t, {.matrices = {"targetMatrix"}});
     // Curve history: world-space curves in, world-space geometry out; curves of their own (unconnected) move with the scene.

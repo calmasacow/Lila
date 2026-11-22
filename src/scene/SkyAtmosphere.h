@@ -18,7 +18,6 @@ enum Attr
 {
     kEnabled,
     kTransformMode, // planetTopAtAbsoluteWorldOrigin, planetTopAtComponentTransform, planetCenterAtComponentTransform
-    kPosition,      // cm, for the component transform modes
     kBottomRadius,  // km
     kGroundAlbedo,
     kAtmosphereHeight, // km
@@ -51,7 +50,10 @@ LILA_SCENE_API int firstAttr();
 /** The first enabled sky atmosphere, or kNoNode. */
 LILA_SCENE_API NodeId active(const Graph& g);
 
-/** The planet's centre in world cm, from the node's transform mode and position. */
+/** The sky node's world position, cm: where the component transform modes put the planet's ground or centre. */
+LILA_SCENE_API glm::dvec3 worldPosition(const Node& sky);
+
+/** The planet's centre in world cm, from the node's transform mode and world position. */
 LILA_SCENE_API glm::dvec3 planetCenter(const Node& sky, bool zUp);
 
 /** The light the sky takes as its sun: the visible directional light with atmosphereSun on, else the first; kNoNode for none. */
