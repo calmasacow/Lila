@@ -525,7 +525,6 @@ H Manipulator::pick(QPointF px) const
     const double grab = kHandleGrabPx;
     double L = handleLength();
     Tool t = effectiveTool();
-    glm::dvec3 viewDir = mView.viewDir(mPivot);
 
     if (t == Tool::Move && mNormal)
     {
@@ -540,19 +539,9 @@ H Manipulator::pick(QPointF px) const
     {
         if (std::abs(px.x() - c->x()) <= 8 && std::abs(px.y() - c->y()) <= 8)
             return H::Center;
-        if (t == Tool::Move)
-            for (int i = 0; i < 3; ++i)
-            {
-                glm::dvec3 a = axis((i + 1) % 3), b = axis((i + 2) % 3);
-                if (std::abs(glm::dot(axis(i), viewDir)) < 0.12)
-                    continue;
-                std::vector<QPointF> quad;
-                for (auto [s, u] : {std::pair{0.25, 0.25}, {0.45, 0.25}, {0.45, 0.45}, {0.25, 0.45}})
-                    if (auto p = mView.project(mPivot + (a * s + b * u) * L))
-                        quad.push_back(*p);
-                if (quad.size() == 4 && insideConvex(px, quad))
-                    return H(int(H::PlaneYZ) + i);
-            }
+        for (int i = 0; i < 3; ++i)
+            if (const auto quad = planeQuad(i, L); !quad.empty() && insideConvex(px, quad))
+                return H(int(H::PlaneYZ) + i);
         H best = H::None;
         double bestD = grab;
         for (int i = 0; i < 3; ++i)
@@ -1711,32 +1700,50 @@ std::optional<QRectF> Manipulator::badgeRect() const
     return QRectF(c->x() - w * 0.5, c->y() + 22, w, 20);
 }
 
+std::vector<QPointF> Manipulator::planeQuad(int i, double length, glm::dvec3 scale) const
+{
+    if (std::abs(glm::dot(axis(i), mView.viewDir(mPivot))) < 0.12)
+        return {};
+    const int ia = (i + 1) % 3, ib = (i + 2) % 3;
+    const glm::dvec3 a = axis(ia) * std::clamp(scale[ia], 0.05, 20.0), b = axis(ib) * std::clamp(scale[ib], 0.05, 20.0);
+    std::vector<QPointF> quad;
+    for (auto [s, u] : {std::pair{0.25, 0.25}, {0.45, 0.25}, {0.45, 0.45}, {0.25, 0.45}})
+        if (auto q = mView.project(mPivot + (a * s + b * u) * length))
+            quad.push_back(*q);
+    if (quad.size() != 4)
+        quad.clear();
+    return quad;
+}
+
+void Manipulator::drawPlanes(OverlayPainter& p, glm::dvec3 scale)
+{
+    const double L = handleLength();
+    const H active = mDrag ? mDrag->handle : H::None;
+    for (int i = 0; i < 3; ++i)
+    {
+        const H h = H(int(H::PlaneYZ) + i);
+        if (active != H::None && active != h)
+            continue;
+        const auto quad = planeQuad(i, L, scale);
+        if (quad.empty())
+            continue;
+        glm::vec4 col = handleColor(h, -1);
+        p.fill(quad, {col.r, col.g, col.b, mHover == h || active == h ? 0.45f : 0.16f});
+        p.polyline(quad, 1.0f, {col.r, col.g, col.b, 0.6f}, true);
+    }
+}
+
 void Manipulator::drawMove(OverlayPainter& p)
 {
     auto c = mView.project(mPivot);
     if (!c)
         return;
     double L = handleLength();
-    glm::dvec3 viewDir = mView.viewDir(mPivot);
     bool pivotMode = mDrag ? mDrag->pivotEdit : tools::pivotEdit();
     H active = mDrag ? mDrag->handle : H::None;
 
-    for (int i = 0; i < 3; ++i)
-    {
-        H h = H(int(H::PlaneYZ) + i);
-        if (std::abs(glm::dot(axis(i), viewDir)) < 0.12 || (active != H::None && active != h) || pivotMode || mNormal)
-            continue;
-        glm::dvec3 a = axis((i + 1) % 3), b = axis((i + 2) % 3);
-        std::vector<QPointF> quad;
-        for (auto [s, u] : {std::pair{0.25, 0.25}, {0.45, 0.25}, {0.45, 0.45}, {0.25, 0.45}})
-            if (auto q = mView.project(mPivot + (a * s + b * u) * L))
-                quad.push_back(*q);
-        if (quad.size() != 4)
-            continue;
-        glm::vec4 col = handleColor(h, -1);
-        p.fill(quad, {col.r, col.g, col.b, mHover == h || active == h ? 0.45f : 0.16f});
-        p.polyline(quad, 1.0f, {col.r, col.g, col.b, 0.6f}, true);
-    }
+    if (!pivotMode && !mNormal)
+        drawPlanes(p, glm::dvec3(1.0));
 
     for (int i = 0; i < 3; ++i)
     {
@@ -1861,6 +1868,8 @@ void Manipulator::drawScale(OverlayPainter& p)
     double L = handleLength();
     H active = mDrag ? mDrag->handle : H::None;
     glm::dvec3 s = mDrag ? mDrag->scale : glm::dvec3(1.0);
+    if (!(mDrag ? mDrag->pivotEdit : tools::pivotEdit()))
+        drawPlanes(p, s);
     for (int i = 0; i < 3; ++i)
     {
         H h = H(int(H::X) + i);
