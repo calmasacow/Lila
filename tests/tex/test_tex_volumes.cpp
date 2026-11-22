@@ -15,6 +15,7 @@ namespace pathtest
 {
 bool tracing();
 std::string uniformHdr(float value);
+std::shared_ptr<RenderMesh> sphere(float radius, int rings, int segments);
 }
 
 namespace
@@ -50,6 +51,17 @@ FrameState volumeFrame(bool pathTraced)
     s.pathTrace.maxSamples = 4096;
     s.pathTrace.denoise = false;
     s.pathTrace.seed = 5;
+    if (pathTraced)
+    {
+        // The path tracer needs a scene to trace; a small sphere behind the camera stays out of the picture.
+        MeshDraw d;
+        d.mesh = pathtest::sphere(5.0f, 8, 16);
+        d.world = glm::translate(glm::dmat4(1.0), glm::dvec3(0.0, 0.0, 2000.0));
+        Material m;
+        m.baseColor = glm::vec3(0.5f);
+        d.materials = {m};
+        s.meshes.push_back(d);
+    }
     return s;
 }
 
@@ -160,4 +172,52 @@ TEST_CASE("atmosphere: the path tracer and the viewport draw the same sky behind
         blueOverRed.push_back(double(mid[2]) / std::max(double(mid[0]), 1e-6));
     }
     CHECK(blueOverRed[1] == doctest::Approx(blueOverRed[0]).epsilon(0.05));
+}
+
+TEST_CASE("volumes: the path tracer's denoiser smooths a volume like a surface")
+{
+    if (!pathtest::tracing())
+        return;
+    // Noise as the difference between two seeds, on the displayed picture: the denoiser works there, the linear readback is the plain average.
+    auto picture = [](FrameState s, uint32_t seed) {
+        s.pathTrace.seed = seed;
+        Renderer::OffscreenResult out;
+        std::string err;
+        REQUIRE_MESSAGE(Renderer::get().renderOffscreenFrames({s}, kSize, kSize, 1, false, out, &err), err);
+        REQUIRE(out.bgra.size() == size_t(kSize) * kSize * 4);
+        return out.bgra;
+    };
+    std::vector<double> noise;
+    for (bool denoise : {false, true})
+    {
+        FrameState s = volumeFrame(true);
+        s.pathTrace.samplesPerFrame = 2;
+        s.pathTrace.maxSamples = 2;
+        s.pathTrace.denoise = denoise;
+        s.post.dither = false;
+        s.envPath = pathtest::uniformHdr(0.05f);
+        LightDraw sun;
+        sun.kind = LightDraw::Directional;
+        sun.direction = glm::normalize(glm::vec3(0.3f, -1.0f, -0.4f));
+        sun.radiance = glm::vec3(20.0f);
+        s.lights.push_back(sun);
+        VolumeDraw v = cube();
+        v.density = 0.004f;
+        v.scatter = glm::vec3(0.9f);
+        s.volumes.push_back(v);
+        const std::vector<uint8_t> a = picture(s, 5), b = picture(s, 6);
+        double sq = 0.0;
+        int n = 0;
+        for (int y = kSize / 2 - 6; y < kSize / 2 + 6; ++y)
+            for (int x = kSize / 2 - 6; x < kSize / 2 + 6; ++x)
+                for (int c = 0; c < 3; ++c)
+                {
+                    const double d = (double(a[(size_t(y) * kSize + x) * 4 + c]) - double(b[(size_t(y) * kSize + x) * 4 + c])) / 255.0;
+                    sq += d * d;
+                    ++n;
+                }
+        noise.push_back(std::sqrt(sq / n));
+    }
+    CHECK(noise[0] > 0.0);
+    CHECK(noise[1] < noise[0] * 0.5);
 }

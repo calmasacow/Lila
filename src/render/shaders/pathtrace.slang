@@ -679,6 +679,33 @@ bool volumeCollision(float3 origin, float3 dir, float maxT, inout uint rng, out 
     return hit;
 }
 
+/** The nearest volume box the ray enters before maxT with any density in it, and where; false for none. */
+bool volumeEntry(float3 origin, float3 dir, float maxT, out float entry, out uint volume)
+{
+    entry = maxT;
+    volume = 0;
+    PtFrame* fr = frameHeader();
+    if (fr == nullptr || fr->volumes == nullptr)
+        return false;
+    bool found = false;
+    for (uint vi = 0; vi < fr->volumeCount; ++vi)
+    {
+        GpuVolume* v = fr->volumes + vi;
+        if (v->dims.w <= 0.0)
+            continue;
+        float3 o = mul(v->worldToIndex, float4(origin, 1.0)).xyz;
+        float3 d = mul((float3x3)v->worldToIndex, dir);
+        float2 r = volBoxRange(o, d, v->dims.xyz);
+        if (r.y > max(r.x, 0.0) && max(r.x, 0.0) < entry)
+        {
+            entry = max(r.x, 0.0);
+            volume = vi;
+            found = true;
+        }
+    }
+    return found;
+}
+
 /** The share of light crossing the scene's volumes along a ray, by ratio tracking. */
 float volumeTransmit(float3 origin, float3 dir, float maxT, inout uint rng)
 {
@@ -931,10 +958,24 @@ void traceCS(uint3 id: SV_DispatchThreadID)
         float lastPdf = 0.0; // the BSDF density of the last bounce's direction; 0 after the camera ray
         float coverage = 0.0;
         float firstHit = -1.0;
+        bool guided = false;
         for (uint depth = 0; depth <= bounces; ++depth)
         {
             Hit h;
             const bool surface = traceSurface(ray, rng, h);
+            float ge;
+            uint gv;
+            if (depth == 0 && volumeEntry(ray.Origin, ray.Direction, surface ? length(h.pos - ray.Origin) : 1e30, ge, gv))
+            {
+                // The denoiser's guides for a camera ray into a volume, whether it collides or passes through: the medium's
+                // albedo, a normal facing the camera and the box's entry depth, alike across the volume so neighbours blend.
+                GpuVolume* gvol = frameHeader()->volumes + gv;
+                alb.rgb += gvol->scatter.rgb / max(gvol->scatter.rgb + gvol->absorb.rgb, 1e-8);
+                nrm.xyz -= ray.Direction;
+                if (sampleIndex == 0)
+                    nrm.w = ge * dot(ray.Direction, p.camForward.xyz);
+                guided = true;
+            }
             float vt;
             uint vi;
             float vd;
@@ -997,7 +1038,7 @@ void traceCS(uint3 id: SV_DispatchThreadID)
                                                                                : envRadiance(ray.Direction) * p.envExtra.y;
                         coverage = 1.0;
                     }
-                    if (sampleIndex == 0)
+                    if (sampleIndex == 0 && !guided)
                         nrm.w = 0.0;
                 }
                 else
@@ -1013,10 +1054,13 @@ void traceCS(uint3 id: SV_DispatchThreadID)
             {
                 firstHit = length(h.pos - ray.Origin);
                 coverage = 1.0;
-                alb.rgb += h.baseColor;
-                nrm.xyz += h.n;
-                if (sampleIndex == 0)
-                    nrm.w = dot(h.pos - p.eye.xyz, p.camForward.xyz);
+                if (!guided)
+                {
+                    alb.rgb += h.baseColor;
+                    nrm.xyz += h.n;
+                    if (sampleIndex == 0)
+                        nrm.w = dot(h.pos - p.eye.xyz, p.camForward.xyz);
+                }
             }
             float3 e = throughput * h.emissive;
             radiance += depth > 1 ? min(e, p.misc.y) : e;
