@@ -2,6 +2,7 @@
 
 #include "ui/Actions.h"
 #include "ui/ViewportTool.h"
+#include "ui/ViewportToast.h"
 #include "ui/GizmoMath.h"
 
 #include "core/PrefStore.h"
@@ -286,7 +287,9 @@ void registerActions()
         double next = std::round(size * factor / 5.0) * 5.0;
         if (next == size)
             next += factor > 1.0 ? 5.0 : -5.0;
-        PrefStore::get().set("general", "/manipulator/size", std::clamp(next, 30.0, 400.0));
+        next = std::clamp(next, 30.0, 400.0);
+        PrefStore::get().set("general", "/manipulator/size", next);
+        viewportToast::showActive(QString("Manipulator Size %1%").arg(qRound(next)), 1200, viewportToast::Kind::Info, "manip.size");
         viewportTools::requestRedraw();
     };
     actions::add({.id = "manip.sizeUp", .label = "Larger Manipulator", .category = "Tools", .run = [resizeManip] { resizeManip(1.15); },
