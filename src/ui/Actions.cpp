@@ -756,6 +756,10 @@ void registerBuiltins()
     cmd("mesh.subdivide", "Subdivide", "Mesh", "polySubdivide", json::object(), "Splits the selected faces into smaller ones.");
     cmd("mesh.mirror", "Mirror", "Mesh", "polyMirror", json::object(), "Adds a mirrored, welded copy of the mesh, once. The Mirror modifier stays live.");
     cmd("mesh.separate", "Separate", "Mesh", "polySeparate", json::object(), "Splits a mesh into one object per disconnected piece.");
+    add({.id = "mesh.tile", .label = "Split into Tiles", .category = "Mesh",
+         .doc = "Splits a huge mesh into tiles, each with its origin at its centre, so the viewport draws it without jitter.",
+         .python = ops::toPython("tileMesh", json::object()), .command = "tileMesh", .call = json::object(),
+         .keywords = {"tile", "chunk", "grid", "split", "large world", "precision", "jitter", "planet", "terrain"}});
     cmd("mesh.combine", "Combine", "Mesh", "polyCombine", json::object(), "Merges the selected meshes into one object.");
     cmd("mesh.smartJoin", "Smart Join", "Mesh", "smartJoin", json::object(),
         "Joins the two selected meshes (a limb into a body) with a quad bridge, carving a matching hole; the option box previews live and rates the result.");

@@ -11214,6 +11214,15 @@ def textureFolders(include: Sequence[Any] | None = None, exclude: Sequence[Any] 
         clear: Remove the lists at that level (with scene, the scene falls back to the workspace). Short form c. Default False.
     """
 
+def tileMesh(*objects: Any, tileSize: float | None = None, maxTiles: int | None = None, ts: float | None = None, mt: int | None = None) -> Any:
+    """Split meshes into a grid of tile objects, each with its origin at its centre, so none reaches far enough from its origin for the viewport's float precision to make it jitter. Faces crossing a tile edge are cut there. The tiles go in a new group at the top of the scene, with the mesh's transform baked in. Returns the tiles.
+
+    Args:
+        objects: objects.
+        tileSize: Tile edge, cm. Short form ts. Default 500000.0.
+        maxTiles: Refuse a mesh that would make more tiles than this. Short form mt. Default 4096.
+    """
+
 def timeRange(start: float | None = None, end: float | None = None, falloff: float | None = None, falloffBefore: float | None = None, falloffAfter: float | None = None, falloffType: str | None = None, every: int | None = None, clear: bool | None = None, *, s: float | None = None, e: float | None = None, fo: float | None = None, fob: float | None = None, foa: float | None = None, fot: str | None = None, ev: int | None = None, c: bool | None = None) -> Any:
     """The time slider's selected range (Shift + drag on it), which edits across frames act on, such as Strings poses and Curve Overlay drags. Give start and end to select, clear to drop it, falloff for the frames edits ease out over either side (falloffBefore and falloffAfter for one side), falloffType for its shape, every to key every n frames. Returns {active, start, end, falloffBefore, falloffAfter, falloffType, every}, times in seconds.
 

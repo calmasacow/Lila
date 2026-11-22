@@ -168,6 +168,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"mesh.combine", "layers-union"},
     {"mesh.smartJoin", "layers-linked"},
     {"mesh.separate", "layers-subtract"},
+    {"mesh.tile", "layout-grid"},
     {"mesh.splitMeshTool", "slice"},
     {"mesh.extract", "box-model"},
     {"mesh.duplicateFaces", "copy"},
