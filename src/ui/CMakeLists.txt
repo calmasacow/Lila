@@ -100,6 +100,7 @@ lila_module(lila_ui UI
     PythonSdk.cpp
     PythonViewport.cpp
     Owner.h
+    ScrubGesture.cpp ScrubGesture.h
     SpinScrub.cpp SpinScrub.h
     NumberExpr.cpp NumberExpr.h
     PanelFilter.cpp PanelFilter.h
@@ -177,6 +178,7 @@ lila_module(lila_ui UI
     Updater.cpp Updater.h
     WelcomeNews.cpp WelcomeNews.h
     FeatureStatus.cpp FeatureStatus.h
+    SceneLights.cpp SceneLights.h
     Credits.cpp Credits.h
     CreditsDialog.cpp CreditsDialog.h
     ProgressOverlay.cpp ProgressOverlay.h
