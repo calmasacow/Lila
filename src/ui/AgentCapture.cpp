@@ -40,6 +40,7 @@
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportWidget.h"
+#include "ui/VolumeDisplay.h"
 
 #include <QApplication>
 #include <QBuffer>
@@ -465,7 +466,7 @@ QImage render(const Options& o, Timing* timing, int repeat)
             d.colorChannel = viewportDisplay::colorChannel();
         }
         d.flags = 0;
-        if (o.display != "wireframe")
+        if (o.display != "wireframe" && !(shown && volumeDisplay::isVolumeMesh(*shown)))
             d.flags |= render::DrawShaded;
         if (o.display != "shaded")
             d.flags |= render::DrawWire;

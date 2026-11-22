@@ -2,6 +2,7 @@
 
 #include "ui/Actions.h"
 #include "ui/ViewportTool.h"
+#include "ui/ViewportToast.h"
 #include "ui/GizmoMath.h"
 
 #include "core/PrefStore.h"
@@ -11,6 +12,8 @@
 #include "scene/Modifiers.h"
 
 #include <QMouseEvent>
+#include <algorithm>
+#include <cmath>
 #include <map>
 #include <tuple>
 
@@ -277,6 +280,26 @@ void registerActions()
                          "own axes.",
                   .python = "lila.prefs.set(\"general\", \"/manipulator/moveSpace\", \"normal\")",
                   .checked = spaceIs("/manipulator/moveSpace", "normal")});
+
+    auto resizeManip = [](double factor) {
+        double size = PrefStore::get().value<double>("general", "/manipulator/size", 100.0);
+        // Round to the Preferences field's 5 px step, always moving at least one step.
+        double next = std::round(size * factor / 5.0) * 5.0;
+        if (next == size)
+            next += factor > 1.0 ? 5.0 : -5.0;
+        next = std::clamp(next, 30.0, 400.0);
+        PrefStore::get().set("general", "/manipulator/size", next);
+        viewportToast::showActive(QString("Manipulator Size %1%").arg(qRound(next)), 1200, viewportToast::Kind::Info, "manip.size");
+        viewportTools::requestRedraw();
+    };
+    actions::add({.id = "manip.sizeUp", .label = "Larger Manipulator", .category = "Tools", .run = [resizeManip] { resizeManip(1.15); },
+                  .doc = "Draws the move, rotate and scale manipulators larger on screen.",
+                  .python = "lila.ui.run_action(\"manip.sizeUp\")",
+                  .keywords = {"gizmo size", "handle size", "manipulator size", "bigger", "increase"}});
+    actions::add({.id = "manip.sizeDown", .label = "Smaller Manipulator", .category = "Tools", .run = [resizeManip] { resizeManip(1.0 / 1.15); },
+                  .doc = "Draws the move, rotate and scale manipulators smaller on screen.",
+                  .python = "lila.ui.run_action(\"manip.sizeDown\")",
+                  .keywords = {"gizmo size", "handle size", "manipulator size", "decrease"}});
 
     auto snap = [](const char* key, const char* label, SnapFlags f, const char* doc) {
         actions::add({.id = std::string("snap.") + key + "On", .label = label, .category = "Snapping", .run = [f] { setSnap(f, true); },

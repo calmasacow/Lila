@@ -115,6 +115,7 @@ lila_module(lila_ui UI
     ColorPopup.cpp ColorPopup.h
     ImagePicker.cpp ImagePicker.h
     MaterialDraw.cpp MaterialDraw.h
+    VolumeDisplay.cpp VolumeDisplay.h
     MaterialEditor.cpp MaterialEditor.h
     MeasureTool.cpp MeasureTool.h
     DebugDrawUi.cpp DebugDrawUi.h
