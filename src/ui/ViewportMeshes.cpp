@@ -3,6 +3,7 @@
 #include "scene/LightingChannels.h"
 #include "scene/SceneIndex.h"
 #include "ui/HeightfieldDisplay.h"
+#include "ui/VolumeDisplay.h"
 
 namespace lila::ui
 {
@@ -134,7 +135,9 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     const bool wireOnly = n.type().isA("lattice");
     const scene::displayLayers::Display layer = scene::displayLayers::display(g, id);
     const bool templated = layer.type == scene::displayLayers::DisplayType::Template;
-    if (!set.wireframe && !wireOnly && !templated)
+    // A volume's mesh only bounds the medium the volume pass draws.
+    const bool volume = shown && volumeDisplay::isVolumeMesh(*shown);
+    if (!set.wireframe && !wireOnly && !templated && !volume)
         d.flags |= render::DrawShaded;
     const bool showsWire = set.wireframe || set.wireOnShaded || wireOnly || templated;
     if (showsWire || hilite)

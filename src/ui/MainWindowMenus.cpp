@@ -92,7 +92,7 @@ void MainWindow::buildMenus()
         });
     });
     menus::addActions("File", {"file.save", "file.saveAs", "file.incrementAndSave", "file.versions", "file.saveSceneTemplate", "#Validate", "validate.run", "window.validation", "#Import and Export", "file.import", "file.convertMaya",
-                        "file.exportSelection", "file.gameExporter", "file.exportMeshSequence", "file.exportWebViewer", "file.exportOnSave", "window.batchRun", "file.createReference", "#Unreal", "unreal.send", "animated.sendOptions", "unreal.sync", "unreal.sendBake", "groom.sendToUnreal",
+                        "file.exportSelection", "file.gameExporter", "file.exportMeshSequence", "file.exportWebViewer", "file.exportOnSave", "window.batchRun", "file.createReference", "#Unreal", "unreal.send", "animated.sendOptions", "unreal.sync", "unreal.sendBake", "unreal.sendSky", "unreal.sendVolumes", "groom.sendToUnreal",
                         "deform.exportMLDeformer", "unreal.expressionRig", "unreal.connect","#Workspace", "file.openFolder"});
     addSubmenu("File", "Recent Folders", [this](QMenu* recent) {
         recent->setProperty(menuSearch::kNoSearchProperty, true);
@@ -122,7 +122,7 @@ void MainWindow::buildMenus()
     addSubmenu("Create", "Polygon Primitives");
     menus::addActions("Create/Polygon Primitives", {"create.cube", "create.sphere", "create.cylinder", "create.capsule", "create.cone", "create.plane", "create.torus",
                                              "create.disc", "create.pipe", "create.quadSphere", "create.icoSphere"});
-    menus::addActions("Create", {"create.locator", "create.camera", "create.cameraFromView", "create.emptyGroup", "create.turntableBase", "create.audio", "anim.importFootage"});
+    menus::addActions("Create", {"create.locator", "create.camera", "create.cameraFromView", "create.skyAtmosphere", "create.fogVolume", "create.emptyGroup", "create.turntableBase", "create.audio", "anim.importFootage"});
     addSubmenu("Create", "Reference Images");
     menus::addActions("Create/Reference Images", {"create.imagePlane", "imagePlane.cut", "imagePlane.guides", "reference.addImages", "referenceOverlay.addImage", "", "referenceOverlay.adjust",
                                                    "referenceOverlay.toggle", "referenceOverlay.next", ""});
@@ -367,7 +367,7 @@ void MainWindow::buildMenus()
     menu("Render", "Render", Area::MenuBar, syncChecks, "", {"Texture", "Render", "Level", "Animate", "Effects"});
     menus::addActions("Render", {"window.renderToolkit", "#Output", "render.frame", "render.sequence", "render.turntable", "render.openLast", "render.showFolder",
                                  "window.renderSettings", "#Look",
-                                 "render.postProcess", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "camera.pickFocus"});
+                                 "render.postProcess", "render.skyAtmosphere", "render.colorManagement", "render.exportGradeLut", "window.scopes", "render.lightRig.threePoint", "render.lightRig.rim", "render.lightRig.product", "viewport.toggleRtShadows", "viewport.togglePostEffects", "viewport.toggleTAA", "viewport.toggleDepthOfField", "viewport.toggleMotionBlur", "camera.pickFocus"});
     addSubmenu("Render", "Reflections", syncChecks);
     menus::addActions("Render/Reflections", {"viewport.reflections.off", "viewport.reflections.screenSpace", "viewport.reflections.rayTraced"});
     menus::addActions("Render", {"#Framing", "viewport.toggleResolutionGate",

@@ -38,6 +38,7 @@
 #include "scene/Picker.h"
 #include "scene/Poses.h"
 #include "scene/PostProcess.h"
+#include "scene/SkyAtmosphere.h"
 #include "scene/ColorManagement.h"
 #include "scene/Relocate.h"
 #include "scene/Georef.h"
@@ -273,6 +274,7 @@ void registerCommands()
     registerCameraCommands();
     registerLightCommands();
     postProcess::registerCommands();
+    skyAtmosphere::registerCommands();
     colorManagement::registerCommands();
     spaces::registerCommands();
     anim::registerCommands();

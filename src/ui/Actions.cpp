@@ -637,6 +637,23 @@ void registerBuiltins()
         "Selects what is unselected and deselects the rest: objects, or components of the current kind.");
     cmd("file.new", "New Scene", "File", "newScene", json::object(), "Clears the scene and starts an empty one.");
     cmd("create.locator", "Locator", "Create", "spaceLocator", json::object(), "Creates a cross-hair transform to mark a spot, snap to or parent under.");
+    {
+        const std::vector<std::string> skyWords = {"atmosphere", "sky", "sun", "planet", "earth", "rayleigh", "mie", "haze", "aerial perspective",
+                                                   "skyatmosphere", "unreal", "nishita", "sky texture", "physical sky"};
+        const json existing = {{"existing", true}};
+        add({.id = "create.skyAtmosphere", .label = "Sky Atmosphere", .category = "Create",
+             .doc = "Selects the scene's sky (creating one, and a sun when there is no directional light): a planet's sky and the haze "
+                    "over distance, from the ground to orbit. Unreal's SkyAtmosphere.",
+             .python = ops::toPython("skyAtmosphere", existing), .command = "skyAtmosphere", .call = existing, .keywords = skyWords});
+        add({.id = "render.skyAtmosphere", .label = "Sky Atmosphere", .category = "Render",
+             .doc = "Selects the scene's sky (creating one, and a sun when there is no directional light). Unreal's SkyAtmosphere.",
+             .python = ops::toPython("skyAtmosphere", existing), .command = "skyAtmosphere", .call = existing, .keywords = skyWords});
+        add({.id = "create.fogVolume", .label = "Fog Volume", .category = "Create",
+             .doc = "Creates a box filled with fog: a cube with a new volume material. Any closed mesh given a volume material fills the same way.",
+             .python = ops::toPython("fogVolume", json::object()), .command = "fogVolume", .call = json::object(),
+             .keywords = {"volume", "fog", "smoke", "cloud", "mist", "participating media", "vdb", "principled volume", "heterogeneous volume",
+                          "volumetric"}});
+    }
     cmd("create.camera", "Camera", "Create", "createNode", {{"args", {"camera"}}},
         "Creates a camera at the origin looking down -Z; look through it from the view's camera menu or by MMB-dragging it from the outliner onto a view.");
     cmd("create.emptyGroup", "Empty Group", "Create", "group", {{"empty", true}}, "Creates an empty transform to group objects under.");
@@ -749,6 +766,14 @@ void registerBuiltins()
                  {"convex hull", "ucx", "collision", "collision from selection", "hull from selection", "unreal collision", "simple collision"});
     cmd("mesh.multiBoxBounds", "Multi-Box Bounds", "Mesh", "multiBoxBounds", json::object(),
         "Splits the selected meshes into chunks that conform to boxes and creates one box (or hull) per chunk, named and parented as Unreal collision.");
+    add({.id = "unreal.sendSky", .label = "Send Sky to Unreal", .category = "Unreal",
+         .doc = "Sends the sky atmosphere (with a real-time sky light and the sun) and the post process's height fog to the open level.",
+         .python = ops::toPython("unrealSendSky", json::object()), .command = "unrealSendSky", .call = json::object(),
+         .keywords = {"sky atmosphere", "skylight", "height fog", "exponential height fog", "volumetric fog", "sun"}});
+    add({.id = "unreal.sendVolumes", .label = "Send Volumes to Unreal", .category = "Unreal",
+         .doc = "Sends meshes with a volume material (the selection, else all) as Sparse Volume Textures on Heterogeneous Volumes.",
+         .python = ops::toPython("unrealSendVolumes", json::object()), .command = "unrealSendVolumes", .call = json::object(),
+         .keywords = {"vdb", "openvdb", "sparse volume texture", "svt", "heterogeneous volume", "fog", "smoke", "cloud"}});
     cmd("unreal.sendBake", "Send Bake to Unreal", "Unreal", "unrealSendTextures", json::object(),
         "Sends the bake project's textures to the connected Unreal editor, updating them in place, and wires them into the "
         "materials (instances of the unreal pref materialParent when it is set).");
