@@ -441,6 +441,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"textureSets.addFillLayer", "paint"},
     {"textureSets.addPaintLayer", "brush"},
     {"textureSets.addFolder", "folder-plus"},
+    {"textureSets.addIdLayers", "color-swatch"},
     {"textureSets.rebuildLayers", "refresh"},
     {"texture.exportImage", "photo-down"},
     {"texture.exportPsd", "file-export"},
