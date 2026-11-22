@@ -221,6 +221,7 @@ lila_module(lila_ui UI
     ViewportHooks.cpp ViewportHooks.h
     ViewportRenderers.cpp ViewportRenderers.h
     ViewportDisplay.cpp ViewportDisplay.h
+    RandomColors.cpp
     ViewportHud.cpp ViewportHud.h
     LodDisplay.cpp LodDisplay.h
     ViewportContext.cpp ViewportContext.h

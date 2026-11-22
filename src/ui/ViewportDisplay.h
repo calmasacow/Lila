@@ -202,6 +202,8 @@ enum class RandomPalette
 LILA_UI_API RandomPalette randomPalette();
 LILA_UI_API void setRandomPalette(RandomPalette palette);
 LILA_UI_API int randomSeed();
+/** The bakeRandomColors command, and the seed saved with the scene (0 in a new one). */
+void registerRandomColors();
 /** A distinct linear colour for randomColors(), the same for the same name and seed in every session. */
 LILA_UI_API glm::vec3 randomColor(std::string_view name, RandomPalette palette = RandomPalette::Contrast, int seed = 0);
 LILA_UI_API bool highlightSelection();

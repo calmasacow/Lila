@@ -216,7 +216,7 @@ void MainWindow::buildMenus()
     menus::addActions("Surface", {"#Normals", "mesh.softenEdges", "mesh.hardenEdges", "mesh.setNormalAngle", "mesh.flip", "mesh.conform",
                                   "mesh.softFoliageNormals", "#Vertex Colors", "vcolor.paint", "vcolor.createSet", "vcolor.fill", "vcolor.gradient",
                                   "vcolor.invert", "vcolor.levels", "vcolor.blur", "#Bake to Vertex Colors", "vcolor.bakeAO", "vcolor.bakeCavity",
-                                  "vcolor.bakeCurvature", "vcolor.bakeHeight", "#Display", "viewport.vertexColors.off", "viewport.vertexColors.shaded",
+                                  "vcolor.bakeCurvature", "vcolor.bakeHeight", "viewport.bakeRandomColors", "#Display", "viewport.vertexColors.off", "viewport.vertexColors.shaded",
                                   "viewport.vertexColors.unlit", "viewport.toggleBackfaceCulling"});
 
     menu("Sculpt", "Sculpt", Area::MenuBar, {}, "", {"Sculpt"});
@@ -308,7 +308,7 @@ void MainWindow::buildMenus()
 
     menu("Display", "Display", Area::MenuBar, syncChecks);
     menus::addActions("Display", {"#Shading", "viewport.wireframe", "viewport.shaded", "viewport.textured", "viewport.wireOnShaded", "viewport.defaultMaterial",
-                           "viewport.greyBaseColor", "viewport.randomColors",
+                           "viewport.greyBaseColor", "viewport.randomColors", "viewport.bakeRandomColors",
                            "viewport.toggleXray", "viewport.toggleBackfaceCulling", "#Lighting and Effects"});
     addSubmenu("Display", "Lighting", syncChecks);
     menus::addActions("Display/Lighting", {"viewport.lighting.environment", "viewport.lighting.studio", "viewport.lighting.sculpt", "viewport.lighting.flat", "viewport.resetLight"});

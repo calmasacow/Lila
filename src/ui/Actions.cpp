@@ -5,6 +5,7 @@
 #include "core/ExtensionContext.h"
 #include "core/Log.h"
 #include "core/PrefStore.h"
+#include "io/SceneFile.h"
 #include "python/Python.h"
 #include "scene/ComponentPick.h"
 #include "scene/Duplicate.h"
@@ -19,6 +20,7 @@
 #include "ui/LocateFlash.h"
 #include "ui/MaterialDraw.h"
 #include "ui/OptionBox.h"
+#include "ui/SpinScrub.h"
 #include "ui/SceneLights.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportTool.h"
@@ -30,6 +32,7 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QPointer>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -508,6 +511,7 @@ void openRandomColorsOptions()
         palette->addItem("Pastel", int(vd::RandomPalette::Pastel));
         palette->setCurrentIndex(palette->findData(int(vd::randomPalette())));
         palette->setToolTip("High Contrast: strong colours across every hue. Pastel: soft, light colours.");
+        setComboDefault(palette, 0);
         QObject::connect(palette, &QComboBox::currentIndexChanged, dialog, [palette](int) {
             vd::setRandomPalette(vd::RandomPalette(palette->currentData().toInt()));
             PrefStore::get().set("general", vd::kRandomColors, true);
@@ -516,11 +520,17 @@ void openRandomColorsOptions()
         QDoubleSpinBox* seed = controls::valueField(0.0, 99999.0, 0, QString(), dialog);
         seed->setValue(vd::randomSeed());
         seed->setToolTip("Gives every mesh a different colour from the same palette.");
+        setSpinDefault(seed, 0.0);
         QObject::connect(seed, &QDoubleSpinBox::valueChanged, dialog, [](double v) {
             PrefStore::get().set("general", vd::kRandomColorsSeed, int(v));
+            io::uiChanged("randomColors");
             PrefStore::get().set("general", vd::kRandomColors, true);
         });
         form->addRow("Seed", seed);
+        auto* bake = new QPushButton("Bake...", dialog);
+        bake->setToolTip("Keeps these colours as materials or vertex colours.");
+        QObject::connect(bake, &QPushButton::clicked, dialog, [] { optionBox::open("viewport.bakeRandomColors"); });
+        form->addRow(QString(), bake);
         layout->addLayout(form);
         auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
         QObject::connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::close);
@@ -972,6 +982,9 @@ void registerBuiltins()
     togglePref("viewport.randomColors", "Random Colors", vd::kRandomColors, false,
                "Shades every mesh with the default material in a colour of its own, to tell objects apart.");
     optionBox::addCustom("viewport.randomColors", openRandomColorsOptions);
+    vd::registerRandomColors();
+    cmd("viewport.bakeRandomColors", "Bake Random Colors", "Display", "bakeRandomColors", json::object(),
+        "Keeps the Random Colors display colours as a material per mesh, or as vertex colours.");
     togglePref("viewport.greyBaseColor", "Grey Base Color", vd::kGreyBaseColor, false,
                "Materials shade with a 50% grey base color, keeping their normal, packed and other maps, opacity and shading model.");
     togglePref("viewport.toggleEnvBackground", "Environment Background", "/viewport/env/background", true, "Shows the HDRI behind the scene.");
