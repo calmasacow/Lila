@@ -868,6 +868,7 @@ const std::unordered_map<std::string_view, std::string_view>& defaultIcons()
     {"vcolor.levels", "adjustments"},
     {"vcolor.blur", "blur"},
     {"vcolor.bakeAO", "flame"},
+    {"vcolor.masks", "mask"},
     {"vcolor.bakeCavity", "flame"},
     {"vcolor.bakeCurvature", "flame"},
     {"vcolor.bakeHeight", "flame"},

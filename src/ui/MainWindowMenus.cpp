@@ -216,7 +216,7 @@ void MainWindow::buildMenus()
     menus::addActions("Surface", {"#Normals", "mesh.softenEdges", "mesh.hardenEdges", "mesh.setNormalAngle", "mesh.flip", "mesh.conform",
                                   "mesh.softFoliageNormals", "#Vertex Colors", "vcolor.paint", "vcolor.createSet", "vcolor.fill", "vcolor.gradient",
                                   "vcolor.invert", "vcolor.levels", "vcolor.blur", "#Bake to Vertex Colors", "vcolor.bakeAO", "vcolor.bakeCavity",
-                                  "vcolor.bakeCurvature", "vcolor.bakeHeight", "viewport.bakeRandomColors", "#Display", "viewport.vertexColors.off", "viewport.vertexColors.shaded",
+                                  "vcolor.bakeCurvature", "vcolor.bakeHeight", "vcolor.masks", "viewport.bakeRandomColors", "#Display", "viewport.vertexColors.off", "viewport.vertexColors.shaded",
                                   "viewport.vertexColors.unlit", "viewport.toggleBackfaceCulling"});
 
     menu("Sculpt", "Sculpt", Area::MenuBar, {}, "", {"Sculpt"});
