@@ -17,7 +17,7 @@ endif()
 # Pins the MSVC toolset for dependencies (vcpkg otherwise picks the newest installed Visual Studio).
 set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets")
 
-project(Lila VERSION 0.10.0 LANGUAGES C CXX)
+project(Lila VERSION 0.12.0 LANGUAGES C CXX)
 
 # System packages on Linux may export only NOCONFIG; retain vcpkg's release fallbacks as well.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

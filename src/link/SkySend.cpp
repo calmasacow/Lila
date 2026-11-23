@@ -55,11 +55,11 @@ json atmosphereJson(const scene::Node& sky)
 {
     namespace sa = scene::skyAtmosphere;
     const int a = sa::firstAttr();
-    auto num = [&](int attr) { return sky.as<double>(a + attr); };
+    auto num = [&](sa::Attr attr) { return sa::scaled(sky, attr); };
     auto col = [&](int attr) { return vec3(sky.as<glm::dvec3>(a + attr)); };
     static const char* modes[] = {"PlanetTopAtAbsoluteWorldOrigin", "PlanetTopAtComponentTransform", "PlanetCenterAtComponentTransform"};
     return {{"transformMode", modes[std::clamp<int64_t>(sky.as<int64_t>(a + sa::kTransformMode), 0, 2)]},
-            {"location", ueVec(sky.as<glm::dvec3>(a + sa::kPosition))},
+            {"location", ueVec(sa::worldPosition(sky))},
             {"bottomRadius", num(sa::kBottomRadius)},
             {"groundAlbedo", col(sa::kGroundAlbedo)},
             {"atmosphereHeight", num(sa::kAtmosphereHeight)},

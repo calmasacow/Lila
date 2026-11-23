@@ -40,6 +40,8 @@ struct AtmosphereSettings
     float minLightElevation = -90.0f;
 
     double topRadius() const { return bottomRadius + atmosphereHeight; }
+    /** 1 for Earth-deep air and deeper, less for a shallower one: scales the fixed small distances so a miniature planet keeps them in proportion. */
+    double lengthUnit() const { return std::min(atmosphereHeight / 60.0, 1.0); }
     bool operator==(const AtmosphereSettings&) const = default;
 };
 

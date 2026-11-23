@@ -1812,7 +1812,7 @@ void registerBuiltins()
     for (const char* t : {
              // Transforms and shapes: values relative to the parent, geometry in object space.
              "transform", "locator", "joint", "mesh", "lattice", "camera", "light", "imagePlane", "lodGroup", "array", "curve", "field",
-             "proxySet", "turntable",
+             "proxySet", "turntable", "skyAtmosphere",
              // Rig elements: control-space or connected values; their outputs follow what they read.
              "ikChain", "reverseFoot", "rigAlign", "twistDriver", "poseDriver", "drivenChannel",
              "splineChain", "splineJoint", "hoseLimb", "hoseHand",
@@ -1853,7 +1853,6 @@ void registerBuiltins()
     registerWorldAttrs("kelvinlet", {.matrices = {"bindMatrix", "geomMatrix"}});
     registerWorldAttrs("softMod", {.matrices = {"bindMatrix", "geomMatrix"}, .points = {"falloffCenter"}});
     registerWorldAttrs("jiggle", {.directions = {"gravity"}});
-    registerWorldAttrs("skyAtmosphere", {.points = {"position"}});
     for (const char* t : {"arrayModifier", "booleanModifier", "surfaceFlowModifier", "transferAttributesModifier"})
         registerWorldAttrs(t, {.matrices = {"targetMatrix"}});
     // Curve history: world-space curves in, world-space geometry out; curves of their own (unconnected) move with the scene.

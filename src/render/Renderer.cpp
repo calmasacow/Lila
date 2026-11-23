@@ -3029,7 +3029,8 @@ struct Renderer::Impl
 
     static float aerialDepthKm(const FrameState& s)
     {
-        return s.atmosphere ? kAerialDepthKm : 0.0f;
+        // Shrinks with a scaled-down atmosphere so a small globe keeps its haze slices; Earth-sized and larger keep the full depth.
+        return s.atmosphere ? kAerialDepthKm * float(s.atmosphere->settings.lengthUnit()) : 0.0f;
     }
 
     /** The sky atmosphere's block for this frame: its tables when the settings changed, the camera and sun every frame. */

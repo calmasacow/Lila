@@ -39,6 +39,7 @@
 #include "scene/Poses.h"
 #include "scene/PostProcess.h"
 #include "scene/SkyAtmosphere.h"
+#include "scene/FloatPrecision.h"
 #include "scene/ColorManagement.h"
 #include "scene/Relocate.h"
 #include "scene/Georef.h"
@@ -275,6 +276,7 @@ void registerCommands()
     registerLightCommands();
     postProcess::registerCommands();
     skyAtmosphere::registerCommands();
+    floatPrecision::registerCommands();
     colorManagement::registerCommands();
     spaces::registerCommands();
     anim::registerCommands();

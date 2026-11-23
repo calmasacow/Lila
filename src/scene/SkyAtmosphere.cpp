@@ -43,9 +43,8 @@ std::vector<AttrDef> attrs()
                    .doc = "Draw this sky. The first enabled one in the scene applies."};
     a[kTransformMode] = {.name = "transformMode", .shortName = "tfm", .type = PlugType::Enum, .defaultValue = int64_t(0), .flags = kStored,
                          .enumNames = {"planetTopAtAbsoluteWorldOrigin", "planetTopAtComponentTransform", "planetCenterAtComponentTransform"},
-                         .doc = "Where the planet sits: its ground at the world origin, its ground at position, or its centre at position."};
-    a[kPosition] = vec3("position", "pos", glm::dvec3(0.0), "The planet's ground or centre for the component transform modes, cm.", false);
-    a[kBottomRadius] = number("bottomRadius", "brd", 6360.0, "The planet's radius, km.", 1.0, 100000.0);
+                         .doc = "Where the planet sits: its ground at the world origin, or its ground or centre at the node's position."};
+    a[kBottomRadius] = number("bottomRadius", "brd", 6360.0, "The planet's radius, km, times the node's scale.", 1.0, 100000.0);
     a[kGroundAlbedo] = vec3("groundAlbedo", "gal", glm::dvec3(0.401978), "The planet's ground colour, lighting the air above it and seen from high up.", true);
     a[kAtmosphereHeight] = number("atmosphereHeight", "ath", 60.0, "How high the air reaches above the ground, km.", 1.0, 200.0);
     a[kMultiScatteringFactor] = number("multiScatteringFactor", "msf", 1.0, "Light scattered more than once: 0 leaves only single scattering, darker at dusk.", 0.0, 2.0);
@@ -71,6 +70,13 @@ std::vector<AttrDef> attrs()
                                                      "Sun height (degrees) below which sunlight on the scene stops reddening and dimming.", -90.0, 90.0);
     return a;
 }
+
+glm::dmat4 worldMatrix(const Node& sky)
+{
+    // Pulled through the graph: the stored world matrix is stale until something evaluates it.
+    Graph* g = const_cast<Graph*>(sky.graph());
+    return g ? std::get<glm::dmat4>(g->value({sky.id(), Transform::kWorldMatrix, -1})) : sky.as<glm::dmat4>(Transform::kWorldMatrix);
+}
 } // namespace
 
 int firstAttr()
@@ -83,17 +89,48 @@ NodeId active(const Graph& g)
 {
     const int first = firstAttr();
     for (const Node* n : sceneIndex::ofType(g, "skyAtmosphere"))
-        if (n->as<bool>(first + kEnabled))
+        if (n->as<bool>(first + kEnabled) && effectivelyVisible(g, n->id()))
             return n->id();
     return kNoNode;
+}
+
+glm::dvec3 worldPosition(const Node& sky)
+{
+    return glm::dvec3(worldMatrix(sky)[3]);
+}
+
+double planetScale(const Node& sky)
+{
+    const double volume = std::abs(glm::determinant(glm::dmat3(worldMatrix(sky))));
+    return volume > 1e-30 ? std::cbrt(volume) : 1.0;
+}
+
+double scaled(const Node& sky, Attr attr)
+{
+    const double v = sky.as<double>(firstAttr() + attr);
+    switch (attr)
+    {
+    case kBottomRadius:
+    case kAtmosphereHeight:
+    case kRayleighExponentialDistribution:
+    case kMieExponentialDistribution:
+    case kOtherTentTipAltitude:
+    case kOtherTentWidth:
+    case kAerialPerspectiveStartDepth: return v * planetScale(sky);
+    case kRayleighScatteringScale:
+    case kMieScatteringScale:
+    case kMieAbsorptionScale:
+    case kOtherAbsorptionScale: return v / planetScale(sky);
+    default: return v;
+    }
 }
 
 glm::dvec3 planetCenter(const Node& sky, bool zUp)
 {
     const int first = firstAttr();
     const glm::dvec3 up = zUp ? glm::dvec3(0.0, 0.0, 1.0) : glm::dvec3(0.0, 1.0, 0.0);
-    const double radiusCm = sky.as<double>(first + kBottomRadius) * 1.0e5;
-    const glm::dvec3 position = sky.as<glm::dvec3>(first + kPosition);
+    const double radiusCm = scaled(sky, kBottomRadius) * 1.0e5;
+    const glm::dvec3 position = worldPosition(sky);
     switch (sky.as<int64_t>(first + kTransformMode))
     {
     case 1: return position - up * radiusCm;
@@ -124,10 +161,12 @@ void registerTypes()
     NodeType t;
     t.name = "skyAtmosphere";
     t.icon = "sun-high";
+    t.base = types::find("locator");
+    t.dag = true;
     t.doc = "A planet's sky and the haze over distant things, lit by the sun (a directional light), from the ground up to orbit. "
             "It lights the scene in place of the environment. Unreal's SkyAtmosphere, attribute for attribute.";
     t.ownAttrs = attrs();
-    t.create = [] { return std::make_unique<Node>(); };
+    t.create = [] { return std::make_unique<Locator>(); };
     types::registerType(std::move(t));
 }
 

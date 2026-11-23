@@ -112,6 +112,7 @@ std::optional<bool> viewportActionState(const std::string& id, const ViewportWid
         {"viewport.toggleShadows", vd::kShadows, true},
         {"viewport.toggleLighting", vd::kSceneLights, true},
         {"viewport.defaultMaterial", vd::kDefaultMaterial, false},
+        {"viewport.randomColors", vd::kRandomColors, false},
         {"viewport.greyBaseColor", vd::kGreyBaseColor, false},
         {"viewport.smoothSubdivisions", vd::kSmoothSubdivisions, false},
         {"viewport.modifierEdges", vd::kModifierEdges, false},

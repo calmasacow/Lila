@@ -1,6 +1,9 @@
 #include <doctest/doctest.h>
 
+#include "TestUtil.h"
 #include "render/Atmosphere.h"
+#include "scene/Graph.h"
+#include "scene/SkyAtmosphere.h"
 
 #include <glm/gtc/constants.hpp>
 
@@ -141,4 +144,41 @@ TEST_CASE("atmosphere: the environment key round-trips and bakes a sky without t
     CHECK(dc.b > dc.r);
     CHECK(dc.g < 3.0f);
     CHECK(dc.g > 0.0f);
+}
+
+TEST_CASE("atmosphere: the sky node sits in the DAG, its position places the planet, and hiding it turns it off")
+{
+    using namespace lila::scene;
+    testutil::run("newScene");
+    const std::string sky = testutil::run("skyAtmosphere", {{"sun", false}}).get<std::string>();
+    Graph& g = Graph::current();
+    const Node* n = g.find(sky);
+    REQUIRE(n);
+    CHECK(n->type().dag);
+    CHECK(skyAtmosphere::active(g) == n->id());
+
+    testutil::run("setAttr", {{"args", {sky + ".transformMode", 2}}});
+    testutil::run("setAttr", {{"args", {sky + ".translate", nlohmann::json::array({100.0, 200.0, 300.0})}}});
+    CHECK(skyAtmosphere::planetCenter(*n, false) == glm::dvec3(100.0, 200.0, 300.0));
+
+    testutil::run("setAttr", {{"args", {sky + ".visibility", false}}});
+    CHECK(skyAtmosphere::active(g) == kNoNode);
+}
+
+TEST_CASE("atmosphere: the sky node's scale sizes the planet and its air together")
+{
+    using namespace lila::scene;
+    namespace sa = skyAtmosphere;
+    testutil::run("newScene");
+    const std::string sky = testutil::run("skyAtmosphere", {{"sun", false}}).get<std::string>();
+    const Node* n = Graph::current().find(sky);
+    REQUIRE(n);
+    testutil::run("setAttr", {{"args", {sky + ".transformMode", 1}}});
+    testutil::run("setAttr", {{"args", {sky + ".scale", nlohmann::json::array({0.001, 0.001, 0.001})}}});
+    CHECK(sa::planetScale(*n) == doctest::Approx(0.001));
+    CHECK(sa::scaled(*n, sa::kBottomRadius) == doctest::Approx(6.36));
+    CHECK(sa::scaled(*n, sa::kAtmosphereHeight) == doctest::Approx(0.06));
+    CHECK(sa::scaled(*n, sa::kRayleighScatteringScale) == doctest::Approx(33.1));
+    CHECK(sa::scaled(*n, sa::kMieAnisotropy) == doctest::Approx(0.8));
+    CHECK(sa::planetCenter(*n, false).y == doctest::Approx(-6.36e5));
 }
