@@ -535,6 +535,12 @@ void NodeCanvas::mouseDoubleClickEvent(QMouseEvent* e)
                 pressField(n, f, e);
             return;
         }
+    if (e->button() == Qt::LeftButton)
+        if (auto s = interfaceSocketAt(sp))
+        {
+            renameInterfaceSocket(*s);
+            return;
+        }
     // A group node or a Receive keeps its own double-click; F2 and the menu still rename them.
     if (n && e->button() == Qt::LeftButton && canRenameNodes() && !n->reroute && n->groupRef.empty() && n->type != gn::kReceiveType &&
         n->headerRect().contains(n->mapFromScene(sp)) && !(n->isViewer() && n->eyeRect().contains(n->mapFromScene(sp))))

@@ -4083,12 +4083,13 @@ def gnLoadGroup(*objects: Any) -> Any:
         objects: nameOrPath.
     """
 
-def gnMoveInput(*objects: Any, panel: str | None = None) -> Any:
-    """Move an exposed input to a position in the interface order (0 is first), optionally into a panel.
+def gnMoveInput(*objects: Any, panel: str | None = None, output: bool | None = None) -> Any:
+    """Move an exposed input (or, with output=True, a group output) to a position in the interface order (0 is first), optionally into a panel.
 
     Args:
         objects: group input index.
         panel: Panel to put it in; empty for none.
+        output: Move a group output instead. Default False.
     """
 
 def gnMoveNodes(*objects: Any, positions: Any | None = None) -> Any:
@@ -10845,11 +10846,12 @@ def texMaterialFromMaps(*objects: Any, folder: str | None = None, recursive: boo
         set: Add them to this texture set as layers instead.
     """
 
-def texMoveInput(*objects: Any) -> Any:
-    """Move a node group's input to another place in its interface, 0 first.
+def texMoveInput(*objects: Any, output: bool | None = None) -> Any:
+    """Move a node group's input (or, with output=True, its output) to another place in its interface, 0 first.
 
     Args:
         objects: group name index.
+        output: Move a group output instead. Default False.
     """
 
 def texMoveLayer(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
@@ -11052,11 +11054,12 @@ def texRenameGroup(*objects: Any) -> Any:
         objects: group newName.
     """
 
-def texRenameInput(*objects: Any) -> Any:
-    """Rename a node group's input, keeping its links inside and on the Group nodes running the group.
+def texRenameInput(*objects: Any, output: bool | None = None) -> Any:
+    """Rename a node group's input (or, with output=True, its output), keeping its links inside and on the Group nodes running the group.
 
     Args:
         objects: group name newName.
+        output: Rename a group output instead. Default False.
     """
 
 def texSampleChannels(*objects: Any, uv: Sequence[Any] | None = None, mesh: str | None = None, position: Sequence[Any] | None = None, source: str | None = None, layer: str | None = None) -> Any:

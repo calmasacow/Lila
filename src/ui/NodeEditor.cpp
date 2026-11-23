@@ -1976,6 +1976,17 @@ void NodeEditor::showCanvasMenu(QPoint global)
         }
         QObject::connect(q, &QAction::triggered, q, [id] { actions::run(json(id)); });
     };
+    if (auto s = mCanvas->interfaceSocketAt(mCanvas->mapToScene(mCanvas->viewport()->mapFromGlobal(global))))
+    {
+        menu.addSection(pretty(s->id));
+        menu.addAction("Rename\tDouble-click", this, [this, s = *s] { mCanvas->renameInterfaceSocket(s); });
+        menu.addAction("Move Up", this, [this, s = *s] { mCanvas->moveInterfaceSocket(s, s.index - 1); })->setEnabled(s->index > 0);
+        menu.addAction("Move Down", this, [this, s = *s] { mCanvas->moveInterfaceSocket(s, s.index + 1); })->setEnabled(s->index + 1 < s->count);
+        menu.addAction(s->groupOutput ? "Remove Output" : "Remove Input", this, [this, s = *s] {
+            run(s.groupOutput ? "RemoveOutput" : "RemoveInput", args({mGroup.toStdString(), s.id}));
+        });
+        menu.addSeparator();
+    }
     for (const char* id : {"nodeEditor.addNode", "nodeEditor.duplicate", "nodeEditor.copy", "nodeEditor.paste", "nodeEditor.delete"})
         item(&menu, id);
     std::vector<std::string> selected = mCanvas->selectedNames();

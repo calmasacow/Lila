@@ -802,6 +802,21 @@ public:
     bool renameNode(const std::string& name);
     /** The node to rename: the one selected, else the one under the cursor; empty for none. */
     std::string renameTarget() const;
+    /** A row of the group's interface under a scene point: one of Group Input's outputs or Group Output's inputs. */
+    struct InterfaceSocket
+    {
+        std::string node;
+        std::string id;
+        /** Its place in the interface, and how many there are. */
+        int index = -1;
+        int count = 0;
+        bool groupOutput = false;
+    };
+    std::optional<InterfaceSocket> interfaceSocketAt(QPointF scenePos) const;
+    /** Opens a box over an interface row to type its name in; the typed text becomes its label where it isn't a plain name. */
+    void renameInterfaceSocket(const InterfaceSocket& s);
+    /** Moves an interface row to place to, 0 first. */
+    void moveInterfaceSocket(const InterfaceSocket& s, int to);
     /** A note box at scene point at to type in; Ctrl+Enter or clicking away adds it as a note, Esc adds nothing. */
     void addNote(QPointF at);
     /** A node renamed by a backend whose labels are names (the scene's): its new name, to keep it selected. */
