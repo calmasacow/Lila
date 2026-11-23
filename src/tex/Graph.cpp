@@ -124,6 +124,8 @@ json Graph::toJson() const
         out["description"] = description;
     if (!subgroups.empty())
         out["subgroups"] = subgroups;
+    if (!presets.empty())
+        out["presets"] = presets;
     return out;
 }
 
@@ -169,6 +171,8 @@ Graph Graph::fromJson(const json& j)
         if (auto it = j.find("subgroups"); it != j.end() && it->is_object())
             for (auto& [k, v] : it->items())
                 g.subgroups[k] = v;
+        if (auto it = j.find("presets"); it != j.end() && it->is_array())
+            g.presets = *it;
     }
     catch (const json::exception& e)
     {

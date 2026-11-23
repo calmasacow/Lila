@@ -75,6 +75,7 @@ std::string freeName(std::string name)
 void registerFileCommands()
 {
     registerGroupCommands();
+    registerParamCommands();
     using T = ArgType;
     ops::registerCommand({
         .name = "texExportGraph",

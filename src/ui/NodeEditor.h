@@ -164,6 +164,8 @@ public:
     std::vector<std::string> sendTargets() const;
     /** Runs the backend's SetValue for a side-panel field, keeping the panel (and the field being dragged) in place. */
     void setValueFromField(const nlohmann::json& call);
+    /** Runs a command for a side-panel field the same way, so dragging the field doesn't rebuild the panel under it. */
+    void runFromField(const std::string& command, const nlohmann::json& call);
 
 private:
     void openAddMenu(QPointF scenePos, const WireDrag* wire);

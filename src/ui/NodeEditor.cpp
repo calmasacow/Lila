@@ -1449,6 +1449,13 @@ std::vector<std::string> NodeEditor::sendTargets() const
 
 void NodeEditor::setValueFromField(const json& call) { setFromField(*mBackend, call); }
 
+void NodeEditor::runFromField(const std::string& command, const json& call)
+{
+    ++gFieldEdits;
+    runCmd(command, call);
+    --gFieldEdits;
+}
+
 void NodeEditor::refreshSendButton()
 {
     if (!mSendBtn)
@@ -2060,7 +2067,7 @@ void NodeEditor::rebuildSidePanel()
         return;
     }
 
-    if ((mBackend->supports("AddInput") && mBackend->hasInterface(group)) || !info["definition"].value("inputs", json::array()).empty())
+    if (mBackend->hasInterface(group) && (mBackend->supports("AddInput") || !info["definition"].value("inputs", json::array()).empty()))
         lay->addWidget(buildInterface(panel, info));
     if (info.contains("owners") || info.contains("modifiers"))
     {
@@ -2230,6 +2237,8 @@ void NodeEditor::rebuildSidePanel()
     }
     else
     {
+        if (QWidget* graph = mBackend->graphPanel(panel, *this, info))
+            lay->addWidget(graph);
         auto* hint = new QLabel(mBackend->canvasHint(), panel);
         hint->setWordWrap(true);
         hint->setStyleSheet("color: rgb(150,150,150);");

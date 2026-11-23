@@ -51,7 +51,7 @@ struct GraphOutput
  *   { "name", "typeVersion", "description", "inputs": [{name, kind: port|param, type, default, label, description, panel,
  *     min, max, softMin, softMax, step, options, targets}], "outputs": [{name, type, description}],
  *     "nodes": [{name, type, position, values}], "links": [[fromNode, fromSocket, toNode, toSocket]],
- *     "ties": [see gn::tiesToJson], "subgroups": {name: graph} }
+ *     "ties": [see gn::tiesToJson], "subgroups": {name: graph}, "presets": [{name, values}] }
  * Node values hold parameter values and unlinked input values by id; missing ones take the definition's default.
  */
 struct LILA_SCENE_API Graph
@@ -73,6 +73,8 @@ struct LILA_SCENE_API Graph
     std::map<std::string, json> subgroups;
     /** The scene time it is evaluated at, in seconds (sequence::followTime): what expressions read as time. Not saved. */
     double time = 0.0;
+    /** Named snapshots of the param inputs' values: [{name, values: {input: value}}], in the order they were saved. */
+    json presets = json::array();
 
     json toJson() const;
     /** Throws std::invalid_argument on malformed input. */

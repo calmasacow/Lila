@@ -1,0 +1,172 @@
+#include <doctest/doctest.h>
+
+#include "TestUtil.h"
+
+#include "scene/Graph.h"
+#include "tex/Graph.h"
+#include "tex/TextureSet.h"
+#include "ui/NodeEditor.h"
+
+#include <QAction>
+#include <QComboBox>
+#include <QDoubleSpinBox>
+#include <QGraphicsItem>
+#include <QGraphicsView>
+#include <QLabel>
+#include <QMainWindow>
+
+using namespace lila;
+using json = nlohmann::json;
+using namespace dockstest;
+
+namespace
+{
+tex::Graph rockGraph() { return tex::readGraph(*tex::findSet(scene::Graph::current(), "Rock")); }
+
+json graphParams(const std::string& graph) { return run("texGraphParams", {{"args", {graph}}}); }
+
+/** A set Rock with a Perlin noise named Noise feeding roughness. */
+void makeRock()
+{
+    registerTexGraphUi();
+    run("newScene");
+    run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 64}});
+    run("texAddNode", {{"args", {"Rock", "perlin"}}, {"name", "Noise"}});
+    run("texConnect", {{"args", {"Rock", "Noise.out", "Output.roughness"}}});
+}
+
+QAction* labelAction(QWidget* root, const QString& text)
+{
+    for (QWidget* w : root->findChildren<QWidget*>())
+        for (QAction* a : w->actions())
+            if (a->text() == text)
+                return a;
+    return nullptr;
+}
+} // namespace
+
+TEST_CASE("graph parameters drive the set's nodes, and presets store and recall them")
+{
+    makeRock();
+    CHECK(run("texExposeParam", {{"args", {"Rock", "Noise.persistence"}}, {"label", "Grit"}}) == "persistence");
+    CHECK_THROWS(run("texExposeParam", {{"args", {"Rock", "Noise.persistence"}}}));
+    CHECK_THROWS(run("texExposeParam", {{"args", {"Rock", "Noise.nothing"}}}));
+
+    run("texSetGraphParam", {{"args", {"Rock", "persistence", 0.2}}});
+    CHECK(rockGraph().node("Noise")->values.value("persistence", 0.0) == doctest::Approx(0.2));
+    CHECK_THROWS(run("texSetGraphParam", {{"args", {"Rock", "persistence", "rough"}}}));
+    json gp = graphParams("Rock");
+    REQUIRE(gp["params"].size() == 1);
+    CHECK(gp["params"][0]["label"] == "Grit");
+    CHECK(gp["params"][0]["value"].get<double>() == doctest::Approx(0.2));
+
+    // Editing the node itself is the parameter's value too.
+    run("texSetValue", {{"args", {"Rock", "Noise.persistence", 0.3}}});
+    CHECK(graphParams("Rock")["params"][0]["value"].get<double>() == doctest::Approx(0.3));
+
+    run("texSavePreset", {{"args", {"Rock", "Smooth"}}});
+    run("texSetGraphParam", {{"args", {"Rock", "persistence", 0.8}}});
+    CHECK(graphParams("Rock")["active"] == "");
+    run("texSavePreset", {{"args", {"Rock", "Rough"}}});
+    CHECK(graphParams("Rock")["active"] == "Rough");
+    CHECK(graphParams("Rock")["presets"] == json::array({"Smooth", "Rough"}));
+
+    run("texApplyPreset", {{"args", {"Rock", "Smooth"}}});
+    CHECK(rockGraph().node("Noise")->values.value("persistence", 0.0) == doctest::Approx(0.3));
+    CHECK(graphParams("Rock")["active"] == "Smooth");
+    run("undo");
+    CHECK(rockGraph().node("Noise")->values.value("persistence", 0.0) == doctest::Approx(0.8));
+    run("redo");
+
+    CHECK(run("texRenamePreset", {{"args", {"Rock", "Smooth", "Soft"}}}) == "Soft");
+    CHECK_THROWS(run("texRenamePreset", {{"args", {"Rock", "Soft", "Rough"}}}));
+    run("texDeletePreset", {{"args", {"Rock", "Rough"}}});
+    CHECK(graphParams("Rock")["presets"] == json::array({"Soft"}));
+    run("undo");
+    CHECK(graphParams("Rock")["presets"] == json::array({"Soft", "Rough"}));
+
+    // The presets go with the set's graph.
+    CHECK(rockGraph().presets.size() == 2);
+    CHECK(tex::Graph::fromJson(rockGraph().toJson()).presets == rockGraph().presets);
+
+    // Removing a parameter leaves the node at its value and drops it from the presets.
+    run("texUnexposeParam", {{"args", {"Rock", "persistence"}}});
+    CHECK(graphParams("Rock")["params"].empty());
+    CHECK(rockGraph().node("Noise")->values.value("persistence", 0.0) == doctest::Approx(0.3));
+    CHECK_FALSE(rockGraph().presets[0]["values"].contains("persistence"));
+}
+
+TEST_CASE("a node group's graph parameters set its defaults, with presets of their own")
+{
+    makeRock();
+    run("texAddNode", {{"args", {"Rock", "perlin"}}, {"name", "Fine"}});
+    run("texConnect", {{"args", {"Rock", "Fine.out", "Output.metallic"}}});
+    const json grouped = run("texGroupNodes", {{"args", {"Rock", "Fine"}}, {"name", "Grain"}});
+    const std::string group = "Rock/" + grouped["group"].get<std::string>();
+    CHECK(run("texExposeParam", {{"args", {group, "Fine.scale"}}}) == "scale");
+    run("texSetGraphParam", {{"args", {group, "scale", 9}}});
+    const tex::Graph inner = tex::readGraphAt(scene::Graph::current(), group);
+    REQUIRE(inner.input("scale"));
+    CHECK(inner.input("scale")->defaultValue == 9);
+    CHECK(inner.input("scale")->targets == std::vector<std::string>{"Fine.scale"});
+    run("texSavePreset", {{"args", {group, "Big"}}});
+    run("texSetGraphParam", {{"args", {group, "scale", 2}}});
+    run("texApplyPreset", {{"args", {group, "Big"}}});
+    CHECK(tex::readGraphAt(scene::Graph::current(), group).input("scale")->defaultValue == 9);
+}
+
+TEST_CASE("the Texture Graph side panel edits graph parameters and presets")
+{
+    makeRock();
+    run("texExposeParam", {{"args", {"Rock", "Noise.persistence"}}});
+    run("texSavePreset", {{"args", {"Rock", "Base"}}});
+
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1100, 700);
+    win.show();
+    editor->setGroup("Rock");
+    pump();
+
+    auto* panel = editor->findChild<QWidget*>("graphParams");
+    REQUIRE(panel);
+    auto* presets = panel->findChild<QComboBox*>("graphPresets");
+    REQUIRE(presets);
+    CHECK(presets->count() == 1);
+    CHECK(presets->currentText() == "Base");
+    QDoubleSpinBox* field = nullptr;
+    for (QDoubleSpinBox* s : panel->findChildren<QDoubleSpinBox*>())
+        if (s->toolTip().contains("Drives Noise.persistence"))
+            field = s;
+    REQUIRE(field);
+    field->setValue(0.65);
+    pump();
+    CHECK(rockGraph().node("Noise")->values.value("persistence", 0.0) == doctest::Approx(0.65));
+    // The values no longer match Base, so the picker says Custom.
+    panel = editor->findChild<QWidget*>("graphParams");
+    REQUIRE(panel);
+    CHECK(panel->findChild<QComboBox*>("graphPresets")->currentIndex() == -1);
+
+    // Picking the preset puts its values back.
+    presets = panel->findChild<QComboBox*>("graphPresets");
+    presets->setCurrentIndex(0);
+    Q_EMIT presets->activated(0);
+    pump();
+    CHECK(rockGraph().node("Noise")->values.value("persistence", 0.0) == doctest::Approx(0.5));
+
+    // A selected node's parameter labels offer Expose; an exposed one offers Remove.
+    auto* view = editor->findChild<QGraphicsView*>();
+    REQUIRE(view);
+    for (QGraphicsItem* i : view->scene()->items())
+        if ((i->flags() & QGraphicsItem::ItemIsSelectable) && QLineF(i->pos(), QPointF(rockGraph().node("Noise")->position.x,
+                                                                                       rockGraph().node("Noise")->position.y)).length() < 0.5)
+            i->setSelected(true);
+    pump();
+    QAction* expose = labelAction(editor, "Expose as Graph Parameter");
+    REQUIRE(expose);
+    CHECK(labelAction(editor, "Remove Graph Parameter"));
+    expose->trigger();
+    pump();
+    CHECK(graphParams("Rock")["params"].size() == 2);
+}

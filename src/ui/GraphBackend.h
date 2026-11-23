@@ -165,6 +165,8 @@ public:
 
     /** The side panel's editor for the selected node (an entry of GroupInfo's "nodes"); null uses the editor's own. */
     virtual QWidget* nodePanel(QWidget* /*parent*/, NodeEditor& /*editor*/, const nlohmann::json& /*node*/) const { return nullptr; }
+    /** The side panel's section for the group itself while no node is selected (its parameters and presets); null for none. */
+    virtual QWidget* graphPanel(QWidget* /*parent*/, NodeEditor& /*editor*/, const nlohmann::json& /*info*/) const { return nullptr; }
 
     /** Whether the toolbar shows the Send button. */
     virtual bool canSend() const { return false; }

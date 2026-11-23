@@ -935,6 +935,25 @@ void addInput(QFormLayout* form, QWidget* parent, const json& in, const SetFn& s
     w.field->setToolTip(tip);
     addRow(w.label, w.field);
 }
+
+/** Puts the parameter's extra action on the right-click menu of its first row's label (a check box when it has none). */
+void attachParamAction(QFormLayout* form, int row, const std::string& id, const ParamActionFn& paramAction)
+{
+    QWidget* target = nullptr;
+    for (QFormLayout::ItemRole role : {QFormLayout::LabelRole, QFormLayout::SpanningRole, QFormLayout::FieldRole})
+        if (QLayoutItem* item = form->itemAt(row, role); item && item->widget())
+        {
+            target = item->widget();
+            break;
+        }
+    if (!target)
+        return;
+    if (QAction* action = paramAction(id, target))
+    {
+        target->addAction(action);
+        target->setContextMenuPolicy(Qt::ActionsContextMenu);
+    }
+}
 } // namespace
 
 json gradientStops(const json& value)
@@ -1072,7 +1091,7 @@ QWidget* curveEditor(QWidget* parent, const json& value, std::function<void(cons
     return w;
 }
 
-QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose)
+QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose, ParamActionFn paramAction)
 {
     auto* w = new QWidget(parent);
     auto* v = new QVBoxLayout(w);
@@ -1080,9 +1099,12 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose
     v->setSpacing(3);
     const std::string name = node.value("name", "");
     QString title = qs(node.value("title", node.value("label", node.value("type", "")))) + (name.empty() ? QString() : "  (" + qs(name) + ")");
-    QLabel* head = heading(w, title);
-    head->setToolTip(qs(node.value("type", "")) + (node.contains("category") ? ", " + qs(node["category"].get<std::string>()) : QString()));
-    v->addWidget(head);
+    if (!title.isEmpty())
+    {
+        QLabel* head = heading(w, title);
+        head->setToolTip(qs(node.value("type", "")) + (node.contains("category") ? ", " + qs(node["category"].get<std::string>()) : QString()));
+        v->addWidget(head);
+    }
     if (node.contains("error"))
         v->addWidget(dimLabel(w, qs(node["error"].get<std::string>())));
 
@@ -1095,10 +1117,15 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose
         auto* form = new QFormLayout();
         form->setContentsMargins(0, 0, 0, 0);
         for (const json& p : params)
+        {
+            const int before = form->rowCount();
             if (p.value("type", "") == "node")
                 addNodeParam(form, w, p, node, set);
             else
                 addParam(form, w, p, set, node);
+            if (paramAction && form->rowCount() > before)
+                attachParamAction(form, before, p.value("id", ""), paramAction);
+        }
         v->addLayout(form);
     }
 
