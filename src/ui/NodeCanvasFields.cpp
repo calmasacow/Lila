@@ -119,6 +119,35 @@ void NodeCanvas::setFieldValue(const std::string& node, const std::string& socke
         runVerb(*backend, "SetValue", call);
 }
 
+void NodeCanvas::pressProp(NodeItem* n, int prop)
+{
+    if (!n->isSelected())
+    {
+        mScene.clearSelection();
+        n->setSelected(true);
+    }
+    const std::string id = n->props[size_t(prop)].first, current = n->props[size_t(prop)].second;
+    const std::string node = n->name;
+    if (n->propIsToggle(size_t(prop)))
+    {
+        const bool on = current != "true";
+        setFieldValue(node, id, n->boolParams.contains(id) ? json(on) : json(on ? "true" : "false"), false);
+        return;
+    }
+    QMenu menu(this);
+    for (const std::string& o : n->propOptions[size_t(prop)])
+    {
+        QAction* a = menu.addAction(pretty(o));
+        a->setCheckable(true);
+        a->setChecked(o == current);
+        a->setData(qs(o));
+    }
+    const QRectF row = n->mapRectToScene(n->propRect(size_t(prop)));
+    QAction* picked = menu.exec(viewport()->mapToGlobal(mapFromScene(row.bottomLeft())));
+    if (picked && picked->data().toString().toStdString() != current)
+        setFieldValue(node, id, picked->data().toString().toStdString(), false);
+}
+
 void NodeCanvas::pressField(NodeItem* n, int input, QMouseEvent* e)
 {
     if (!n->isSelected())
@@ -361,6 +390,22 @@ void NodeCanvas::hoverField(QPointF sp)
     NodeItem* n = nodeAt(sp);
     bool input = false;
     int f = n && n->socketAt(sp, input) < 0 ? n->fieldAt(sp) : -1;
+    int pr = n && f < 0 ? n->propAt(sp) : -1;
+    if (mHotPropNode && (mHotPropNode != n || mHotPropNode->hotProp != pr))
+    {
+        mHotPropNode->hotProp = -1;
+        mHotPropNode->update();
+        mHotPropNode = nullptr;
+    }
+    if (n && pr >= 0)
+    {
+        if (n->hotProp != pr)
+        {
+            n->hotProp = pr;
+            n->update();
+        }
+        mHotPropNode = n;
+    }
     if (mHotFieldNode && (mHotFieldNode != n || mHotFieldNode->hotField != f))
     {
         mHotFieldNode->hotField = -1;
@@ -378,7 +423,7 @@ void NodeCanvas::hoverField(QPointF sp)
     }
     if (mZipKey)
         return;
-    FieldKind kind = f >= 0 ? n->fieldKind(f) : FieldKind::None;
+    FieldKind kind = f >= 0 ? n->fieldKind(f) : pr >= 0 ? FieldKind::Toggle : FieldKind::None;
     if (kind != FieldKind::None)
     {
         viewport()->setCursor(kind == FieldKind::Number ? Qt::SizeHorCursor : Qt::PointingHandCursor);

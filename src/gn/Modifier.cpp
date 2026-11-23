@@ -1229,6 +1229,38 @@ void commitGroup(Graph& g, Node& groupNode, Group next, const std::map<std::stri
         propagateToUsers(g, next.name);
 }
 
+void renameGroup(Graph& g, Node& groupNode, const std::string& to)
+{
+    const std::string from = groupNode.name();
+    if (to == from)
+        return;
+    if (!validIdentifier(to))
+        throw std::invalid_argument("'" + to + "' isn't a valid group name");
+    if (!g.findAll(to).empty())
+        throw std::invalid_argument("a node named " + to + " already exists");
+    Group next = readGroup(groupNode);
+    next.name = to;
+    g.rename(groupNode.id(), to);
+    setGroupDefinition(g, groupNode, next);
+    syncInstances(g, groupNode, next, {});
+    for (const std::string& name : groupNames(g))
+    {
+        if (name == to)
+            continue;
+        Node* user = findGroupNode(g, name);
+        Group grp = readGroup(*user);
+        bool uses = false;
+        for (GNode& n : grp.nodes)
+            if (n.values.value("group", std::string()) == from && runsGroup(n.type))
+            {
+                n.values["group"] = to;
+                uses = true;
+            }
+        if (uses)
+            commitGroup(g, *user, std::move(grp));
+    }
+}
+
 namespace detail
 {
 /** Used by the commands: a new modifier of the group's type, inserted at the top of a mesh's stack. */
