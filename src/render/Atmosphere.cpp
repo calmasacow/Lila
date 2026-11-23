@@ -26,9 +26,9 @@ struct Medium
 Medium medium(const AtmosphereSettings& a, double h)
 {
     h = std::max(h, 0.0);
-    const double dr = std::exp(-h / std::max(double(a.rayleighScaleHeight), 1e-3));
-    const double dm = std::exp(-h / std::max(double(a.mieScaleHeight), 1e-3));
-    const double dOzone = std::max(0.0, double(a.otherTipValue) * (1.0 - std::abs(h - double(a.otherTipAltitude)) / std::max(double(a.otherWidth), 1e-3)));
+    const double dr = std::exp(-h / std::max(double(a.rayleighScaleHeight), 1e-9));
+    const double dm = std::exp(-h / std::max(double(a.mieScaleHeight), 1e-9));
+    const double dOzone = std::max(0.0, double(a.otherTipValue) * (1.0 - std::abs(h - double(a.otherTipAltitude)) / std::max(double(a.otherWidth), 1e-9)));
     Medium m;
     m.rayleigh = glm::dvec3(a.rayleighScattering) * dr;
     m.mie = glm::dvec3(a.mieScattering) * dm;
@@ -279,7 +279,7 @@ glm::vec3 skyRadiance(const AtmosphereSettings& a, const AtmosphereLuts& luts, c
 
 glm::vec3 sunTransmittance(const AtmosphereSettings& a, const AtmosphereLuts& luts, const glm::dvec3& pos, const glm::dvec3& sunDir)
 {
-    const double r = std::max(glm::length(pos), a.bottomRadius + 1e-4);
+    const double r = std::max(glm::length(pos), a.bottomRadius + 1e-4 * a.lengthUnit());
     if (r > a.topRadius())
         return glm::vec3(1.0f);
     double mu = glm::dot(pos / std::max(glm::length(pos), 1e-9), sunDir);
@@ -293,7 +293,7 @@ glm::dvec3 atmosphereCameraKm(const AtmosphereFrame& f, const glm::dvec3& eyeWor
 {
     glm::dvec3 p = (eyeWorld - f.planetCenter) / kCmPerKm;
     const double r = glm::length(p);
-    const double floor = f.settings.bottomRadius + 0.001;
+    const double floor = f.settings.bottomRadius + 0.001 * f.settings.lengthUnit();
     if (r < floor)
         p = r > 1e-9 ? p * (floor / r) : upOf(f.zUp) * floor;
     return p;
@@ -309,8 +309,9 @@ glm::dvec3 bakedCamera(const AtmosphereFrame& f, const glm::dvec3& eyeWorld)
     glm::dvec3 radial = glm::round(p / r * 100.0) / 100.0;
     radial = glm::length(radial) > 1e-6 ? glm::normalize(radial) : upOf(f.zUp);
     const double h = std::max(r - f.settings.bottomRadius, 0.0);
-    const double step = std::round(std::log2(1.0 + h / 0.25) * 4.0) / 4.0;
-    const double hq = (std::exp2(step) - 1.0) * 0.25;
+    const double base = 0.25 * f.settings.lengthUnit();
+    const double step = std::round(std::log2(1.0 + h / base) * 4.0) / 4.0;
+    const double hq = (std::exp2(step) - 1.0) * base;
     return radial * (f.settings.bottomRadius + hq);
 }
 

@@ -99,9 +99,9 @@ struct AtmMedium
 AtmMedium atmMedium(GpuAtmosphere* a, float h)
 {
     h = max(h, 0.0);
-    float dr = exp(-h / max(a->rayleigh.w, 1e-3));
-    float dm = exp(-h / max(a->mieScatter.w, 1e-3));
-    float dOzone = max(0.0, a->ozoneShape.x * (1.0 - abs(h - a->ozone.w) / max(a->ozoneShape.y, 1e-3)));
+    float dr = exp(-h / max(a->rayleigh.w, 1e-9));
+    float dm = exp(-h / max(a->mieScatter.w, 1e-9));
+    float dOzone = max(0.0, a->ozoneShape.x * (1.0 - abs(h - a->ozone.w) / max(a->ozoneShape.y, 1e-9)));
     AtmMedium m;
     m.rayleigh = a->rayleigh.rgb * dr;
     m.mie = a->mieScatter.rgb * dm;
@@ -127,11 +127,13 @@ float3 atmIntegrate(GpuAtmosphere* a, float3 pos, float3 dir, float3 sun, float 
 {
     transmittance = float3(1.0, 1.0, 1.0);
     float bottom = a->radii.x, top = a->radii.y;
+    // A shallower atmosphere than Earth's shrinks the margins with it, so a miniature planet keeps its air.
+    float margin = 1e-4 * min((top - bottom) / 60.0, 1.0);
     float r = length(pos);
-    if (r < bottom + 1e-4)
+    if (r < bottom + margin)
     {
-        pos *= (bottom + 1e-4) / max(r, 1e-6);
-        r = bottom + 1e-4;
+        pos *= (bottom + margin) / max(r, 1e-9);
+        r = bottom + margin;
     }
     float entered = 0.0;
     if (r > top)
@@ -143,7 +145,7 @@ float3 atmIntegrate(GpuAtmosphere* a, float3 pos, float3 dir, float3 sun, float 
         entered = tTop;
     }
     float tGround = atmRaySphere(pos, dir, bottom);
-    float tTop = atmRayExit(pos, dir, top + 1e-4);
+    float tTop = atmRayExit(pos, dir, top + margin);
     float tEnd = tGround >= 0.0 ? tGround : tTop;
     float tMax = min(tEnd, max(maxDist - entered, 0.0));
     float tMin = clamp(minDist - entered, 0.0, tMax);

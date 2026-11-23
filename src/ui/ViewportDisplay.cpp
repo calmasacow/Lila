@@ -177,7 +177,7 @@ static render::AtmosphereSettings atmosphereSettings(const scene::Node& sky)
 {
     namespace sa = scene::skyAtmosphere;
     const int a = sa::firstAttr();
-    auto num = [&](int attr) { return sky.as<double>(a + attr); };
+    auto num = [&](sa::Attr attr) { return sa::scaled(sky, attr); };
     auto vec = [&](int attr) { return glm::vec3(sky.as<glm::dvec3>(a + attr)); };
     render::AtmosphereSettings r;
     r.bottomRadius = num(sa::kBottomRadius);

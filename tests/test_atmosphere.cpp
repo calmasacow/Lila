@@ -164,3 +164,21 @@ TEST_CASE("atmosphere: the sky node sits in the DAG, its position places the pla
     testutil::run("setAttr", {{"args", {sky + ".visibility", false}}});
     CHECK(skyAtmosphere::active(g) == kNoNode);
 }
+
+TEST_CASE("atmosphere: the sky node's scale sizes the planet and its air together")
+{
+    using namespace lila::scene;
+    namespace sa = skyAtmosphere;
+    testutil::run("newScene");
+    const std::string sky = testutil::run("skyAtmosphere", {{"sun", false}}).get<std::string>();
+    const Node* n = Graph::current().find(sky);
+    REQUIRE(n);
+    testutil::run("setAttr", {{"args", {sky + ".transformMode", 1}}});
+    testutil::run("setAttr", {{"args", {sky + ".scale", nlohmann::json::array({0.001, 0.001, 0.001})}}});
+    CHECK(sa::planetScale(*n) == doctest::Approx(0.001));
+    CHECK(sa::scaled(*n, sa::kBottomRadius) == doctest::Approx(6.36));
+    CHECK(sa::scaled(*n, sa::kAtmosphereHeight) == doctest::Approx(0.06));
+    CHECK(sa::scaled(*n, sa::kRayleighScatteringScale) == doctest::Approx(33.1));
+    CHECK(sa::scaled(*n, sa::kMieAnisotropy) == doctest::Approx(0.8));
+    CHECK(sa::planetCenter(*n, false).y == doctest::Approx(-6.36e5));
+}

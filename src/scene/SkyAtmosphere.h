@@ -53,6 +53,12 @@ LILA_SCENE_API NodeId active(const Graph& g);
 /** The sky node's world position, cm: where the component transform modes put the planet's ground or centre. */
 LILA_SCENE_API glm::dvec3 worldPosition(const Node& sky);
 
+/** The node's uniform world scale. It sizes the planet and its air together, so a scaled-down globe gets an atmosphere in proportion. */
+LILA_SCENE_API double planetScale(const Node& sky);
+
+/** An attribute as it applies at the node's scale: km lengths times planetScale, per-km strengths divided by it, the rest as stored. */
+LILA_SCENE_API double scaled(const Node& sky, Attr attr);
+
 /** The planet's centre in world cm, from the node's transform mode and world position. */
 LILA_SCENE_API glm::dvec3 planetCenter(const Node& sky, bool zUp);
 

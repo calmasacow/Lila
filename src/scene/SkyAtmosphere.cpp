@@ -44,7 +44,7 @@ std::vector<AttrDef> attrs()
     a[kTransformMode] = {.name = "transformMode", .shortName = "tfm", .type = PlugType::Enum, .defaultValue = int64_t(0), .flags = kStored,
                          .enumNames = {"planetTopAtAbsoluteWorldOrigin", "planetTopAtComponentTransform", "planetCenterAtComponentTransform"},
                          .doc = "Where the planet sits: its ground at the world origin, or its ground or centre at the node's position."};
-    a[kBottomRadius] = number("bottomRadius", "brd", 6360.0, "The planet's radius, km.", 1.0, 100000.0);
+    a[kBottomRadius] = number("bottomRadius", "brd", 6360.0, "The planet's radius, km, times the node's scale.", 1.0, 100000.0);
     a[kGroundAlbedo] = vec3("groundAlbedo", "gal", glm::dvec3(0.401978), "The planet's ground colour, lighting the air above it and seen from high up.", true);
     a[kAtmosphereHeight] = number("atmosphereHeight", "ath", 60.0, "How high the air reaches above the ground, km.", 1.0, 200.0);
     a[kMultiScatteringFactor] = number("multiScatteringFactor", "msf", 1.0, "Light scattered more than once: 0 leaves only single scattering, darker at dusk.", 0.0, 2.0);
@@ -70,6 +70,13 @@ std::vector<AttrDef> attrs()
                                                      "Sun height (degrees) below which sunlight on the scene stops reddening and dimming.", -90.0, 90.0);
     return a;
 }
+
+glm::dmat4 worldMatrix(const Node& sky)
+{
+    // Pulled through the graph: the stored world matrix is stale until something evaluates it.
+    Graph* g = const_cast<Graph*>(sky.graph());
+    return g ? std::get<glm::dmat4>(g->value({sky.id(), Transform::kWorldMatrix, -1})) : sky.as<glm::dmat4>(Transform::kWorldMatrix);
+}
 } // namespace
 
 int firstAttr()
@@ -89,17 +96,40 @@ NodeId active(const Graph& g)
 
 glm::dvec3 worldPosition(const Node& sky)
 {
-    // Pulled through the graph: the stored world matrix is stale until something evaluates it.
-    Graph* g = const_cast<Graph*>(sky.graph());
-    const glm::dmat4 world = g ? std::get<glm::dmat4>(g->value({sky.id(), Transform::kWorldMatrix, -1})) : sky.as<glm::dmat4>(Transform::kWorldMatrix);
-    return glm::dvec3(world[3]);
+    return glm::dvec3(worldMatrix(sky)[3]);
+}
+
+double planetScale(const Node& sky)
+{
+    const double volume = std::abs(glm::determinant(glm::dmat3(worldMatrix(sky))));
+    return volume > 1e-30 ? std::cbrt(volume) : 1.0;
+}
+
+double scaled(const Node& sky, Attr attr)
+{
+    const double v = sky.as<double>(firstAttr() + attr);
+    switch (attr)
+    {
+    case kBottomRadius:
+    case kAtmosphereHeight:
+    case kRayleighExponentialDistribution:
+    case kMieExponentialDistribution:
+    case kOtherTentTipAltitude:
+    case kOtherTentWidth:
+    case kAerialPerspectiveStartDepth: return v * planetScale(sky);
+    case kRayleighScatteringScale:
+    case kMieScatteringScale:
+    case kMieAbsorptionScale:
+    case kOtherAbsorptionScale: return v / planetScale(sky);
+    default: return v;
+    }
 }
 
 glm::dvec3 planetCenter(const Node& sky, bool zUp)
 {
     const int first = firstAttr();
     const glm::dvec3 up = zUp ? glm::dvec3(0.0, 0.0, 1.0) : glm::dvec3(0.0, 1.0, 0.0);
-    const double radiusCm = sky.as<double>(first + kBottomRadius) * 1.0e5;
+    const double radiusCm = scaled(sky, kBottomRadius) * 1.0e5;
     const glm::dvec3 position = worldPosition(sky);
     switch (sky.as<int64_t>(first + kTransformMode))
     {
