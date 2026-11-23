@@ -104,7 +104,8 @@ json typeDefault(const ParamDecl& p)
     case ParamType::Curve: return json{{"points", json::array({json::array({0.0, 0.0}), json::array({1.0, 1.0})})}};
     case ParamType::Image:
     case ParamType::Code:
-    case ParamType::Node: return "";
+    case ParamType::Node:
+    case ParamType::String: return "";
     }
     return nullptr;
 }
@@ -132,6 +133,10 @@ ParamDecl paramFromJson(const json& j, const std::string& type)
     p.softMax = readOptNumber(j, "softMax");
     p.step = readOptNumber(j, "step");
     p.hidden = j.value("hidden", false);
+    p.editor = j.value("editor", std::string());
+    p.source = j.value("source", std::string());
+    if (!p.source.empty() && (p.type != ParamType::Image || p.source != "text"))
+        throw std::invalid_argument(type + "." + p.id + ": unknown source " + p.source);
     return p;
 }
 
@@ -148,6 +153,10 @@ json paramJson(const ParamDecl& p)
         o["options"] = p.options;
     if (p.hidden)
         o["hidden"] = true;
+    if (!p.editor.empty())
+        o["editor"] = p.editor;
+    if (!p.source.empty())
+        o["source"] = p.source;
     writeOptNumber(o, "min", p.min);
     writeOptNumber(o, "max", p.max);
     writeOptNumber(o, "softMin", p.softMin);

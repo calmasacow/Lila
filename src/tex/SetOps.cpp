@@ -168,7 +168,7 @@ uint64_t planKey(const Plan& p, const std::map<std::string, External>& externals
             if (auto it = externals.find(b.name); it != externals.end())
                 h = mix(mix(h, b.name), it->second.hash);
         if (b.kind == BufferKind::Image)
-            h = mix(mix(h, b.name), fileStamp(resolveImagePath(b.name, {})));
+            h = mix(mix(h, b.name), generatedSource(b.name) ? 0 : fileStamp(resolveImagePath(b.name, {})));
     }
     return h;
 }

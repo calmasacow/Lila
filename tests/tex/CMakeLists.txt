@@ -30,6 +30,7 @@ add_executable(lila_tex_tests
     test_tex_shading_channels.cpp
     test_tex_material_sets.cpp
     test_tex_snapshots.cpp
+    test_tex_text_repeat.cpp
     test_tex_ties.cpp)
 target_link_libraries(lila_tex_tests PRIVATE LilaScene doctest::doctest)
 target_compile_definitions(lila_tex_tests PRIVATE LILA_TEST_TEX_DATA="${CMAKE_SOURCE_DIR}/tests/data/tex")
@@ -66,6 +67,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_tileable.cpp
     test_tex_sculpt_paint.cpp
     test_tex_stroke_edit.cpp
+    test_tex_text_repeat_gpu.cpp
     test_tex_vt.cpp)
 target_link_libraries(lila_tex_gpu_tests PRIVATE LilaUI doctest::doctest)
 add_dependencies(lila_tex_gpu_tests lila_slang_runtime)

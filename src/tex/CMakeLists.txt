@@ -37,6 +37,7 @@ lila_module(lila_tex Scene
     SlangRt.cpp
     SmartMaterial.cpp
     TextImage.cpp
+    TextRaster.cpp
     TextureSet.cpp
     Types.cpp)
 

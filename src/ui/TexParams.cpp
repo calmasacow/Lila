@@ -15,8 +15,10 @@
 #include "ui/CodeEdit.h"
 #include "ui/ColorPopup.h"
 #include "ui/FlagFields.h"
+#include "ui/FontPicker.h"
 #include "ui/Icons.h"
 #include "ui/ImagePicker.h"
+#include "ui/MultilineEdit.h"
 #include "ui/NodePicker.h"
 #include "ui/TexturePicker.h"
 #include "ui/Theme.h"
@@ -31,6 +33,7 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -737,6 +740,34 @@ void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& se
     {
         form->addRow(label);
         form->addRow(codeEditor(parent, value.is_string() ? value.get<std::string>() : std::string(), tip, changed));
+        return;
+    }
+    if (type == "string")
+    {
+        const QString text = value.is_string() ? qs(value.get<std::string>()) : QString();
+        const std::string editor = p.value("editor", "");
+        if (editor == "multiline")
+        {
+            auto* box = new MultilineEdit(parent);
+            box->showText(text.toStdString());
+            box->setToolTip(tip);
+            QObject::connect(box, &MultilineEdit::committed, box, [changed](const QString& t) { changed(t.toStdString()); });
+            form->addRow(label, box);
+            return;
+        }
+        if (editor == "font")
+        {
+            auto* picker = new FontPicker(parent);
+            picker->setValue(text.toStdString());
+            picker->setToolTip(tip);
+            QObject::connect(picker, &FontPicker::chosen, picker, [changed](const QString& f) { changed(f.toStdString()); });
+            form->addRow(label, picker);
+            return;
+        }
+        auto* line = new QLineEdit(text, parent);
+        line->setToolTip(tip);
+        QObject::connect(line, &QLineEdit::editingFinished, line, [line, changed] { changed(line->text().toStdString()); });
+        form->addRow(label, line);
         return;
     }
     form->addRow(label, dimLabel(parent, qs(value.dump())));

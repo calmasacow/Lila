@@ -184,6 +184,8 @@ json paramStateJson(const ParamDecl& p, const GNode* n)
     }
     if (!p.options.empty())
         j["options"] = p.options;
+    if (!p.editor.empty())
+        j["editor"] = p.editor;
     for (auto [key, v] : {std::pair{"min", &p.min}, {"max", &p.max}, {"softMin", &p.softMin}, {"softMax", &p.softMax}, {"step", &p.step}})
         if (*v)
             j[key] = **v;

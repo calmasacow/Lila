@@ -10,6 +10,7 @@
 #include <map>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 /**
@@ -77,6 +78,13 @@ LILA_SCENE_API NativeCpuFn nativeCpu(const std::string& type);
 /** An image parameter's file: absolute as given, else under root, the workspace, the scene's folder or Lila's resources. */
 LILA_SCENE_API std::filesystem::path resolveImagePath(const std::string& path, const std::filesystem::path& root);
 
+/** Whether an Image buffer's name is drawn rather than read from a file (a Text node's words): it has no path. */
+LILA_SCENE_API bool generatedSource(std::string_view name);
+
+/** An Image buffer's texels: the file its name resolves to (resolveImagePath, read by readSourceFile), or what a generated name draws. */
+LILA_SCENE_API image::Image readSourceImage(const std::string& name, const std::filesystem::path& root, int planWidth, int planHeight,
+                                            std::string* error = nullptr);
+
 /**
  * An Image node's file as a plan samples it: no larger than the plan (detail past the set's resolution never shows), and
  * when maxTexels is above 0, scaled to hold at most that many texels. That second cut loses detail, so it sets *warning.
@@ -84,7 +92,7 @@ LILA_SCENE_API std::filesystem::path resolveImagePath(const std::string& path, c
 LILA_SCENE_API image::Image fitSourceImage(image::Image img, const std::string& name, int planWidth, int planHeight, size_t maxTexels,
                                            std::string* warning);
 /** An Image node's file read for a plan: an SVG is drawn at the plan's size, so its edges stay sharp; anything else as stored. */
-LILA_SCENE_API image::Image readSourceImage(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err);
+LILA_SCENE_API image::Image readSourceFile(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err);
 
 /** The GPU evaluator the renderer installs: evaluate throws like evaluateCpu; available says whether a GPU can run it. */
 struct GpuEvaluator

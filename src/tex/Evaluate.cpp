@@ -7,6 +7,7 @@
 #include "io/SceneFile.h"
 #include "tex/Natives.h"
 #include "tex/SlangRt.h"
+#include "tex/TextRaster.h"
 
 #include <tbb/parallel_for.h>
 
@@ -93,7 +94,7 @@ GpuEvaluator& gpuEvaluator()
 }
 } // namespace
 
-image::Image readSourceImage(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err)
+image::Image readSourceFile(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err)
 {
     std::string ext = path.extension().string();
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
@@ -135,6 +136,15 @@ fs::path resolveImagePath(const std::string& path, const fs::path& root)
     if (fs::exists(paths::resourcesDir() / p))
         return paths::resourcesDir() / p;
     return scene.empty() ? p : scene;
+}
+
+bool generatedSource(std::string_view name) { return name.starts_with(kTextSourcePrefix); }
+
+image::Image readSourceImage(const std::string& name, const fs::path& root, int planWidth, int planHeight, std::string* error)
+{
+    if (generatedSource(name))
+        return *textSourceImage(name, error);
+    return readSourceFile(resolveImagePath(name, root), planWidth, planHeight, error);
 }
 
 void registerNativeCpu(const std::string& type, NativeCpuFn fn) { natives()[type] = std::move(fn); }
@@ -182,8 +192,9 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
         {
             std::string err;
             image::Image img = b.name.empty() ? image::Image{}
-                                              : fitSourceImage(readSourceImage(resolveImagePath(b.name, options.imageRoot), plan.width, plan.height, &err), b.name, plan.width,
-                                                               plan.height, 0, nullptr);
+                                              : fitSourceImage(readSourceImage(b.name, options.imageRoot, plan.width, plan.height, &err), b.name, plan.width, plan.height, 0, nullptr);
+            if (img.width > 0 && !err.empty() && generatedSource(b.name))
+                result.warnings.push_back("text: " + err);
             if (img.width <= 0)
             {
                 if (!b.name.empty())

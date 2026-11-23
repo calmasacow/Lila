@@ -3,6 +3,7 @@
 #include "core/Profile.h"
 #include "tex/Ports.h"
 #include "tex/Prelude.h"
+#include "tex/TextRaster.h"
 
 #include <algorithm>
 #include <cctype>
@@ -533,7 +534,8 @@ private:
         case ParamType::Curve: return "TexCurve " + p.id;
         case ParamType::Image:
         case ParamType::Code:
-        case ParamType::Node: return {};
+        case ParamType::Node:
+        case ParamType::String: return {};
         }
         return {};
     }
@@ -661,7 +663,8 @@ private:
             case ParamType::Curve: s << "    p." << p.id << ".base = " << slot << "u;\n"; break;
             case ParamType::Image:
             case ParamType::Code:
-            case ParamType::Node: break;
+            case ParamType::Node:
+            case ParamType::String: break;
             }
         }
         s << "    return p;\n}\n";
@@ -974,7 +977,9 @@ private:
                 const json& v = n.values[p.id];
                 if (p.type == ParamType::Image)
                 {
-                    const std::string path = v.is_string() ? v.get<std::string>() : std::string();
+                    const std::string path = p.source == "text"  ? textSourceName(n.values, mPlan.width, mPlan.height)
+                                             : v.is_string() ? v.get<std::string>()
+                                                             : std::string();
                     // "external:<name>" reads a caller-supplied map (a paint buffer) instead of a file.
                     int b;
                     if (path.starts_with("external:"))
@@ -1125,7 +1130,8 @@ private:
         }
         case ParamType::Image:
         case ParamType::Code:
-        case ParamType::Node: return;
+        case ParamType::Node:
+        case ParamType::String: return;
         }
         packFloat4(u, slot, f);
     }

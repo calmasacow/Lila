@@ -2,6 +2,7 @@
 #include "render/TexEvalInternal.h"
 
 #include "core/Progress.h"
+#include "tex/TextRaster.h"
 
 #include <optional>
 #include <tbb/parallel_for.h>
@@ -552,7 +553,16 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
         if (b.kind == BufferKind::Image)
         {
             std::shared_ptr<const image::Image> img = blackImage();
-            if (!b.name.empty())
+            if (tex::generatedSource(b.name))
+            {
+                std::string err;
+                std::shared_ptr<const image::Image> drawn = tex::textSourceImage(b.name, &err);
+                if (drawn->width > 0)
+                    img = std::move(drawn);
+                if (!err.empty())
+                    warnings.push_back("text: " + err);
+            }
+            else if (!b.name.empty())
             {
                 const fs::path path = tex::resolveImagePath(b.name, inputs.imageRoot);
                 std::error_code ec;
@@ -568,7 +578,7 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 if (!cached)
                 {
                     std::string err, fitted;
-                    image::Image read = tex::fitSourceImage(tex::readSourceImage(path, plan.width, plan.height, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
+                    image::Image read = tex::fitSourceImage(tex::readSourceFile(path, plan.width, plan.height, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
                     if (read.width > 0)
                     {
                         cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted};
