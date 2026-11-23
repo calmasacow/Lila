@@ -77,6 +77,12 @@ LILA_SCENE_API void registerNativeCpu(const std::string& type, NativeCpuFn fn);
 /** The registered CPU side of a native type; empty when there is none. */
 LILA_SCENE_API NativeCpuFn nativeCpu(const std::string& type);
 
+/**
+ * The file an image parameter reads for the UDIM tile whose uv origin is uvOffset: with a <UDIM> or <UVTILE> token in path,
+ * that tile's file; otherwise path itself.
+ */
+LILA_SCENE_API std::string imageForTile(const std::string& path, const float uvOffset[2]);
+
 /** An image parameter's file: absolute as given, else under root, the workspace, the scene's folder or Lila's resources. */
 LILA_SCENE_API std::filesystem::path resolveImagePath(const std::string& path, const std::filesystem::path& root);
 

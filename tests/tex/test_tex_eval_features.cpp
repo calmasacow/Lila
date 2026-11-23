@@ -205,6 +205,35 @@ TEST_CASE("tex eval features: node settings set through texSetValue and listed w
                     CHECK(s["value"] == "set");
 }
 
+TEST_CASE("tex eval features: an image with a UDIM token reads the tile being evaluated")
+{
+    const float first[2] = {0.0f, 0.0f}, second[2] = {1.0f, 0.0f}, above[2] = {0.0f, 1.0f};
+    CHECK(imageForTile("rock_<UDIM>.png", second) == "rock_1002.png");
+    CHECK(imageForTile("rock_<UDIM>.png", above) == "rock_1011.png");
+    CHECK(imageForTile("rock_<UVTILE>.png", second) == "rock_u2_v1.png");
+    CHECK(imageForTile("rock_1001.png", second) == "rock_1001.png");
+
+    const fs::path dir = tempDir("eval_features_udim");
+    writeImage(dir, "rock_1001.exr", image::Image{1, 1, {0.2f, 0.2f, 0.2f, 1.0f}});
+    writeImage(dir, "rock_1002.exr", image::Image{1, 1, {0.7f, 0.7f, 0.7f, 1.0f}});
+    Plan p = plan(imageGraph(paths::toUtf8(dir / "rock_<UDIM>.exr")), "I", "out", 4);
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+    auto shown = [&](const float origin[2], std::vector<std::string>* warnings = nullptr) {
+        EvalOptions o;
+        o.uvOffset[0] = origin[0];
+        o.uvOffset[1] = origin[1];
+        EvalResult r = evaluateCpu(p, o);
+        if (warnings)
+            *warnings = r.warnings;
+        return texel(r.outputs.at("out"), 1, 2)[0];
+    };
+    CHECK(shown(first) == doctest::Approx(0.2f));
+    CHECK(shown(second) == doctest::Approx(0.7f));
+    std::vector<std::string> warnings;
+    CHECK(shown(above, &warnings) == doctest::Approx(0.0f));
+    CHECK_FALSE(warnings.empty());
+}
+
 TEST_CASE("tex eval features: premultiplied alpha divides back out on read")
 {
     const fs::path dir = tempDir("eval_features_alpha");

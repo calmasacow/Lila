@@ -564,7 +564,7 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
             }
             else if (!b.name.empty())
             {
-                const fs::path path = tex::resolveImagePath(b.name, inputs.imageRoot);
+                const fs::path path = tex::resolveImagePath(tex::imageForTile(b.name, inputs.uvOffset), inputs.imageRoot);
                 std::error_code ec;
                 const fs::file_time_type time = fs::last_write_time(path, ec);
                 // Cached per plan size: each plan keeps only the copy it samples, not the whole file.

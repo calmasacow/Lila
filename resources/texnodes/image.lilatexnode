@@ -37,7 +37,8 @@
     {
       "id": "file",
       "type": "image",
-      "default": ""
+      "default": "",
+      "doc": "The image. A <UDIM> or <UVTILE> token in the name (rock_<UDIM>.png) reads each UDIM tile's own file in that tile."
     },
     {
       "id": "tiles",

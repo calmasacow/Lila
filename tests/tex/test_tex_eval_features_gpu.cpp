@@ -67,6 +67,31 @@ TEST_CASE("tex eval features gpu: nodes at their own size and bit depth match th
         }
 }
 
+TEST_CASE("tex eval features gpu: UDIM image reads match the CPU per tile")
+{
+    if (!haveGpu())
+        return;
+    const fs::path dir = tempDir("eval_features_gpu_udim");
+    image::write(dir / "n_1001.exr", noiseImage(16, 16), 32);
+    image::write(dir / "n_1002.exr", noiseImage(24, 24), 32);
+    Graph g;
+    add(g, "I", "image", {{"file", paths::toUtf8(dir / "n_<UDIM>.exr")}, {"tiles", 2}});
+    PlanRequest r;
+    r.width = r.height = 16;
+    r.outputs = {{"out", "I", "out", PortType::Color, {}}};
+    const Plan p = buildPlan(g, r);
+    for (float u : {0.0f, 1.0f})
+    {
+        CAPTURE(u);
+        EvalOptions o;
+        o.uvOffset[0] = u;
+        matches(p, 5e-3, o);
+    }
+    EvalOptions second;
+    second.uvOffset[0] = 1.0f;
+    CHECK(maxDiff(evaluateCpu(p).outputs.at("out"), evaluateCpu(p, second).outputs.at("out")) > 0.05);
+}
+
 TEST_CASE("tex eval features gpu: tiled and premultiplied image reads match the CPU")
 {
     if (!haveGpu())

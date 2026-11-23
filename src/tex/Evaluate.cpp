@@ -140,6 +140,15 @@ image::Image withMipLevels(const image::Image& img, uint32_t& flags)
     return out;
 }
 
+std::string imageForTile(const std::string& path, const float uvOffset[2])
+{
+    const std::optional<image::UdimPattern> pattern = image::udimPattern(path, false);
+    if (!pattern)
+        return path;
+    const int u = int(std::floor(uvOffset[0])), v = int(std::floor(uvOffset[1]));
+    return image::udimTilePath(*pattern, 1001 + std::clamp(u, 0, 9) + 10 * std::max(v, 0));
+}
+
 fs::path resolveImagePath(const std::string& path, const fs::path& root)
 {
     fs::path p(path);
@@ -212,8 +221,9 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
         if (b.kind == BufferKind::Image)
         {
             std::string err;
+            const std::string name = imageForTile(b.name, options.uvOffset);
             image::Image img = b.name.empty() ? image::Image{}
-                                              : fitSourceImage(readSourceImage(b.name, options.imageRoot, plan.width, plan.height, &err), b.name, plan.width, plan.height, 0, nullptr);
+                                              : fitSourceImage(readSourceImage(name, options.imageRoot, plan.width, plan.height, &err), b.name, plan.width, plan.height, 0, nullptr);
             if (img.width > 0 && !err.empty() && generatedSource(b.name))
                 result.warnings.push_back("text: " + err);
             if (img.width <= 0)
