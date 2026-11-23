@@ -170,6 +170,14 @@ public:
     /** The side panel's section for the group itself while no node is selected (its parameters and presets); null for none. */
     virtual QWidget* graphPanel(QWidget* /*parent*/, NodeEditor& /*editor*/, const nlohmann::json& /*info*/) const { return nullptr; }
 
+    /** Whether profile() can time the group's nodes, for the Node Timings overlay. */
+    virtual bool canProfile() const { return false; }
+    /**
+     * Times how long each node of the group takes to evaluate, off the GUI thread; done runs on the GUI thread with
+     * {nodes: {node: ms}, label} (label says how it was measured), or {error}.
+     */
+    virtual void profile(const std::string& /*group*/, std::function<void(nlohmann::json)> done) const { done({{"error", "not supported"}}); }
+
     /** Whether the toolbar shows the Send button. */
     virtual bool canSend() const { return false; }
     /** Scene paths the Send button acts on. ownerInView is the followed owner when it runs group, else empty. */

@@ -490,6 +490,11 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
             scheduleRefresh();
     });
 
+    mProfileTimer = new QTimer(this);
+    mProfileTimer->setSingleShot(true);
+    mProfileTimer->setInterval(300);
+    connect(mProfileTimer, &QTimer::timeout, this, [this] { profileNow(); });
+
     mRefresh = new QTimer(this);
     mRefresh->setSingleShot(true);
     mRefresh->setInterval(0);
@@ -754,6 +759,7 @@ bool NodeEditor::setBackend(const std::string& id)
     mGroup.clear();
     mOwner.clear();
     mSelectedNode.clear();
+    setTimings(mTimings);
     buildToolbar();
     rebuildPinned();
     followSelection();
@@ -1464,6 +1470,40 @@ std::vector<std::string> NodeEditor::sendTargets() const
 
 void NodeEditor::setValueFromField(const json& call) { setFromField(*mBackend, call); }
 
+void NodeEditor::setTimings(bool on)
+{
+    mTimings = on && mBackend->canProfile();
+    ++mProfileRun;
+    mCanvas->setNodeTimes({}, {});
+    if (mTimings)
+        profileNow();
+}
+
+const std::map<std::string, double>& NodeEditor::nodeTimes() const { return mCanvas->nodeTimes(); }
+
+void NodeEditor::profileNow()
+{
+    if (!mTimings || mGroup.isEmpty())
+        return;
+    const int runId = ++mProfileRun;
+    QPointer<NodeEditor> self(this);
+    mBackend->profile(mGroup.toStdString(), [self, runId](json r) {
+        if (!self || runId != self->mProfileRun || !self->mTimings)
+            return;
+        if (r.contains("error"))
+        {
+            log::warn("Node Timings: {}", r["error"].get<std::string>());
+            self->mCanvas->setNodeTimes({}, {});
+            return;
+        }
+        std::map<std::string, double> times;
+        const json nodes = r.value("nodes", json::object());
+        for (const auto& [node, ms] : nodes.items())
+            times[node] = ms.get<double>();
+        self->mCanvas->setNodeTimes(std::move(times), qs(r.value("label", std::string())));
+    });
+}
+
 void NodeEditor::runFromField(const std::string& command, const json& call)
 {
     ++gFieldEdits;
@@ -1539,6 +1579,12 @@ void NodeEditor::refresh(bool panel)
     if (selected.empty() && !mSelectedNode.isEmpty())
         selected.insert(mSelectedNode.toStdString());
     json info = mGroup.isEmpty() ? json() : run("GroupInfo", args({mGroup.toStdString()}));
+    if (mTimings)
+    {
+        if (mGroup != mBuiltGroup)
+            mCanvas->setNodeTimes({}, {});
+        mProfileTimer->start();
+    }
     mBuiltStamp = stamp;
     mBuiltGroup = mGroup;
     mBuiltOwner = mOwner;
@@ -2047,6 +2093,8 @@ void NodeEditor::showCanvasMenu(QPoint global)
     item(&menu, "nodeEditor.toggleFlow");
     item(&menu, "nodeEditor.toggleSelectedWires");
     item(&menu, "nodeEditor.toggleMinimap");
+    if (mBackend->canProfile())
+        item(&menu, "nodeEditor.toggleTimings");
     if (mCanvas->hasPreviews(false))
         item(&menu, "nodeEditor.togglePreviews");
     item(&menu, "nodeEditor.find");
@@ -2360,6 +2408,16 @@ void registerEditActions()
                       },
                   .doc = "Show an overview of the whole graph in the corner; click or drag in it to move the view.",
                   .checked = [] { return NodeEditor::active() && NodeEditor::active()->minimap(); }});
+    actions::add({.id = "nodeEditor.toggleTimings", .label = "Node Timings", .category = "Node Editor",
+                  .run =
+                      [] {
+                          if (NodeEditor* e = NodeEditor::active())
+                              e->setTimings(!e->timings());
+                      },
+                  .doc = "Show how long each node takes to evaluate, on a tag above it, with the slowest lit. Timed again after every "
+                         "edit; texture graphs time their passes on the CPU.",
+                  .checked = [] { return NodeEditor::active() && NodeEditor::active()->timings(); },
+                  .keywords = {"profile", "profiler", "performance", "slow", "cost", "time"}});
     for (int slot = 1; slot <= 5; ++slot)
     {
         actions::add({.id = "nodeEditor.bookmarkSet" + std::to_string(slot), .label = "Save View " + std::to_string(slot), .category = "Node Editor",

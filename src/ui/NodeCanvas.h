@@ -869,8 +869,19 @@ public:
 
     void frame(bool selectedOnly);
 
+    /**
+     * The timing overlay: each node's time in ms as a tag on its header, the slowest lit, and how they were measured
+     * ("CPU, 256 px") with the total in the corner. Empty times hide it.
+     */
+    void setNodeTimes(std::map<std::string, double> ms, QString label);
+    const std::map<std::string, double>& nodeTimes() const { return mTimes; }
+    /** The nodes the overlay lights: up to three of the slowest, each taking at least a tenth of the total. */
+    std::set<std::string> slowestNodes() const;
+
 protected:
     void drawForeground(QPainter* p, const QRectF&) override;
+    /** The timing overlay's tags, in scene coordinates, and its corner readout, in view coordinates. */
+    void drawTimes(QPainter* p);
 
     void drawGhostLines(QPainter* p);
     /** The active grab's locked-axis line and spacing readout, in view coordinates. */
@@ -1114,6 +1125,8 @@ private:
     bool mThumbsQueued = false;
     std::map<std::string, NodeItem*> mNodes;
     std::vector<LinkItem*> mLinks;
+    std::map<std::string, double> mTimes;
+    QString mTimesLabel;
     std::map<std::string, QPointF> mPressPositions;
     QGraphicsPathItem* mTemp = nullptr;
     NodeItem* mWireFrom = nullptr;

@@ -35,6 +35,8 @@ struct EvalResult
     std::map<std::string, image::Image> outputs;
     std::vector<std::string> warnings;
     double milliseconds = 0.0;
+    /** Each pass's run time in plan order, compiling left out; empty from an evaluator that doesn't time passes (the GPU one). */
+    std::vector<double> passMilliseconds;
     /** Kernels compiled and found in the cache during this evaluation. */
     size_t compiled = 0;
     size_t cached = 0;

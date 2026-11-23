@@ -264,7 +264,9 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
             NativeCall call{plan, pass, uniforms, {}, {out, w, h}};
             for (const auto& [id, b] : pass.inputBuffers)
                 call.inputs[id] = {&arena[offset[size_t(b)] * 4], size[size_t(b)].first, size[size_t(b)].second};
+            const auto started = std::chrono::steady_clock::now();
             it->second(call);
+            result.passMilliseconds.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
             continue;
         }
         std::string err;
@@ -283,11 +285,13 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
             std::memcpy(&globals[kernel->offArena], &a, sizeof(a));
         std::memcpy(&globals[kernel->offOut], &o, sizeof(o));
         const uint32_t groupsX = uint32_t((w + 7) / 8), groupsY = uint32_t((h + 7) / 8);
+        const auto started = std::chrono::steady_clock::now();
         tbb::parallel_for(uint32_t(0), groupsY, [&](uint32_t gy) {
             slangrt::Varying v{{0, gy, 0}, {groupsX, gy + 1, 1}};
             std::vector<uint8_t> local = globals;
             kernel->fn(&v, nullptr, local.data());
         });
+        result.passMilliseconds.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
     }
 
     for (const auto& [name, id] : plan.outputs)

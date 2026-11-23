@@ -76,6 +76,7 @@ TEST_CASE("graph parameters drive the set's nodes, and presets store and recall 
     CHECK(run("texExposeParam", {{"args", {"Rock", "Noise.persistence"}}, {"label", "Grit"}}) == "persistence");
     CHECK_THROWS(run("texExposeParam", {{"args", {"Rock", "Noise.persistence"}}}));
     CHECK_THROWS(run("texExposeParam", {{"args", {"Rock", "Noise.nothing"}}}));
+    CHECK_THROWS(run("texExposeParam", {{"args", {"Rock", "Noise.octaves"}}, {"name", "@seed"}}));
 
     run("texSetGraphParam", {{"args", {"Rock", "persistence", 0.2}}});
     CHECK(rockGraph().node("Noise")->values.value("persistence", 0.0) == doctest::Approx(0.2));
@@ -231,7 +232,10 @@ TEST_CASE("the graph seed offsets every seed parameter in the set, groups includ
     win.show();
     editor->setGroup("Rock");
     pump();
-    auto* seed = editor->findChild<QSpinBox*>("graphSeed");
+    QSpinBox* seed = nullptr;
+    for (QSpinBox* s : editor->findChild<QWidget*>("graphParams")->findChildren<QSpinBox*>())
+        if (s->toolTip().contains("re-rolls"))
+            seed = s;
     REQUIRE(seed);
     CHECK(seed->value() == 10);
     seed->setValue(7);
@@ -291,4 +295,57 @@ TEST_CASE("the pinned preview stays on the set while its groups open, and holds 
     editor->setBackend(ui::kGeometryNodesBackend);
     pump();
     CHECK_FALSE(editor->findChild<QWidget*>("texGraphPreview"));
+}
+
+TEST_CASE("node timings time each node's passes, by the graph on show")
+{
+    makeRock();
+    run("texAddNode", {{"args", {"Rock", "perlin"}}, {"name", "Fine"}});
+    run("texConnect", {{"args", {"Rock", "Fine.out", "Output.metallic"}}});
+    const json grouped = run("texGroupNodes", {{"args", {"Rock", "Fine"}}, {"name", "Grain"}});
+    const std::string group = "Rock/" + grouped["group"].get<std::string>();
+
+    const json top = run("texProfileGraph", {{"args", {"Rock"}}, {"size", 64}});
+    CHECK(top["backend"] == "cpu");
+    CHECK(top["size"] == 64);
+    CHECK(top["total"].get<double>() > 0.0);
+    CHECK(top["nodes"].contains("Noise"));
+    CHECK(top["nodes"].contains(grouped["node"].get<std::string>()));
+    CHECK_FALSE(top["nodes"].contains("Fine"));
+    const json inner = run("texProfileGraph", {{"args", {group}}, {"size", 64}});
+    CHECK(inner["nodes"].contains("Fine"));
+    CHECK_FALSE(inner["nodes"].contains("Noise"));
+
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1100, 700);
+    win.show();
+    editor->setGroup("Rock");
+    pump();
+    REQUIRE(ui::actions::find("nodeEditor.toggleTimings"));
+    editor->setTimings(true);
+    CHECK(editor->timings());
+    const auto until = [&](auto done) {
+        const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+        while (!done() && std::chrono::steady_clock::now() < end)
+        {
+            pump();
+            QThread::msleep(20);
+        }
+        return done();
+    };
+    REQUIRE(until([&] { return editor->nodeTimes().contains("Noise"); }));
+
+    // An edit times the graph again; opening the group shows its own nodes.
+    editor->enterGroup(QString::fromStdString(group));
+    CHECK(until([&] { return editor->nodeTimes().contains("Fine"); }));
+    CHECK_FALSE(editor->nodeTimes().contains("Noise"));
+    editor->setTimings(false);
+    CHECK(editor->nodeTimes().empty());
+
+    // A backend that can't time nodes turns the overlay off.
+    editor->setTimings(true);
+    editor->setBackend(ui::kGeometryNodesBackend);
+    CHECK_FALSE(editor->timings());
 }

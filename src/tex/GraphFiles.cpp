@@ -5,6 +5,7 @@
 #include "ops/Command.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
+#include "tex/GraphProfile.h"
 #include "tex/NodeDef.h"
 #include "tex/TextureSet.h"
 
@@ -76,6 +77,7 @@ void registerFileCommands()
 {
     registerGroupCommands();
     registerParamCommands();
+    registerProfileCommands();
     using T = ArgType;
     ops::registerCommand({
         .name = "texExportGraph",

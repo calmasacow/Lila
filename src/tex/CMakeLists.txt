@@ -9,6 +9,8 @@ lila_module(lila_tex Scene
     GraphFiles.cpp
     GraphGroups.cpp
     GraphParams.cpp
+    GraphProfile.cpp
+    GraphProfile.h
     Interop.cpp
     Interop.h
     LayerCommands.cpp

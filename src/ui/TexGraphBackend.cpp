@@ -1,6 +1,7 @@
 #include "ui/GraphBackend.h"
 
 #include "core/Log.h"
+#include "core/MainQueue.h"
 #include "geo/Mesh.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
@@ -11,6 +12,7 @@
 #pragma push_macro("slots")
 #undef slots
 #include "tex/Evaluate.h"
+#include "tex/GraphProfile.h"
 #include "tex/NodeDef.h"
 #include "tex/TextureSet.h"
 #include "tex/PaintStrokes.h"
@@ -39,8 +41,7 @@
 #include <QComboBox>
 #include <QFormLayout>
 #include <QMenu>
-#include <QRandomGenerator>
-#include <QSpinBox>
+#include <QThreadPool>
 #include <QTimer>
 #include <QHBoxLayout>
 #include <QPushButton>
@@ -52,6 +53,7 @@
 #include <QToolButton>
 
 #include <algorithm>
+#include <format>
 #include <set>
 
 namespace lila::ui
@@ -60,6 +62,10 @@ namespace
 {
 
 constexpr int kThumbnail = 96;
+/** The square size Node Timings evaluates the set at. */
+constexpr int kProfileSize = 256;
+/** The Parameters panel's id for the graph seed: "@" never starts a graph parameter's name. */
+constexpr const char* kSeedParam = "@seed";
 
 std::vector<NodeEditor*>& texEditors()
 {
@@ -255,48 +261,12 @@ QWidget* graphParamsPanel(QWidget* parent, NodeEditor& editor, const std::string
             presets->setCurrentIndex(presets->findText(qs(now.value("active", std::string()))));
     };
 
-    auto* seedForm = new QFormLayout();
-    seedForm->setContentsMargins(0, 0, 0, 0);
-    auto* seedRow = new QWidget(box);
-    auto* sh = new QHBoxLayout(seedRow);
-    sh->setContentsMargins(0, 0, 0, 0);
-    sh->setSpacing(2);
-    auto* seed = new QSpinBox(seedRow);
-    seed->setObjectName("graphSeed");
-    seed->setRange(-(1 << 30), 1 << 30);
-    seed->setValue(gp.value("seed", 0));
-    seed->setKeyboardTracking(false);
-    seed->setAlignment(Qt::AlignRight);
-    seed->setButtonSymbols(QAbstractSpinBox::NoButtons);
-    const QString seedTip = "Seed\nAdded to every seed parameter in the set, groups included: one number re-rolls the whole material";
-    seed->setToolTip(seedTip);
-    QObject::connect(seed, &QSpinBox::valueChanged, seed, [ed, group, followPreset](int value) {
-        if (!ed)
-            return;
-        ed->runFromField("texSetGraphSeed", argsCall({group, value}));
-        followPreset();
-    });
-    auto* dice = new QToolButton(seedRow);
-    dice->setIcon(icon("dice"));
-    dice->setToolTip("Random Seed");
-    QObject::connect(dice, &QToolButton::clicked, seed, [seed] { seed->setValue(int(QRandomGenerator::global()->bounded(1, 100000))); });
-    sh->addWidget(seed, 1);
-    sh->addWidget(dice);
-    auto* seedLabel = new QLabel("Seed", box);
-    seedLabel->setToolTip(seedTip);
-    seedForm->addRow(seedLabel, seedRow);
-    v->addLayout(seedForm);
-
-    if (params.empty())
-    {
-        auto* none = new QLabel("No parameters. Right-click a node's parameter to expose it.", box);
-        none->setWordWrap(true);
-        none->setStyleSheet("color: rgb(150,150,150);");
-        v->addWidget(none);
-        return box;
-    }
-
     json shown = {{"title", ""}, {"params", json::array()}};
+    shown["params"].push_back({{"id", kSeedParam},
+                               {"label", "Seed"},
+                               {"type", "seed"},
+                               {"value", gp.value("seed", 0)},
+                               {"doc", "Added to every seed parameter in the set, groups included: one number re-rolls the whole material"}});
     for (const json& p : params)
     {
         json e = {{"id", p.value("name", "")}, {"type", p.value("type", "float")}, {"value", p.value("value", json())}};
@@ -316,15 +286,27 @@ QWidget* graphParamsPanel(QWidget* parent, NodeEditor& editor, const std::string
         [ed, group, followPreset](const std::string& id, const json& value) {
             if (!ed)
                 return;
-            ed->runFromField("texSetGraphParam", argsCall({group, id, value}));
+            if (id == kSeedParam)
+                ed->runFromField("texSetGraphSeed", argsCall({group, value}));
+            else
+                ed->runFromField("texSetGraphParam", argsCall({group, id, value}));
             followPreset();
         },
         {},
         [group](const std::string& id, QWidget* owner) -> QAction* {
+            if (id == kSeedParam)
+                return nullptr;
             auto* a = new QAction("Remove Graph Parameter", owner);
             QObject::connect(a, &QAction::triggered, qApp, [group, id] { deferTexCommand("texUnexposeParam", argsCall({group, id})); });
             return a;
         }));
+    if (params.empty())
+    {
+        auto* none = new QLabel("No parameters. Right-click a node's parameter to expose it.", box);
+        none->setWordWrap(true);
+        none->setStyleSheet("color: rgb(150,150,150);");
+        v->addWidget(none);
+    }
     return box;
 }
 
@@ -574,6 +556,45 @@ public:
     }
 
     QWidget* pinnedPanel(QWidget* parent, NodeEditor& editor) const override { return new TexGraphPreview(editor, parent); }
+
+    bool canProfile() const override { return true; }
+
+    /** The set's passes timed on the CPU (the GPU evaluator doesn't time passes), on a pool thread. */
+    void profile(const std::string& group, std::function<void(json)> done) const override
+    {
+        const tex::GraphAddress at = tex::splitAddress(group);
+        scene::Node* n = tex::findSet(scene::Graph::current(), at.set);
+        if (!n)
+        {
+            done({{"error", "no texture set named " + at.set}});
+            return;
+        }
+        tex::Graph graph;
+        tex::SetSettings settings;
+        try
+        {
+            graph = tex::readGraph(*n);
+            settings = tex::readSettings(*n);
+        }
+        catch (const std::exception& e)
+        {
+            done({{"error", e.what()}});
+            return;
+        }
+        QThreadPool::globalInstance()->start([graph = std::move(graph), settings = std::move(settings), sub = at.group, done = std::move(done)] {
+            json r;
+            try
+            {
+                r = tex::profileGraph(graph, settings, sub, kProfileSize);
+                r["label"] = std::format("CPU, {} px", kProfileSize);
+            }
+            catch (const std::exception& e)
+            {
+                r = {{"error", e.what()}};
+            }
+            mainq::post([done, r] { done(r); });
+        });
+    }
 
     QWidget* graphPanel(QWidget* parent, NodeEditor& editor, const json&) const override
     {

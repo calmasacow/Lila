@@ -9,6 +9,7 @@
 
 #include <array>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
@@ -117,6 +118,11 @@ public:
     void toggleNodeFlag(const char* flag);
     /** True when every selected node the flag applies to has it on. */
     bool nodeFlagOn(const char* flag) const;
+    /** The Node Timings overlay: how long each node takes, timed again whenever the graph changes. */
+    void setTimings(bool on);
+    bool timings() const { return mTimings; }
+    /** The times the overlay shows by node, in ms; empty while it is off or the first timing runs. */
+    const std::map<std::string, double>& nodeTimes() const;
     /** Image previews on every node that has one; remembered as a pref. */
     void setPreviews(bool on);
     bool previews() const;
@@ -227,6 +233,11 @@ private:
     /** The side panel's column: the backend's pinned panel over the scrolling side panel. */
     QWidget* mSideColumn = nullptr;
     QWidget* mPinned = nullptr;
+    bool mTimings = false;
+    /** Times the graph a moment after it last changed; a run's result only lands when it is the latest. */
+    QTimer* mProfileTimer = nullptr;
+    int mProfileRun = 0;
+    void profileNow();
     QTimer* mRefresh = nullptr;
     QToolButton* mSendBtn = nullptr;
     int mListener = 0;
