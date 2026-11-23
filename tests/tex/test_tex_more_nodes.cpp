@@ -3,6 +3,7 @@
 #include "tex/NodeDef.h"
 
 #include <array>
+#include <fstream>
 
 using namespace textest;
 
@@ -310,6 +311,86 @@ TEST_CASE("tex more nodes: Blend's layer modes, Remap's interpolations and Trans
     image::Image turned = eval(into(tr, "T.out"), "Output", "baseColor", 8);
     CHECK(texel(turned, 1, 1)[3] == doctest::Approx(1.0));
     CHECK(texel(turned, 6, 6)[3] == doctest::Approx(0.0));
+}
+
+TEST_CASE("tex more nodes: an SVG reads as an image, drawn at the plan's size")
+{
+    const std::filesystem::path file = std::filesystem::temp_directory_path() / "lila_tex_square.svg";
+    {
+        std::ofstream out(file);
+        out << R"(<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><rect x="0" y="0" width="50" height="50" fill="#ff0000"/></svg>)";
+    }
+    std::string err;
+    image::Image raw = image::readSvg(file, 200, &err);
+    REQUIRE_MESSAGE(raw.width == 200, err);
+    CHECK(raw.height == 100);
+    // The left half is the red square; the right half is outside every shape.
+    CHECK(raw.rgba[(size_t(50) * 200 + 50) * 4 + 0] == doctest::Approx(1.0));
+    CHECK(raw.rgba[(size_t(50) * 200 + 150) * 4 + 3] == doctest::Approx(0.0));
+
+    Graph g;
+    add(g, "I", "image", {{"file", file.generic_string()}});
+    image::Image img = eval(into(g, "I.out"), "Output", "baseColor", 16);
+    CHECK(texel(img, 3, 8)[0] == doctest::Approx(1.0).epsilon(1e-3));
+    CHECK(texel(img, 12, 8)[0] == doctest::Approx(0.0).epsilon(1e-3));
+    std::filesystem::remove(file);
+}
+
+TEST_CASE("tex more nodes: Non-Uniform Blur, Bevel, Radial Splatter, Warp's amount and Tiler's extra patterns")
+{
+    // A hard black and white split, blurred only where the map is white.
+    Graph nb;
+    add(nb, "G", "gradient");
+    add(nb, "B", "nonUniformBlur", {{"radius", 0.1}, {"map", 0.0}});
+    link(nb, "G.out", "B.input");
+    Plan p = plan(into(nb, "B.out"), "Output", "baseColor", 32);
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+
+    // A filled square bevels to 0 at its edge and 1 deep inside.
+    Graph bv;
+    add(bv, "S", "sdfBox", {{"width", 0.8}, {"height", 0.8}});
+    add(bv, "M", "sdfToMask");
+    add(bv, "B", "bevel", {{"width", 0.1}});
+    link(bv, "S.sdf", "M.input");
+    link(bv, "M.out", "B.input");
+    image::Image bevel = eval(into(bv, "B.out"), "Output", "baseColor", 64, PortType::Gray);
+    CHECK(texel(bevel, 32, 32)[0] == doctest::Approx(1.0).epsilon(1e-3));
+    CHECK(texel(bevel, 7, 32)[0] < 0.5f);
+    CHECK(texel(bevel, 1, 1)[0] == doctest::Approx(0.0));
+
+    Graph rs;
+    add(rs, "R", "radialSplatter", {{"count", 4}, {"radius", 0.3}, {"size", 0.1}});
+    image::Image radial = eval(into(rs, "R.out"), "Output", "baseColor", 64, PortType::Gray);
+    // Copies sit at 0.3 right of the centre and nowhere in the middle.
+    CHECK(texel(radial, 51, 32)[0] == doctest::Approx(1.0));
+    CHECK(texel(radial, 32, 32)[0] == doctest::Approx(0.0));
+
+    Graph wp;
+    add(wp, "N", "perlin", {{"scale", 4}});
+    add(wp, "W", "warp", {{"intensity", 4.0}, {"amount", 0.0}});
+    link(wp, "N.out", "W.input");
+    link(wp, "N.out", "W.warp");
+    image::Image still = eval(into(wp, "W.out"), "Output", "baseColor", 16);
+    image::Image source = eval(into(wp, "N.out"), "Output", "baseColor", 16);
+    CHECK(texel(still, 5, 5)[0] == doctest::Approx(texel(source, 5, 5)[0]).epsilon(1e-4));
+
+    // Two patterns, a constant 1 and a constant 0.5: instances draw both.
+    Graph tl;
+    add(tl, "A", "constant", {{"value", 1.0}});
+    add(tl, "H", "constant", {{"value", 0.5}});
+    add(tl, "T", "tiler", {{"countX", 8}, {"countY", 8}, {"size", 1.0}, {"patterns", 2}});
+    link(tl, "A.out", "T.pattern");
+    link(tl, "H.out", "T.pattern2");
+    image::Image tiles = eval(into(tl, "T.out"), "Output", "baseColor", 64, PortType::Gray);
+    bool full = false, half = false;
+    for (int y = 4; y < 64; y += 8)
+        for (int x = 4; x < 64; x += 8)
+        {
+            full |= std::abs(texel(tiles, x, y)[0] - 1.0f) < 1e-3f;
+            half |= std::abs(texel(tiles, x, y)[0] - 0.5f) < 1e-3f;
+        }
+    CHECK(full);
+    CHECK(half);
 }
 
 TEST_CASE("tex more nodes: Comparison, Logic, Select, Step and Smooth Step")

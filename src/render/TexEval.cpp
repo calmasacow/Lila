@@ -568,7 +568,7 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 if (!cached)
                 {
                     std::string err, fitted;
-                    image::Image read = tex::fitSourceImage(image::read(path, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
+                    image::Image read = tex::fitSourceImage(tex::readSourceImage(path, plan.width, plan.height, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
                     if (read.width > 0)
                     {
                         cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted};

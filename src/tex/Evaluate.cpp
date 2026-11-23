@@ -93,6 +93,13 @@ GpuEvaluator& gpuEvaluator()
 }
 } // namespace
 
+image::Image readSourceImage(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err)
+{
+    std::string ext = path.extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    return ext == ".svg" ? image::readSvg(path, std::max(planWidth, planHeight), err) : image::read(path, err);
+}
+
 image::Image fitSourceImage(image::Image img, const std::string& name, int planWidth, int planHeight, size_t maxTexels, std::string* warning)
 {
     if (img.width <= 0 || img.height <= 0)
@@ -175,7 +182,7 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
         {
             std::string err;
             image::Image img = b.name.empty() ? image::Image{}
-                                              : fitSourceImage(image::read(resolveImagePath(b.name, options.imageRoot), &err), b.name, plan.width,
+                                              : fitSourceImage(readSourceImage(resolveImagePath(b.name, options.imageRoot), plan.width, plan.height, &err), b.name, plan.width,
                                                                plan.height, 0, nullptr);
             if (img.width <= 0)
             {

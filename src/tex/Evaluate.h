@@ -83,6 +83,8 @@ LILA_SCENE_API std::filesystem::path resolveImagePath(const std::string& path, c
  */
 LILA_SCENE_API image::Image fitSourceImage(image::Image img, const std::string& name, int planWidth, int planHeight, size_t maxTexels,
                                            std::string* warning);
+/** An Image node's file read for a plan: an SVG is drawn at the plan's size, so its edges stay sharp; anything else as stored. */
+LILA_SCENE_API image::Image readSourceImage(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err);
 
 /** The GPU evaluator the renderer installs: evaluate throws like evaluateCpu; available says whether a GPU can run it. */
 struct GpuEvaluator
