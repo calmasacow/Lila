@@ -9,6 +9,8 @@
 #include "tex/TextureSet.h"
 
 #include <algorithm>
+#include <cmath>
+#include <random>
 #include <set>
 
 namespace lila::tex
@@ -234,8 +236,8 @@ void registerParamCommands()
     ops::registerCommand({
         .name = "texGraphParams",
         .doc = "A graph's parameters and presets: {params: [{name, label, kind, type, value, targets, options, min, max, softMin, "
-               "softMax, step, description}], presets: [names], active}. active names the first preset whose values all match the "
-               "parameters now; empty when none does.",
+               "softMax, step, description}], presets: [names], active, seed}. active names the first preset whose values all match "
+               "the parameters now; empty when none does. seed: a set's graph seed (texSetGraphSeed).",
         .positionalDoc = "graph",
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -250,19 +252,24 @@ void registerParamCommands()
             {
                 presets.push_back(p.value("name", ""));
                 const json values = p.value("values", json::object());
-                bool matches = !values.empty();
+                bool matches = !values.empty() || p.contains("seed");
                 for (const auto& [key, value] : values.items())
                     matches = matches && (!now.contains(key) || now[key] == value);
+                matches = matches && (!p.contains("seed") || p["seed"] == g.seed);
                 if (active.empty() && matches)
                     active = p.value("name", "");
             }
-            return {{"params", params}, {"presets", presets}, {"active", active}};
+            json out = {{"params", params}, {"presets", presets}, {"active", active}};
+            if (isSetGraph(address))
+                out["seed"] = g.seed;
+            return out;
         },
     });
 
     ops::registerCommand({
         .name = "texSavePreset",
-        .doc = "Store every graph parameter's current value under a preset name, replacing a preset of that name. Returns the name.",
+        .doc = "Store every graph parameter's current value (and a set's graph seed) under a preset name, replacing a preset of that "
+               "name. Returns the name.",
         .positionalDoc = "graph name",
         .run = [](const Args& a) -> json {
             const std::string address = paramArg(a, 0, "texSavePreset", "graph");
@@ -271,6 +278,8 @@ void registerParamCommands()
                 throw CommandError("texSavePreset: name required");
             Graph g = readParamGraph(address, "texSavePreset");
             json entry = {{"name", name}, {"values", presetSnapshot(g, isSetGraph(address))}};
+            if (isSetGraph(address))
+                entry["seed"] = g.seed;
             if (json* p = findPreset(g, name))
                 *p = std::move(entry);
             else
@@ -283,13 +292,17 @@ void registerParamCommands()
 
     ops::registerCommand({
         .name = "texApplyPreset",
-        .doc = "Set the graph parameters to a preset's values. Parameters added since it was saved keep theirs. Returns the names set.",
+        .doc = "Set the graph parameters (and a set's graph seed) to a preset's values. Parameters added since it was saved keep "
+               "theirs. Returns the names set.",
         .positionalDoc = "graph name",
         .run = [](const Args& a) -> json {
             const std::string address = paramArg(a, 0, "texApplyPreset", "graph");
             const std::string name = paramArg(a, 1, "texApplyPreset", "name");
             Graph g = readParamGraph(address, "texApplyPreset");
-            const json values = presetOrThrow(g, name, "texApplyPreset").value("values", json::object());
+            const json& preset = presetOrThrow(g, name, "texApplyPreset");
+            const json values = preset.value("values", json::object());
+            if (isSetGraph(address) && preset.contains("seed") && preset["seed"].is_number_integer())
+                g.seed = preset["seed"].get<int>();
             json set = json::array();
             for (GraphInput& in : g.inputs)
                 if (auto it = values.find(in.name); it != values.end())
@@ -337,6 +350,32 @@ void registerParamCommands()
             writeGraphAt(scene::Graph::current(), address, g);
             return nullptr;
         },
+    });
+
+    ops::registerCommand({
+        .name = "texSetGraphSeed",
+        .doc = "Set a texture set's graph seed: added to every seed parameter in the set, node groups included, so one number "
+               "re-rolls the whole material. Presets store it. Returns the seed.",
+        .positionalDoc = "set [seed]",
+        .flags = {{"random", "", T::Bool, false, "Pick a new seed at random instead."}},
+        .run = [](const Args& a) -> json {
+            const std::string address = paramArg(a, 0, "texSetGraphSeed", "texture set");
+            if (!isSetGraph(address))
+                throw CommandError("texSetGraphSeed: the seed belongs to the set; give \"" + splitAddress(address).set + "\"");
+            Graph g = readParamGraph(address, "texSetGraphSeed");
+            if (a.get<bool>("random", false))
+            {
+                static std::mt19937 rng{std::random_device{}()};
+                g.seed = int(std::uniform_int_distribution<int>(1, 99999)(rng));
+            }
+            else if (a.positional.size() > 1 && a.positional[1].is_number())
+                g.seed = int(std::llround(a.positional[1].get<double>()));
+            else
+                throw CommandError("texSetGraphSeed: seed or random=True required");
+            writeGraphAt(scene::Graph::current(), address, g);
+            return g.seed;
+        },
+        .examples = {"texSetGraphSeed(\"RockTex\", 42)", "texSetGraphSeed(\"RockTex\", random=True)"},
     });
 }
 } // namespace lila::tex

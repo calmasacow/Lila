@@ -38,6 +38,8 @@
 #include <QComboBox>
 #include <QFormLayout>
 #include <QMenu>
+#include <QRandomGenerator>
+#include <QSpinBox>
 #include <QTimer>
 #include <QHBoxLayout>
 #include <QPushButton>
@@ -178,9 +180,9 @@ QWidget* presetRow(QWidget* parent, const std::string& group, const json& graphP
     h->setSpacing(2);
     auto* picker = new QComboBox(row);
     picker->setObjectName("graphPresets");
-    picker->setPlaceholderText("Custom");
     for (const json& name : graphParams.value("presets", json::array()))
         picker->addItem(qs(name.get<std::string>()));
+    picker->setPlaceholderText(picker->count() ? "Custom" : "No presets");
     picker->setCurrentIndex(picker->findText(qs(graphParams.value("active", std::string()))));
     picker->setToolTip("Preset\nPick one to set every parameter to its values. Custom: the values match no preset");
     QObject::connect(picker, &QComboBox::activated, picker, [group, picker](int i) {
@@ -241,6 +243,49 @@ QWidget* graphParamsPanel(QWidget* parent, NodeEditor& editor, const std::string
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(3);
     v->addWidget(texGraphHeading(box, setGraph ? "Parameters" : "Presets"));
+    v->addWidget(presetRow(box, group, gp));
+    if (!setGraph)
+        return box;
+    QPointer<QComboBox> presets = box->findChild<QComboBox*>("graphPresets");
+    QPointer<NodeEditor> ed(&editor);
+    // The panel stays up under a field being edited, so the picker follows on its own.
+    auto followPreset = [group, presets] {
+        if (const json now = queryGraphParams(group); presets && now.is_object())
+            presets->setCurrentIndex(presets->findText(qs(now.value("active", std::string()))));
+    };
+
+    auto* seedForm = new QFormLayout();
+    seedForm->setContentsMargins(0, 0, 0, 0);
+    auto* seedRow = new QWidget(box);
+    auto* sh = new QHBoxLayout(seedRow);
+    sh->setContentsMargins(0, 0, 0, 0);
+    sh->setSpacing(2);
+    auto* seed = new QSpinBox(seedRow);
+    seed->setObjectName("graphSeed");
+    seed->setRange(-(1 << 30), 1 << 30);
+    seed->setValue(gp.value("seed", 0));
+    seed->setKeyboardTracking(false);
+    seed->setAlignment(Qt::AlignRight);
+    seed->setButtonSymbols(QAbstractSpinBox::NoButtons);
+    const QString seedTip = "Seed\nAdded to every seed parameter in the set, groups included: one number re-rolls the whole material";
+    seed->setToolTip(seedTip);
+    QObject::connect(seed, &QSpinBox::valueChanged, seed, [ed, group, followPreset](int value) {
+        if (!ed)
+            return;
+        ed->runFromField("texSetGraphSeed", argsCall({group, value}));
+        followPreset();
+    });
+    auto* dice = new QToolButton(seedRow);
+    dice->setIcon(icon("dice"));
+    dice->setToolTip("Random Seed");
+    QObject::connect(dice, &QToolButton::clicked, seed, [seed] { seed->setValue(int(QRandomGenerator::global()->bounded(1, 100000))); });
+    sh->addWidget(seed, 1);
+    sh->addWidget(dice);
+    auto* seedLabel = new QLabel("Seed", box);
+    seedLabel->setToolTip(seedTip);
+    seedForm->addRow(seedLabel, seedRow);
+    v->addLayout(seedForm);
+
     if (params.empty())
     {
         auto* none = new QLabel("No parameters. Right-click a node's parameter to expose it.", box);
@@ -249,10 +294,6 @@ QWidget* graphParamsPanel(QWidget* parent, NodeEditor& editor, const std::string
         v->addWidget(none);
         return box;
     }
-    v->addWidget(presetRow(box, group, gp));
-    if (!setGraph)
-        return box;
-    QPointer<QComboBox> presets = box->findChild<QComboBox*>("graphPresets");
 
     json shown = {{"title", ""}, {"params", json::array()}};
     for (const json& p : params)
@@ -269,16 +310,13 @@ QWidget* graphParamsPanel(QWidget* parent, NodeEditor& editor, const std::string
                 e[k] = p[k];
         shown["params"].push_back(e);
     }
-    QPointer<NodeEditor> ed(&editor);
     v->addWidget(texParams::nodePanel(
         box, shown,
-        [ed, group, presets](const std::string& id, const json& value) {
+        [ed, group, followPreset](const std::string& id, const json& value) {
             if (!ed)
                 return;
             ed->runFromField("texSetGraphParam", argsCall({group, id, value}));
-            // The panel stays up under a field being edited, so the picker follows on its own.
-            if (const json now = queryGraphParams(group); presets && now.is_object())
-                presets->setCurrentIndex(presets->findText(qs(now.value("active", std::string()))));
+            followPreset();
         },
         {},
         [group](const std::string& id, QWidget* owner) -> QAction* {

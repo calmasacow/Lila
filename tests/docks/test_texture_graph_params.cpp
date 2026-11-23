@@ -4,6 +4,10 @@
 
 #include "scene/Graph.h"
 #include "tex/Graph.h"
+#pragma push_macro("slots")
+#undef slots
+#include "tex/Plan.h"
+#pragma pop_macro("slots")
 #include "tex/TextureSet.h"
 #include "ui/NodeEditor.h"
 
@@ -14,6 +18,7 @@
 #include <QGraphicsView>
 #include <QLabel>
 #include <QMainWindow>
+#include <QSpinBox>
 
 using namespace lila;
 using json = nlohmann::json;
@@ -33,6 +38,22 @@ void makeRock()
     run("texCreateSet", {{"args", {"Rock"}}, {"resolution", 64}});
     run("texAddNode", {{"args", {"Rock", "perlin"}}, {"name", "Noise"}});
     run("texConnect", {{"args", {"Rock", "Noise.out", "Output.roughness"}}});
+}
+
+/** The value a plan gives a node's seed parameter (node is its path through groups, or its last step). */
+double plannedSeed(const std::string& node)
+{
+    const tex::Graph g = rockGraph();
+    tex::PlanRequest req;
+    req.width = req.height = 16;
+    req.outputs = tex::channelRequests(g, tex::readSettings(*tex::findSet(scene::Graph::current(), "Rock")));
+    const tex::Plan plan = tex::buildPlan(g, req);
+    REQUIRE(plan.error.empty());
+    for (const tex::UniformEntry& e : plan.params)
+        if (e.id == "seed" && (e.node == node || e.node.ends_with("/" + node)))
+            return plan.uniforms[size_t(e.slot) * 4];
+    FAIL("no seed for " << node);
+    return 0.0;
 }
 
 QAction* labelAction(QWidget* root, const QString& text)
@@ -169,4 +190,48 @@ TEST_CASE("the Texture Graph side panel edits graph parameters and presets")
     expose->trigger();
     pump();
     CHECK(graphParams("Rock")["params"].size() == 2);
+}
+
+TEST_CASE("the graph seed offsets every seed parameter in the set, groups included")
+{
+    makeRock();
+    run("texAddNode", {{"args", {"Rock", "perlin"}}, {"name", "Fine"}});
+    run("texConnect", {{"args", {"Rock", "Fine.out", "Output.metallic"}}});
+    run("texGroupNodes", {{"args", {"Rock", "Fine"}}, {"name", "Grain"}});
+    run("texSetValue", {{"args", {"Rock", "Noise.seed", 3}}});
+    CHECK(plannedSeed("Noise") == 3.0);
+    CHECK(plannedSeed("Fine") == 0.0);
+
+    CHECK(run("texSetGraphSeed", {{"args", {"Rock", 10}}}) == 10);
+    CHECK(rockGraph().seed == 10);
+    CHECK(plannedSeed("Noise") == 13.0);
+    CHECK(plannedSeed("Fine") == 10.0);
+    CHECK(graphParams("Rock")["seed"] == 10);
+    CHECK_THROWS(run("texSetGraphSeed", {{"args", {"Rock/Grain", 1}}}));
+    CHECK(run("texSetGraphSeed", {{"args", {"Rock"}}, {"random", true}}).get<int>() != 0);
+    run("undo");
+    CHECK(rockGraph().seed == 10);
+
+    // Presets keep the seed.
+    run("texSavePreset", {{"args", {"Rock", "Ten"}}});
+    run("texSetGraphSeed", {{"args", {"Rock", 20}}});
+    CHECK(graphParams("Rock")["active"] == "");
+    run("texApplyPreset", {{"args", {"Rock", "Ten"}}});
+    CHECK(rockGraph().seed == 10);
+    CHECK(graphParams("Rock")["active"] == "Ten");
+
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1100, 700);
+    win.show();
+    editor->setGroup("Rock");
+    pump();
+    auto* seed = editor->findChild<QSpinBox*>("graphSeed");
+    REQUIRE(seed);
+    CHECK(seed->value() == 10);
+    seed->setValue(7);
+    pump();
+    CHECK(rockGraph().seed == 7);
+    CHECK(editor->findChild<QComboBox*>("graphPresets")->currentIndex() == -1);
 }

@@ -126,6 +126,8 @@ json Graph::toJson() const
         out["subgroups"] = subgroups;
     if (!presets.empty())
         out["presets"] = presets;
+    if (seed != 0)
+        out["seed"] = seed;
     return out;
 }
 
@@ -173,6 +175,7 @@ Graph Graph::fromJson(const json& j)
                 g.subgroups[k] = v;
         if (auto it = j.find("presets"); it != j.end() && it->is_array())
             g.presets = *it;
+        g.seed = j.value("seed", 0);
     }
     catch (const json::exception& e)
     {

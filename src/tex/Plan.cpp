@@ -145,6 +145,7 @@ public:
         LILA_ZONE();
         Scope top;
         top.g = &g;
+        mSeed = g.seed;
         mTime = g.time;
         for (const GraphInput& gi : g.inputs)
             if (gi.param)
@@ -432,6 +433,8 @@ private:
                 mPlan.warnings.push_back(f.path + "." + p.id + ": " + v.dump() + " doesn't fit a " + paramTypeName(p.type) + ", using the default");
                 v = p.defaultValue;
             }
+            if (p.type == ParamType::Seed && mSeed != 0 && v.is_number())
+                v = std::llround(v.get<double>()) + mSeed;
             f.values[p.id] = v;
             f.paramSlot[p.id] = newSlots(f.path, p.id, paramSlots(p.type));
         }
@@ -1289,6 +1292,8 @@ private:
     const PlanRequest& mReq;
     double mTime = 0.0;
     Plan mPlan;
+    /** The graph seed, added to every seed parameter. */
+    int64_t mSeed = 0;
     std::vector<FlatNode> mNodes;
     std::vector<Root> mRoots;
     std::set<std::string> mBuffered;
