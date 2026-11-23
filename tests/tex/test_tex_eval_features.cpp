@@ -234,6 +234,45 @@ TEST_CASE("tex eval features: an image with a UDIM token reads the tile being ev
     CHECK_FALSE(warnings.empty());
 }
 
+TEST_CASE("tex eval features: a set's own named outputs export as files of their own")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Pk"}}, {"resolution", 8}});
+    const json channels = run("texAddChannel", {{"args", {"Pk", "packed"}}, {"suffix", "PK"}});
+    CHECK(std::ranges::any_of(channels, [](const json& c) { return c["name"] == "packed" && c["suffix"] == "PK"; }));
+    run("texAddChannel", {{"args", {"Pk", "tint"}}, {"colorSpace", "srgb"}});
+    CHECK_THROWS(run("texAddChannel", {{"args", {"Pk", "packed"}}}));
+    CHECK_THROWS(run("texAddChannel", {{"args", {"Pk", "bad"}}, {"colorSpace", "aces"}}));
+
+    run("texAddNode", {{"args", {"Pk", "color"}}, {"name", "C"}});
+    run("texSetValue", {{"args", {"Pk", "C.color", {0.25, 0.5, 0.75, 1.0}}}});
+    run("texConnect", {{"args", {"Pk", "C.out", "Output.packed"}}});
+    run("texConnect", {{"args", {"Pk", "C.out", "Output.tint"}}});
+
+    const fs::path dir = tempDir("eval_features_outputs");
+    const json r = run("texExport", {{"args", {"Pk"}}, {"preset", "unreal"}, {"folder", dir.string()}, {"backend", "cpu"}});
+    std::string packed, tint;
+    for (const json& f : r["files"])
+    {
+        const std::string name = fs::path(f.get<std::string>()).filename().string();
+        if (name.find("_PK.") != std::string::npos)
+            packed = f.get<std::string>();
+        if (name.find("_tint.") != std::string::npos)
+            tint = f.get<std::string>();
+    }
+    REQUIRE(!packed.empty());
+    REQUIRE(!tint.empty());
+    const image::Image p = image::read(packed);
+    REQUIRE(p.width == 8);
+    CHECK(texel(p, 3, 3)[0] == doctest::Approx(0.25f).epsilon(0.01));
+    CHECK(texel(p, 3, 3)[2] == doctest::Approx(0.75f).epsilon(0.01));
+    // sRGB-encoded on disk: 0.5 linear is about 0.735.
+    CHECK(texel(image::read(tint), 3, 3)[1] == doctest::Approx(0.735f).epsilon(0.01));
+    for (const json& o : r["outputs"])
+        if (o["file"] == tint)
+            CHECK(o["colorSpace"] == "srgb");
+}
+
 TEST_CASE("tex eval features: premultiplied alpha divides back out on read")
 {
     const fs::path dir = tempDir("eval_features_alpha");

@@ -646,6 +646,33 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "texAddChannel",
+        .doc = "Add a named output to a texture set: a Material Output input of that name, evaluated and exported like the standard "
+               "channels. One the export preset doesn't name (a packed ORM, a specular or subsurface map) is written as a file of its "
+               "own, with suffix as its {map} token. Returns the set's channels.",
+        .positionalDoc = "set name",
+        .flags = {{"type", "", T::String, "color", "Port type: color, gray or vector.", {"color", "gray", "vector"}},
+                  {"bits", "", T::Int, 8, "8, 16 or 32 bits per channel."},
+                  {"suffix", "", T::String, "", "File name token for {map}; the name when empty."},
+                  {"colorSpace", "", T::String, "linear", "linear writes data, srgb encodes colour.", {"linear", "srgb"}}},
+        .run = [](const Args& a) -> json {
+            const std::string set = positionalString(a, 0, "texAddChannel", "texture set");
+            const std::string name = positionalString(a, 1, "texAddChannel", "name");
+            const SetSettings s = readSettings(setNode(set, "texAddChannel"));
+            if (s.channel(name))
+                throw CommandError("texAddChannel: " + set + " already has a channel " + name);
+            json channels = s.toJson()["channels"];
+            json c = {{"name", name}, {"type", a.get<std::string>("type", "color")}, {"bits", a.get<int>("bits", 8)},
+                      {"colorSpace", a.get<std::string>("colorSpace", "linear")}};
+            if (const std::string suffix = a.get<std::string>("suffix", ""); !suffix.empty())
+                c["suffix"] = suffix;
+            channels.push_back(c);
+            return ops::execute("texSetSettings", {{"args", {set, json{{"channels", channels}}}}})["channels"];
+        },
+        .examples = {"texAddChannel(\"RockTex\", \"orm\", suffix=\"ORM\")", "texAddChannel(\"RockTex\", \"specular\", type=\"gray\")"},
+    });
+
+    ops::registerCommand({
         .name = "texAddNode",
         .doc = "Add a node to a texture set's graph. Returns its name. texNodeTypes lists the types.",
         .positionalDoc = "set type",
