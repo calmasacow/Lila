@@ -567,18 +567,18 @@ private:
         return text;
     }
 
-    /** The generic sampler arguments of a node type: its inputs, then its image params. */
-    std::vector<std::pair<std::string, PortType>> samplerArgs(const NodePorts& ports)
+    /** The generic sampler arguments of a node type with their interfaces: its inputs, then its image params. */
+    std::vector<std::pair<std::string, std::string>> samplerArgs(const NodePorts& ports)
     {
-        std::vector<std::pair<std::string, PortType>> out;
+        std::vector<std::pair<std::string, std::string>> out;
         for (const PortDecl& in : ports.inputs)
-            out.emplace_back(in.id, in.type);
+            out.emplace_back(in.id, samplerInterface(in.type));
         for (const ParamDecl& p : ports.params)
             if (p.type == ParamType::Image)
-                out.emplace_back(p.id, PortType::Color);
+                out.emplace_back(p.id, "ITexImage");
         if (ports.def)
             for (const std::string& e : ports.def->externals)
-                out.emplace_back(e, PortType::Color);
+                out.emplace_back(e, samplerInterface(PortType::Color));
         return out;
     }
 
@@ -602,7 +602,7 @@ private:
             {
                 s << "<";
                 for (size_t i = 0; i < args.size(); ++i)
-                    s << (i ? ", " : "") << "S_" << args[i].first << " : " << samplerInterface(args[i].second);
+                    s << (i ? ", " : "") << "S_" << args[i].first << " : " << args[i].second;
                 s << ">";
             }
             s << "(float2 uv, TexP_" << key << " p";
@@ -690,7 +690,8 @@ private:
 
     /**
      * Whether a node's code samples the sampler argument id only at its own uv: every use is `id.sample(uv)` (or
-     * `id.sample(uv * float(p.k))` with k at 1) and uv is never reassigned. Anything else, such as passing the sampler to a
+     * `id.sample(uv * float(p.k))` with k at 1, or the same as `id.sampleImage(..., wrap, filter)` without cubic filtering)
+     * and uv is never reassigned. Anything else, such as passing the sampler to a
      * helper, counts as non-local.
      */
     static bool samplesAtUv(const std::string& text, const std::string& id, const FlatNode& n)
@@ -716,8 +717,19 @@ private:
         {
             if ((at > 0 && (word(text[at - 1]) || text[at - 1] == '.')) || (at + id.size() < text.size() && word(text[at + id.size()])))
                 continue;
-            const std::string rest = text.substr(at + id.size(), 64);
-            if (rest.starts_with(".sample(uv)"))
+            std::string rest = text.substr(at + id.size(), 64);
+            // An image read with its wrap and filter args reads the same texels at uv, unless cubic filtering widens it.
+            char end = ')';
+            if (rest.starts_with(".sampleImage("))
+            {
+                auto it = n.values.find("filter");
+                if (it != n.values.end() && ((it->second.is_string() && it->second.get<std::string>() == "cubic") ||
+                                             (it->second.is_number() && it->second.get<int>() == 2)))
+                    return false;
+                rest = ".sample(" + rest.substr(std::strlen(".sampleImage("));
+                end = ',';
+            }
+            if (rest.starts_with(std::string(".sample(uv") + end))
                 continue;
             bool scaled = false;
             for (const char* form : {".sample(uv * float(p.", ".sample(uv * p."})
@@ -727,7 +739,7 @@ private:
                     size_t to = from;
                     while (to < rest.size() && word(rest[to]))
                         ++to;
-                    const std::string close = std::string(form).find("float(") != std::string::npos ? "))" : ")";
+                    const std::string close = std::string(std::string(form).find("float(") != std::string::npos ? ")" : "") + end;
                     scaled = rest.compare(to, close.size(), close) == 0 && unitParam(rest.substr(from, to - from));
                 }
             if (!scaled)
@@ -851,8 +863,10 @@ private:
                 if (p.type == ParamType::Image)
                 {
                     int b = mImageBuffer.at(std::to_string(i) + "." + p.id);
-                    src << "struct " << tag << "_s_" << p.id << " : ITexColor\n{\n    float4 sample(float2 uv) { return texReadBuf("
-                        << mPlan.buffers[size_t(b)].slot << ", uv); }\n};\n";
+                    const auto slot = mPlan.buffers[size_t(b)].slot;
+                    src << "struct " << tag << "_s_" << p.id << " : ITexImage\n{\n    float4 sample(float2 uv) { return texReadBuf(" << slot
+                        << ", uv); }\n    float4 sampleImage(float2 uv, int wrap, int filter) { return texReadImage(" << slot
+                        << ", uv, wrap, filter); }\n};\n";
                     readsOut.push_back(b);
                 }
             for (const std::string& e : n.def->externals)

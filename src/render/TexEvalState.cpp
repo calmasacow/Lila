@@ -90,12 +90,12 @@ uint64_t mix(uint64_t h, uint64_t v)
 uint64_t mixText(uint64_t h, std::string_view s) { return mix(h, std::hash<std::string_view>{}(s)); }
 
 /**
- * A fused pass's source with the slot numbers it names (gU[n], texReadBuf(n, .base = nu) replaced by their order of
- * first use, and those slots in that order: two plans that number their slots differently give equal text.
+ * A fused pass's source with the slot numbers it names (gU[n], texReadBuf(n, texReadImage(n, .base = nu) replaced by their
+ * order of first use, and those slots in that order: two plans that number their slots differently give equal text.
  */
 std::pair<std::string, std::vector<int>> slotFree(const std::string& src)
 {
-    static constexpr std::string_view kMarks[] = {"gU[", "texReadBuf(", ".base = "};
+    static constexpr std::string_view kMarks[] = {"gU[", "texReadBuf(", "texReadImage(", ".base = "};
     std::string out;
     out.reserve(src.size());
     std::vector<int> order;

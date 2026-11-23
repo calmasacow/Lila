@@ -172,6 +172,146 @@ float fresnelAt(json values)
 }
 } // namespace
 
+TEST_CASE("tex more nodes: Image wraps past its edge by repeat, extend, mirror or clip, and filters by closest or cubic")
+{
+    // A 4 x 4 ramp holding its column index, read at uv * 2 so the right half of the result lies past the image's edge.
+    image::Image ramp{4, 4, {}, {}};
+    for (int k = 0; k < 16; ++k)
+        ramp.rgba.insert(ramp.rgba.end(), {float(k % 4), 0.0f, 0.0f, 1.0f});
+    auto at = [&](const char* wrap, const char* filter, const image::Image& file, int x) {
+        Graph g;
+        add(g, "U", "uv");
+        add(g, "S", "vectorMath", {{"operation", "scale"}, {"scale", 2.0}});
+        add(g, "I", "image", {{"file", "external:ramp"}, {"wrap", wrap}, {"filter", filter}});
+        link(g, "U.uv", "S.a");
+        link(g, "S.out", "I.coord");
+        Plan p = plan(into(g, "I.out"), "Output", "baseColor", 8);
+        REQUIRE_MESSAGE(p.error.empty(), p.error);
+        EvalOptions o;
+        o.externals["ramp"] = file;
+        return texel(evaluateCpu(p, o).outputs.at("out"), x, 7)[0];
+    };
+    // Column 5 reads image texel 5 and column 7 texel 7, one and three past the last.
+    CHECK(at("repeat", "closest", ramp, 5) == doctest::Approx(1.0));
+    CHECK(at("repeat", "closest", ramp, 7) == doctest::Approx(3.0));
+    CHECK(at("extend", "closest", ramp, 5) == doctest::Approx(3.0));
+    CHECK(at("extend", "closest", ramp, 7) == doctest::Approx(3.0));
+    CHECK(at("mirror", "closest", ramp, 5) == doctest::Approx(2.0));
+    CHECK(at("mirror", "closest", ramp, 7) == doctest::Approx(0.0));
+    CHECK(at("clip", "closest", ramp, 5) == doctest::Approx(0.0));
+    CHECK(at("clip", "closest", ramp, 2) == doctest::Approx(2.0));
+    // Cubic weights sum to one, so a flat image stays flat.
+    CHECK(at("repeat", "cubic", flatImage(0.5f, 0.5f, 0.5f), 3) == doctest::Approx(0.5).epsilon(1e-4));
+}
+
+TEST_CASE("tex more nodes: Math's extended operations")
+{
+    const std::vector<std::tuple<const char*, double, double, double, double>> cases = {
+        {"multiplyAdd", 2.0, 3.0, 1.0, 7.0},    {"squareRoot", 9.0, 0.0, 0.0, 3.0},     {"inverseSquareRoot", 4.0, 0.0, 0.0, 0.5},
+        {"logarithm", 8.0, 2.0, 0.0, 3.0},      {"sign", -2.0, 0.0, 0.0, -1.0},          {"round", 2.5, 0.0, 0.0, 3.0},
+        {"ceiling", 2.1, 0.0, 0.0, 3.0},        {"truncate", -2.7, 0.0, 0.0, -2.0},      {"snap", 0.74, 0.25, 0.0, 0.75},
+        {"wrap", 1.25, 0.0, 1.0, 0.25},         {"pingPong", 1.5, 1.0, 0.0, 0.5},        {"smoothMinimum", 0.3, 0.3, 0.0, 0.3},
+        {"compare", 0.30, 0.32, 0.05, 1.0},     {"lessThan", 0.2, 0.3, 0.0, 1.0},        {"greaterThan", 0.2, 0.3, 0.0, 0.0},
+        {"mix", 0.0, 10.0, 0.25, 2.5},          {"toDegrees", 3.14159265, 0.0, 0.0, 180.0},
+    };
+    for (const auto& [op, a, b, c, want] : cases)
+    {
+        INFO(op);
+        Graph g;
+        add(g, "M", "math", {{"operation", op}, {"a", a}, {"b", b}, {"c", c}});
+        CHECK(texel(eval(into(g, "M.out"), "Output", "baseColor", 4, PortType::Gray), 1, 1)[0] == doctest::Approx(want).epsilon(1e-3));
+    }
+}
+
+TEST_CASE("tex more nodes: White Noise, Checker, Wave, Grayscale, Posterize, Mix, Height Blend and the normal tools")
+{
+    Graph chk;
+    add(chk, "C", "checker", {{"countX", 2}, {"countY", 2}});
+    image::Image board = eval(into(chk, "C.out"), "Output", "baseColor", 4, PortType::Gray);
+    CHECK(texel(board, 0, 0)[0] == doctest::Approx(texel(board, 2, 2)[0]));
+    CHECK(texel(board, 0, 0)[0] != doctest::Approx(texel(board, 2, 0)[0]));
+
+    Graph noise;
+    add(noise, "N", "whiteNoise", {{"scale", 4}, {"seed", 3}});
+    image::Image n = eval(into(noise, "N.out"), "Output", "baseColor", 4, PortType::Gray);
+    CHECK(texel(n, 0, 0)[0] != doctest::Approx(texel(n, 1, 0)[0]));
+
+    Graph wave;
+    add(wave, "W", "wave", {{"profile", "saw"}, {"count", 1}});
+    // A saw along x is u itself.
+    CHECK(texel(eval(into(wave, "W.out"), "Output", "baseColor", 4, PortType::Gray), 1, 1)[0] == doctest::Approx(1.5 / 4.0).epsilon(1e-4));
+
+    Graph gray;
+    add(gray, "C", "color", {{"color", {0.2, 0.4, 0.9, 1.0}}});
+    add(gray, "G", "grayscale", {{"mode", "maximum"}});
+    link(gray, "C.out", "G.input");
+    CHECK(grayOf(gray, "G.out") == doctest::Approx(0.9));
+
+    Graph post;
+    add(post, "C", "color", {{"color", {0.6, 0.6, 0.6, 1.0}}});
+    add(post, "P", "posterize", {{"steps", 2}});
+    link(post, "C.out", "P.input");
+    CHECK(texel(eval(into(post, "P.out"), "Output", "baseColor", 4), 1, 1)[0] == doctest::Approx(1.0));
+
+    Graph mix;
+    add(mix, "M", "mix", {{"a", {0.0, 0.0, 0.0, 1.0}}, {"b", {1.0, 0.5, 0.0, 1.0}}, {"factor", 0.5}});
+    CHECK(texel(eval(into(mix, "M.out"), "Output", "baseColor", 4), 1, 1)[1] == doctest::Approx(0.25));
+
+    Graph hb;
+    add(hb, "H", "heightBlend", {{"heightTop", 0.8}, {"heightBottom", 0.2}, {"contrast", 0.9}});
+    CHECK(grayOf(hb, "H.mask") == doctest::Approx(1.0));
+    CHECK(grayOf(hb, "H.height") == doctest::Approx(0.8));
+
+    // A normal leaning +x turned a quarter turn leans +y.
+    Graph nr;
+    add(nr, "C", "color", {{"color", {1.0, 0.5, 0.5, 1.0}}});
+    add(nr, "R", "normalRotate", {{"angle", 90.0}});
+    link(nr, "C.out", "R.input");
+    const float* turned = texel(eval(into(nr, "R.out"), "Output", "baseColor", 4), 1, 1);
+    CHECK(turned[0] == doctest::Approx(0.5).epsilon(1e-3));
+    CHECK(turned[1] == doctest::Approx(1.0).epsilon(1e-3));
+
+    Graph nn;
+    add(nn, "C", "color", {{"color", {0.5, 0.5, 0.75, 1.0}}});
+    add(nn, "N", "normalNormalize");
+    link(nn, "C.out", "N.input");
+    CHECK(texel(eval(into(nn, "N.out"), "Output", "baseColor", 4), 1, 1)[2] == doctest::Approx(1.0).epsilon(1e-4));
+
+    Graph bc;
+    add(bc, "C", "color", {{"color", {0.5, 0.5, 0.5, 1.0}}});
+    add(bc, "B", "brightnessContrast", {{"brightness", 0.1}, {"contrast", 0.5}});
+    link(bc, "C.out", "B.input");
+    // 1.5 * 0.5 + (0.1 - 0.25)
+    CHECK(texel(eval(into(bc, "B.out"), "Output", "baseColor", 4), 1, 1)[0] == doctest::Approx(0.6).epsilon(1e-4));
+}
+
+TEST_CASE("tex more nodes: Blend's layer modes, Remap's interpolations and Transform's pivot and edges")
+{
+    Graph bl;
+    add(bl, "F", "color", {{"color", {0.5, 0.5, 0.5, 1.0}}});
+    add(bl, "K", "color", {{"color", {0.5, 0.5, 0.5, 1.0}}});
+    add(bl, "B", "blend", {{"mode", "exclusion"}});
+    link(bl, "F.out", "B.foreground");
+    link(bl, "K.out", "B.background");
+    CHECK(texel(eval(into(bl, "B.out"), "Output", "baseColor", 4), 1, 1)[0] == doctest::Approx(0.5));
+
+    Graph rm;
+    add(rm, "C", "constant", {{"value", 0.6}});
+    add(rm, "R", "remap", {{"interpolation", "stepped"}, {"steps", 4}});
+    link(rm, "C.out", "R.input");
+    CHECK(grayOf(rm, "R.out") == doctest::Approx(0.5));
+
+    // A quarter turn around the left edge's middle reads the input's lower left from the result's upper left, and past
+    // the input's edge for the right half, where clip leaves nothing.
+    Graph tr;
+    add(tr, "C", "color", {{"color", {1.0, 1.0, 1.0, 1.0}}});
+    add(tr, "T", "transform", {{"rotation", 90.0}, {"pivotX", -0.5}, {"edges", "clip"}});
+    link(tr, "C.out", "T.input");
+    image::Image turned = eval(into(tr, "T.out"), "Output", "baseColor", 8);
+    CHECK(texel(turned, 1, 1)[3] == doctest::Approx(1.0));
+    CHECK(texel(turned, 6, 6)[3] == doctest::Approx(0.0));
+}
+
 TEST_CASE("tex more nodes: Comparison, Logic, Select, Step and Smooth Step")
 {
     const std::vector<std::pair<std::string, std::array<float, 3>>> ops = {

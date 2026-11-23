@@ -44,6 +44,8 @@ interface ITexFloat { float sample(float2 uv); }
 interface ITexColor { float4 sample(float2 uv); }
 interface ITexVector { float3 sample(float2 uv); }
 interface ITexMaterial { TexMaterial sample(float2 uv); }
+/** An image file: sample() repeats with bilinear filtering; wrap is repeat, extend, mirror or clip, filter linear, closest or cubic. */
+interface ITexImage : ITexColor { float4 sampleImage(float2 uv, int wrap, int filter); }
 
 float2 texel() { return gPass.res.zw; }
 float2 texResolution() { return gPass.res.xy; }
@@ -72,10 +74,15 @@ float4 texFetchBuf(uint slot, int2 p)
     return gArena[asuint(d.x) + uint(y * w + x)];
 }
 
-float4 texReadBuf(uint slot, float2 uv)
+float2 texBufSize(uint slot)
 {
     float4 d = gU[slot];
-    float2 size = float2(float(asuint(d.y)), float(asuint(d.z)));
+    return float2(float(asuint(d.y)), float(asuint(d.z)));
+}
+
+float4 texReadBuf(uint slot, float2 uv)
+{
+    float2 size = texBufSize(slot);
     float2 p = float2(uv.x, 1.0 - uv.y) * size - 0.5;
     float2 f = floor(p);
     float2 t = p - f;
@@ -85,6 +92,57 @@ float4 texReadBuf(uint slot, float2 uv)
     float4 c = texFetchBuf(slot, i + int2(0, 1));
     float4 e = texFetchBuf(slot, i + int2(1, 1));
     return lerp(lerp(a, b, t.x), lerp(c, e, t.x), t.y);
+}
+
+int texWrapTexel(int x, int n, int wrap)
+{
+    if (wrap == 0)
+        return ((x % n) + n) % n;
+    if (wrap == 2)
+    {
+        int m = ((x % (2 * n)) + 2 * n) % (2 * n);
+        return m < n ? m : 2 * n - 1 - m;
+    }
+    return clamp(x, 0, n - 1);
+}
+
+float4 texFetchImage(uint slot, int2 p, int wrap)
+{
+    int2 size = int2(texBufSize(slot));
+    return texFetchBuf(slot, int2(texWrapTexel(p.x, size.x, wrap), texWrapTexel(p.y, size.y, wrap)));
+}
+
+float4 texCatmullRom(float t)
+{
+    float t2 = t * t, t3 = t2 * t;
+    return float4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2);
+}
+
+float4 texReadImage(uint slot, float2 uv, int wrap, int filter)
+{
+    if (wrap == 3 && (any(uv < 0.0) || any(uv > 1.0)))
+        return float4(0.0, 0.0, 0.0, 0.0);
+    float2 size = texBufSize(slot);
+    float2 p = float2(uv.x, 1.0 - uv.y) * size;
+    if (filter == 1)
+        return texFetchImage(slot, int2(floor(p)), wrap);
+    p -= 0.5;
+    float2 f = floor(p);
+    float2 t = p - f;
+    int2 i = int2(f);
+    if (filter == 0)
+        return lerp(lerp(texFetchImage(slot, i, wrap), texFetchImage(slot, i + int2(1, 0), wrap), t.x),
+                    lerp(texFetchImage(slot, i + int2(0, 1), wrap), texFetchImage(slot, i + int2(1, 1), wrap), t.x), t.y);
+    float4 wx = texCatmullRom(t.x), wy = texCatmullRom(t.y);
+    float4 sum = float4(0.0, 0.0, 0.0, 0.0);
+    for (int y = 0; y < 4; ++y)
+    {
+        float4 row = float4(0.0, 0.0, 0.0, 0.0);
+        for (int x = 0; x < 4; ++x)
+            row += wx[x] * texFetchImage(slot, i + int2(x - 1, y - 1), wrap);
+        sum += wy[y] * row;
+    }
+    return sum;
 }
 
 float4 texGradientEval(uint base, float t)

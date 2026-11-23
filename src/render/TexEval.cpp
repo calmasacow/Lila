@@ -122,13 +122,16 @@ float4 texFetchBuf(uint slot, int2 p)
     return texFetchAt(d, uint(y * w + x));
 }
 
-float4 texReadBuf(uint slot, float2 uv)
+float2 texBufSize(uint slot)
 {
     float4 d = gU[slot];
-    float2 size = float2(float(asuint(d.y)), float(asuint(d.z)));
     uint flags = asuint(d.w);
-    if ((flags & 2u) != 0)
-        size = gU[flags >> 8].zw;
+    return (flags & 2u) != 0 ? gU[flags >> 8].zw : float2(float(asuint(d.y)), float(asuint(d.z)));
+}
+
+float4 texReadBuf(uint slot, float2 uv)
+{
+    float2 size = texBufSize(slot);
     float2 p = float2(uv.x, 1.0 - uv.y) * size - 0.5;
     float2 f = floor(p);
     float2 t = p - f;

@@ -103,6 +103,29 @@
       "doc": "Repeats across the texture."
     },
     {
+      "id": "wrap",
+      "type": "enum",
+      "default": "repeat",
+      "options": [
+        "repeat",
+        "extend",
+        "mirror",
+        "clip"
+      ],
+      "doc": "Past the image's edge. repeat: tiles it. extend: stretches the edge pixels. mirror: tiles it flipped every other time. clip: transparent black."
+    },
+    {
+      "id": "filter",
+      "type": "enum",
+      "default": "linear",
+      "options": [
+        "linear",
+        "closest",
+        "cubic"
+      ],
+      "doc": "Between pixels. linear: blends the four nearest. closest: the nearest pixel, hard-edged, for pixel art and ID maps. cubic: smoother when the image is enlarged."
+    },
+    {
       "id": "colorSpace",
       "type": "enum",
       "default": "linear",
@@ -130,7 +153,7 @@
   "cost": 4,
   "code": "float4 sequenceFrame(float4 a, float4 b, float mix, int colorSpace)\n{\n    float4 c = mix > 0.0 ? lerp(a, b, mix) : a;\n    if (colorSpace != 1)\n        return c;\n    float3 lo = c.rgb / 12.92;\n    float3 hi = pow(max((c.rgb + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return float4(lerp(hi, lo, step(c.rgb, float3(0.04045))), c.a);\n}",
   "body": {
-    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn sequenceFrame(file.sample(at), next.sample(at), p.mix, p.colorSpace);",
-    "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn lerp(file.sample(at).a, next.sample(at).a, p.mix);"
+    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn sequenceFrame(file.sampleImage(at, p.wrap, p.filter), next.sampleImage(at, p.wrap, p.filter), p.mix, p.colorSpace);",
+    "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nreturn lerp(file.sampleImage(at, p.wrap, p.filter).a, next.sampleImage(at, p.wrap, p.filter).a, p.mix);"
   }
 }
