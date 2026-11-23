@@ -3985,6 +3985,13 @@ def gnDeleteBake(*objects: Any) -> Any:
         objects: group node.
     """
 
+def gnDeleteGroup(*objects: Any) -> Any:
+    """Delete a group nothing uses. Fails naming the modifiers and groups still running it.
+
+    Args:
+        objects: group.
+    """
+
 def gnDeleteNode(*objects: Any) -> Any:
     """Delete nodes from a group, with their links. A zone's input and output go together.
 
@@ -4122,6 +4129,13 @@ def gnRemoveOutput(*objects: Any) -> Any:
 
     Args:
         objects: group name.
+    """
+
+def gnRenameGroup(*objects: Any) -> Any:
+    """Rename a group, its modifiers' type (they keep their values) and the Group nodes running it. Returns the new name.
+
+    Args:
+        objects: group newName.
     """
 
 def gnRenameInput(*objects: Any, output: bool | None = None) -> Any:
@@ -8555,7 +8569,7 @@ def sceneData(*objects: Any, value: Any | None = None, remove: bool | None = Non
     """
 
 def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name: str | None = None, insert: bool | None = None) -> Any:
-    """Create a scene node from the node editor and add it to the selection, so the view shows it. Returns its path. A modifier added with a mesh (or one of its modifiers) selected goes on top of that mesh's stack, as addModifier puts it, and is laid out in the stack's columns rather than at position.
+    """Create a scene node from the node editor and add it to the selection, so the view shows it (in a node group, to the group). Returns its path. A modifier added with a mesh (or one of its modifiers) selected goes on top of that mesh's stack, as addModifier puts it, and is laid out in the stack's columns rather than at position.
 
     Args:
         objects: view type.
@@ -8565,14 +8579,23 @@ def sceneGraphAddNode(*objects: Any, position: Sequence[Any] | None = None, name
     """
 
 def sceneGraphConnect(*objects: Any) -> Any:
-    """Connect plugs from the node editor: sceneGraphConnect(view, 'Ctrl.translateX', 'Box.rotateY') replaces the input's connection. In the Hierarchy view, 'A.@children' to 'B.@parent' parents B under A.
+    """Connect plugs from the node editor: sceneGraphConnect(view, 'Ctrl.translateX', 'Box.rotateY') replaces the input's connection. In the Hierarchy view, 'A.@children' to 'B.@parent' parents B under A. A node group's socket '@Arm.L_hand.rotateX' is its member's plug.
 
     Args:
         objects: view from to.
     """
 
+def sceneGraphCopyNodes(*objects: Any, depth: int | None = None, all: bool | None = None) -> Any:
+    """Shown nodes as shareable text (JSON with a format header): their types, values, parents, the connections among them and the node groups they stand for. Paste it with sceneGraphPasteNodes, here or in another scene.
+
+    Args:
+        objects: view nodes...
+        depth: As sceneGraphInfo takes it, for where the nodes show. Default 2.
+        all: As sceneGraphInfo takes it. Default False.
+    """
+
 def sceneGraphDeleteNode(*objects: Any) -> Any:
-    """Delete scene nodes from the node editor, with their connections (and, for objects, their children).
+    """Delete scene nodes from the node editor, with their connections (and, for objects, their children); a node group's node deletes the group with every node in it.
 
     Args:
         objects: view nodes...
@@ -8586,10 +8609,30 @@ def sceneGraphDisconnect(*objects: Any, source: str | None = None) -> Any:
         source: node.socket of the one link to remove.
     """
 
+def sceneGraphDuplicateNodes(*objects: Any, offset: Sequence[Any] | None = None, depth: int | None = None, all: bool | None = None) -> Any:
+    """Copy shown nodes in place with the connections among them; copies join their originals' frames. Returns the new nodes as the view shows them.
+
+    Args:
+        objects: view nodes...
+        offset: [x, y] shift for the copies. Default [40, 40].
+        depth: As sceneGraphInfo takes it, for where the nodes show. Default 2.
+        all: As sceneGraphInfo takes it. Default False.
+    """
+
+def sceneGraphGroupNodes(*objects: Any, name: str | None = None, depth: int | None = None, all: bool | None = None) -> Any:
+    """Gather shown nodes into a node group, drawn as one node in their place: sceneGraphGroupNodes(view, 'L_arm', 'L_hand', name='Arm'). Scene nodes are untouched; links crossing the group become its node's sockets. Returns {group, node}.
+
+    Args:
+        objects: view nodes...
+        name: Name for the new group; made unique. Default 'NodeGroup'.
+        depth: As sceneGraphInfo takes it, for where the nodes show. Default 2.
+        all: As sceneGraphInfo takes it. Default False.
+    """
+
 def sceneGraphInfo(*objects: Any, depth: int | None = None, all: bool | None = None) -> Any:
     """A view of the scene's nodes for the node editor: the nodes with their plugs as sockets and values, the connections between them as links, and each node's canvas position.
 
-    Views: Selection (the selection and what is wired straight into and out of it), History (each selected mesh's whole modifier stack and its source), Hierarchy (the selection's parents and children), Upstream and Downstream (depth steps from the selection). Views look through anim curves and unit conversions unless all is on.
+    Views: Selection (the selection and what is wired straight into and out of it), History (each selected mesh's whole modifier stack and its source), Hierarchy (the selection's parents and children), Upstream and Downstream (depth steps from the selection). Views look through anim curves and unit conversions unless all is on. A node group shows as one node wherever its members show; given a group's name instead of a view, the group's members with the nodes wired to them.
 
     Args:
         objects: view.
@@ -8623,11 +8666,26 @@ def sceneGraphNodeTypes(linkType: str | None = None, linkInput: bool | None = No
         linkInput: The drag started at an input, so the node needs a matching output. Default False.
     """
 
+def sceneGraphPasteNodes(*objects: Any, position: Sequence[Any] | None = None) -> Any:
+    """Create scene nodes from text made by sceneGraphCopyNodes, centred at position, with their connections and node groups; names are made unique. Returns the new nodes as the view shows them. Bad text fails with every problem listed and changes nothing.
+
+    Args:
+        objects: view text.
+        position: [x, y] canvas centre for the pasted nodes. Default [0, 0].
+    """
+
 def sceneGraphRenameNode(*objects: Any) -> Any:
-    """Rename a scene node from the node editor, as rename does, keeping its place, flags and frames in every view: sceneGraphRenameNode(view, 'pCube1', 'Crate'). Returns its new path.
+    """Rename a scene node from the node editor, as rename does, keeping its place, flags, frames, ties and node groups in every view: sceneGraphRenameNode(view, 'pCube1', 'Crate'). Returns its new path.
 
     Args:
         objects: view node name.
+    """
+
+def sceneGraphSetBookmarks(*objects: Any) -> Any:
+    """Replace a view's saved canvas views: sceneGraphSetBookmarks(view, {'1': [x, y, zoom]}), centre and zoom by slot. Kept with the scene.
+
+    Args:
+        objects: view bookmarks.
     """
 
 def sceneGraphSetFrames(*objects: Any) -> Any:
@@ -8647,11 +8705,25 @@ def sceneGraphSetNodeFlags(*objects: Any, collapsed: bool | None = None, hideUnu
         muted: Accepted for the editor's mute key; scene nodes don't mute.
     """
 
+def sceneGraphSetTies(*objects: Any) -> Any:
+    """Replace a view's zip ties, shaped as gnSetTies takes them: sceneGraphSetTies(view, [{links: [[fromNode, fromSocket, toNode, toSocket], ...], position: [x, y], angle: 0, color: ''}]). Links naming no node are dropped, and so is a tie left with fewer than two. Kept with the scene.
+
+    Args:
+        objects: view ties.
+    """
+
 def sceneGraphSetValue(*objects: Any) -> Any:
     """Set an unconnected plug from the node editor: sceneGraphSetValue(view, 'Box.translateX', 2).
 
     Args:
         objects: view node.attr value.
+    """
+
+def sceneGraphUngroup(*objects: Any) -> Any:
+    """Remove the node group a group node stands for, showing its nodes in its place; the scene nodes are untouched. Returns them as the view shows them.
+
+    Args:
+        objects: view node.
     """
 
 def sceneInfo() -> Any:
@@ -10305,6 +10377,13 @@ def texAddIdLayers(*objects: Any, names: Sequence[Any] | None = None, folder: st
         folder: Folder to put the layers in, made when missing; empty puts them at the root. Default 'IDs'.
     """
 
+def texAddInput(*objects: Any) -> Any:
+    """Add an input to a node group ("Set/Group"): an output of its Group Input and a socket on the Group nodes running it. Returns its name, made unique.
+
+    Args:
+        objects: group name [type].
+    """
+
 def texAddLayer(*objects: Any, name: str | None = None, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None, material: Any | None = None, graph: Any | None = None, source: str | None = None, filter: str | None = None, values: Any | None = None, channels: Any | None = None, projection: Any | None = None, decal: Any | None = None, text: Any | None = None, scatter: Any | None = None) -> Any:
     """Add a layer to a texture set's stack (on top unless placed). Kinds: fill (material + mask), paint (placeholder material, paint buffers and a painted mask), procedural (a graph with outputs named after channels, optionally mask), folder, instance (another layer's values and mask), filter (a filter node applied to the composite below), decal (pictures per channel placed by projection), text (words drawn in the material's base colour, placed like a decal) and scatter (copies of a pattern over the uvs). A graph made by hand joins the stack as its bottom layer. Returns {id}.
 
@@ -10466,6 +10545,13 @@ def texCreateSet(*objects: Any, settings: Any | None = None, resolution: int | N
         materials: Materials that use the set (their Texture Set), created when missing.
     """
 
+def texDeleteGroup(*objects: Any) -> Any:
+    """Delete a node group ("Set/Group") and the Group nodes running it, with their links.
+
+    Args:
+        objects: group.
+    """
+
 def texDeleteNode(*objects: Any) -> Any:
     """Delete nodes from a texture set's graph, with their links.
 
@@ -10593,7 +10679,7 @@ def texExportFlipbook(*objects: Any, startFrame: float | None = None, endFrame: 
     """
 
 def texExportGraph(*objects: Any) -> Any:
-    """Write a texture set to a file: .lilamat holds its graph and settings (import it to make the set again); .lilatexnodes holds its node groups as graph nodes for the node library. Returns the path.
+    """Write a texture set to a file: .lilamat holds its graph and settings (import it to make the set again); .lilatexnodes holds its node groups as graph nodes for the node library, or only the one named as "Set/Group". Returns the path.
 
     Args:
         objects: set path.
@@ -10631,6 +10717,13 @@ def texExportPtex(*objects: Any, mesh: str | None = None, file: str | None = Non
         file: The .ptx to write; relative paths are under the workspace.
         channel: The set's channel. Default 'baseColor'.
         faceResolution: Texels per face side as a power of two: 6 is 64 x 64. Default 6.
+    """
+
+def texExposeInput(*objects: Any) -> Any:
+    """Make a node's input inside a node group an input of the group, linked from Group Input with the input's value as its default. Returns the new input's name.
+
+    Args:
+        objects: group node.input.
     """
 
 def texFaceGroup(*objects: Any, faces: Sequence[Any] | None = None, mesh: str | None = None, remove: bool | None = None) -> Any:
@@ -10671,11 +10764,22 @@ def texFlipbookMaterials(regenerate: bool | None = None) -> Any:
     """
 
 def texGraphInfo(*objects: Any, source: bool | None = None) -> Any:
-    """A texture set's graph definition, settings, nodes with resolved ports, parameters and values, and its evaluation plan (passes, buffers, structure hash) or compile error.
+    """A texture set's graph (or, as "Set/Group", one of its node groups): definition, settings, nodes with resolved ports, parameters and values, and the set graph's evaluation plan (passes, buffers, structure hash) or compile error.
 
     Args:
         objects: set.
         source: Include each pass's Slang source. Default False.
+    """
+
+def texGroupNodes(*objects: Any, name: str | None = None) -> Any:
+    """Collapse nodes into a new node group of the set and put a Group node running it in their place. Links crossing the boundary become the group's inputs and outputs. Open it as "Set/Group". Returns {group, node}.
+
+    Args:
+        objects: set nodes...
+        name: Name for the new group; made unique. Default 'NodeGroup'.
+
+    Examples:
+        texGroupNodes("RockTex", "Noise", "Levels", name="Grit")
     """
 
 def texImportGraph(*objects: Any, name: str | None = None) -> Any:
@@ -10739,6 +10843,13 @@ def texMaterialFromMaps(*objects: Any, folder: str | None = None, recursive: boo
         category: Library category. Default 'Imported'.
         path: Write the .lilamat files to this folder instead.
         set: Add them to this texture set as layers instead.
+    """
+
+def texMoveInput(*objects: Any) -> Any:
+    """Move a node group's input to another place in its interface, 0 first.
+
+    Args:
+        objects: group name index.
     """
 
 def texMoveLayer(*objects: Any, above: str | None = None, below: str | None = None, parent: str | None = None, index: int | None = None) -> Any:
@@ -10899,6 +11010,13 @@ def texRebuildLayers(*objects: Any) -> Any:
         objects: set.
     """
 
+def texRemoveInput(*objects: Any) -> Any:
+    """Remove a node group's input, its links inside, and the links into it on the Group nodes running the group.
+
+    Args:
+        objects: group name.
+    """
+
 def texRemoveLayer(*objects: Any) -> Any:
     """Remove layers (folders with their contents) from a texture set's stack.
 
@@ -10913,11 +11031,32 @@ def texRemoveMask(*objects: Any) -> Any:
         objects: set layer mask...
     """
 
+def texRemoveOutput(*objects: Any) -> Any:
+    """Remove a node group's output, its link inside, and the links out of it on the Group nodes running the group.
+
+    Args:
+        objects: group name.
+    """
+
 def texRemoveVariant(*objects: Any) -> Any:
     """Remove a texture set's variant; the set goes back to the base when it was active.
 
     Args:
         objects: set name.
+    """
+
+def texRenameGroup(*objects: Any) -> Any:
+    """Rename a node group ("Set/Group") and point the Group nodes running it at the new name. Returns the name, made unique.
+
+    Args:
+        objects: group newName.
+    """
+
+def texRenameInput(*objects: Any) -> Any:
+    """Rename a node group's input, keeping its links inside and on the Group nodes running the group.
+
+    Args:
+        objects: group name newName.
     """
 
 def texSampleChannels(*objects: Any, uv: Sequence[Any] | None = None, mesh: str | None = None, position: Sequence[Any] | None = None, source: str | None = None, layer: str | None = None) -> Any:
@@ -10943,6 +11082,13 @@ def texSaveBrushPreset(*objects: Any, brush: Any | None = None, payload: Any | N
         category: Where it lists.
         doc: What it is for.
         tier: user or workspace. One of 'user', 'workspace'.
+    """
+
+def texSaveGroup(*objects: Any) -> Any:
+    """Save a node group ("Set/Group") to the user's texture node library as a graph node, so Add Node offers it in every scene; a set name saves the set to the material library instead. Returns the file path.
+
+    Args:
+        objects: group.
     """
 
 def texSaveSmartMaterial(*objects: Any, name: str | None = None, description: str | None = None, mask: bool | None = None) -> Any:
@@ -10989,6 +11135,22 @@ def texSetFrames(*objects: Any) -> Any:
 
     Args:
         objects: set frames.
+    """
+
+def texSetInputInfo(*objects: Any, label: str | None = None, description: str | None = None, subtype: str | None = None, panel: str | None = None, min: Any | None = None, max: Any | None = None, softMin: Any | None = None, softMax: Any | None = None, step: Any | None = None) -> Any:
+    """Set how a node group's input presents: label, description, panel and number limits. An empty string clears one.
+
+    Args:
+        objects: group name.
+        label: Shown instead of the name.
+        description: Tooltip.
+        subtype: Accepted for other node editors' inputs; texture inputs ignore it.
+        panel: Panel it is listed under.
+        min: Hard minimum, or empty.
+        max: Hard maximum, or empty.
+        softMin: Slider minimum, or empty.
+        softMax: Slider maximum, or empty.
+        step: Drag step, or empty.
     """
 
 def texSetLayer(*objects: Any) -> Any:
@@ -11115,6 +11277,13 @@ def texTransferSet(*objects: Any, source: str | None = None, onto: str | None = 
         into: The set that gets the layer; else the same set.
         maxDistance: How far a target texel may be from the source surface.
         folder: Where the pixels go; textures/<target>/transferred by default.
+    """
+
+def texUngroup(*objects: Any) -> Any:
+    """Replace a Group node with the nodes of the group it runs, rewired in place. The group goes when nothing else runs it. Returns the added node names.
+
+    Args:
+        objects: set node.
     """
 
 def texVariants(*objects: Any) -> Any:
