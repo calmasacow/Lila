@@ -20,7 +20,7 @@ namespace
 {
 using scene::Node;
 
-std::string positional(const Args& a, size_t i, const char* cmd, const char* what)
+std::string groupArg(const Args& a, size_t i, const char* cmd, const char* what)
 {
     if (a.positional.size() <= i || !a.positional[i].is_string())
         throw CommandError(std::string(cmd) + ": " + what + " required");
@@ -86,7 +86,7 @@ std::string nodeOfType(const Graph& g, const char* type)
     return n ? n->name : std::string();
 }
 
-json defaultFor(PortType t)
+json portDefault(PortType t)
 {
     switch (t)
     {
@@ -210,7 +210,7 @@ Collapsed collapse(Graph& outer, const ChannelList& extra, const std::vector<std
                 in.name = name;
                 in.port = decl->type;
                 auto v = target.values.find(l.toSocket);
-                in.defaultValue = v != target.values.end() ? *v : decl->defaultValue.is_null() ? defaultFor(decl->type) : decl->defaultValue;
+                in.defaultValue = v != target.values.end() ? *v : decl->defaultValue.is_null() ? portDefault(decl->type) : decl->defaultValue;
                 inner.inputs.push_back(std::move(in));
                 inputFor[key] = name;
             }
@@ -409,7 +409,7 @@ void registerGroupCommands()
         .positionalDoc = "set nodes...",
         .flags = {{"name", "", T::String, "NodeGroup", "Name for the new group; made unique."}},
         .run = [](const Args& a) -> json {
-            const std::string address = positional(a, 0, "texGroupNodes", "texture set");
+            const std::string address = groupArg(a, 0, "texGroupNodes", "texture set");
             const std::string base = a.get<std::string>("name", "NodeGroup");
             if (!validName(base))
                 throw CommandError("texGroupNodes: '" + base + "' can't name a group (no / or .)");
@@ -427,8 +427,8 @@ void registerGroupCommands()
                "Returns the added node names.",
         .positionalDoc = "set node",
         .run = [](const Args& a) -> json {
-            const std::string address = positional(a, 0, "texUngroup", "texture set");
-            const std::string node = positional(a, 1, "texUngroup", "node");
+            const std::string address = groupArg(a, 0, "texUngroup", "texture set");
+            const std::string node = groupArg(a, 1, "texUngroup", "node");
             return editAt(address, "texUngroup", [&](Graph& g, const ChannelList&) -> json { return ungroup(g, node, "texUngroup"); });
         },
     });
@@ -439,8 +439,8 @@ void registerGroupCommands()
                "Returns its name, made unique.",
         .positionalDoc = "group name [type]",
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texAddInput", "group"), "texAddInput");
-            const std::string base = positional(a, 1, "texAddInput", "name");
+            SetGraphs s = openGroup(groupArg(a, 0, "texAddInput", "group"), "texAddInput");
+            const std::string base = groupArg(a, 1, "texAddInput", "name");
             if (!validName(base))
                 throw CommandError("texAddInput: '" + base + "' can't name an input");
             PortType t = PortType::Float;
@@ -450,7 +450,7 @@ void registerGroupCommands()
             GraphInput in;
             in.name = uniqueKey(inputNames(s.sub), base);
             in.port = t;
-            in.defaultValue = defaultFor(t);
+            in.defaultValue = portDefault(t);
             s.sub.inputs.push_back(in);
             commitGroup(s, [](Graph&, GNode&) {});
             return in.name;
@@ -462,8 +462,8 @@ void registerGroupCommands()
         .doc = "Remove a node group's input, its links inside, and the links into it on the Group nodes running the group.",
         .positionalDoc = "group name",
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texRemoveInput", "group"), "texRemoveInput");
-            const std::string name = positional(a, 1, "texRemoveInput", "name");
+            SetGraphs s = openGroup(groupArg(a, 0, "texRemoveInput", "group"), "texRemoveInput");
+            const std::string name = groupArg(a, 1, "texRemoveInput", "name");
             inputIn(s.sub, name, "texRemoveInput");
             std::erase_if(s.sub.inputs, [&](const GraphInput& in) { return in.name == name; });
             const std::string gi = nodeOfType(s.sub, kGroupInputType);
@@ -481,8 +481,8 @@ void registerGroupCommands()
         .doc = "Rename a node group's input, keeping its links inside and on the Group nodes running the group.",
         .positionalDoc = "group name newName",
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texRenameInput", "group"), "texRenameInput");
-            const std::string from = positional(a, 1, "texRenameInput", "name"), to = positional(a, 2, "texRenameInput", "new name");
+            SetGraphs s = openGroup(groupArg(a, 0, "texRenameInput", "group"), "texRenameInput");
+            const std::string from = groupArg(a, 1, "texRenameInput", "name"), to = groupArg(a, 2, "texRenameInput", "new name");
             if (!validName(to))
                 throw CommandError("texRenameInput: '" + to + "' can't name an input");
             GraphInput& in = inputIn(s.sub, from, "texRenameInput");
@@ -514,8 +514,8 @@ void registerGroupCommands()
         .doc = "Move a node group's input to another place in its interface, 0 first.",
         .positionalDoc = "group name index",
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texMoveInput", "group"), "texMoveInput");
-            const std::string name = positional(a, 1, "texMoveInput", "name");
+            SetGraphs s = openGroup(groupArg(a, 0, "texMoveInput", "group"), "texMoveInput");
+            const std::string name = groupArg(a, 1, "texMoveInput", "name");
             if (a.positional.size() < 3 || !a.positional[2].is_number())
                 throw CommandError("texMoveInput: index required");
             inputIn(s.sub, name, "texMoveInput");
@@ -543,8 +543,8 @@ void registerGroupCommands()
                   {"softMax", "", T::Any, nullptr, "Slider maximum, or empty."},
                   {"step", "", T::Any, nullptr, "Drag step, or empty."}},
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texSetInputInfo", "group"), "texSetInputInfo");
-            GraphInput& in = inputIn(s.sub, positional(a, 1, "texSetInputInfo", "name"), "texSetInputInfo");
+            SetGraphs s = openGroup(groupArg(a, 0, "texSetInputInfo", "group"), "texSetInputInfo");
+            GraphInput& in = inputIn(s.sub, groupArg(a, 1, "texSetInputInfo", "name"), "texSetInputInfo");
             if (a.has("label"))
                 in.label = a.get<std::string>("label", "");
             if (a.has("description"))
@@ -573,8 +573,8 @@ void registerGroupCommands()
                "default. Returns the new input's name.",
         .positionalDoc = "group node.input",
         .run = [](const Args& a) -> json {
-            const std::string address = positional(a, 0, "texExposeInput", "group");
-            const std::string plug = positional(a, 1, "texExposeInput", "node.input");
+            const std::string address = groupArg(a, 0, "texExposeInput", "group");
+            const std::string plug = groupArg(a, 1, "texExposeInput", "node.input");
             const size_t dot = plug.find('.');
             if (dot == std::string::npos)
                 throw CommandError("texExposeInput: expected node.input, got '" + plug + "'");
@@ -593,7 +593,7 @@ void registerGroupCommands()
             in.name = uniqueKey(inputNames(s.sub), sid);
             in.port = decl->type;
             auto v = n->values.find(sid);
-            in.defaultValue = v != n->values.end() ? *v : decl->defaultValue.is_null() ? defaultFor(decl->type) : decl->defaultValue;
+            in.defaultValue = v != n->values.end() ? *v : decl->defaultValue.is_null() ? portDefault(decl->type) : decl->defaultValue;
             s.sub.inputs.push_back(in);
             std::erase_if(s.sub.links, [&](const GLink& l) { return l.toNode == nn && l.toSocket == sid; });
             s.sub.links.push_back({nodeOfType(s.sub, kGroupInputType), in.name, nn, sid});
@@ -607,8 +607,8 @@ void registerGroupCommands()
         .doc = "Remove a node group's output, its link inside, and the links out of it on the Group nodes running the group.",
         .positionalDoc = "group name",
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texRemoveOutput", "group"), "texRemoveOutput");
-            const std::string name = positional(a, 1, "texRemoveOutput", "name");
+            SetGraphs s = openGroup(groupArg(a, 0, "texRemoveOutput", "group"), "texRemoveOutput");
+            const std::string name = groupArg(a, 1, "texRemoveOutput", "name");
             if (!s.sub.output(name))
                 throw CommandError("texRemoveOutput: no output '" + name + "' in " + s.group);
             std::erase_if(s.sub.outputs, [&](const GraphOutput& o) { return o.name == name; });
@@ -626,8 +626,8 @@ void registerGroupCommands()
         .doc = "Rename a node group (\"Set/Group\") and point the Group nodes running it at the new name. Returns the name, made unique.",
         .positionalDoc = "group newName",
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texRenameGroup", "group"), "texRenameGroup");
-            const std::string base = positional(a, 1, "texRenameGroup", "new name");
+            SetGraphs s = openGroup(groupArg(a, 0, "texRenameGroup", "group"), "texRenameGroup");
+            const std::string base = groupArg(a, 1, "texRenameGroup", "new name");
             if (!validName(base))
                 throw CommandError("texRenameGroup: '" + base + "' can't name a group (no / or .)");
             if (base == s.group)
@@ -650,7 +650,7 @@ void registerGroupCommands()
         .doc = "Delete a node group (\"Set/Group\") and the Group nodes running it, with their links.",
         .positionalDoc = "group",
         .run = [](const Args& a) -> json {
-            SetGraphs s = openGroup(positional(a, 0, "texDeleteGroup", "group"), "texDeleteGroup");
+            SetGraphs s = openGroup(groupArg(a, 0, "texDeleteGroup", "group"), "texDeleteGroup");
             auto drop = [&](Graph& g) {
                 std::set<std::string> gone;
                 for (const GNode& n : g.nodes)
@@ -679,7 +679,7 @@ void registerGroupCommands()
         .positionalDoc = "group",
         .undoable = false,
         .run = [](const Args& a) -> json {
-            const std::string address = positional(a, 0, "texSaveGroup", "group");
+            const std::string address = groupArg(a, 0, "texSaveGroup", "group");
             // A whole set keeps in the material library, the way its own Save to Library does.
             if (splitAddress(address).group.empty())
             {
