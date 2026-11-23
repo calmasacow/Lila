@@ -142,6 +142,10 @@ public:
     void ungroupSelected();
     /** Opens the group the selected Group node runs. */
     void openSelectedGroup();
+    /** The group the first selected Group node runs, or empty. */
+    QString selectedSubgroup() const;
+    /** Keeps the selected Group node's group in the library, else the group on show. */
+    void saveGroupToLibrary();
     /** Shows a group run from the one on show, remembering the way back for the path bar and Parent Group. */
     void enterGroup(const QString& name);
     /** Back to the group that runs this one, with its Group node selected: the way in, else the first group that runs it. */

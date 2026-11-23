@@ -1185,7 +1185,7 @@ void NodeEditor::ungroupSelected()
         selectAfterRefresh(added);
 }
 
-void NodeEditor::openSelectedGroup()
+QString NodeEditor::selectedSubgroup() const
 {
     for (const std::string& n : mCanvas->selectedNames())
         if (mBackend->runsSubgroup(mCanvas->typeOf(n)))
@@ -1195,11 +1195,30 @@ void NodeEditor::openSelectedGroup()
                 if (d.value("name", "") == n && d.contains("values"))
                 {
                     std::string g = mBackend->childGroup(mGroup.toStdString(), d["values"].value("group", ""));
-                    if (mBackend->hasGroup(scene::Graph::current(), g))
-                        enterGroup(qs(g));
-                    return;
+                    return mBackend->hasGroup(scene::Graph::current(), g) ? qs(g) : QString();
                 }
         }
+    return {};
+}
+
+void NodeEditor::openSelectedGroup()
+{
+    if (QString g = selectedSubgroup(); !g.isEmpty())
+        enterGroup(g);
+}
+
+void NodeEditor::saveGroupToLibrary()
+{
+    if (!mBackend->supports("SaveGroup"))
+        return;
+    QString g = selectedSubgroup();
+    if (g.isEmpty())
+        g = mGroup;
+    if (g.isEmpty())
+        return;
+    json p = run("SaveGroup", args({g.toStdString()}));
+    if (p.is_string())
+        log::info("saved {}", p.get<std::string>());
 }
 
 namespace
@@ -1974,6 +1993,8 @@ void NodeEditor::showCanvasMenu(QPoint global)
         item(&menu, "nodeEditor.groupNodes");
     if (groupNode)
         item(&menu, "nodeEditor.ungroup");
+    if (mBackend->supports("SaveGroup") && (groupNode || !parentGroup().isEmpty()))
+        item(&menu, "nodeEditor.saveGroup");
     menu.addSeparator();
     QMenu* arrange = menu.addMenu("Arrange");
     for (const char* id : {"nodeEditor.alignLeft", "nodeEditor.alignCenter", "nodeEditor.alignRight", "nodeEditor.alignTop", "nodeEditor.alignMiddle",
@@ -2236,7 +2257,9 @@ void registerEditActions()
     add("nodeEditor.openGroup", "Open Group", &NodeEditor::openSelectedGroup, "Open the group the selected Group node runs.");
     add("nodeEditor.parentGroup", "Parent Group", &NodeEditor::openParentGroup,
         "Go back to the group that runs this one, with its Group node selected.");
-    add("nodeEditor.exportGroup", "Export Node Group...", &NodeEditor::exportGroup,
+    add("nodeEditor.saveGroup", "Save Group to Library", &NodeEditor::saveGroupToLibrary,
+        "Keep the selected Group node's group, or the group on show, in your library as a node for every scene.");
+    add("nodeEditor.exportGroup","Export Node Group...", &NodeEditor::exportGroup,
         "Write the group and the groups nested in it to a .lilanodes file to share.");
     struct AlignAction
     {
