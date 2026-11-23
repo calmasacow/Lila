@@ -13,6 +13,7 @@
 #include "scene/Materials.h"
 #include "scene/Node.h"
 #include "tex/Evaluate.h"
+#include "tex/Expressions.h"
 #include "tex/Generators.h"
 #include "tex/Interop.h"
 #include "tex/Layers.h"
@@ -182,6 +183,8 @@ json paramStateJson(const ParamDecl& p, const GNode* n)
         j["value"] = paramValue(*n, p);
         if (const std::string attr = sequence::driver(*n, p.id); !attr.empty())
             j["driver"] = attr;
+        if (const std::string text = expressionOf(*n, p.id); !text.empty())
+            j["expression"] = text;
     }
     if (!p.options.empty())
         j["options"] = p.options;
@@ -869,6 +872,61 @@ void registerCommands()
     });
 
     ops::registerCommand({
+        .name = "texSetExpression",
+        .doc = "Compute a node's number parameter (or unlinked number input) from an expression instead of its value: texSetExpression(set, 'Noise.scale', "
+               "string='Tiles.count * 2'). Same syntax as plug expressions (the expression command): numbers, Node.param for another "
+               "node's parameter or unlinked input in the same graph, input.name for an exposed input of the graph, time (seconds) "
+               "and frame, + - * / % **, comparisons, and/or/not, `a if c else b` and the expression command's functions. An empty "
+               "string or remove=True takes the expression away and keeps the value it computed. Returns the value it computes now.",
+        .positionalDoc = "set node.param",
+        .flags = {{"string", "s", T::String, nullptr, "The expression; a leading = is optional."},
+                  {"remove", "", T::Bool, false, "Take the expression away."}},
+        .run = [](const Args& a) -> json {
+            auto [nn, id] = splitPlug(positionalString(a, 1, "texSetExpression", "node.param"), "texSetExpression");
+            const std::string text = a.get<std::string>("string", "");
+            const bool remove = a.get<bool>("remove", false) || text.find_first_not_of(" \t=") == std::string::npos;
+            json computed;
+            editGraph(a, "texSetExpression", [&](Graph& g, const SetSettings& s) -> json {
+                GNode& n = nodeIn(g, nn, "texSetExpression");
+                NodePorts p = portsChecked(g, n, s, "texSetExpression");
+                const ParamDecl* prm = p.param(id);
+                const PortDecl* in = prm ? nullptr : p.input(id);
+                const bool number = prm ? !prm->hidden && (prm->type == ParamType::Float || prm->type == ParamType::Int ||
+                                                           prm->type == ParamType::Seed || prm->type == ParamType::Bool)
+                                        : in && (in->type == PortType::Float || in->type == PortType::Gray);
+                if (!number)
+                    throw CommandError("texSetExpression: " + nn + "." + id + " isn't a number parameter or input");
+                const json fallback = prm ? prm->defaultValue : in->defaultValue;
+                const bool integer = prm && (prm->type == ParamType::Int || prm->type == ParamType::Seed);
+                if (!n.values.is_object())
+                    n.values = json::object();
+                json expressions = n.values.value(kExpressionsKey, json::object());
+                if (remove)
+                {
+                    if (!expressions.contains(id))
+                        return nullptr;
+                    n.values[id] = resolvedValue(g, n, id, fallback, graph().time());
+                    if (integer && n.values[id].is_number_float())
+                        n.values[id] = std::llround(n.values[id].get<double>());
+                    expressions.erase(id);
+                }
+                else
+                    expressions[id] = text;
+                if (expressions.empty())
+                    n.values.erase(kExpressionsKey);
+                else
+                    n.values[kExpressionsKey] = expressions;
+                std::string why;
+                computed = resolvedValue(g, n, id, fallback, graph().time(), &why);
+                if (!why.empty())
+                    throw CommandError("texSetExpression: " + why);
+                return nullptr;
+            });
+            return computed;
+        },
+    });
+
+    ops::registerCommand({
         .name = "texMoveNodes",
         .doc = "Move nodes on the canvas: texMoveNodes(set, positions={'Noise': [0, 100]}).",
         .positionalDoc = "set",
@@ -1256,8 +1314,18 @@ void registerCommands()
                 nodes.push_back(nodeJson(node, g, s));
                 // A driven parameter shows its attribute's value, which is what evaluates.
                 for (json& prm : nodes.back()["params"])
+                {
                     if (const int at = prm.contains("driver") ? n.type().attrIndex(prm["driver"].get<std::string>()) : -1; at >= 0)
                         prm["value"] = scene::toJson(graph().value({n.id(), at}));
+                    // An expression's field shows what it computes now.
+                    if (prm.contains("expression"))
+                    {
+                        std::string why;
+                        prm["value"] = resolvedValue(g, node, prm["id"].get<std::string>(), prm["default"], graph().time(), &why);
+                        if (!why.empty())
+                            prm["expressionError"] = why;
+                    }
+                }
                 if (auto it = problems.find(node.name); it != problems.end())
                     nodes.back()["problem"] = it->second;
             }

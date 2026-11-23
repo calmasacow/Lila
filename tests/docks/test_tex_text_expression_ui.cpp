@@ -31,6 +31,22 @@ json nodeInfo(const std::string& set, const std::string& name)
     return json();
 }
 
+json paramOf(const json& node, const std::string& id)
+{
+    for (const json& p : node["params"])
+        if (p["id"] == id)
+            return p;
+    return json();
+}
+
+QAction* actionNamed(QWidget* panel, const QString& text)
+{
+    for (QWidget* w : panel->findChildren<QWidget*>())
+        for (QAction* a : w->actions())
+            if (a->text() == text)
+                return a;
+    return nullptr;
+}
 } // namespace
 
 TEST_CASE("text node fields edit its words and font")
@@ -54,3 +70,46 @@ TEST_CASE("text node fields edit its words and font")
     CHECK(sets["font"] == "JetBrains Mono");
 }
 
+TEST_CASE("a number parameter's right-click adds, edits and removes an expression")
+{
+    registerTexGraphUi();
+    run("newScene");
+    const std::string set = run("texCreateSet", {{"args", {"Exprs"}}, {"resolution", 32}}).get<std::string>();
+    run("texAddNode", {{"args", {set, "transform"}}, {"name", "A"}});
+    run("texAddNode", {{"args", {set, "transform"}}, {"name", "B"}});
+    run("texSetValue", {{"args", {set, "A.offsetX", 0.2}}});
+    run("texSetValue", {{"args", {set, "B.offsetX", 0.4}}});
+    QWidget host;
+    auto panelFor = [&](const std::string& name) { return ui::texParams::nodePanel(&host, nodeInfo(set, name), [](const std::string&, const json&) {}); };
+
+    QAction* add = actionNamed(panelFor("B"), "Add Expression");
+    REQUIRE(add);
+    add->trigger();
+    pump();
+    CHECK(paramOf(nodeInfo(set, "B"), "offsetX")["expression"] == "0.4");
+
+    QWidget* panel = panelFor("B");
+    QLineEdit* edit = nullptr;
+    for (QLineEdit* e : panel->findChildren<QLineEdit*>())
+        if (e->text().startsWith("= "))
+            edit = e;
+    REQUIRE(edit);
+    CHECK(edit->text() == "= 0.4");
+    edit->setText("= A.offsetX * 2");
+    Q_EMIT edit->editingFinished();
+    pump();
+    const json p = paramOf(nodeInfo(set, "B"), "offsetX");
+    CHECK(p["expression"] == "A.offsetX * 2");
+    CHECK(p["value"].get<double>() == doctest::Approx(0.4));
+
+    panel = panelFor("B");
+    bool shown = false;
+    for (QLabel* l : panel->findChildren<QLabel*>())
+        shown = shown || l->text() == "0.4";
+    CHECK(shown);
+    QAction* remove = actionNamed(panel, "Remove Expression");
+    REQUIRE(remove);
+    remove->trigger();
+    pump();
+    CHECK_FALSE(paramOf(nodeInfo(set, "B"), "offsetX").contains("expression"));
+}

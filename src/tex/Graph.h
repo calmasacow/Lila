@@ -71,6 +71,8 @@ struct LILA_SCENE_API Graph
     json bookmarks = json::object();
     /** Graphs its Group nodes use (values.group names one), by name, each self-contained. */
     std::map<std::string, json> subgroups;
+    /** The scene time it is evaluated at, in seconds (sequence::followTime): what expressions read as time. Not saved. */
+    double time = 0.0;
 
     json toJson() const;
     /** Throws std::invalid_argument on malformed input. */

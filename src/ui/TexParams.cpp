@@ -643,6 +643,85 @@ void addKeyableAction(const std::vector<QWidget*>& targets, const json& p, const
     }
 }
 
+/** Runs texSetExpression on a set's node parameter after the current event: the command rebuilds this panel. */
+void setExpressionLater(const json& node, const std::string& id, const std::string& text)
+{
+    const std::string set = node.value("set", ""), name = node.value("name", "");
+    QTimer::singleShot(0, qApp, [set, name, id, text] {
+        try
+        {
+            ops::execute("texSetExpression", {{"args", {set, name + "." + id}}, {"string", text}}, CallSource::UI);
+        }
+        catch (const std::exception& e)
+        {
+            log::warn("{}", e.what());
+        }
+    });
+}
+
+/** Right-click on a number parameter of a set's node: Add Expression turns its field into an expression of its value. */
+void addExpressionAction(const std::vector<QWidget*>& targets, const json& p, const json& node)
+{
+    if (node.value("set", "").empty() || node.value("name", "").empty())
+        return;
+    const std::string id = p.value("id", "");
+    const json value = p.contains("value") ? p["value"] : p.value("default", json());
+    const std::string start = value.is_number() ? QString::number(value.get<double>(), 'g', 6).toStdString() : std::string("0");
+    for (QWidget* target : targets)
+        if (target)
+        {
+            auto* action = new QAction("Add Expression", target);
+            QObject::connect(action, &QAction::triggered, qApp, [node, id, start] { setExpressionLater(node, id, start); });
+            target->addAction(action);
+            target->setContextMenuPolicy(Qt::ActionsContextMenu);
+        }
+}
+
+/** A parameter computed by an expression: its text, editable, and the value it gives now. */
+void addExpressionRow(QFormLayout* form, QWidget* parent, const json& p, const json& node, const QString& tip)
+{
+    const std::string id = p.value("id", "");
+    const json value = p.value("value", json());
+    auto* label = new QLabel(labelOf(p), parent);
+    auto* row = new QWidget(parent);
+    auto* h = new QHBoxLayout(row);
+    h->setContentsMargins(0, 0, 0, 0);
+    auto* edit = new QLineEdit(qs("= " + p["expression"].get<std::string>()), row);
+    const QString error = p.contains("expressionError") ? qs(p["expressionError"].get<std::string>()) : QString();
+    edit->setToolTip(tip + "\nExpression: " + qs(p["expression"].get<std::string>()) + (error.isEmpty() ? QString() : "\n" + error));
+    QObject::connect(edit, &QLineEdit::editingFinished, edit, [edit, node, id, was = p["expression"].get<std::string>()] {
+        std::string text = edit->text().trimmed().toStdString();
+        if (text.starts_with('='))
+            text = QString::fromStdString(text.substr(1)).trimmed().toStdString();
+        if (text != was && !text.empty())
+            setExpressionLater(node, id, text);
+    });
+    auto* shown = dimLabel(row, value.is_number() ? QString::number(value.get<double>(), 'g', 6) : qs(value.dump()));
+    shown->setToolTip(error.isEmpty() ? QString("Value now") : error);
+    h->addWidget(edit, 1);
+    h->addWidget(shown);
+    for (QWidget* target : std::initializer_list<QWidget*>{label, edit})
+    {
+        auto* remove = new QAction("Remove Expression", target);
+        QObject::connect(remove, &QAction::triggered, qApp, [node, id] {
+            const std::string set = node.value("set", ""), name = node.value("name", "");
+            QTimer::singleShot(0, qApp, [set, name, id] {
+                try
+                {
+                    ops::execute("texSetExpression", {{"args", {set, name + "." + id}}, {"remove", true}}, CallSource::UI);
+                }
+                catch (const std::exception& e)
+                {
+                    log::warn("{}", e.what());
+                }
+            });
+        });
+        target->addAction(remove);
+        target->setContextMenuPolicy(Qt::ActionsContextMenu);
+    }
+    form->addRow(label, row);
+}
+
 void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& set, const json& node = json())
 {
     const std::string id = p.value("id", "");
@@ -651,6 +730,11 @@ void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& se
     auto changed = [set, id](const json& v) { set(id, v); };
     QString tip = qs(id + ": " + type) + (p.contains("doc") ? "\n" + qs(p["doc"].get<std::string>()) : QString());
 
+    if ((type == "float" || type == "int") && p.contains("expression"))
+    {
+        addExpressionRow(form, parent, p, node, tip);
+        return;
+    }
     if (type == "float" || type == "int")
     {
         FlagFieldWidgets w = makeFlagField(numberField(p, type == "int"), value, changed, parent);
@@ -658,6 +742,7 @@ void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& se
             tip += "\nKeyable: " + qs(node.value("set", "") + "." + p["driver"].get<std::string>());
         w.field->setToolTip(tip);
         addKeyableAction({w.label, w.field}, p, node);
+        addExpressionAction({w.label, w.field}, p, node);
         form->addRow(w.label, w.field);
         return;
     }

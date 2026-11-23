@@ -1,6 +1,7 @@
 #include "tex/Plan.h"
 
 #include "core/Profile.h"
+#include "tex/Expressions.h"
 #include "tex/Ports.h"
 #include "tex/Prelude.h"
 #include "tex/TextRaster.h"
@@ -75,6 +76,10 @@ struct Scope
     std::string prefix;
     std::map<std::string, Ref> groupInputs;
     std::map<std::string, json> overrides;
+    /** The graph's exposed param inputs by name, as expressions read them (input.name). */
+    std::map<std::string, json> inputValues;
+    /** node.param expressions being evaluated, to catch one that reads itself. */
+    std::set<std::string> evaluating;
     std::map<std::string, int> flatOf;
     std::map<std::string, std::unique_ptr<Scope>> children;
     std::set<std::string> visiting;
@@ -140,6 +145,10 @@ public:
         LILA_ZONE();
         Scope top;
         top.g = &g;
+        mTime = g.time;
+        for (const GraphInput& gi : g.inputs)
+            if (gi.param)
+                top.inputValues[gi.name] = gi.defaultValue;
         mPlan.width = std::max(1, mReq.width);
         mPlan.height = std::max(1, mReq.height);
         try
@@ -194,9 +203,56 @@ private:
     {
         if (auto it = s.overrides.find(n.name + "." + id); it != s.overrides.end())
             return it->second;
+        json stored = fallback;
         if (auto it = n.values.find(id); it != n.values.end())
-            return *it;
-        return fallback;
+            stored = *it;
+        if (const std::string text = expressionOf(n, id); !text.empty())
+            return expressionValue(s, n, id, text, stored);
+        return stored;
+    }
+
+    /** An expression's value; a broken one warns and keeps the stored value. */
+    json expressionValue(Scope& s, const GNode& n, const std::string& id, const std::string& text, const json& stored)
+    {
+        const std::string key = n.name + "." + id;
+        if (!s.evaluating.insert(key).second)
+            throw std::invalid_argument(key + " reads itself through its expression");
+        auto read = [&](const std::string& name) -> double {
+            const size_t dot = name.find('.');
+            const std::string node = name.substr(0, dot), what = name.substr(dot + 1);
+            if (node == "input" && !s.g->node(node))
+            {
+                auto it = s.inputValues.find(what);
+                if (it == s.inputValues.end())
+                    throw std::invalid_argument("the graph has no input " + what);
+                return expressionNumber(it->second, name);
+            }
+            const GNode* other = s.g->node(node);
+            if (!other)
+                throw std::invalid_argument("no node " + node);
+            const NodePorts ports = portsOf(*s.g, *other);
+            json fallback;
+            if (const ParamDecl* p = ports.param(what))
+                fallback = p->defaultValue;
+            else if (const PortDecl* in = ports.input(what))
+                fallback = in->defaultValue;
+            else
+                throw std::invalid_argument(node + " has no parameter " + what);
+            return expressionNumber(valueFor(s, *other, what, fallback), name);
+        };
+        json out = stored;
+        try
+        {
+            out = evaluateExpression(text, read, mTime);
+        }
+        catch (const std::invalid_argument& e)
+        {
+            const std::string warning = s.prefix + key + ": expression " + text + ": " + e.what() + ", using " + stored.dump();
+            if (std::find(mPlan.warnings.begin(), mPlan.warnings.end(), warning) == mPlan.warnings.end())
+                mPlan.warnings.push_back(warning);
+        }
+        s.evaluating.erase(key);
+        return out;
     }
 
     /** implicitUv: the reader is a fused Slang node, which can read the coordinate in place of a constant. */
@@ -244,6 +300,7 @@ private:
                 json v = valueFor(s, n, gi.name, gi.defaultValue);
                 for (const std::string& t : gi.targets)
                     child->overrides[t] = v;
+                child->inputValues[gi.name] = v;
                 continue;
             }
             const PortDecl* decl = ports.input(gi.name);
@@ -283,6 +340,7 @@ private:
             pass->suffix = s.suffix + "#" + std::to_string(k);
             pass->groupInputs = s.groupInputs;
             pass->overrides = s.overrides;
+            pass->inputValues = s.inputValues;
             pass->depth = s.depth;
             pass->parent = &s;
             pass->body = {bodyNames.begin(), bodyNames.end()};
@@ -367,6 +425,8 @@ private:
         for (const ParamDecl& p : ports.params)
         {
             json v = valueFor(s, n, p.id, p.defaultValue);
+            if ((p.type == ParamType::Int || p.type == ParamType::Seed || p.type == ParamType::Enum) && v.is_number_float())
+                v = std::llround(v.get<double>());
             if (!paramValueValid(p.type, v, p.options))
             {
                 mPlan.warnings.push_back(f.path + "." + p.id + ": " + v.dump() + " doesn't fit a " + paramTypeName(p.type) + ", using the default");
@@ -1227,6 +1287,7 @@ private:
     }
 
     const PlanRequest& mReq;
+    double mTime = 0.0;
     Plan mPlan;
     std::vector<FlatNode> mNodes;
     std::vector<Root> mRoots;

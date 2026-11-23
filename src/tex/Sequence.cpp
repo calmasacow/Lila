@@ -3,6 +3,7 @@
 #include "core/Paths.h"
 #include "scene/Anim.h"
 #include "tex/Evaluate.h"
+#include "tex/Expressions.h"
 
 #include <algorithm>
 #include <cctype>
@@ -181,12 +182,13 @@ bool animated(const Graph& g)
         if (auto d = n.values.find(kDriversKey); d != n.values.end() && d->is_object() && !d->empty())
             return true;
     }
-    return false;
+    return expressionsUseTime(g);
 }
 
 bool followTime(Graph& g, scene::Graph& scene, const scene::Node& set, double seconds, const fs::path& root)
 {
     bool changed = false;
+    g.time = seconds;
     auto put = [&](GNode& n, const std::string& id, json v) {
         if (!n.values.is_object())
             n.values = json::object();

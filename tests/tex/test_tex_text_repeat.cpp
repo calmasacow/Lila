@@ -1,6 +1,8 @@
 #include "TexTest.h"
 
+#include "tex/Expressions.h"
 #include "tex/NodeDef.h"
+#include "tex/Sequence.h"
 #include "tex/TextRaster.h"
 
 using namespace textest;
@@ -247,3 +249,88 @@ TEST_CASE("repeat: texAddNode adds the pair, and the graph info lists the zone")
     CHECK(run("texGraphInfo", {{"args", {"Loop"}}})["zones"].size() == 2);
 }
 
+namespace
+{
+/** N = a + b, with b's expression. */
+Graph sum(const std::string& expression, double a = 0.25)
+{
+    Graph g;
+    add(g, "Src", "math", {{"b", 0.3}});
+    add(g, "N", "math", {{"operation", "add"}, {"a", a}, {"b", 0.0}, {kExpressionsKey, {{"b", expression}}}});
+    return g;
+}
+} // namespace
+
+TEST_CASE("expressions: read other nodes, the graph's inputs and time, as values only")
+{
+    CHECK(centre(eval(sum("Src.b * 2"), "N", "out", 8, PortType::Gray)) == doctest::Approx(0.85f));
+    CHECK(centre(eval(sum("= clamp(Src.b * 10, 0, 1) + N.a"), "N", "out", 8, PortType::Gray)) == doctest::Approx(1.5f));
+    CHECK(centre(eval(sum("0.5 if Src.b > 0.2 else 0.1"), "N", "out", 8, PortType::Gray)) == doctest::Approx(0.75f));
+
+    Graph in = sum("input.wear * 2");
+    GraphInput wear;
+    wear.name = "wear";
+    wear.param = true;
+    wear.defaultValue = 0.125;
+    in.inputs.push_back(wear);
+    CHECK(centre(eval(in, "N", "out", 8, PortType::Gray)) == doctest::Approx(0.5f));
+
+    Graph t = sum("time * 0.25");
+    CHECK(sequence::animated(t));
+    CHECK_FALSE(sequence::animated(sum("Src.b")));
+    t.time = 2.0;
+    CHECK(centre(eval(t, "N", "out", 8, PortType::Gray)) == doctest::Approx(0.75f));
+    Graph later = t;
+    later.time = 3.0;
+    CHECK(plan(t, "N", "out", 8, PortType::Gray).structureHash == plan(later, "N", "out", 8, PortType::Gray).structureHash);
+    CHECK(centre(eval(later, "N", "out", 8, PortType::Gray)) == doctest::Approx(1.0f));
+}
+
+TEST_CASE("expressions: a broken one warns and keeps the stored value; int params round")
+{
+    for (const char* bad : {"Missing.b + 1", "nosuch(1)", "N.b + 1", "1 +"})
+    {
+        CAPTURE(bad);
+        const Plan p = plan(sum(bad), "N", "out", 8, PortType::Gray);
+        REQUIRE_MESSAGE(p.error.empty(), p.error);
+        CHECK_FALSE(p.warnings.empty());
+        CHECK(centre(evaluateCpu(p).outputs.at("out")) == doctest::Approx(0.25f));
+    }
+
+    Graph g = zone(1);
+    g.node("In")->values[kExpressionsKey] = {{"iterations", "1.6 + 1"}};
+    add(g, "Add", "math", {{"operation", "add"}, {"b", 1.0}});
+    textest::link(g, "In.gray", "Add.a");
+    textest::link(g, "Add.out", "Out.gray");
+    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(3.0f));
+}
+
+TEST_CASE("expressions: texSetExpression sets, shows and removes one")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Expr"}}, {"resolution", 16}});
+    run("texAddNode", {{"args", {"Expr", "transform"}}, {"name", "A"}});
+    run("texAddNode", {{"args", {"Expr", "transform"}}, {"name", "B"}});
+    run("texSetValue", {{"args", {"Expr", "A.offsetX", 0.2}}});
+    CHECK(run("texSetExpression", {{"args", {"Expr", "B.offsetX"}}, {"string", "A.offsetX + 0.05"}}).get<double>() == doctest::Approx(0.25));
+    auto param = [](const std::string& node, const std::string& id) {
+        const json info = run("texGraphInfo", {{"args", {"Expr"}}});
+        for (const json& n : info["nodes"])
+            if (n["name"] == node)
+                for (const json& p : n["params"])
+                    if (p["id"] == id)
+                        return p;
+        return json();
+    };
+    CHECK(param("B", "offsetX")["expression"] == "A.offsetX + 0.05");
+    run("texSetValue", {{"args", {"Expr", "A.offsetX", 0.5}}});
+    CHECK(param("B", "offsetX")["value"].get<double>() == doctest::Approx(0.55));
+
+    CHECK_THROWS(run("texSetExpression", {{"args", {"Expr", "B.offsetY"}}, {"string", "Nope.x"}}));
+    CHECK_THROWS(run("texSetExpression", {{"args", {"Expr", "B.input"}}, {"string", "1"}}));
+    CHECK_FALSE(param("B", "offsetY").contains("expression"));
+
+    run("texSetExpression", {{"args", {"Expr", "B.offsetX"}}, {"remove", true}});
+    CHECK_FALSE(param("B", "offsetX").contains("expression"));
+    CHECK(param("B", "offsetX")["value"].get<double>() == doctest::Approx(0.55));
+}
