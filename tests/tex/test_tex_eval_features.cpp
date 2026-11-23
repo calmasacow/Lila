@@ -112,3 +112,29 @@ TEST_CASE("tex eval features: a tiled image reads the prefiltered level instead 
             worst = std::max(worst, std::abs(double(texel(tiled, x, y)[0]) - double(texel(level2, x % 16, y % 16)[0])));
     CHECK(worst < 1e-4);
 }
+
+TEST_CASE("tex eval features: premultiplied alpha divides back out on read")
+{
+    const fs::path dir = tempDir("eval_features_alpha");
+    // Left half premultiplied colour at half alpha, right half fully transparent.
+    image::Image img{2, 1, {0.25f, 0.1f, 0.05f, 0.5f, 0.0f, 0.0f, 0.0f, 0.0f}};
+    const std::string file = writeImage(dir, "premul.exr", img);
+    for (const char* node : {"image", "imageSequence"})
+    {
+        CAPTURE(node);
+        Graph g;
+        add(g, "I", node, {{"file", file}});
+        const image::Image straight = eval(g, "I", "out", 2);
+        CHECK(texel(straight, 0, 0)[0] == doctest::Approx(0.25f));
+        g.node("I")->values["alphaMode"] = "premultiplied";
+        const image::Image fixed = eval(g, "I", "out", 2);
+        CHECK(texel(fixed, 0, 0)[0] == doctest::Approx(0.5f));
+        CHECK(texel(fixed, 0, 0)[1] == doctest::Approx(0.2f));
+        CHECK(texel(fixed, 0, 0)[2] == doctest::Approx(0.1f));
+        CHECK(texel(fixed, 0, 0)[3] == doctest::Approx(0.5f));
+        CHECK(texel(fixed, 1, 0)[0] == doctest::Approx(0.0f));
+        CHECK(texel(fixed, 1, 0)[3] == doctest::Approx(0.0f));
+        // Alpha itself is never changed.
+        CHECK(texel(eval(g, "I", "alpha", 2, PortType::Gray), 0, 0)[0] == doctest::Approx(0.5f));
+    }
+}

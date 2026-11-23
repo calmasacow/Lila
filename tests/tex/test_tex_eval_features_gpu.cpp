@@ -27,7 +27,7 @@ image::Image noiseImage(int w, int h)
 {
     image::Image img{w, h, std::vector<float>(size_t(w) * size_t(h) * 4)};
     for (size_t i = 0; i < img.rgba.size(); ++i)
-        img.rgba[i] = i % 4 == 3 ? float(i / 4 % size_t(w)) / float(w) : float((i * 2654435761u) % 1000u) / 999.0f;
+        img.rgba[i] = i % 4 == 3 ? 0.5f + 0.5f * float(i / 4 % size_t(w)) / float(w) : float((i * 2654435761u) % 1000u) / 999.0f;
     return img;
 }
 
@@ -45,7 +45,7 @@ void matches(const Plan& p, double tol = 5e-3, const EvalOptions& options = {})
 }
 } // namespace
 
-TEST_CASE("tex eval features gpu: mipped image reads match the CPU")
+TEST_CASE("tex eval features gpu: tiled and premultiplied image reads match the CPU")
 {
     if (!haveGpu())
         return;
@@ -58,7 +58,7 @@ TEST_CASE("tex eval features gpu: mipped image reads match the CPU")
             CAPTURE(tiles);
             CAPTURE(node);
             Graph g;
-            add(g, "I", node, {{"file", file}, {"tiles", tiles}});
+            add(g, "I", node, {{"file", file}, {"tiles", tiles}, {"alphaMode", tiles == 3 ? "premultiplied" : "straight"}});
             PlanRequest r;
             r.width = 40;
             r.height = 24;

@@ -79,12 +79,23 @@
         "srgb"
       ],
       "doc": "How the file's colour values are read. linear: as stored, for data maps (roughness, normal, height) and EXR. srgb: decoded from sRGB to linear, for colour maps saved as 8 or 16-bit PNG, JPEG, TGA or TIFF. Alpha is never decoded."
+    },
+    {
+      "id": "alphaMode",
+      "label": "Alpha",
+      "type": "enum",
+      "default": "straight",
+      "options": [
+        "straight",
+        "premultiplied"
+      ],
+      "doc": "How the file stores colour against alpha. straight: colour as is (PNG, TGA, most paint exports). premultiplied: colour already multiplied by alpha (EXR renders), divided back out on read so the output is straight."
     }
   ],
   "cost": 3,
-  "code": "float3 imageSrgbToLinear(float3 c)\n{\n    float3 lo = c / 12.92;\n    float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return lerp(hi, lo, step(c, float3(0.04045)));\n}",
+  "code": "float3 imageSrgbToLinear(float3 c)\n{\n    float3 lo = c / 12.92;\n    float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return lerp(hi, lo, step(c, float3(0.04045)));\n}\nfloat4 imageStraight(float4 c, int alphaMode)\n{\n    return alphaMode == 1 && c.a > 0.0 ? float4(c.rgb / c.a, c.a) : c;\n}",
   "body": {
-    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nfloat4 c = file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy);\nreturn p.colorSpace == 1 ? float4(imageSrgbToLinear(c.rgb), c.a) : c;",
+    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nfloat4 c = imageStraight(file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy), p.alphaMode);\nreturn p.colorSpace == 1 ? float4(imageSrgbToLinear(c.rgb), c.a) : c;",
     "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nreturn file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy).a;"
   }
 }
