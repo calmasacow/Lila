@@ -125,3 +125,125 @@ TEST_CASE("text: a word edit redraws the image but keeps the plan's structure")
     CHECK(textSourceImage(it->name)->width == 64);
 }
 
+namespace
+{
+/** A repeat zone In -> Out with the gray lane starting at start, running passes times. */
+Graph zone(int passes, double start = 0.0)
+{
+    Graph g;
+    add(g, "In", kRepeatInputType, {{"output", "Out"}, {"iterations", passes}, {"gray", start}});
+    add(g, "Out", kRepeatOutputType);
+    return g;
+}
+
+float centre(const image::Image& img) { return texel(img, img.width / 2, img.height / 2)[0]; }
+} // namespace
+
+TEST_CASE("repeat: the body runs Iterations times, each pass reading the last")
+{
+    Graph g = zone(5);
+    add(g, "Add", "math", {{"operation", "add"}, {"b", 0.1}});
+    textest::link(g, "In.gray", "Add.a");
+    textest::link(g, "Add.out", "Out.gray");
+    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(0.5f).epsilon(1e-4));
+
+    g.node("In")->values["iterations"] = 0;
+    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(0.0f));
+
+    // The iteration index: 0 + 1 + 2 + 3.
+    Graph h = zone(4);
+    add(h, "Add", "math", {{"operation", "add"}});
+    textest::link(h, "In.gray", "Add.a");
+    textest::link(h, "In.iteration", "Add.b");
+    textest::link(h, "Add.out", "Out.gray");
+    CHECK(centre(eval(h, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(6.0f));
+}
+
+TEST_CASE("repeat: an unlinked lane carries through; nodes outside the body run once")
+{
+    Graph g = zone(3);
+    g.node("In")->values["color"] = json::array({0.25, 0.5, 0.75, 1.0});
+    add(g, "P", "perlin", {{"scale", 3}});
+    add(g, "Add", "math", {{"operation", "add"}});
+    textest::link(g, "In.gray", "Add.a");
+    textest::link(g, "P.out", "Add.b");
+    textest::link(g, "Add.out", "Out.gray");
+    const image::Image col = eval(g, "Out", "color", 8);
+    CHECK(texel(col, 3, 3)[0] == doctest::Approx(0.25f));
+    CHECK(texel(col, 3, 3)[2] == doctest::Approx(0.75f));
+
+    const Plan p = plan(g, "Out", "gray", 16, PortType::Gray);
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+    int noise = 0, adds = 0;
+    for (const UniformEntry& u : p.params)
+    {
+        noise += u.node == "P" && u.id == "scale";
+        adds += u.node.starts_with("Add#") && u.id == "operation";
+    }
+    CHECK(noise == 1);
+    CHECK(adds == 3);
+
+    Graph once;
+    add(once, "P", "perlin", {{"scale", 3}});
+    const image::Image n = eval(once, "P", "out", 16, PortType::Gray);
+    const image::Image r = evaluateCpu(p).outputs.at("out");
+    CHECK(texel(r, 5, 7)[0] == doctest::Approx(3.0f * texel(n, 5, 7)[0]).epsilon(1e-3));
+}
+
+TEST_CASE("repeat: an iterated transform equals one transform of the summed offset")
+{
+    Graph g = zone(3);
+    add(g, "B", "bricks");
+    add(g, "T", "transform", {{"offsetX", 0.1}});
+    textest::link(g, "B.mask", "In.color");
+    textest::link(g, "In.color", "T.input");
+    textest::link(g, "T.out", "Out.color");
+    Graph one;
+    add(one, "B", "bricks");
+    add(one, "T", "transform", {{"offsetX", 0.3}});
+    textest::link(one, "B.mask", "T.input");
+    CHECK(maxDiff(eval(g, "Out", "color", 64), eval(one, "T", "out", 64)) < 1e-3);
+}
+
+TEST_CASE("repeat: zones nest, and passes stop at the limit")
+{
+    Graph g = zone(3);
+    add(g, "In2", kRepeatInputType, {{"output", "Out2"}, {"iterations", 2}});
+    add(g, "Out2", kRepeatOutputType);
+    add(g, "Add", "math", {{"operation", "add"}, {"b", 1.0}});
+    textest::link(g, "In.gray", "In2.gray");
+    textest::link(g, "In2.gray", "Add.a");
+    textest::link(g, "Add.out", "Out2.gray");
+    textest::link(g, "Out2.gray", "Out.gray");
+    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(6.0f));
+
+    Graph big = zone(500);
+    add(big, "Add", "math", {{"operation", "add"}, {"b", 1.0}});
+    textest::link(big, "In.gray", "Add.a");
+    textest::link(big, "Add.out", "Out.gray");
+    const Plan p = plan(big, "Out", "gray", 8, PortType::Gray);
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+    CHECK_FALSE(p.warnings.empty());
+    CHECK(centre(evaluateCpu(p).outputs.at("out")) == doctest::Approx(float(kMaxRepeatIterations)));
+
+    Graph orphan;
+    add(orphan, "Out", kRepeatOutputType);
+    CHECK_FALSE(plan(orphan, "Out", "gray", 8, PortType::Gray).error.empty());
+}
+
+TEST_CASE("repeat: texAddNode adds the pair, and the graph info lists the zone")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Loop"}}, {"resolution", 16}});
+    const std::string in = run("texAddNode", {{"args", {"Loop", kRepeatInputType}}}).get<std::string>();
+    run("texAddNode", {{"args", {"Loop", "math"}}, {"name", "Add"}});
+    run("texConnect", {{"args", {"Loop", in + ".gray", "Add.a"}}});
+    const json info0 = run("texGraphInfo", {{"args", {"Loop"}}});
+    REQUIRE(info0["zones"].size() == 1);
+    const std::string out = info0["zones"][0]["output"].get<std::string>();
+    run("texConnect", {{"args", {"Loop", "Add.out", out + ".gray"}}});
+    CHECK(run("texGraphInfo", {{"args", {"Loop"}}})["zones"][0]["nodes"] == json::array({"Add"}));
+    run("texDuplicateNodes", {{"args", {"Loop", in, "Add", out}}});
+    CHECK(run("texGraphInfo", {{"args", {"Loop"}}})["zones"].size() == 2);
+}
+

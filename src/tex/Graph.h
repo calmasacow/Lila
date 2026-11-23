@@ -94,4 +94,19 @@ inline constexpr const char* kGroupInputType = "GroupInput";
 inline constexpr const char* kGroupOutputType = "GroupOutput";
 inline constexpr const char* kGroupType = "Group";
 inline constexpr const char* kMaterialOutputType = "materialOutput";
+
+/**
+ * A repeat zone: a Repeat Input naming its Repeat Output in its "output" value (as geometry nodes' zones do), and the
+ * nodes downstream of the one and upstream of the other as its body. The planner unrolls the body once per pass.
+ */
+inline constexpr const char* kRepeatInputType = "RepeatInput";
+inline constexpr const char* kRepeatOutputType = "RepeatOutput";
+inline constexpr int kMaxRepeatIterations = 64;
+
+/** The Repeat Output a Repeat Input pairs with, or null. */
+LILA_SCENE_API const GNode* repeatOutputOf(const Graph& g, const GNode& input);
+/** The Repeat Input pairing with a Repeat Output, or null. */
+LILA_SCENE_API const GNode* repeatInputOf(const Graph& g, const GNode& output);
+/** The zone's body: nodes downstream of input and upstream of output, in graph order. */
+LILA_SCENE_API std::vector<std::string> repeatBody(const Graph& g, const std::string& input, const std::string& output);
 } // namespace lila::tex

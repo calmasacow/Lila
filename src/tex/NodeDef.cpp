@@ -7,6 +7,7 @@
 #include "core/Workspace.h"
 #include "gn/Group.h"
 #include "gn/Routing.h"
+#include "tex/Graph.h"
 
 #include <algorithm>
 #include <fstream>
@@ -21,7 +22,8 @@ namespace fs = std::filesystem;
 
 namespace
 {
-constexpr const char* kKindNames[] = {"slang", "graph", "native", "buffer", "output", "groupInput", "groupOutput", "group", "route"};
+constexpr const char* kKindNames[] = {"slang",       "graph", "native", "buffer",      "output",      "groupInput",
+                                      "groupOutput", "group", "route",  "repeatInput", "repeatOutput"};
 
 std::optional<double> readOptNumber(const json& o, const char* key)
 {
@@ -211,6 +213,49 @@ std::vector<NodeDef> coreDefs()
     receive.label = "Receive";
     receive.doc = "Reads the value of the Send node with its name, without a wire. Takes that value's type.";
     out.push_back(receive);
+
+    const std::vector<PortDecl> lanes = {
+        {"color", PortType::Color, json::array({0.0, 0.0, 0.0, 1.0}), "Color", "Carried from pass to pass.", 1},
+        {"gray", PortType::Gray, json(0.0), "Gray", "Carried from pass to pass.", 1},
+    };
+    NodeDef ri;
+    ri.type = kRepeatInputType;
+    ri.label = "Repeat Input";
+    ri.category = "Utility";
+    ri.doc = "Start of a repeat zone: the nodes between it and Repeat Output run Iterations times, each pass reading what the last one "
+             "gave Repeat Output (the first reads this node's inputs). For iterative warps, smoothing and recursive patterns.";
+    ri.keywords = {"repeat zone", "loop", "iterate", "recursive", "feedback"};
+    ri.kind = NodeKind::RepeatInput;
+    ri.cost = 0;
+    ri.inputs = lanes;
+    ri.outputs = lanes;
+    ri.outputs.push_back({"iteration", PortType::Float, json(), "Iteration", "The pass number, from 0.", 1});
+    for (PortDecl& o : ri.outputs)
+        o.defaultValue = json();
+    ParamDecl iterations;
+    iterations.id = "iterations";
+    iterations.type = ParamType::Int;
+    iterations.defaultValue = 4;
+    iterations.doc = "Passes, up to " + std::to_string(kMaxRepeatIterations) + "; 0 passes the inputs through.";
+    iterations.min = 0.0;
+    iterations.max = double(kMaxRepeatIterations);
+    iterations.softMax = 16.0;
+    ri.params = {iterations};
+    out.push_back(ri);
+    NodeDef ro;
+    ro.type = kRepeatOutputType;
+    ro.label = "Repeat Output";
+    ro.category = "Utility";
+    ro.doc = "End of a repeat zone: what reaches it feeds the next pass, and after the last pass comes out here. An unlinked input "
+             "carries its value through unchanged.";
+    ro.keywords = ri.keywords;
+    ro.kind = NodeKind::RepeatOutput;
+    ro.cost = 0;
+    ro.inputs = lanes;
+    ro.outputs = lanes;
+    for (PortDecl& o : ro.outputs)
+        o.defaultValue = json();
+    out.push_back(ro);
     for (NodeDef& d : out)
         d.tier = "core";
     return out;

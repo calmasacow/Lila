@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/Profile.h"
 #include "gn/Routing.h"
+#include "gn/Zones.h"
 #include "link/UnrealLink.h"
 #include "ops/Command.h"
 #include "ops/CommandOptions.h"
@@ -646,6 +647,16 @@ void registerCommands()
                     n.position = {a.flags["position"][0].get<double>(), a.flags["position"][1].get<double>()};
                 fillBakeBounds(n, s, "texAddNode");
                 g.nodes.push_back(n);
+                // A repeat zone comes as a pair: Repeat Input on the left, its Repeat Output to the right.
+                if (type == kRepeatInputType || type == kRepeatOutputType)
+                {
+                    const bool asInput = type == kRepeatInputType;
+                    GNode other{g.uniqueNodeName(asInput ? kRepeatOutputType : kRepeatInputType), asInput ? kRepeatOutputType : kRepeatInputType,
+                                n.position + glm::dvec2(asInput ? 400.0 : -400.0, 0.0), json::object()};
+                    GNode& in = asInput ? g.nodes.back() : other;
+                    in.values["output"] = asInput ? other.name : n.name;
+                    g.nodes.push_back(other);
+                }
                 return n.name;
             });
         },
@@ -901,6 +912,8 @@ void registerCommands()
                     if (renamed.contains(l.fromNode) && renamed.contains(l.toNode))
                         extra.push_back({renamed[l.fromNode], l.fromSocket, renamed[l.toNode], l.toSocket});
                 g.links.insert(g.links.end(), extra.begin(), extra.end());
+                for (const auto& [old, fresh] : renamed)
+                    gn::retargetZoneCopy(*g.node(fresh), renamed);
                 std::set<std::string> copied;
                 for (auto& [old, fresh] : renamed)
                     copied.insert(old);
@@ -1095,6 +1108,8 @@ void registerCommands()
                 for (const json& l : clip.value("links", json::array()))
                     if (renamed.contains(l[0].get<std::string>()) && renamed.contains(l[2].get<std::string>()))
                         g.links.push_back({renamed[l[0].get<std::string>()], l[1].get<std::string>(), renamed[l[2].get<std::string>()], l[3].get<std::string>()});
+                for (const auto& [old, fresh] : renamed)
+                    gn::retargetZoneCopy(*g.node(fresh), renamed);
                 std::set<std::string> pasted;
                 for (auto& [old, fresh] : renamed)
                     pasted.insert(old);
@@ -1246,7 +1261,11 @@ void registerCommands()
                 if (auto it = problems.find(node.name); it != problems.end())
                     nodes.back()["problem"] = it->second;
             }
-            json out = {{"name", address}, {"definition", g.toJson()}, {"settings", s.toJson()}, {"nodes", nodes}};
+            json zones = json::array();
+            for (const GNode& node : g.nodes)
+                if (const GNode* o = repeatOutputOf(g, node))
+                    zones.push_back({{"input", node.name}, {"output", o->name}, {"kind", "Repeat"}, {"nodes", repeatBody(g, node.name, o->name)}});
+            json out = {{"name", address}, {"definition", g.toJson()}, {"settings", s.toJson()}, {"nodes", nodes}, {"zones", zones}};
             // A group evaluates as part of the set, so only the set's graph has a plan of its own.
             if (inGroup)
                 return out;

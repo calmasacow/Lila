@@ -61,6 +61,9 @@ enum class NodeKind : uint8_t
     Group,
     /** Reroutes and portals (gn/Routing.h): spliced out before planning. */
     Route,
+    /** The two ends of a repeat zone (Graph.h): the planner unrolls the nodes between them. */
+    RepeatInput,
+    RepeatOutput,
 };
 
 LILA_SCENE_API const char* nodeKindName(NodeKind k);

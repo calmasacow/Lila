@@ -37,3 +37,21 @@ TEST_CASE("text gpu: the Text node matches the CPU evaluator")
     matchesCpu(g, "T", "out", PortType::Color);
 }
 
+TEST_CASE("repeat gpu: an iterated warp and blur match the CPU evaluator")
+{
+    if (!textGpu())
+        return;
+    Graph g;
+    add(g, "B", "bricks");
+    add(g, "W", "perlin", {{"scale", 3}});
+    add(g, "In", kRepeatInputType, {{"output", "Out"}, {"iterations", 6}});
+    add(g, "Out", kRepeatOutputType);
+    add(g, "Warp", "warp", {{"intensity", 0.5}});
+    add(g, "Blur", "blur", {{"radius", 0.01}});
+    textest::link(g, "B.mask", "In.color");
+    textest::link(g, "In.color", "Warp.input");
+    textest::link(g, "W.out", "Warp.warp");
+    textest::link(g, "Warp.out", "Blur.input");
+    textest::link(g, "Blur.out", "Out.color");
+    matchesCpu(g, "Out", "color", PortType::Color);
+}

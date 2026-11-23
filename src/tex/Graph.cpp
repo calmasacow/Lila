@@ -1,5 +1,6 @@
 #include "tex/Graph.h"
 
+#include <set>
 #include <stdexcept>
 
 namespace lila::tex
@@ -214,6 +215,51 @@ const GNode* Graph::firstOfType(std::string_view type) const
         if (x.type == type)
             return &x;
     return nullptr;
+}
+
+const GNode* repeatOutputOf(const Graph& g, const GNode& input)
+{
+    if (input.type != kRepeatInputType)
+        return nullptr;
+    auto it = input.values.find("output");
+    if (it == input.values.end() || !it->is_string())
+        return nullptr;
+    const GNode* out = g.node(it->get<std::string>());
+    return out && out->type == kRepeatOutputType ? out : nullptr;
+}
+
+const GNode* repeatInputOf(const Graph& g, const GNode& output)
+{
+    for (const GNode& n : g.nodes)
+        if (repeatOutputOf(g, n) == &output)
+            return &n;
+    return nullptr;
+}
+
+std::vector<std::string> repeatBody(const Graph& g, const std::string& input, const std::string& output)
+{
+    auto reach = [&](const std::string& from, bool down) {
+        std::set<std::string> seen;
+        std::vector<std::string> stack = {from};
+        while (!stack.empty())
+        {
+            const std::string cur = stack.back();
+            stack.pop_back();
+            for (const GLink& l : g.links)
+            {
+                const std::string& next = down ? l.toNode : l.fromNode;
+                if ((down ? l.fromNode : l.toNode) == cur && seen.insert(next).second)
+                    stack.push_back(next);
+            }
+        }
+        return seen;
+    };
+    const std::set<std::string> below = reach(input, true), above = reach(output, false);
+    std::vector<std::string> out;
+    for (const GNode& n : g.nodes)
+        if (n.name != input && n.name != output && below.contains(n.name) && above.contains(n.name))
+            out.push_back(n.name);
+    return out;
 }
 
 std::string Graph::uniqueNodeName(std::string_view base) const

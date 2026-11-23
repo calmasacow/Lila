@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -78,7 +79,20 @@ struct Scope
     std::map<std::string, std::unique_ptr<Scope>> children;
     std::set<std::string> visiting;
     int depth = 0;
+    /** Appended to the paths of nodes flattened here: a repeat pass's "#k". */
+    std::string suffix;
+    /** A repeat pass: its zone's body resolves here, every other node in parent (once for all passes). */
+    Scope* parent = nullptr;
+    std::set<std::string> body;
+    std::string repeatInput;
+    /** The zone input's outputs during this pass. */
+    std::map<std::string, Ref> lanes;
+    /** Unrolled zones by Repeat Output, with their passes' scopes. */
+    std::map<std::string, std::map<std::string, Ref>> repeats;
+    std::vector<std::unique_ptr<Scope>> passes;
 };
+
+constexpr int kRepeatPassesPerBuffer = 8;
 
 const std::vector<std::pair<std::string, PortType>> kStandard = {
     {"baseColor", PortType::Color}, {"roughness", PortType::Gray},   {"metallic", PortType::Gray}, {"normal", PortType::Color},
@@ -218,7 +232,7 @@ private:
         child->owned = std::make_unique<Graph>(Graph::fromJson(ports.graph));
         resolveRouting(*child->owned);
         child->g = child->owned.get();
-        child->prefix = s.prefix + n.name + "/";
+        child->prefix = s.prefix + n.name + s.suffix + "/";
         child->depth = s.depth + 1;
         // A graph node's own subgroups resolve inside it; a Group node shares its parent's.
         if (child->owned->subgroups.empty())
@@ -239,8 +253,59 @@ private:
         return *slot;
     }
 
+    /** Unrolls a repeat zone: its body flattened once per pass, each pass reading the last one's results. */
+    const std::map<std::string, Ref>& unroll(Scope& s, const GNode& out, const NodePorts& outPorts)
+    {
+        if (auto it = s.repeats.find(out.name); it != s.repeats.end())
+            return it->second;
+        const GNode* in = repeatInputOf(*s.g, out);
+        if (!in)
+            throw std::invalid_argument(s.prefix + out.name + ": no Repeat Input pairs with it");
+        const NodePorts inPorts = portsOf(*s.g, *in);
+        if (!inPorts.error.empty())
+            throw std::invalid_argument(s.prefix + in->name + ": " + inPorts.error);
+        const json count = valueFor(s, *in, "iterations", inPorts.param("iterations")->defaultValue);
+        int passes = count.is_number() ? int(std::lround(count.get<double>())) : 0;
+        if (passes > kMaxRepeatIterations)
+            mPlan.warnings.push_back(s.prefix + in->name + ": " + std::to_string(passes) + " iterations, running the most, " +
+                                     std::to_string(kMaxRepeatIterations));
+        passes = std::clamp(passes, 0, kMaxRepeatIterations);
+
+        std::map<std::string, Ref> lanes;
+        for (const PortDecl& lane : inPorts.inputs)
+            lanes[lane.id] = resolveInput(s, *in, lane);
+        const std::vector<std::string> bodyNames = repeatBody(*s.g, in->name, out.name);
+        for (int k = 0; k < passes; ++k)
+        {
+            auto pass = std::make_unique<Scope>();
+            pass->g = s.g;
+            pass->prefix = s.prefix;
+            pass->suffix = s.suffix + "#" + std::to_string(k);
+            pass->groupInputs = s.groupInputs;
+            pass->overrides = s.overrides;
+            pass->depth = s.depth;
+            pass->parent = &s;
+            pass->body = {bodyNames.begin(), bodyNames.end()};
+            pass->repeatInput = in->name;
+            pass->lanes = lanes;
+            pass->lanes["iteration"] = constantRef(s.prefix + in->name + pass->suffix, "iteration", PortType::Float, json(k));
+            for (const PortDecl& lane : outPorts.inputs)
+                if (!s.g->linksInto(out.name, lane.id).empty())
+                    lanes[lane.id] = resolveInput(*pass, out, lane);
+            // Every few passes the lanes go to buffers, so no pass fuses more than that many copies of the body.
+            if ((k + 1) % kRepeatPassesPerBuffer == 0 && k + 1 < passes)
+                for (const auto& [id, r] : lanes)
+                    if (!r.constant() && !r.uv)
+                        mRepeatCuts.push_back(r);
+            s.passes.push_back(std::move(pass));
+        }
+        return s.repeats[out.name] = lanes;
+    }
+
     Ref resolveOutput(Scope& s, const std::string& nodeName, const std::string& socket)
     {
+        if (s.parent && nodeName != s.repeatInput && !s.body.contains(nodeName))
+            return resolveOutput(*s.parent, nodeName, socket);
         const GNode* n = s.g->node(nodeName);
         if (!n)
             throw std::invalid_argument(s.prefix + ": no node " + nodeName);
@@ -273,6 +338,17 @@ private:
         }
         if (kind == NodeKind::Output || kind == NodeKind::GroupOutput)
             throw std::invalid_argument(s.prefix + nodeName + " has no outputs");
+        if (kind == NodeKind::RepeatInput)
+        {
+            if (nodeName == s.repeatInput)
+                return s.lanes.at(socket);
+            // Read outside its zone, or with no zone: the values it starts from, at pass 0.
+            if (const PortDecl* lane = ports.input(socket))
+                return resolveInput(s, *n, *lane);
+            return constantRef(s.prefix + nodeName + s.suffix, socket, out->type, json(0.0));
+        }
+        if (kind == NodeKind::RepeatOutput)
+            return unroll(s, *n, ports).at(socket);
         return {flatten(s, *n, ports), socket, out->type, -1};
     }
 
@@ -283,7 +359,7 @@ private:
         if (!s.visiting.insert(n.name).second)
             throw std::invalid_argument(s.prefix + n.name + ": the graph has a cycle through it");
         FlatNode f;
-        f.path = s.prefix + n.name;
+        f.path = s.prefix + n.name + s.suffix;
         f.def = ports.def;
         f.ports = ports;
         for (const PortDecl& in : ports.inputs)
@@ -407,6 +483,8 @@ private:
                 refs[r.ref.key()] = r.ref;
             }
 
+        for (const Ref& r : mRepeatCuts)
+            buffer(r, "repeat passes");
         for (size_t i = 0; i < mNodes.size(); ++i)
         {
             const FlatNode& n = mNodes[i];
@@ -1158,6 +1236,8 @@ private:
     std::map<std::string, int> mBufferOf;
     std::map<std::string, int> mImageBuffer;
     std::map<std::string, int> mExternalBuffer;
+    /** Repeat lanes buffered between groups of passes. */
+    std::vector<Ref> mRepeatCuts;
 };
 } // namespace
 
