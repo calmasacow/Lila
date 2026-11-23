@@ -1249,9 +1249,20 @@ private:
             mPlan.outputs[root.name] = b;
         }
 
+        // Mip levels pack below level 0, so only buffers every node reads through sampleImage (which knows the layout) get them.
+        std::set<int> plainReads;
+        for (const auto& [key, b] : mImageBuffer)
+        {
+            const FlatNode& n = mNodes[size_t(std::stoi(key.substr(0, key.find('.'))))];
+            const std::string id = key.substr(key.find('.') + 1);
+            for (const auto& [out, text] : n.def->body)
+                for (size_t at = text.find(id + ".sample("); at != std::string::npos; at = text.find(id + ".sample(", at + 1))
+                    if (at == 0 || !(std::isalnum(static_cast<unsigned char>(text[at - 1])) || text[at - 1] == '_' || text[at - 1] == '.'))
+                        plainReads.insert(b);
+        }
         for (const Pass& p : mPlan.passes)
             for (int b : p.reads)
-                if (BufferDesc& d = mPlan.buffers[size_t(b)]; d.kind == BufferKind::Image && p.kind == PassKind::Fused &&
+                if (BufferDesc& d = mPlan.buffers[size_t(b)]; d.kind == BufferKind::Image && p.kind == PassKind::Fused && !plainReads.contains(b) &&
                                                               std::find(p.local.begin(), p.local.end(), b) == p.local.end() && !p.reach.contains(b))
                     d.mips = true;
     }
