@@ -20,6 +20,7 @@ add_executable(lila_tex_tests
     test_tex_layer_clipboard.cpp
     test_tex_material_from_maps.cpp
     test_tex_more_nodes.cpp
+    test_tex_natives_more.cpp
     test_tex_ptex.cpp
     test_tex_patch_fill.cpp
     test_tex_patch_fill_seams.cpp
