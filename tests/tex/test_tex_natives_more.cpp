@@ -64,3 +64,12 @@ TEST_CASE("tex natives more: histogram shift wraps")
     CHECK(constantThrough("histogramShift", 0.3, {{"position", 0.8}}) == doctest::Approx(0.1));
     CHECK(constantThrough("histogramShift", 1.0, {{"position", 0.0}}) == doctest::Approx(1.0));
 }
+
+TEST_CASE("tex natives more: histogram select keeps a band")
+{
+    auto value = constantThrough;
+    CHECK(value("histogramSelect", 0.5, json::object()) == doctest::Approx(1.0));
+    CHECK(value("histogramSelect", 0.9, json::object()) == doctest::Approx(0.0));
+    CHECK(value("histogramSelect", 0.55, {{"contrast", 0.0}}) == doctest::Approx(0.6));
+    CHECK(value("histogramSelect", 0.6, {{"contrast", 1.0}}) == doctest::Approx(1.0));
+}
