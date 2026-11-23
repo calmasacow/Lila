@@ -66,6 +66,7 @@ TexMaterial texToMaterial(TexMaterial m) { return m; }
 float4 texStore(float v) { return float4(v, v, v, 1.0); }
 float4 texStore(float3 v) { return float4(v, 1.0); }
 float4 texStore(float4 c) { return c; }
+float4 texQuantize8(float4 c) { return round(saturate(c) * 255.0) / 255.0; }
 
 float4 texFetchBuf(uint slot, int2 p)
 {

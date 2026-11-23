@@ -226,6 +226,19 @@ json nodeJson(const GNode& n, const Graph& g, const SetSettings& s)
     j["inputs"] = ins;
     j["outputs"] = outs;
     j["params"] = prms;
+    if (p.def && (p.def->kind == NodeKind::Slang || p.def->kind == NodeKind::Native || p.def->kind == NodeKind::Buffer))
+    {
+        json settings = json::array();
+        for (const NodeSetting& ns : nodeSettings())
+            settings.push_back({{"id", ns.id},
+                                {"type", "enum"},
+                                {"label", ns.label},
+                                {"options", ns.options},
+                                {"default", ns.defaultValue},
+                                {"value", n.values.contains(ns.id) ? n.values[ns.id] : json(ns.defaultValue)},
+                                {"doc", ns.doc}});
+        j["settings"] = settings;
+    }
     // The group a Group node runs, as geometry nodes list theirs: a choice among the set's groups.
     if (n.type == kGroupType)
     {
@@ -734,7 +747,9 @@ void registerCommands()
     ops::registerCommand({
         .name = "texSetValue",
         .doc = "Set a parameter or an unlinked input: texSetValue(set, 'Noise.scale', 8), texSetValue(set, 'Blend.mode', 'multiply'). "
-               "GroupInput.<input> sets an exposed input's default. Value edits never recompile the graph.",
+               "GroupInput.<input> sets an exposed input's default. Value edits never recompile the graph. Every computing node also "
+               "takes outputSize (eighth, quarter, half, set, double, quadruple: its resolution against the set's) and bitDepth (set, 8, "
+               "16, 32), which give it buffers of its own: texSetValue(set, 'Blur.outputSize', 'half').",
         .positionalDoc = "set node.id value",
         .run = [](const Args& a) -> json {
             auto [nn, id] = splitPlug(positionalString(a, 1, "texSetValue", "node.id"), "texSetValue");
@@ -776,6 +791,17 @@ void registerCommands()
                 if (n.type == kGroupType && id == "group")
                 {
                     n.values[id] = value;
+                    return nullptr;
+                }
+                if (const NodeSetting* ns = nodeSetting(id);
+                    ns && p.def && (p.def->kind == NodeKind::Slang || p.def->kind == NodeKind::Native || p.def->kind == NodeKind::Buffer))
+                {
+                    if (!value.is_string() || std::find(ns->options.begin(), ns->options.end(), value.get<std::string>()) == ns->options.end())
+                        throw CommandError("texSetValue: " + id + " takes one of " + joinIds(ns->options) + ", got " + value.dump());
+                    if (value.get<std::string>() == ns->defaultValue)
+                        n.values.erase(id);
+                    else
+                        n.values[id] = value;
                     return nullptr;
                 }
                 if (gn::isRoutingType(n.type) && id == "name")

@@ -113,6 +113,98 @@ TEST_CASE("tex eval features: a tiled image reads the prefiltered level instead 
     CHECK(worst < 1e-4);
 }
 
+TEST_CASE("tex eval features: a node at half size runs at half size and reads back bilinear")
+{
+    Graph g;
+    add(g, "P", "perlin", {{"scale", 3}, {"seed", 2}});
+    const image::Image small = eval(g, "P", "out", 32);
+    g.node("P")->values["outputSize"] = "half";
+    Plan p = plan(g, "P", "out", 64);
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+    bool halfBuffer = false;
+    for (const BufferDesc& b : p.buffers)
+        halfBuffer |= b.kind == BufferKind::Intermediate && b.width == 32 && b.height == 32;
+    CHECK(halfBuffer);
+    const image::Image big = evaluateCpu(p).outputs.at("out");
+    REQUIRE(big.width == 64);
+    auto at = [&](int x, int y) { return texel(small, (x + 32) % 32, (y + 32) % 32)[0]; };
+    double worst = 0.0;
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x)
+        {
+            const float px = float(x) / 2.0f - 0.25f, py = float(y) / 2.0f - 0.25f;
+            const int ix = int(std::floor(px)), iy = int(std::floor(py));
+            const float tx = px - float(ix), ty = py - float(iy);
+            const float top = at(ix, iy) * (1 - tx) + at(ix + 1, iy) * tx;
+            const float bottom = at(ix, iy + 1) * (1 - tx) + at(ix + 1, iy + 1) * tx;
+            worst = std::max(worst, std::abs(double(top * (1 - ty) + bottom * ty) - double(texel(big, x, y)[0])));
+        }
+    CHECK(worst < 1e-4);
+
+    g.node("P")->values["outputSize"] = "double";
+    Plan twice = plan(g, "P", "out", 64);
+    bool doubled = false;
+    for (const BufferDesc& b : twice.buffers)
+        doubled |= b.kind == BufferKind::Intermediate && b.width == 128;
+    CHECK(doubled);
+
+    g.node("P")->values["outputSize"] = "huge";
+    CHECK_FALSE(plan(g, "P", "out", 64).warnings.empty());
+}
+
+TEST_CASE("tex eval features: bit depth stores the node's output at 8 or 32 bits")
+{
+    Graph g;
+    add(g, "P", "perlin", {{"scale", 3}, {"seed", 2}});
+    add(g, "L", "levels");
+    link(g, "P.out", "L.input");
+    g.node("P")->values["bitDepth"] = "8";
+    Plan p = plan(g, "L", "out", 32);
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+    const BufferDesc* own = nullptr;
+    for (const BufferDesc& b : p.buffers)
+        if (b.name == "P.out")
+            own = &b;
+    REQUIRE(own);
+    CHECK(own->format == "rgba16f");
+    const image::Image stepped = eval(g, "P", "out", 32);
+    for (size_t i = 0; i < stepped.rgba.size(); ++i)
+        CHECK(std::abs(stepped.rgba[i] * 255.0f - std::round(stepped.rgba[i] * 255.0f)) < 1e-3f);
+
+    g.node("P")->values["bitDepth"] = "32";
+    for (const BufferDesc& b : plan(g, "L", "out", 32).buffers)
+        if (b.name == "P.out")
+            CHECK(b.format == "rgba32f");
+}
+
+TEST_CASE("tex eval features: node settings set through texSetValue and listed with the node")
+{
+    run("newScene");
+    run("texCreateSet", {{"args", {"Sz"}}, {"resolution", 16}});
+    run("texAddNode", {{"args", {"Sz", "perlin"}}, {"name", "P"}});
+    run("texSetValue", {{"args", {"Sz", "P.outputSize", "quarter"}}});
+    run("texSetValue", {{"args", {"Sz", "P.bitDepth", "16"}}});
+    CHECK_THROWS(run("texSetValue", {{"args", {"Sz", "P.bitDepth", "12"}}}));
+    const json info = run("texGraphInfo", args({"Sz"}));
+    json node;
+    for (const json& n : info["nodes"])
+        if (n["name"] == "P")
+            node = n;
+    REQUIRE(node.contains("settings"));
+    std::map<std::string, json> values;
+    for (const json& s : node["settings"])
+        values[s["id"]] = s["value"];
+    CHECK(values["outputSize"] == "quarter");
+    CHECK(values["bitDepth"] == "16");
+    // Back to the default leaves no value behind.
+    run("texSetValue", {{"args", {"Sz", "P.outputSize", "set"}}});
+    for (const json& n : run("texGraphInfo", args({"Sz"}))["nodes"])
+        if (n["name"] == "P")
+            for (const json& s : n["settings"])
+                if (s["id"] == "outputSize")
+                    CHECK(s["value"] == "set");
+}
+
 TEST_CASE("tex eval features: premultiplied alpha divides back out on read")
 {
     const fs::path dir = tempDir("eval_features_alpha");

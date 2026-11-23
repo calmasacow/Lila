@@ -1142,7 +1142,17 @@ QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose
             addInput(form, w, in, set, expose);
         v->addLayout(form);
     }
-    if (params.empty() && !anyInput)
+    const json settings = node.value("settings", json::array());
+    if (!settings.empty())
+    {
+        v->addWidget(heading(w, "Output"));
+        auto* form = new QFormLayout();
+        form->setContentsMargins(0, 0, 0, 0);
+        for (const json& s : settings)
+            addParam(form, w, s, set, node);
+        v->addLayout(form);
+    }
+    if (params.empty() && !anyInput && settings.empty())
         v->addWidget(dimLabel(w, "No settings."));
     return w;
 }

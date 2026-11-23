@@ -45,6 +45,28 @@ void matches(const Plan& p, double tol = 5e-3, const EvalOptions& options = {})
 }
 } // namespace
 
+TEST_CASE("tex eval features gpu: nodes at their own size and bit depth match the CPU")
+{
+    if (!haveGpu())
+        return;
+    for (const char* size : {"quarter", "half", "set", "double"})
+        for (const char* bits : {"set", "8", "32"})
+        {
+            CAPTURE(size);
+            CAPTURE(bits);
+            Graph g;
+            add(g, "P", "perlin", {{"scale", 3}, {"seed", 4}, {"outputSize", size}, {"bitDepth", bits}});
+            add(g, "B", "blur", {{"radius", 0.03}, {"outputSize", size}});
+            add(g, "L", "levels");
+            link(g, "P.out", "B.input");
+            link(g, "B.out", "L.input");
+            PlanRequest r;
+            r.width = r.height = 48;
+            r.outputs = {{"out", "L", "out", PortType::Color, {}}, {"p", "P", "out", PortType::Color, {}}};
+            matches(buildPlan(g, r));
+        }
+}
+
 TEST_CASE("tex eval features gpu: tiled and premultiplied image reads match the CPU")
 {
     if (!haveGpu())

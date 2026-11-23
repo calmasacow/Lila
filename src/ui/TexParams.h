@@ -25,9 +25,9 @@ using ParamActionFn = std::function<QAction*(const std::string& id, QWidget* own
 /**
  * Editors for one node as texGraphInfo lists it ("nodes" entry): its parameters (float and int sliders, enums, bools,
  * colour swatches, gradient and curve editors, seeds with a randomise button, image pickers, code editors, scene node pickers),
- * then its unlinked inputs. A graph node's parameters are its exposed ones. Every edit goes to set. node's "set", when given,
- * names the texture set, for editors that read its bake (a camera picker filling position-map bounds). An empty title
- * (no title, label or type) leaves the heading out.
+ * then its unlinked inputs, then its "settings" (output size and bit depth) under Output. A graph node's parameters are its
+ * exposed ones. Every edit goes to set. node's "set", when given, names the texture set, for editors that read its bake (a
+ * camera picker filling position-map bounds). An empty title (no title, label or type) leaves the heading out.
  */
 LILA_UI_API QWidget* nodePanel(QWidget* parent, const json& node, SetFn set, ExposeFn expose = {}, ParamActionFn paramAction = {});
 

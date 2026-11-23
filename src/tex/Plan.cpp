@@ -57,6 +57,11 @@ struct FlatNode
     std::map<std::string, json> values;
     std::vector<Ref> inputs;
     std::map<std::string, int> paramSlot;
+    /** Node settings: its buffers are the plan's size times 2^sizeShift; bits 0 keeps the plan's format. */
+    int sizeShift = 0;
+    int bits = 0;
+
+    bool ownBuffers() const { return sizeShift != 0 || bits != 0; }
 };
 
 struct Root
@@ -67,7 +72,27 @@ struct Root
     std::string field;
     /** The ref is already in a buffer of another type: the pass converts what it reads from there. */
     bool fromBuffer = false;
+    /** Stores 8-bit steps. */
+    bool quantize = false;
 };
+
+const std::vector<NodeSetting> kNodeSettings = {
+    {"outputSize", "Size", {"eighth", "quarter", "half", "set", "double", "quadruple"}, "set", "Resolution of the node's output against the set's."},
+    {"bitDepth", "Bit Depth", {"set", "8", "16", "32"}, "set", "Bits per channel the node's output is stored at; set keeps the set's."},
+};
+
+/** The option index a node's value picks for a setting, -1 when it has none or an unknown one. */
+int settingIndex(const json& values, const char* id)
+{
+    const NodeSetting* s = nodeSetting(id);
+    auto it = values.find(id);
+    if (!s || it == values.end() || !it->is_string())
+        return -1;
+    auto at = std::find(s->options.begin(), s->options.end(), it->get<std::string>());
+    return at == s->options.end() ? -1 : int(at - s->options.begin());
+}
+
+int scaledSize(int size, int shift) { return std::clamp(int(std::ldexp(double(size), shift)), 1, std::max(size, 16384)); }
 
 struct Scope
 {
@@ -438,6 +463,16 @@ private:
             f.values[p.id] = v;
             f.paramSlot[p.id] = newSlots(f.path, p.id, paramSlots(p.type));
         }
+        if (f.def && (f.def->kind == NodeKind::Slang || f.def->kind == NodeKind::Native || f.def->kind == NodeKind::Buffer))
+        {
+            if (const int i = settingIndex(n.values, "outputSize"); i >= 0)
+                f.sizeShift = i - 3;
+            if (const int i = settingIndex(n.values, "bitDepth"); i > 0)
+                f.bits = std::stoi(kNodeSettings[1].options[size_t(i)]);
+            for (const NodeSetting& ns : kNodeSettings)
+                if (n.values.contains(ns.id) && settingIndex(n.values, ns.id.c_str()) < 0)
+                    mPlan.warnings.push_back(f.path + "." + ns.id + ": " + n.values[ns.id].dump() + " isn't one of its options, using " + ns.defaultValue);
+        }
         s.visiting.erase(n.name);
         int index = int(mNodes.size());
         mNodes.push_back(std::move(f));
@@ -554,6 +589,10 @@ private:
             if (n.def->kind == NodeKind::Native || n.def->kind == NodeKind::Buffer)
                 for (const PortDecl& o : n.ports.outputs)
                     buffer({int(i), o.id, o.type, -1}, "native");
+            if (n.ownBuffers())
+                for (const PortDecl& o : n.ports.outputs)
+                    if (o.type != PortType::Material)
+                        buffer({int(i), o.id, o.type, -1}, "node settings");
             for (size_t k = 0; k < n.inputs.size(); ++k)
             {
                 const Ref& src = n.inputs[k];
@@ -1055,7 +1094,8 @@ private:
         src << "\n[shader(\"compute\")]\n[numthreads(8, 8, 1)]\nvoid texMain(uint3 id : SV_DispatchThreadID)\n{\n"
             << "    uint w = uint(gPass.res.x);\n    uint h = uint(gPass.res.y);\n    if (id.x >= w || id.y >= h)\n        return;\n"
             << "    float2 uv = gPass.uv.xy + float2((float(id.x) + 0.5) * gPass.res.z, 1.0 - (float(id.y) + 0.5) * gPass.res.w) * gPass.uv.zw;\n"
-            << "    gOut[id.y * w + id.x] = texStore(" << convFn(root.store) << "(" << value << "));\n}\n";
+            << "    gOut[id.y * w + id.x] = " << (root.quantize ? "texQuantize8(" : "") << "texStore(" << convFn(root.store) << "(" << value << "))"
+            << (root.quantize ? ")" : "") << ";\n}\n";
 
         for (const std::string& k : reads)
             readsOut.push_back(mBufferOf.at(k));
@@ -1153,8 +1193,15 @@ private:
         });
         for (const Ref& r : order)
         {
-            std::string name = r.constant() ? "constant" + std::to_string(r.slot) : mNodes[size_t(r.node)].path + "." + r.socket;
-            mBufferOf[r.key()] = addBuffer(BufferKind::Intermediate, name, r.type, mPlan.width, mPlan.height);
+            const FlatNode* n = r.constant() ? nullptr : &mNodes[size_t(r.node)];
+            std::string name = n ? n->path + "." + r.socket : "constant" + std::to_string(r.slot);
+            const int shift = n ? n->sizeShift : 0;
+            const int b = addBuffer(BufferKind::Intermediate, name, r.type, scaledSize(mPlan.width, shift), scaledSize(mPlan.height, shift));
+            if (n && n->bits)
+                mPlan.buffers[size_t(b)].format = n->bits == 32 ? "rgba32f" : "rgba16f";
+            if (n && n->bits == 8 && n->def->kind == NodeKind::Native)
+                mPlan.warnings.push_back(name + ": a native node's output keeps 16 bits; 8-bit steps come from fused nodes only");
+            mBufferOf[r.key()] = b;
         }
         for (const Ref& r : order)
         {
@@ -1164,6 +1211,7 @@ private:
             else
             {
                 Root root{"", r, r.type, {}};
+                root.quantize = !r.constant() && mNodes[size_t(r.node)].bits == 8;
                 p.source = passSource(root, p.reads, &p.slots, &p.local, &p.reach);
                 p.hash = hash64(p.source);
                 p.node = r.constant() ? "constant" : mNodes[size_t(r.node)].path;
@@ -1177,7 +1225,8 @@ private:
         for (const Root& root : mRoots)
         {
             auto it = mBufferOf.find(root.ref.key());
-            if (it != mBufferOf.end() && root.field.empty() && storageCompatible(root.ref.type, root.store) && !claimed.contains(it->second))
+            if (it != mBufferOf.end() && root.field.empty() && storageCompatible(root.ref.type, root.store) && !claimed.contains(it->second) &&
+                mPlan.buffers[size_t(it->second)].width == mPlan.width && mPlan.buffers[size_t(it->second)].height == mPlan.height)
             {
                 BufferDesc& b = mPlan.buffers[size_t(it->second)];
                 b.kind = BufferKind::Output;
@@ -1325,6 +1374,16 @@ uint64_t hash64(std::string_view data, uint64_t seed)
 }
 
 const std::vector<std::pair<std::string, PortType>>& standardChannels() { return kStandard; }
+
+const std::vector<NodeSetting>& nodeSettings() { return kNodeSettings; }
+
+const NodeSetting* nodeSetting(std::string_view id)
+{
+    for (const NodeSetting& s : kNodeSettings)
+        if (s.id == id)
+            return &s;
+    return nullptr;
+}
 
 std::vector<OutputRequest> materialRequests(const Graph& g, const std::vector<std::pair<std::string, PortType>>& channels)
 {

@@ -162,6 +162,23 @@ struct LILA_SCENE_API Plan
     json summary() const;
 };
 
+/**
+ * A setting every computing node (Slang, native, Buffer) takes besides its parameters, kept in its values by id. A node with
+ * one off its default caches its outputs in buffers of its own: outputSize scales them against the plan's size (eighth to
+ * quadruple), bitDepth stores them at 8 (quantized to 1/255 by fused passes), 16 or 32 bits instead of the plan's format.
+ */
+struct NodeSetting
+{
+    std::string id;
+    std::string label;
+    std::vector<std::string> options;
+    std::string defaultValue;
+    std::string doc;
+};
+LILA_SCENE_API const std::vector<NodeSetting>& nodeSettings();
+/** Null when id names no node setting. */
+LILA_SCENE_API const NodeSetting* nodeSetting(std::string_view id);
+
 /** The standard material channels a Material Output has, in order, with their port types. */
 LILA_SCENE_API const std::vector<std::pair<std::string, PortType>>& standardChannels();
 
