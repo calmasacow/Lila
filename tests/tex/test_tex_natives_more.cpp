@@ -84,6 +84,32 @@ TEST_CASE("tex natives more: auto levels stretches to the full range")
     CHECK(kernelGap("autoLevels", l, "N.out") < 1e-5);
 }
 
+TEST_CASE("tex natives more: equalize spreads a skewed ramp evenly")
+{
+    // Squared: most texels are dark. Equalized, each column's value is about its share of the columns before it.
+    Graph g = ramp("float v = 0.1 + 0.8 * uv.x * uv.x; return float4(v, v, v, 1.0);");
+    add(g, "N", "equalize");
+    link(g, "Src.out", "N.input");
+    image::Image img = at64(g, "N.out");
+    for (int x : {24, 32, 48, 60})
+    {
+        CAPTURE(x);
+        CHECK(texel(img, x, 7)[0] == doctest::Approx((float(x) + 0.5f) / 64.0f).epsilon(0.04));
+    }
+    for (int x = 1; x < 64; ++x)
+        CHECK(texel(img, x, 7)[0] >= texel(img, x - 1, 7)[0]);
+
+    add(g, "C", "equalize", {{"mode", "perChannel"}});
+    link(g, "Src.out", "C.input");
+    CHECK(maxDiff(img, at64(g, "C.out")) < 1e-3);
+
+    Graph c = ramp("return float4(uv.x * uv.x, uv.y, 0.5 * uv.x, 1.0);");
+    add(c, "N", "equalize", {{"mode", "perChannel"}});
+    link(c, "Src.out", "N.input");
+    CHECK(kernelGap("equalize", g, "N.out") < 1e-5);
+    CHECK(kernelGap("equalize", c, "N.out") < 1e-5);
+}
+
 TEST_CASE("tex natives more: histogram shift wraps")
 {
     CHECK(constantThrough("histogramShift", 0.3, {{"position", 0.5}}) == doctest::Approx(0.8));

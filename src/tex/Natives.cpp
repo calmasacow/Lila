@@ -187,6 +187,44 @@ void autoLevelsCpu(const NativeCall& c)
     }
 }
 
+constexpr int kEqualizeBins = 256;
+
+int equalizeBin(float v) { return std::clamp(int(std::floor(v * float(kEqualizeBins))), 0, kEqualizeBins - 1); }
+
+void equalizeCpu(const NativeCall& c)
+{
+    LILA_ZONE();
+    std::vector<float> src = fitted(c, "input");
+    std::vector<float> in = withLuminance(c);
+    std::vector<std::array<float, 4>> count(kEqualizeBins, {0.0f, 0.0f, 0.0f, 0.0f}), below = count;
+    for (size_t i = 0; i < in.size(); i += 4)
+        for (int ch = 0; ch < 4; ++ch)
+            count[size_t(equalizeBin(in[i + ch]))][size_t(ch)] += 1.0f;
+    for (int b = 1; b < kEqualizeBins; ++b)
+        for (int ch = 0; ch < 4; ++ch)
+            below[size_t(b)][size_t(ch)] = below[size_t(b - 1)][size_t(ch)] + count[size_t(b - 1)][size_t(ch)];
+    const float total = float(c.output.width * c.output.height);
+    auto map = [&](float v, int ch) {
+        const int b = equalizeBin(v);
+        const float t = std::clamp(v * float(kEqualizeBins) - float(b), 0.0f, 1.0f);
+        return (below[size_t(b)][size_t(ch)] + t * count[size_t(b)][size_t(ch)]) / total;
+    };
+    const bool luminance = int(c.param("mode")) == 0;
+    for (size_t i = 0; i < in.size(); i += 4)
+    {
+        float* o = &c.output.rgba[i];
+        const float l = map(in[i + 3], 3);
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            if (!luminance)
+                o[ch] = map(in[i + ch], ch);
+            else
+                o[ch] = in[i + 3] > 1e-5f ? std::clamp(in[i + ch] * (l / in[i + 3]), 0.0f, 1.0f) : l;
+        }
+        o[3] = src[i + 3];
+    }
+}
+
 // Distance -------------------------------------------------------------------------------------------------------
 
 /** Squared distance transform of f along a line of n samples spaced s apart, wrapping (three copies). */
@@ -515,7 +553,7 @@ const std::map<std::string, std::string>& kernelFiles()
 {
     static const std::map<std::string, std::string> m = {{"blur", "blur"},   {"floodFill", "floodFill"}, {"distance", "distance"},
                                                          {"dilate", "morphology"}, {"erode", "morphology"}, {"ambientOcclusion", "ambientOcclusion"},
-                                                         {"normalToHeight", "normalToHeight"}, {"autoLevels", "autoLevels"}};
+                                                         {"normalToHeight", "normalToHeight"}, {"autoLevels", "autoLevels"}, {"equalize", "equalize"}};
     return m;
 }
 } // namespace
@@ -583,6 +621,13 @@ NativeSchedule nativeSchedule(const std::string& type, int width, int height, co
         const int rows = firstScratch, all = firstScratch + 1;
         s.scratch = {{2, h}, {2, 1}};
         s.steps = {step("rangeRows", rows, 1, h), step("rangeAll", all, 1, 1, slot(rows)), step("levelsOut", out, w, h, slot(all))};
+    }
+    else if (type == "equalize")
+    {
+        const int rows = firstScratch, hist = firstScratch + 1, below = firstScratch + 2;
+        s.scratch = {{256, h}, {256, 1}, {256, 1}};
+        s.steps = {step("histogramRows", rows, 1, h), step("histogramSum", hist, 256, 1, slot(rows)),
+                   step("histogramBelow", below, 1, 1, slot(hist)), step("equalizeOut", out, w, h, slot(hist), slot(below))};
     }
     else if (type == "ambientOcclusion")
         s.steps = {step("occlusion", out, w, h)};
@@ -749,5 +794,6 @@ void addBuiltinNatives(std::map<std::string, NativeCpuFn>& table)
     table["ambientOcclusion"] = aoCpu;
     table["normalToHeight"] = normalToHeightCpu;
     table["autoLevels"] = autoLevelsCpu;
+    table["equalize"] = equalizeCpu;
 }
 } // namespace lila::tex
