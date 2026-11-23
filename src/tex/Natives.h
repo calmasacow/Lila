@@ -13,7 +13,8 @@
 #include <vector>
 
 /**
- * Native (multi-pass) texture nodes: blur, flood fill, distance, dilate, erode, ambient occlusion and normal to height.
+ * Native (multi-pass) texture nodes: blur, flood fill, distance, dilate, erode, ambient occlusion, normal to height
+ * and auto levels.
  * Each has a C++ implementation the CPU evaluator runs, and a GPU form: Slang kernels in
  * <resources>/texnodes/natives/<file>.slang run in the order nativeSchedule() gives.
  *

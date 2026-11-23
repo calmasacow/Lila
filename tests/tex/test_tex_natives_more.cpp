@@ -58,6 +58,32 @@ double kernelGap(const std::string& type, const Graph& g, const std::string& fro
 }
 } // namespace
 
+TEST_CASE("tex natives more: auto levels stretches to the full range")
+{
+    Graph g = ramp("return float4(0.25 + 0.5 * uv.x, 0.1 + 0.2 * uv.y, 0.5, 0.7);");
+    add(g, "N", "autoLevels");
+    link(g, "Src.out", "N.input");
+    image::Image img = at64(g, "N.out");
+    CHECK(texel(img, 0, 5)[0] == doctest::Approx(0.0).epsilon(1e-4));
+    CHECK(texel(img, 63, 5)[0] == doctest::Approx(1.0).epsilon(1e-4));
+    CHECK(texel(img, 5, 63)[1] == doctest::Approx(0.0).epsilon(1e-4));
+    CHECK(texel(img, 5, 0)[1] == doctest::Approx(1.0).epsilon(1e-4));
+    // A flat channel has no range to stretch and alpha is never touched.
+    CHECK(texel(img, 20, 20)[2] == doctest::Approx(0.5));
+    CHECK(texel(img, 20, 20)[3] == doctest::Approx(0.7));
+
+    Graph l = ramp("float v = 0.3 + 0.4 * uv.x; return float4(v, v, v, 1.0);");
+    add(l, "N", "autoLevels", {{"mode", "luminance"}});
+    link(l, "Src.out", "N.input");
+    image::Image lum = at64(l, "N.out");
+    CHECK(texel(lum, 0, 9)[0] == doctest::Approx(0.0).epsilon(1e-3));
+    CHECK(texel(lum, 63, 9)[1] == doctest::Approx(1.0).epsilon(1e-3));
+    CHECK(texel(lum, 32, 9)[2] == doctest::Approx(32.0 / 63.0).epsilon(1e-3));
+
+    CHECK(kernelGap("autoLevels", g, "N.out") < 1e-5);
+    CHECK(kernelGap("autoLevels", l, "N.out") < 1e-5);
+}
+
 TEST_CASE("tex natives more: histogram shift wraps")
 {
     CHECK(constantThrough("histogramShift", 0.3, {{"position", 0.5}}) == doctest::Approx(0.8));

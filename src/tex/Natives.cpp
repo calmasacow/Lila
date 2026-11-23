@@ -152,6 +152,41 @@ void floodFillCpu(const NativeCall& c)
     store(c, out);
 }
 
+// Auto levels and equalize ---------------------------------------------------------------------------------------
+
+/** The input on the output's grid with its luminance in alpha, as the kernels read it. */
+std::vector<float> withLuminance(const NativeCall& c)
+{
+    std::vector<float> v = fitted(c, "input");
+    for (size_t i = 0; i < v.size(); i += 4)
+        v[i + 3] = v[i] * 0.2126f + v[i + 1] * 0.7152f + v[i + 2] * 0.0722f;
+    return v;
+}
+
+float stretch(float v, float lo, float hi) { return hi - lo > 1e-6f ? (v - lo) / (hi - lo) : v; }
+
+void autoLevelsCpu(const NativeCall& c)
+{
+    LILA_ZONE();
+    std::vector<float> src = fitted(c, "input");
+    std::vector<float> in = withLuminance(c);
+    float lo[4] = {1e30f, 1e30f, 1e30f, 1e30f}, hi[4] = {-1e30f, -1e30f, -1e30f, -1e30f};
+    for (size_t i = 0; i < in.size(); i += 4)
+        for (int ch = 0; ch < 4; ++ch)
+        {
+            lo[ch] = std::min(lo[ch], in[i + ch]);
+            hi[ch] = std::max(hi[ch], in[i + ch]);
+        }
+    const bool luminance = int(c.param("mode")) == 1;
+    for (size_t i = 0; i < src.size(); i += 4)
+    {
+        float* o = &c.output.rgba[i];
+        for (int ch = 0; ch < 3; ++ch)
+            o[ch] = luminance ? std::clamp(stretch(src[i + ch], lo[3], hi[3]), 0.0f, 1.0f) : stretch(src[i + ch], lo[ch], hi[ch]);
+        o[3] = src[i + 3];
+    }
+}
+
 // Distance -------------------------------------------------------------------------------------------------------
 
 /** Squared distance transform of f along a line of n samples spaced s apart, wrapping (three copies). */
@@ -480,7 +515,7 @@ const std::map<std::string, std::string>& kernelFiles()
 {
     static const std::map<std::string, std::string> m = {{"blur", "blur"},   {"floodFill", "floodFill"}, {"distance", "distance"},
                                                          {"dilate", "morphology"}, {"erode", "morphology"}, {"ambientOcclusion", "ambientOcclusion"},
-                                                         {"normalToHeight", "normalToHeight"}};
+                                                         {"normalToHeight", "normalToHeight"}, {"autoLevels", "autoLevels"}};
     return m;
 }
 } // namespace
@@ -542,6 +577,12 @@ NativeSchedule nativeSchedule(const std::string& type, int width, int height, co
             src = dst;
         }
         s.steps.push_back(step("jumpResolve", out, w, h, slot(src)));
+    }
+    else if (type == "autoLevels")
+    {
+        const int rows = firstScratch, all = firstScratch + 1;
+        s.scratch = {{2, h}, {2, 1}};
+        s.steps = {step("rangeRows", rows, 1, h), step("rangeAll", all, 1, 1, slot(rows)), step("levelsOut", out, w, h, slot(all))};
     }
     else if (type == "ambientOcclusion")
         s.steps = {step("occlusion", out, w, h)};
@@ -707,5 +748,6 @@ void addBuiltinNatives(std::map<std::string, NativeCpuFn>& table)
     table["erode"] = morphologyCpu<false>;
     table["ambientOcclusion"] = aoCpu;
     table["normalToHeight"] = normalToHeightCpu;
+    table["autoLevels"] = autoLevelsCpu;
 }
 } // namespace lila::tex
