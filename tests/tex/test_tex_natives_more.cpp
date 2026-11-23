@@ -125,3 +125,65 @@ TEST_CASE("tex natives more: histogram select keeps a band")
     CHECK(value("histogramSelect", 0.55, {{"contrast", 0.0}}) == doctest::Approx(0.6));
     CHECK(value("histogramSelect", 0.6, {{"contrast", 1.0}}) == doctest::Approx(1.0));
 }
+
+TEST_CASE("tex natives more: fill to index numbers each brick")
+{
+    Graph g = bricksInto("fillToIndex");
+    image::Image img = at64(g, "N.out");
+    std::set<int> values;
+    for (size_t i = 0; i < img.rgba.size(); i += 4)
+        if (img.rgba[i] > 0.0f)
+            values.insert(int(std::lround(img.rgba[i] * 8.0f)));
+    CHECK(values == std::set<int>{1, 2, 3, 4, 5, 6, 7, 8});
+    // Mortar is outside every region.
+    CHECK(texel(img, 0, 0)[0] == 0.0f);
+    CHECK(kernelGap("fillToIndex", g, "N.out") < 1e-6);
+}
+
+TEST_CASE("tex natives more: fill to position and bounding box size")
+{
+    image::Image pos = at64(bricksInto("fillToPosition"), "N.out");
+    // The brick covering texel (16, 8) spans the left half of the top row.
+    CHECK(texel(pos, 16, 8)[0] == doctest::Approx(0.25).epsilon(0.03));
+    CHECK(texel(pos, 16, 8)[1] == doctest::Approx(1.0 - 8.0 / 64.0).epsilon(0.03));
+    CHECK(texel(pos, 5, 3)[0] == texel(pos, 16, 8)[0]);
+    CHECK(texel(pos, 5, 3)[1] == texel(pos, 16, 8)[1]);
+    CHECK(texel(pos, 48, 40)[0] == doctest::Approx(0.75).epsilon(0.03));
+    CHECK(texel(pos, 48, 40)[1] == doctest::Approx(1.0 - 40.0 / 64.0).epsilon(0.03));
+
+    Graph g = bricksInto("fillToBoundingBoxSize");
+    image::Image width = at64(g, "N.width");
+    image::Image height = at64(g, "N.height");
+    CHECK(texel(width, 16, 8)[0] > 0.4f);
+    CHECK(texel(width, 16, 8)[0] < 0.5f);
+    CHECK(texel(height, 16, 8)[0] > 0.18f);
+    CHECK(texel(height, 16, 8)[0] < 0.25f);
+    CHECK(texel(width, 0, 0)[0] == 0.0f);
+}
+
+TEST_CASE("tex natives more: flood fill mapper stamps the pattern into each region")
+{
+    image::Image full = at64(bricksInto("floodFillMapper"), "N.out");
+    image::Image index = at64(bricksInto("fillToIndex"), "N.out");
+    for (size_t i = 0; i < full.rgba.size(); i += 4)
+        CHECK(full.rgba[i] == (index.rgba[i] > 0.0f ? 1.0f : 0.0f));
+
+    // Half size: the centre of each brick keeps the pattern, its corners lose it.
+    image::Image half = at64(bricksInto("floodFillMapper", {{"size", 0.5}}), "N.out");
+    CHECK(texel(half, 16, 8)[0] == 1.0f);
+    CHECK(texel(half, 4, 3)[0] == 0.0f);
+
+    // A gradient pattern runs across each brick from its left edge.
+    Graph g = bricksInto("floodFillMapper");
+    add(g, "G", "gradient");
+    link(g, "G.out", "N.pattern");
+    image::Image ramped = at64(g, "N.out");
+    CHECK(texel(ramped, 30, 8)[0] > texel(ramped, 4, 8)[0]);
+
+    image::Image varied = at64(bricksInto("floodFillMapper", {{"valueRandom", 1.0}, {"seed", 3}}), "N.out");
+    std::set<float> values;
+    for (size_t i = 0; i < varied.rgba.size(); i += 4)
+        if (index.rgba[i] > 0.0f)
+            values.insert(varied.rgba[i]);
+    CHECK(values.size() == 8);
+}

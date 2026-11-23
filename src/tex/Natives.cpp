@@ -152,6 +152,44 @@ void floodFillCpu(const NativeCall& c)
     store(c, out);
 }
 
+/** Flood fill regions numbered in row order of their keys (helpers/fill.slang), as (index + 1) / count. */
+void fillToIndexCpu(const NativeCall& c)
+{
+    LILA_ZONE();
+    const int w = c.output.width, h = c.output.height;
+    std::vector<float> in = fitted(c, "input");
+    const size_t n = size_t(w) * size_t(h);
+    std::vector<int> key(n, -1);
+    std::vector<uint8_t> marked(n, 0);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            const float* e = px(in, w, x, y);
+            const float b[4] = {std::round(e[0]), std::round(e[1]), std::round(e[2]), std::round(e[3])};
+            if (b[2] < b[0] || b[3] < b[1])
+                continue;
+            const int k = wrapi(y + int(b[1]), h) * w + wrapi(x + int(b[0]), w);
+            key[size_t(y) * w + x] = k;
+            marked[size_t(k)] = 1;
+        }
+    std::vector<int> index(n, 0);
+    int count = 0;
+    for (size_t i = 0; i < n; ++i)
+    {
+        index[i] = count;
+        count += marked[i];
+    }
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            const int k = key[size_t(y) * w + x];
+            if (k < 0)
+                storeGray(c, x, y, 0.0f);
+            else
+                storeGray(c, x, y, (float(index[size_t(k)]) + 1.0f) / float(std::max(count, 1)));
+        }
+}
+
 // Auto levels and equalize ---------------------------------------------------------------------------------------
 
 /** The input on the output's grid with its luminance in alpha, as the kernels read it. */
@@ -553,7 +591,8 @@ const std::map<std::string, std::string>& kernelFiles()
 {
     static const std::map<std::string, std::string> m = {{"blur", "blur"},   {"floodFill", "floodFill"}, {"distance", "distance"},
                                                          {"dilate", "morphology"}, {"erode", "morphology"}, {"ambientOcclusion", "ambientOcclusion"},
-                                                         {"normalToHeight", "normalToHeight"}, {"autoLevels", "autoLevels"}, {"equalize", "equalize"}};
+                                                         {"normalToHeight", "normalToHeight"}, {"fillToIndex", "fillToIndex"},
+                                                         {"autoLevels", "autoLevels"}, {"equalize", "equalize"}};
     return m;
 }
 } // namespace
@@ -615,6 +654,13 @@ NativeSchedule nativeSchedule(const std::string& type, int width, int height, co
             src = dst;
         }
         s.steps.push_back(step("jumpResolve", out, w, h, slot(src)));
+    }
+    else if (type == "fillToIndex")
+    {
+        const int marks = firstScratch, rows = firstScratch + 1, offsets = firstScratch + 2;
+        s.scratch = {{w, h}, {w + 1, h}, {1, h + 1}};
+        s.steps = {step("indexClear", marks, w, h), step("indexMark", marks, w, h), step("indexRows", rows, 1, h, slot(marks)),
+                   step("indexOffsets", offsets, 1, 1, slot(rows)), step("indexOut", out, w, h, slot(rows), slot(offsets))};
     }
     else if (type == "autoLevels")
     {
@@ -793,6 +839,7 @@ void addBuiltinNatives(std::map<std::string, NativeCpuFn>& table)
     table["erode"] = morphologyCpu<false>;
     table["ambientOcclusion"] = aoCpu;
     table["normalToHeight"] = normalToHeightCpu;
+    table["fillToIndex"] = fillToIndexCpu;
     table["autoLevels"] = autoLevelsCpu;
     table["equalize"] = equalizeCpu;
 }
