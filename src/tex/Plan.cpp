@@ -861,29 +861,29 @@ private:
         {
             if ((at > 0 && (word(text[at - 1]) || text[at - 1] == '.')) || (at + id.size() < text.size() && word(text[at + id.size()])))
                 continue;
-            std::string rest = text.substr(at + id.size(), 64);
-            // An image read with its wrap and filter args reads the same texels at uv, unless cubic filtering widens it.
-            char end = ')';
-            if (rest.starts_with(".sampleImage("))
+            const std::string rest = text.substr(at + id.size(), 64);
+            // An image read's wrap, filter and footprint args leave it reading the texels at uv, unless cubic filtering widens it.
+            const bool image = rest.starts_with(".sampleImage(");
+            if (image)
             {
                 auto it = n.values.find("filter");
                 if (it != n.values.end() && ((it->second.is_string() && it->second.get<std::string>() == "cubic") ||
                                              (it->second.is_number() && it->second.get<int>() == 2)))
                     return false;
-                rest = ".sample(" + rest.substr(std::strlen(".sampleImage("));
-                end = ',';
             }
-            if (rest.starts_with(std::string(".sample(uv") + end))
+            const std::string method = image ? ".sampleImage(" : ".sample(";
+            const std::string end = image ? "," : ")";
+            if (rest.starts_with(method + "uv" + end))
                 continue;
             bool scaled = false;
-            for (const char* form : {".sample(uv * float(p.", ".sample(uv * p."})
-                if (rest.starts_with(form))
+            for (const std::string scale : {"uv * float(p.", "uv * p."})
+                if (const std::string form = method + scale; rest.starts_with(form))
                 {
-                    const size_t from = std::strlen(form);
+                    const size_t from = form.size();
                     size_t to = from;
                     while (to < rest.size() && word(rest[to]))
                         ++to;
-                    const std::string close = std::string(std::string(form).find("float(") != std::string::npos ? ")" : "") + end;
+                    const std::string close = (scale.find("float(") != std::string::npos ? ")" : "") + end;
                     scaled = rest.compare(to, close.size(), close) == 0 && unitParam(rest.substr(from, to - from));
                 }
             if (!scaled)
@@ -1007,10 +1007,10 @@ private:
                 if (p.type == ParamType::Image)
                 {
                     int b = mImageBuffer.at(std::to_string(i) + "." + p.id);
-                    const auto slot = mPlan.buffers[size_t(b)].slot;
+                    const std::string slot = std::to_string(mPlan.buffers[size_t(b)].slot);
                     src << "struct " << tag << "_s_" << p.id << " : ITexImage\n{\n    float4 sample(float2 uv) { return texReadBuf(" << slot
-                        << ", uv); }\n    float4 sampleImage(float2 uv, int wrap, int filter) { return texReadImage(" << slot
-                        << ", uv, wrap, filter); }\n};\n";
+                        << ", uv); }\n    float4 sampleImage(float2 uv, int wrap, int filter, float2 dx, float2 dy) { return texReadImage(" << slot
+                        << ", uv, wrap, filter, dx, dy); }\n};\n";
                     readsOut.push_back(b);
                 }
             for (const std::string& e : n.def->externals)
@@ -1199,6 +1199,12 @@ private:
             mPlan.passes.push_back(std::move(p));
             mPlan.outputs[root.name] = b;
         }
+
+        for (const Pass& p : mPlan.passes)
+            for (int b : p.reads)
+                if (BufferDesc& d = mPlan.buffers[size_t(b)]; d.kind == BufferKind::Image && p.kind == PassKind::Fused &&
+                                                              std::find(p.local.begin(), p.local.end(), b) == p.local.end() && !p.reach.contains(b))
+                    d.mips = true;
     }
 
     void packParam(const ParamDecl& p, const json& v, int slot)
@@ -1284,7 +1290,7 @@ private:
             structure.push_back({p.hash, p.output, p.reads});
         json bufs = json::array();
         for (const BufferDesc& b : mPlan.buffers)
-            bufs.push_back({int(b.kind), b.kind == BufferKind::Image ? std::string() : b.name, int(b.type), b.width, b.height, b.format, b.slot});
+            bufs.push_back({int(b.kind), b.kind == BufferKind::Image ? std::string() : b.name, int(b.type), b.width, b.height, b.format, b.slot, b.mips});
         json all = {{"passes", structure}, {"buffers", bufs}, {"slots", mPlan.uniformSlots}, {"outputs", mPlan.outputs}};
         mPlan.structureHash = hash64(all.dump());
     }
@@ -1354,7 +1360,7 @@ json Plan::summary() const
     static const char* kinds[] = {"intermediate", "output", "image", "external"};
     for (const BufferDesc& b : buffers)
         buffersJ.push_back({{"id", b.id}, {"kind", kinds[int(b.kind)]}, {"name", b.name}, {"type", portTypeName(b.type)}, {"width", b.width},
-                            {"height", b.height}, {"format", b.format}});
+                            {"height", b.height}, {"format", b.format}, {"mips", b.mips}});
     json out = {{"passes", passesJ},  {"buffers", buffersJ}, {"uniformSlots", uniformSlots}, {"structureHash", std::to_string(structureHash)},
                 {"outputs", outputs}, {"width", width},      {"height", height}};
     if (!error.empty())

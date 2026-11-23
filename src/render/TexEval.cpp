@@ -568,7 +568,7 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 std::error_code ec;
                 const fs::file_time_type time = fs::last_write_time(path, ec);
                 // Cached per plan size: each plan keeps only the copy it samples, not the whole file.
-                const std::string key = path.string() + "@" + std::to_string(plan.width) + "x" + std::to_string(plan.height);
+                const std::string key = path.string() + "@" + std::to_string(plan.width) + "x" + std::to_string(plan.height) + (b.mips ? "+mips" : "");
                 std::optional<LoadedImage> cached;
                 {
                     std::scoped_lock lock(m->mutex);
@@ -581,7 +581,10 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                     image::Image read = tex::fitSourceImage(tex::readSourceFile(path, plan.width, plan.height, &err), b.name, plan.width, plan.height, kMaxImageTexels, &fitted);
                     if (read.width > 0)
                     {
-                        cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted};
+                        uint32_t flags = 0;
+                        if (b.mips)
+                            read = tex::withMipLevels(read, flags);
+                        cached = LoadedImage{time, std::make_shared<const image::Image>(std::move(read)), fitted, flags};
                         std::scoped_lock lock(m->mutex);
                         m->imageCache[key] = *cached;
                     }
@@ -591,6 +594,8 @@ std::string Evaluator::setPlan(Plan plan, Inputs inputs, std::vector<StoreTarget
                 if (cached)
                 {
                     img = cached->image;
+                    if (cached->flags)
+                        prep->imageFlags[b.id] = cached->flags;
                     if (!cached->warning.empty())
                         warnings.push_back(cached->warning);
                 }

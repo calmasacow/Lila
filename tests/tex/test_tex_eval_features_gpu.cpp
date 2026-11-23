@@ -1,0 +1,69 @@
+#include "TexTest.h"
+
+#include "core/Paths.h"
+#include "render/Renderer.h"
+#include "render/TexEval.h"
+
+#include <filesystem>
+
+using namespace textest;
+using namespace lila::render;
+
+namespace
+{
+namespace fs = std::filesystem;
+
+bool haveGpu()
+{
+    Renderer& r = Renderer::get();
+    if (r.running() || r.start())
+        return true;
+    MESSAGE("no GPU for texture graph GPU tests");
+    return false;
+}
+
+/** Noise texels, alpha a ramp. */
+image::Image noiseImage(int w, int h)
+{
+    image::Image img{w, h, std::vector<float>(size_t(w) * size_t(h) * 4)};
+    for (size_t i = 0; i < img.rgba.size(); ++i)
+        img.rgba[i] = i % 4 == 3 ? float(i / 4 % size_t(w)) / float(w) : float((i * 2654435761u) % 1000u) / 999.0f;
+    return img;
+}
+
+void matches(const Plan& p, double tol = 5e-3, const EvalOptions& options = {})
+{
+    REQUIRE_MESSAGE(p.error.empty(), p.error);
+    EvalResult cpu = evaluateCpu(p, options);
+    EvalResult gpu = texgpu::evaluate(p, options);
+    for (const auto& [name, img] : cpu.outputs)
+    {
+        CAPTURE(name);
+        REQUIRE(gpu.outputs.contains(name));
+        CHECK(maxDiff(img, gpu.outputs.at(name)) < tol);
+    }
+}
+} // namespace
+
+TEST_CASE("tex eval features gpu: mipped image reads match the CPU")
+{
+    if (!haveGpu())
+        return;
+    const fs::path dir = tempDir("eval_features_gpu_mips");
+    const std::string file = paths::toUtf8(dir / "noise.exr");
+    image::write(file, noiseImage(40, 24), 32);
+    for (int tiles : {1, 2, 3, 5})
+        for (const char* node : {"image", "imageSequence"})
+        {
+            CAPTURE(tiles);
+            CAPTURE(node);
+            Graph g;
+            add(g, "I", node, {{"file", file}, {"tiles", tiles}});
+            PlanRequest r;
+            r.width = 40;
+            r.height = 24;
+            r.outputs = {{"out", "I", "out", PortType::Color, {}}, {"alpha", "I", "alpha", PortType::Gray, {}}};
+            Plan p = buildPlan(g, r);
+            matches(p);
+        }
+}

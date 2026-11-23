@@ -18,7 +18,8 @@
       "type": "vector",
       "label": "UV",
       "implicit": "uv",
-      "doc": "Where to read the image: the mesh's uvs unless linked (Projection, Mapping)."
+      "doc": "Where to read the image: the mesh's uvs unless linked (Projection, Mapping).",
+      "reach": 1
     }
   ],
   "outputs": [
@@ -44,7 +45,7 @@
       "default": 1,
       "min": 1,
       "softMax": 16,
-      "doc": "Repeats across the texture."
+      "doc": "Repeats across the texture. Repeated or read through a scaled UV, the image is read from prefiltered smaller copies, so detail finer than a texel averages instead of aliasing."
     },
     {
       "id": "wrap",
@@ -83,7 +84,7 @@
   "cost": 3,
   "code": "float3 imageSrgbToLinear(float3 c)\n{\n    float3 lo = c / 12.92;\n    float3 hi = pow(max((c + 0.055) / 1.055, float3(0.0)), float3(2.4));\n    return lerp(hi, lo, step(c, float3(0.04045)));\n}",
   "body": {
-    "out": "float4 c = file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter);\nreturn p.colorSpace == 1 ? float4(imageSrgbToLinear(c.rgb), c.a) : c;",
-    "alpha": "return file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter).a;"
+    "out": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nfloat4 c = file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy);\nreturn p.colorSpace == 1 ? float4(imageSrgbToLinear(c.rgb), c.a) : c;",
+    "alpha": "float2 at = coord.sample(uv).xy * float(p.tiles);\nfloat2 dx = texWrapDelta(coord.sample(uv + float2(texel().x, 0.0)).xy * float(p.tiles) - at);\nfloat2 dy = texWrapDelta(coord.sample(uv + float2(0.0, texel().y)).xy * float(p.tiles) - at);\nreturn file.sampleImage(coord.sample(uv).xy * float(p.tiles), p.wrap, p.filter, dx, dy).a;"
   }
 }

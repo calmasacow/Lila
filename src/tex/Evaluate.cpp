@@ -120,6 +120,26 @@ image::Image fitSourceImage(image::Image img, const std::string& name, int planW
     return image::downsampled(img, w, h);
 }
 
+image::Image withMipLevels(const image::Image& img, uint32_t& flags)
+{
+    flags = 0;
+    if (img.width <= 0 || img.height <= 0 || (img.width == 1 && img.height == 1) || img.height >= (1 << 24))
+        return img;
+    std::vector<float> texels = img.rgba;
+    image::Image level = img;
+    uint32_t levels = 1;
+    while ((level.width > 1 || level.height > 1) && levels < 31)
+    {
+        level = image::downsampled(level, std::max(1, level.width / 2), std::max(1, level.height / 2));
+        texels.insert(texels.end(), level.rgba.begin(), level.rgba.end());
+        ++levels;
+    }
+    image::Image out{img.width, int((texels.size() / 4 + size_t(img.width) - 1) / size_t(img.width)), std::move(texels)};
+    out.rgba.resize(size_t(out.width) * size_t(out.height) * 4, 0.0f);
+    flags = (levels << 2) | (uint32_t(img.height) << 8);
+    return out;
+}
+
 fs::path resolveImagePath(const std::string& path, const fs::path& root)
 {
     fs::path p(path);
@@ -184,6 +204,7 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
     std::vector<image::Image> sourced(plan.buffers.size());
     std::vector<size_t> offset(plan.buffers.size());
     std::vector<std::pair<int, int>> size(plan.buffers.size());
+    std::vector<uint32_t> flags(plan.buffers.size(), 0);
     size_t total = 0;
     for (const BufferDesc& b : plan.buffers)
     {
@@ -201,6 +222,8 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
                     result.warnings.push_back("image " + b.name + ": " + (err.empty() ? "can't read" : err));
                 img = {1, 1, {0.0f, 0.0f, 0.0f, 1.0f}};
             }
+            if (b.mips)
+                img = withMipLevels(img, flags[size_t(b.id)]);
             sourced[size_t(b.id)] = std::move(img);
         }
         else if (b.kind == BufferKind::External)
@@ -247,7 +270,7 @@ EvalResult evaluateCpu(const Plan& plan, const EvalOptions& options)
         uniforms.assign(4, 0.0f);
     for (const BufferDesc& b : plan.buffers)
     {
-        const uint32_t d[4] = {uint32_t(offset[size_t(b.id)]), uint32_t(size[size_t(b.id)].first), uint32_t(size[size_t(b.id)].second), 0u};
+        const uint32_t d[4] = {uint32_t(offset[size_t(b.id)]), uint32_t(size[size_t(b.id)].first), uint32_t(size[size_t(b.id)].second), flags[size_t(b.id)]};
         std::memcpy(&uniforms[size_t(b.slot) * 4], d, sizeof(d));
     }
 

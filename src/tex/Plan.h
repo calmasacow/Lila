@@ -61,6 +61,11 @@ struct BufferDesc
     std::string format = "rgba16f";
     /** The gU slot of its descriptor. */
     int slot = -1;
+    /**
+     * Image: a pass reads it away from its own uv (tiled, scaled, warped), so the evaluator packs mip levels after it
+     * (withMipLevels in Evaluate.h) and sampleImage reads the level the footprint covers.
+     */
+    bool mips = false;
 };
 
 enum class PassKind : uint8_t

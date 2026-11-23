@@ -4,6 +4,7 @@ add_executable(lila_tex_tests
     test_brush_stroke_methods.cpp
     test_tex_commands.cpp
     test_tex_eval.cpp
+    test_tex_eval_features.cpp
     test_tex_files.cpp
     test_tex_graph.cpp
     test_tex_layers.cpp
@@ -48,6 +49,7 @@ add_executable(lila_tex_gpu_tests
     test_tex_volumes.cpp
     test_thumbs_live_viewport.cpp
     test_tex_gpu.cpp
+    test_tex_eval_features_gpu.cpp
     test_tex_paint.cpp
     test_tex_paint_symmetry.cpp
     test_tex_paint_tools.cpp

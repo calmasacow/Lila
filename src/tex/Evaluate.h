@@ -96,6 +96,12 @@ LILA_SCENE_API image::Image fitSourceImage(image::Image img, const std::string& 
 /** An Image node's file read for a plan: an SVG is drawn at the plan's size, so its edges stay sharp; anything else as stored. */
 LILA_SCENE_API image::Image readSourceFile(const std::filesystem::path& path, int planWidth, int planHeight, std::string* err);
 
+/**
+ * An Image buffer's texels with its mip levels (each half the last, area averaged, down to 1 x 1) packed after it, one
+ * level after another, as width-wide rows. flags receives the descriptor flags texReadImage reads them by.
+ */
+LILA_SCENE_API image::Image withMipLevels(const image::Image& img, uint32_t& flags);
+
 /** The GPU evaluator the renderer installs: evaluate throws like evaluateCpu; available says whether a GPU can run it. */
 struct GpuEvaluator
 {
