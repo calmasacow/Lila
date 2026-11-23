@@ -37,7 +37,7 @@ TexGraphPreview::TexGraphPreview(NodeEditor& editor, QWidget* parent) : QWidget(
 {
     setObjectName("texGraphPreview");
     auto* v = new QVBoxLayout(this);
-    v->setContentsMargins(8, 4, 8, 4);
+    v->setContentsMargins(10, 4, 10, 4);
     v->setSpacing(4);
 
     auto* bar = new QHBoxLayout();

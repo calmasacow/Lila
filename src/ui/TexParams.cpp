@@ -801,6 +801,7 @@ void addParam(QFormLayout* form, QWidget* parent, const json& p, const SetFn& se
         spin->setRange(0, 1 << 30);
         spin->setValue(value.is_number() ? int(value.get<double>()) : 0);
         spin->setKeyboardTracking(false);
+        spin->setAlignment(Qt::AlignRight);
         QObject::connect(spin, &QSpinBox::valueChanged, spin, [changed](int v) { changed(v); });
         auto* dice = new QToolButton(row);
         dice->setIcon(icon("dice"));

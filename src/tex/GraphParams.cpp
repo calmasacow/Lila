@@ -140,7 +140,10 @@ std::string uniqueParamName(const Graph& g, const std::string& base)
             return c;
 }
 
-bool validParamName(const std::string& n) { return !n.empty() && n.find('/') == std::string::npos && n.find('.') == std::string::npos; }
+bool validParamName(const std::string& n)
+{
+    return !n.empty() && n.front() != '@' && n.find('/') == std::string::npos && n.find('.') == std::string::npos;
+}
 } // namespace
 
 void registerParamCommands()
@@ -173,7 +176,7 @@ void registerParamCommands()
                     throw CommandError("texExposeParam: " + plug + " is already the parameter '" + in.name + "'");
             const std::string base = a.get<std::string>("name", id);
             if (!validParamName(base))
-                throw CommandError("texExposeParam: '" + base + "' can't name a parameter (no / or .)");
+                throw CommandError("texExposeParam: '" + base + "' can't name a parameter (no / or ., no leading @)");
             GraphInput in;
             in.name = uniqueParamName(g, base);
             in.param = true;
