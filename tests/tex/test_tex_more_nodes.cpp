@@ -452,6 +452,81 @@ TEST_CASE("tex more nodes: the third batch compiles and evaluates, with its valu
     CHECK(reflected[1] == doctest::Approx(1.0));
 }
 
+TEST_CASE("tex more nodes: the fourth batch compiles and evaluates, with its values")
+{
+    for (const char* type : {"fractalSum", "streaks", "fibers", "cobblestones", "tileRandom", "integer", "time", "panner", "rotator"})
+    {
+        INFO(type);
+        const tex::NodeDef* def = tex::findNode(type);
+        REQUIRE(def);
+        Graph g;
+        add(g, "N", type);
+        Plan p = plan(into(g, "N." + def->outputs.front().id), "Output", "baseColor", 8);
+        REQUIRE_MESSAGE(p.error.empty(), p.error);
+        CHECK(evaluateCpu(p).outputs.at("out").width == 8);
+    }
+    for (const char* base : {"perlin", "value", "simplex", "cells"})
+    {
+        INFO(base);
+        Graph g;
+        add(g, "F", "fractalSum", {{"base", base}});
+        image::Image img = eval(into(g, "F.out"), "Output", "baseColor", 16, PortType::Gray);
+        CHECK(texel(img, 3, 3)[0] >= 0.0f);
+        CHECK(texel(img, 3, 3)[0] <= 1.0f);
+    }
+
+    // Lacunarity 2 and no distortion are what Perlin always made; distortion changes it and it still tiles.
+    Graph plain;
+    add(plain, "P", "perlin", {{"scale", 4}, {"seed", 2}});
+    Graph bent;
+    add(bent, "P", "perlin", {{"scale", 4}, {"seed", 2}, {"distortion", 1.0}});
+    image::Image a = eval(into(plain, "P.out"), "Output", "baseColor", 16, PortType::Gray);
+    image::Image b = eval(into(bent, "P.out"), "Output", "baseColor", 16, PortType::Gray);
+    CHECK(maxDiff(a, b) > 1e-3);
+
+    Graph cells;
+    add(cells, "C", "cells", {{"metric", "minkowski"}, {"exponent", 1.0}, {"mode", "f1"}});
+    Graph manhattan;
+    add(manhattan, "C", "cells", {{"metric", "manhattan"}, {"mode", "f1"}});
+    CHECK(maxDiff(eval(into(cells, "C.out"), "Output", "baseColor", 16), eval(into(manhattan, "C.out"), "Output", "baseColor", 16)) < 1e-4);
+
+    Graph vor;
+    add(vor, "V", "voronoi", {{"smoothness", 0.5}});
+    Plan vp = plan(into(vor, "V.smoothF1"), "Output", "baseColor", 8, PortType::Gray);
+    REQUIRE_MESSAGE(vp.error.empty(), vp.error);
+
+    // Hue Map shifts a pure red half a turn to cyan.
+    Graph hsv;
+    add(hsv, "C", "color", {{"color", {1.0, 0.0, 0.0, 1.0}}});
+    add(hsv, "H", "hsv", {{"hueMap", 0.5}});
+    link(hsv, "C.out", "H.input");
+    const float* cyan = texel(eval(into(hsv, "H.out"), "Output", "baseColor", 4), 1, 1);
+    CHECK(cyan[0] == doctest::Approx(0.0).epsilon(1e-3));
+    CHECK(cyan[2] == doctest::Approx(1.0).epsilon(1e-3));
+
+    // A panner at 0.25 textures a second, two seconds in, reads the input half a texture along.
+    Graph pan;
+    add(pan, "U", "uv");
+    add(pan, "S", "separateXyz");
+    add(pan, "P", "panner", {{"speedX", 0.25}, {"speedY", 0.0}, {"time", 2.0}});
+    link(pan, "U.uv", "S.vec");
+    link(pan, "S.x", "P.input");
+    image::Image panned = eval(into(pan, "P.out"), "Output", "baseColor", 16);
+    CHECK(texel(panned, 12, 8)[0] == doctest::Approx(12.5 / 16.0 - 0.5).epsilon(1e-3));
+
+    Graph cob;
+    add(cob, "C", "cobblestones", {{"gap", 0.1}});
+    image::Image stones = eval(into(cob, "C.mask"), "Output", "baseColor", 32, PortType::Gray);
+    bool stone = false, gap = false;
+    for (float v : stones.rgba)
+    {
+        stone |= v > 0.5f;
+        gap |= v < 0.5f;
+    }
+    CHECK(stone);
+    CHECK(gap);
+}
+
 TEST_CASE("tex more nodes: Comparison, Logic, Select, Step and Smooth Step")
 {
     const std::vector<std::pair<std::string, std::array<float, 3>>> ops = {
