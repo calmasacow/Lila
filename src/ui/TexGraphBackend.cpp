@@ -22,6 +22,7 @@
 #include "ui/Menus.h"
 #include "ui/NodeEditor.h"
 #include "ui/Panels.h"
+#include "ui/TexGraphPreview.h"
 #include "ui/TexParams.h"
 #include "ui/TexPreview.h"
 #include "ui/TextureGraphUi.h"
@@ -571,6 +572,8 @@ public:
             }
         return panel;
     }
+
+    QWidget* pinnedPanel(QWidget* parent, NodeEditor& editor) const override { return new TexGraphPreview(editor, parent); }
 
     QWidget* graphPanel(QWidget* parent, NodeEditor& editor, const json&) const override
     {

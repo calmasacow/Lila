@@ -10,6 +10,7 @@
 #pragma pop_macro("slots")
 #include "tex/TextureSet.h"
 #include "ui/NodeEditor.h"
+#include "ui/TexGraphPreview.h"
 
 #include <QAction>
 #include <QComboBox>
@@ -19,6 +20,9 @@
 #include <QLabel>
 #include <QMainWindow>
 #include <QSpinBox>
+#include <QThread>
+
+#include <chrono>
 
 using namespace lila;
 using json = nlohmann::json;
@@ -234,4 +238,57 @@ TEST_CASE("the graph seed offsets every seed parameter in the set, groups includ
     pump();
     CHECK(rockGraph().seed == 7);
     CHECK(editor->findChild<QComboBox*>("graphPresets")->currentIndex() == -1);
+}
+
+TEST_CASE("the pinned preview stays on the set while its groups open, and holds it while pinned")
+{
+    makeRock();
+    run("texAddNode", {{"args", {"Rock", "perlin"}}, {"name", "Fine"}});
+    run("texConnect", {{"args", {"Rock", "Fine.out", "Output.metallic"}}});
+    const std::string group = "Rock/" + run("texGroupNodes", {{"args", {"Rock", "Fine"}}, {"name", "Grain"}})["group"].get<std::string>();
+    run("texCreateSet", {{"args", {"Moss"}}, {"resolution", 64}});
+
+    QMainWindow win;
+    auto* editor = new ui::NodeEditor(&win, ui::kTextureGraphBackend);
+    win.setCentralWidget(editor);
+    win.resize(1100, 700);
+    win.show();
+    editor->setGroup("Rock");
+    pump();
+    auto* preview = dynamic_cast<ui::TexGraphPreview*>(editor->findChild<QWidget*>("texGraphPreview"));
+    REQUIRE(preview);
+    CHECK(preview->set() == "Rock");
+    editor->enterGroup(QString::fromStdString(group));
+    pump();
+    CHECK(editor->group().toStdString() == group);
+    CHECK(preview->set() == "Rock");
+
+    // It renders the set on the preview ball.
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(180);
+    while (preview->image().isNull() && std::chrono::steady_clock::now() < end)
+    {
+        pump();
+        QThread::msleep(20);
+    }
+    INFO("status: " << preview->status().toStdString());
+    CHECK_FALSE(preview->image().isNull());
+
+    preview->setPinned(true);
+    editor->setGroup("Moss");
+    pump();
+    CHECK(preview->set() == "Rock");
+    preview->setPinned(false);
+    pump();
+    CHECK(preview->set() == "Moss");
+
+    // No mesh uses Moss, so the Mesh shape says so.
+    CHECK(preview->mesh().empty());
+    preview->setShape(ui::TexGraphPreview::Shape::Mesh);
+    pump();
+    CHECK(preview->status() == "No mesh uses Moss");
+
+    // Another backend drops the preview.
+    editor->setBackend(ui::kGeometryNodesBackend);
+    pump();
+    CHECK_FALSE(editor->findChild<QWidget*>("texGraphPreview"));
 }

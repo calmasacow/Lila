@@ -466,15 +466,21 @@ NodeEditor::NodeEditor(QWidget* parent, const std::string& backend) : QWidget(pa
     auto* split = new QSplitter(Qt::Horizontal, this);
     mCanvas = new NodeCanvas(split);
     mCanvas->backend = mBackend.get();
-    mSide = new QScrollArea(split);
+    mSideColumn = new QWidget(split);
+    auto* column = new QVBoxLayout(mSideColumn);
+    column->setContentsMargins(0, 0, 0, 0);
+    column->setSpacing(0);
+    mSide = new QScrollArea(mSideColumn);
     mSide->setWidgetResizable(true);
     mSide->setMinimumWidth(230);
+    column->addWidget(mSide, 1);
     split->addWidget(mCanvas);
-    split->addWidget(mSide);
+    split->addWidget(mSideColumn);
     split->setStretchFactor(0, 1);
     split->setSizes({700, 260});
     lay->addWidget(split, 1);
     buildToolbar();
+    rebuildPinned();
 
     // Sends stored after the command returns, so the label is read on the next turn of the event loop.
     mExecuteListener = ops::addExecuteListener([this](const ExecuteEvent& e) {
@@ -749,9 +755,18 @@ bool NodeEditor::setBackend(const std::string& id)
     mOwner.clear();
     mSelectedNode.clear();
     buildToolbar();
+    rebuildPinned();
     followSelection();
     refresh();
     return true;
+}
+
+void NodeEditor::rebuildPinned()
+{
+    delete mPinned;
+    mPinned = mBackend->pinnedPanel(mSideColumn, *this);
+    if (mPinned)
+        static_cast<QVBoxLayout*>(mSideColumn->layout())->insertWidget(0, mPinned);
 }
 
 NodeEditor::~NodeEditor()

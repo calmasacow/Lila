@@ -186,6 +186,7 @@ private:
     /** Drops the path past a group that's on it; any other group starts a new path. */
     void retracePath(const QString& name);
     void rebuildSidePanel();
+    void rebuildPinned();
     void followSelection();
     void followOwner(const GraphBackend::Owner& owner);
     /** The followed owner's path when it runs the group on show, else empty. */
@@ -223,6 +224,9 @@ private:
     QWidget* mPathBar = nullptr;
     NodeCanvas* mCanvas = nullptr;
     QScrollArea* mSide = nullptr;
+    /** The side panel's column: the backend's pinned panel over the scrolling side panel. */
+    QWidget* mSideColumn = nullptr;
+    QWidget* mPinned = nullptr;
     QTimer* mRefresh = nullptr;
     QToolButton* mSendBtn = nullptr;
     int mListener = 0;
