@@ -393,6 +393,65 @@ TEST_CASE("tex more nodes: Non-Uniform Blur, Bevel, Radial Splatter, Warp's amou
     CHECK(half);
 }
 
+TEST_CASE("tex more nodes: the third batch compiles and evaluates, with its values")
+{
+    for (const char* type : {"highPass", "pixelate", "gamma", "dropShadow", "glow", "heightToShadow", "normalReconstruct", "safeTransform", "vectorRotate",
+                             "cornerPin", "vector", "sphereMask", "curlNoise", "grid", "starburst", "alphaTools"})
+    {
+        INFO(type);
+        const tex::NodeDef* def = tex::findNode(type);
+        REQUIRE(def);
+        Graph g;
+        add(g, "N", type);
+        Plan p = plan(into(g, "N." + def->outputs.front().id), "Output", "baseColor", 8);
+        REQUIRE_MESSAGE(p.error.empty(), p.error);
+        CHECK(evaluateCpu(p).outputs.at("out").width == 8);
+    }
+
+    Graph gm;
+    add(gm, "C", "color", {{"color", {0.25, 0.25, 0.25, 1.0}}});
+    add(gm, "G", "gamma", {{"gamma", 2.0}});
+    link(gm, "C.out", "G.input");
+    CHECK(texel(eval(into(gm, "G.out"), "Output", "baseColor", 4), 1, 1)[0] == doctest::Approx(0.5).epsilon(1e-4));
+
+    Graph sm;
+    add(sm, "S", "sphereMask", {{"radius", 0.25}, {"hardness", 1.0}});
+    image::Image mask = eval(into(sm, "S.out"), "Output", "baseColor", 16, PortType::Gray);
+    CHECK(texel(mask, 8, 8)[0] == doctest::Approx(1.0));
+    CHECK(texel(mask, 0, 0)[0] == doctest::Approx(0.0));
+
+    // A pinned square shrunk to the left half: the right half is clipped away.
+    Graph cp;
+    add(cp, "C", "color", {{"color", {1.0, 1.0, 1.0, 1.0}}});
+    add(cp, "P", "cornerPin", {{"bottomRightX", 0.5}, {"topRightX", 0.5}});
+    link(cp, "C.out", "P.input");
+    image::Image pinned = eval(into(cp, "P.out"), "Output", "baseColor", 16);
+    CHECK(texel(pinned, 3, 8)[3] == doctest::Approx(1.0));
+    CHECK(texel(pinned, 12, 8)[3] == doctest::Approx(0.0));
+
+    Graph nr;
+    add(nr, "C", "color", {{"color", {0.5, 0.5, 0.0, 1.0}}});
+    add(nr, "N", "normalReconstruct");
+    link(nr, "C.out", "N.input");
+    CHECK(texel(eval(into(nr, "N.out"), "Output", "baseColor", 4), 1, 1)[2] == doctest::Approx(1.0).epsilon(1e-4));
+
+    Graph gr;
+    add(gr, "G", "grid", {{"countX", 4}, {"countY", 4}, {"thickness", 0.2}});
+    image::Image grid = eval(into(gr, "G.out"), "Output", "baseColor", 32, PortType::Gray);
+    CHECK(texel(grid, 0, 4)[0] == doctest::Approx(1.0));
+    CHECK(texel(grid, 4, 4)[0] == doctest::Approx(0.0));
+
+    Graph vm;
+    add(vm, "A", "vector", {{"x", 1.0}, {"y", -1.0}, {"z", 0.0}});
+    add(vm, "B", "vector", {{"x", 0.0}, {"y", 1.0}, {"z", 0.0}});
+    add(vm, "M", "vectorMath", {{"operation", "reflect"}});
+    link(vm, "A.out", "M.a");
+    link(vm, "B.out", "M.b");
+    const float* reflected = texel(eval(into(vm, "M.out"), "Output", "baseColor", 4), 1, 1);
+    CHECK(reflected[0] == doctest::Approx(1.0));
+    CHECK(reflected[1] == doctest::Approx(1.0));
+}
+
 TEST_CASE("tex more nodes: Comparison, Logic, Select, Step and Smooth Step")
 {
     const std::vector<std::pair<std::string, std::array<float, 3>>> ops = {

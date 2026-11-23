@@ -40,7 +40,7 @@
   ],
   "cost": 1,
   "body": {
-    "out": "uint2 cell = uint2(floor(frac(uv) * float(p.scale)));\nreturn texRand(cell, uint(p.seed));",
-    "color": "uint2 cell = uint2(floor(frac(uv) * float(p.scale)));\nuint s = uint(p.seed);\nreturn float4(texRand(cell, s), texRand(cell, s ^ 0x68e31da4u), texRand(cell, s ^ 0xb5297a4du), 1.0);"
+    "out": "uint2 cell = uint2(floor(frac(uv) * float(p.scale) + 1e-4));\nreturn texRand(cell, uint(p.seed));",
+    "color": "uint2 cell = uint2(floor(frac(uv) * float(p.scale) + 1e-4));\nuint s = uint(p.seed);\nreturn float4(texRand(cell, s), texRand(cell, s ^ 0x68e31da4u), texRand(cell, s ^ 0xb5297a4du), 1.0);"
   }
 }
