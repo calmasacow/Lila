@@ -332,12 +332,21 @@ LILA_SCENE_API std::shared_ptr<const geo::Mesh> combinedMesh(scene::Graph& g, No
 /** Drops cached visuals (after a library reload). */
 LILA_SCENE_API void clearVisuals();
 
+/**
+ * A payload's colour from its data key "color": "#rrggbb" (sRGB), or [r, g, b] / [r, g, b, a] linear with a how much it
+ * shows. Linear rgb and amount; nothing when there is none or it doesn't parse. Drawn per instance and sent to Unreal as
+ * per-instance custom data.
+ */
+LILA_SCENE_API std::optional<glm::vec4> dataColor(const json& data);
+
 /** Per mesh, the instance matrices (world) a slotSet's resolved slots draw with, hidden ones left out. Main thread. */
 struct DrawBatch
 {
     std::shared_ptr<const geo::Mesh> mesh;
     std::string key;
     std::vector<glm::mat4> transforms;
+    /** Per transform, dataColor of the resolved payload (zero for none); empty when no slot of the batch has one. */
+    std::vector<glm::vec4> colors;
 };
 LILA_SCENE_API std::vector<DrawBatch> drawBatches(scene::Graph& g, NodeId set);
 

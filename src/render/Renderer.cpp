@@ -112,6 +112,7 @@ constexpr uint32_t kOneSidedLighting = 1u << 16;
 constexpr uint32_t kNormalXY = 1u << 17; // two-channel normal map: Z rebuilt in the shader
 constexpr uint32_t kGreyBase = 1u << 18;  // base colour map supplies opacity only
 constexpr uint32_t kGrunge = 1u << 19;    // a grunge block follows the draw's style block
+constexpr uint32_t kInstanceColor = 1u << 20; // the shader reads each placement's GpuInstance::tint
 
 // Placeholder textures bound where a material has no map; never evicted.
 constexpr uint64_t kWhiteSrgbKey = ~uint64_t(0);
@@ -310,6 +311,9 @@ struct AerialPush
 constexpr double kWorldPatternPeriod = 65536.0;
 static_assert(sizeof(GpuFrame) == sizeof(GpuLight), "the light buffer's header is one light long");
 
+constexpr uint32_t kTraceInstanceColor = 1u << 0; // reflection hits show the placement's instance colour
+constexpr uint32_t kTraceBaseColorMap = 1u << 1;  // the colour multiplies in rather than replacing
+
 /** A traced placement's mesh for rtbevel.slang and rtreflect.slang: its buffers' addresses, world matrix rows and materials. */
 struct TraceInstance
 {
@@ -318,7 +322,7 @@ struct TraceInstance
     glm::vec4 rows[3]{};
     uint64_t sections = 0; // TraceSection per material section
     uint32_t sectionCount = 0;
-    uint32_t pad = 0;
+    uint32_t tint = 0; // instance colour, unorm rgba8: linear rgb, amount
 };
 
 /** A section's material for reflection hits; matches rtreflect.slang. */
@@ -327,7 +331,7 @@ struct TraceSection
     uint32_t endTriangle = 0;
     float roughness = 0.5f;
     float metallic = 0.0f;
-    float pad = 0.0f;
+    uint32_t flags = kTraceInstanceColor; // kTraceInstanceColor, kTraceBaseColorMap
     glm::vec4 baseColor{0.5f, 0.5f, 0.5f, 1.0f};
     glm::vec4 emissive{0.0f};
 };
@@ -1105,8 +1109,9 @@ struct Renderer::Impl
     std::vector<SectionRecord> offscreenRecords;
     std::vector<SectionRecord>* frameRecords = &offscreenRecords;
     PathTracer pathTracer;
-    /** Per instance of the scene's top-level structure, the shaded batch it places and its trace table entry. */
+    /** Per instance of the scene's top-level structure, the shaded batch it places, its colour and its trace table entry. */
     std::vector<uint32_t> frameTlasBatches;
+    std::vector<glm::vec4> frameTlasTints;
     std::vector<TraceInstance> frameTraceInstances;
     /** Bumped whenever a bottom-level structure is built or refit: traced geometry changed. */
     uint64_t blasEpoch = 0;
@@ -3435,6 +3440,9 @@ struct Renderer::Impl
             const glm::uvec2 range = frameTlasBatches[i] < batchSections.size() ? batchSections[frameTlasBatches[i]] : glm::uvec2(0);
             pi.firstSection = range.x;
             pi.sectionCount = range.y;
+            const glm::vec4 tint = i < frameTlasTints.size() ? frameTlasTints[i] : glm::vec4(0.0f);
+            pi.tint[0] = glm::packHalf2x16(glm::vec2(tint.r, tint.g));
+            pi.tint[1] = glm::packHalf2x16(glm::vec2(tint.b, tint.a));
         }
 
         PathTracer::Inputs in;
@@ -4714,6 +4722,7 @@ struct Renderer::Impl
         std::vector<VkAccelerationStructureInstanceKHR> instances;
         std::vector<TraceInstance> table;
         frameTlasBatches.clear();
+        frameTlasTints.clear();
         std::vector<TraceSection> sections;
         bool built = false;
         for (const DrawBatch& b : frameBatches.shaded)
@@ -4745,6 +4754,7 @@ struct Renderer::Impl
             for (uint32_t i = 0; i < b.count; ++i)
             {
                 frameTlasBatches.push_back(uint32_t(&b - frameBatches.shaded.data()));
+                frameTlasTints.push_back(frameBatches.instances[b.first + i].tint);
                 const glm::mat4& w = frameBatches.instances[b.first + i].world;
                 VkAccelerationStructureInstanceKHR inst{};
                 for (int r = 0; r < 3; ++r)
@@ -4762,6 +4772,7 @@ struct Renderer::Impl
                     ti.rows[r] = glm::vec4(w[0][r], w[1][r], w[2][r], w[3][r]);
                 ti.sections = firstSection; // an index until the buffer's address is known
                 ti.sectionCount = sectionCount;
+                ti.tint = glm::packUnorm4x8(glm::clamp(frameBatches.instances[b.first + i].tint, 0.0f, 1.0f));
                 table.push_back(ti);
             }
         }
@@ -4880,6 +4891,7 @@ struct Renderer::Impl
                 t.emissive = glm::vec4(m.emissive, 0.0f);
                 t.roughness = m.roughness;
                 t.metallic = m.metallic;
+                t.flags = (m.flags & MatNoInstanceColor ? 0u : kTraceInstanceColor) | (m.flags & MatBaseColorMap ? kTraceBaseColorMap : 0u);
             }
             else
             {
@@ -8001,6 +8013,9 @@ struct Renderer::Impl
             p.flags = MatTwoSided;
         }
         p.extra.z = std::clamp(s.envLightSaturation, 0.0f, 1.0f);
+        if (b.tinted && !(p.flags & (MatNoInstanceColor | kGreyBase)))
+            p.flags |= kInstanceColor;
+        p.flags &= ~uint32_t(MatNoInstanceColor);
         if (d.vertexColors != VertexColorMode::Off)
             p.flags |= (d.vertexColors == VertexColorMode::Unlit ? kVertexColorUnlit : kVertexColorShaded) |
                        (uint32_t(d.colorChannel) << kColorChannelShift);

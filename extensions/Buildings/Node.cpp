@@ -36,6 +36,10 @@ uint64_t gTick = 0;
 constexpr size_t kCacheMax = 30000;
 
 std::mutex gPubMutex;
+/** The building Edit Rooms cuts away: its shell and modules are left out of its mesh. */
+std::string gCutaway;
+/** What modifiers set to lod auto show, by camera distance (the viewport sets it); near until it has. */
+std::unordered_map<uint64_t, std::string> gViewLod;
 std::map<uint64_t, std::shared_ptr<const Published>> gPub;
 
 std::mutex gGeoMutex;
@@ -89,6 +93,19 @@ GeometryPtr emptyRef()
     return g;
 }
 
+/**
+ * The palette colour a module's instance carries: render for the wall-like blocks and domes, roof for roofs, trim for the
+ * rest. It shows on the module's sections without a shared material (bld_render, bld_trim, bld_roof); the shared ones
+ * (glass, metal, frames...) keep their own colour.
+ */
+glm::vec3 modulePaletteColor(const Palette& p, const std::string& kind)
+{
+    static const std::set<std::string> kRender = {"wall", "pilaster", "cornice", "corner", "band", "plinth", "dome"};
+    if (kind == "roof")
+        return p.roof;
+    return kRender.contains(kind) ? p.render : p.trim;
+}
+
 GeometryPtr placeholderRef(const Module& m)
 {
     const Vec3 q{std::round(m.size.x / 5.0) * 5.0, std::round(m.size.y / 5.0) * 5.0, std::round(m.size.z)};
@@ -132,7 +149,14 @@ void exec(ExecContext& c)
     LILA_ZONE();
     const auto t0 = std::chrono::steady_clock::now();
     const uint64_t owner = c.env.owner;
-    const std::string lod = c.s("lod").empty() ? "near" : c.s("lod");
+    const bool autoLod = c.s("lod") == "auto";
+    std::string lod = c.s("lod").empty() ? "near" : c.s("lod");
+    if (autoLod)
+    {
+        std::lock_guard lock(gPubMutex);
+        const auto it = gViewLod.find(owner);
+        lod = it == gViewLod.end() ? "near" : it->second;
+    }
     const std::string cell = c.s("cell");
     const bool withModules = c.b("modules");
     std::shared_ptr<const ParsedSpecs> parsed;
@@ -157,6 +181,13 @@ void exec(ExecContext& c)
     pub->modifier = owner;
     pub->cell = cell;
     pub->lod = lod;
+    pub->autoLod = autoLod;
+    for (const Spec& s : parsed->specs)
+        for (const Vec2& p : s.footprint)
+        {
+            pub->lo = glm::min(pub->lo, Vec3(p.x, s.ground, p.y));
+            pub->hi = glm::max(pub->hi, Vec3(p.x, s.ground, p.y));
+        }
     pub->specs = parsed->specs;
     const size_t n = parsed->specs.size();
     pub->results.resize(n);
@@ -247,6 +278,11 @@ void exec(ExecContext& c)
         if (r.enabled)
             rulePatterns.push_back(r.type);
 
+    std::string cutaway;
+    {
+        std::lock_guard lock(gPubMutex);
+        cutaway = gCutaway;
+    }
     Soup shell;
     std::vector<int32_t> faceBuilding;
     std::vector<std::string> materialNames;
@@ -261,6 +297,8 @@ void exec(ExecContext& c)
         return id;
     };
     auto inst = std::make_shared<lila::gn::Instances>();
+    // The building's palette on its modules, which are shared placeholder meshes across buildings.
+    std::vector<glm::vec4> moduleColors;
     std::unordered_map<std::string, int> refIndex;
     slots::InstanceSlots spec;
     spec.owner = "buildings:" + cell;
@@ -276,6 +314,7 @@ void exec(ExecContext& c)
         {
             const Result& r = *pub->results[i];
             const Spec& sp = parsed->specs[i];
+            const bool cut = !cutaway.empty() && r.id == cutaway;
             std::vector<std::string> regions = sp.regions;
             regions.push_back("style:" + r.style);
             if (!cell.empty())
@@ -311,7 +350,7 @@ void exec(ExecContext& c)
                     if (check && setsVisual(slots::resolve(s, *st).payload))
                         dropped[k] = 1;
                 }
-                if (lod == "near" && withModules)
+                if (lod == "near" && withModules && !cut)
                 {
                     int ref = 0;
                     if (m.shell)
@@ -342,10 +381,13 @@ void exec(ExecContext& c)
                             ref = it->second;
                     }
                     inst->add(s.transform, ref);
+                    moduleColors.push_back(m.shell ? glm::vec4(0.0f) : glm::vec4(modulePaletteColor(r.palette, m.kind), 1.0f));
                 }
                 slotList.push_back(std::move(s));
             }
 
+            if (cut)
+                continue;
             // Shell faces, materials by palette.
             const Soup& src = lod == "near" ? r.shell : lod == "hlod" ? r.hlod : r.far;
             int32_t mats[MatCount];
@@ -385,7 +427,10 @@ void exec(ExecContext& c)
     if (lod == "near" && withModules)
     {
         LILA_ZONE_N("buildings.slots");
+        std::span<glm::vec4> colors = inst->attrs.getOrAdd<glm::vec4>(lila::gn::kInstanceColorAttr);
+        std::copy(moduleColors.begin(), moduleColors.end(), colors.begin());
         g.instances = inst;
+        g.keepInstances = !c.b("realize");
         spec.slots = std::move(slotList);
         out = slots::applyToInstances(lila::gn::makeGeometry(std::move(g)), lila::scene::NodeId(owner), spec);
     }
@@ -456,6 +501,25 @@ void forgetPublished(uint64_t modifier)
     gPub.erase(modifier);
 }
 
+bool setViewLod(uint64_t modifier, const std::string& lod)
+{
+    std::lock_guard lock(gPubMutex);
+    std::string& was = gViewLod[modifier];
+    if (was == lod)
+        return false;
+    was = lod;
+    return true;
+}
+
+bool setCutawayBuilding(const std::string& id)
+{
+    std::lock_guard lock(gPubMutex);
+    if (gCutaway == id)
+        return false;
+    gCutaway = id;
+    return true;
+}
+
 void clearGenerationCache()
 {
     std::lock_guard lock(gGenMutex);
@@ -478,6 +542,11 @@ void registerNode(lila::ext::Context& ctx)
         {.id = "lod", .type = Socket::String, .defaultValue = "near", .doc = "near, hlod or far."},
         {.id = "cell", .type = Socket::String, .defaultValue = "", .doc = "The cell these buildings are in (x_z), or a building id when standalone."},
         {.id = "modules", .type = Socket::Bool, .defaultValue = true, .doc = "Draw the modules (near only)."},
+        {.id = "realize",
+         .type = Socket::Bool,
+         .defaultValue = false,
+         .doc = "Flatten the modules into the cell mesh, for exporters that take one flat mesh. Off, the mesh holds the shell and "
+                "the modules stay instances: drawn instanced and sent to Unreal as instances, at a fraction of the memory."},
     };
     d.sockets.outputs = {{.id = "geometry", .type = Socket::Geometry, .doc = "Shell mesh and module instances."}};
     d.exec = exec;

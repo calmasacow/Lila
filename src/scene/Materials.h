@@ -144,6 +144,8 @@ enum Attr
     kVolumeNoiseCoverage,
     kVolumeNoiseOffset,
     kVolumeEdgeFade,
+    // Takes the colour geometry nodes instances and slots carry (their "color" instance attribute) in the viewport.
+    kInstanceColor,
     kCount
 };
 

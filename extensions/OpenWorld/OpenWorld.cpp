@@ -54,3 +54,5 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     openworld::world::registerWorldUi(ctx);
     return 0;
 }
+
+LILA_EXTENSION_EXPORT void lilaExtensionUninit(lila::ext::Context&) { openworld::unregisterSites(); }

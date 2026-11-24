@@ -8,6 +8,7 @@ struct InstanceData
 {
     float4x4 world;
     float4 color;
+    float4 tint;
 };
 
 struct WirePush

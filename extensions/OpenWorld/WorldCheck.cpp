@@ -465,8 +465,9 @@ json checkWorld(const WorldRef* w, const json& options)
                 ++onPlaceholder;
                 t["placeholder"] = t["placeholder"].get<int>() + 1;
             }
-            // Ground props only: wall, roof and free parts sit where their building or kit put them.
-            if (!hf || !type || type->attach != slots::Attach::Ground || s.owner.starts_with("building:"))
+            // Ground props only: wall, roof and free parts sit where their building or kit put them, and an interior's
+            // furnishing stands on its floor.
+            if (!hf || !type || type->attach != slots::Attach::Ground || s.owner.starts_with("building:") || s.owner.starts_with("interior:"))
                 continue;
             const glm::dvec3 p(s.transform[3]);
             if (hf->contains(p.x, p.z))

@@ -23,10 +23,12 @@ namespace
 constexpr int kHfNodeSamples = 2 * kHeightfieldPatch;
 constexpr uint32_t kHfNoMap = 0xffffu;
 
+/** Matches InstanceData in mesh.slang. */
 struct HfGpuInstance
 {
     glm::mat4 world{1.0f};
     glm::vec4 color{0.0f};
+    glm::vec4 tint{0.0f};
 };
 
 /** Matches HfLayer in heightfield.slang. */
@@ -66,7 +68,7 @@ struct HfGpuParams
     uint64_t flowMask = 0;
     HfGpuLayer layers[kHeightfieldMaxLayers];
 };
-static_assert(sizeof(HfGpuParams) % 16 == 0 && offsetof(HfGpuParams, layers) == 624, "matches HfParams in heightfield.slang");
+static_assert(sizeof(HfGpuParams) % 16 == 0 && offsetof(HfGpuParams, layers) == 640, "matches HfParams in heightfield.slang");
 static_assert(sizeof(HeightfieldPatch) == 16, "matches HfPatch in heightfield.slang");
 
 bool validHeightfieldDraw(const HeightfieldDraw& d)

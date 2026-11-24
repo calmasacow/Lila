@@ -40,6 +40,7 @@
 #include "ui/ViewportHooks.h"
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportWidget.h"
+#include "ui/ViewportWidgetDetail.h"
 #include "ui/VolumeDisplay.h"
 
 #include <QApplication>
@@ -473,7 +474,11 @@ QImage render(const Options& o, Timing* timing, int repeat)
             d.flags |= render::DrawShaded;
         if (o.display != "shaded")
             d.flags |= render::DrawWire;
-        s.meshes.push_back(std::move(d));
+        // Geometry nodes instances draw as the viewport draws them: each referenced mesh instanced, with instance colours.
+        if (gn::InstanceViewPtr view = smooth == 0 ? gn::instanceViewFor(g, id) : nullptr)
+            viewportDetail::pushInstanceDraws(s, d, *view, textured);
+        else
+            s.meshes.push_back(std::move(d));
         // A smoothed or modified mesh also shows the cage being edited, as Lila's component mode does.
         if (o.display != "shaded")
         {

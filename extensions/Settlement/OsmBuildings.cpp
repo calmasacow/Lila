@@ -551,6 +551,7 @@ void placeOsmBuildings(Layout& l, const Site& site, const Ground& g, const Optio
 
 Envelope osmEnvelope(const Lot& lot, const Layout& l, const Ground& g, const Options& o, const Site& site)
 {
+    LILA_ZONE();
     Envelope env;
     if (!l.gen || !l.gen->osmIndex)
         return env;
@@ -772,6 +773,7 @@ Envelope osmEnvelope(const Lot& lot, const Layout& l, const Ground& g, const Opt
 
 void finishProgram(Envelope& env, const Lot& lot, const Layout& l)
 {
+    LILA_ZONE();
     env.name = lot.name;
     env.program = lot.program;
     env.businesses = lot.businesses;

@@ -3,10 +3,12 @@
 // OSM fixture town through Settlement's buildings route, and a performance budget.
 
 #include "extensions/ExtensionManager.h"
+#include "gn/InstanceView.h"
 #include "gn/NodeLib.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
 
+#include <array>
 #include <doctest/doctest.h>
 
 #include <chrono>
@@ -101,6 +103,23 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
     CHECK(made["buildings"] == 2);
     CHECK(made["slots"].get<int>() > 20);
     const std::string A = "building:1111", B = "building:2222";
+
+    // Modules carry their building's palette colour into the instanced draw; shared module materials keep their own.
+    {
+        scene::Graph& g = scene::Graph::current();
+        for (int k = 0; k < 3; ++k)
+            g.evaluate();
+        size_t colored = 0;
+        for (scene::NodeId id : g.nodes())
+            if (gn::InstanceViewPtr v = gn::instanceViewFor(g, id))
+                for (const gn::InstancePart& p : v->parts)
+                    if (p.colors)
+                        for (const glm::vec4& c : *p.colors)
+                            colored += c.a == 1.0f && c != glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        CHECK(colored > 10);
+        CHECK(run("getAttr", {{"args", {"bld_glass.instanceColor"}}}) == false);
+        CHECK(run("getAttr", {{"args", {"Bld_colonialCentro_render0.instanceColor"}}}) == true);
+    }
     const uint64_t before = hashIds(slotIds(B));
     const std::vector<std::string> aBefore = slotIds(A);
 
@@ -265,6 +284,15 @@ TEST_CASE("buildings commands: the OSM fixture town through Settlement's buildin
     // Change a style by district and paint a bay through the route's buildings.
     const json st = run("buildingStyle", {{"all", true}, {"style", "malecon"}});
     CHECK(st["count"] == envelopes);
+
+    // A settlement edit rebuilds its buildings as a step of their own: none stale after, one undo shows the old ones.
+    run("settlementAddExclusion", {{"args", {mesh}}, {"polygon", {{-15000, -15000}, {15000, -15000}, {15000, 15000}, {-15000, 15000}}}, {"name", "Park"}});
+    CHECK(run("buildingRefresh", {{"dryRun", true}})["stale"].empty());
+    const int fewer = run("settlementEnvelopes", {{"args", {mesh}}, {"limit", 0}})["count"];
+    CHECK(fewer < envelopes);
+    CHECK(run("undoInfo")["undo"] == "buildingRefresh");
+    run("undo");
+    CHECK(run("buildingRefresh", {{"dryRun", true}})["stale"].size() == 1);
 }
 
 TEST_CASE("buildings commands: site kit envelopes (no lot, a stable id each) make one building each")
@@ -311,4 +339,81 @@ TEST_CASE("buildings commands: performance budget")
     MESSAGE("one-building edit: " << editMs << " ms (evaluate " << edit["evaluateMs"] << " ms, node " << edit.value("nodeMs", 0.0) << " ms)");
     CHECK(edit.value("generated", 0) == 1);
     CHECK(editMs < 1000.0); // generous; the target is 100 ms, measured and logged
+}
+
+TEST_CASE("buildings commands: the trim sheet goes to the user's folder without a workspace, never beside the shipped one")
+{
+    loadBuildings();
+    run("newScene");
+    run("buildingCreate", {{"envelopes", json::array({envelope(1, 0, 0, 1200, 900, 2)})}, {"name", "Block"}});
+    const std::filesystem::path shipped = std::filesystem::path(LILA_TEST_BUILDINGS_STYLES).parent_path() / "trims";
+    auto count = [](const std::filesystem::path& d) {
+        int n = 0;
+        for (const auto& e : std::filesystem::directory_iterator(d))
+            n += e.is_regular_file();
+        return n;
+    };
+    const int before = count(shipped);
+    // Baking it (Trim Sheets) writes maps beside that copy; here only the copy is made.
+    const json r = run("buildingTrimSheet", {{"bake", false}});
+    CAPTURE(r.dump().substr(0, 1500));
+    CHECK(r["fileFrom"].get<std::string>().starts_with("user folder"));
+    CHECK(r["file"].get<std::string>().find("trim-sheets") != std::string::npos);
+    CHECK(std::filesystem::exists(r["file"].get<std::string>()));
+    CHECK(count(shipped) == before);
+}
+TEST_CASE("buildings commands: near detail keeps the modules as instances, realize flattens them into the cell mesh")
+{
+    loadBuildings();
+    run("newScene");
+    json envs = json::array();
+    for (int k = 0; k < 12; ++k)
+        envs.push_back(envelope(0xa0000 + uint64_t(k), (k % 4) * 1600.0, (k / 4) * 1600.0, 1200, 1100, 3, {"street", "party", "open", "party"},
+                                "colonialCentro", k % 2 ? "shop" : ""));
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Inst"}});
+    REQUIRE(!made["meshes"].empty());
+    const std::string mesh = made["meshes"][0].get<std::string>();
+    const json info = run("buildingInfo", {{"args", {mesh}}});
+    REQUIRE(info["slots"].get<int>() > 0);
+    // The mesh holds the shell only; the modules are drawn and sent as instances.
+    CHECK(run("meshInfo", {{"args", {mesh}}})["faces"].get<int>() == info["faces"].get<int>());
+    run("setAttr", {{"args", {info["modifier"].get<std::string>() + ".realize", true}}});
+    CHECK(run("meshInfo", {{"args", {mesh}}})["faces"].get<int>() > info["faces"].get<int>());
+}
+
+TEST_CASE("buildings commands: acute corners, a tiny edge between two walls and mansion porticos pass buildingCheck")
+{
+    loadBuildings();
+    run("newScene");
+    // A wedge (about 30 degrees at its tip), a quad whose short third edge hides an acute meeting, and a 45 degree kite.
+    const std::vector<std::vector<std::array<double, 2>>> shapes = {
+        {{0, 0}, {3000, 0}, {0, 1700}},
+        {{0, 0}, {2800, 0}, {2800, 60}, {0, 1500}},
+        {{0, 0}, {2400, 0}, {2400, 1000}, {1000, 1000}},
+    };
+    json envs = json::array();
+    int k = 0;
+    for (const char* style : {"modernCommercial", "colonialCentro", "residential", "narcoMansion", "malecon"})
+        for (const auto& shape : shapes)
+            for (int seed = 0; seed < 2; ++seed, ++k)
+            {
+                const double x0 = (k % 10) * 6000.0, z0 = (k / 10) * 6000.0;
+                json e = envelope(0xb000 + uint64_t(k), x0, z0, 100, 100, 3, {}, style, k % 2 ? "shop" : "");
+                json fp = json::array(), sides = json::array();
+                for (const auto& p : shape)
+                {
+                    fp.push_back({x0 + p[0], z0 + p[1]});
+                    sides.push_back("street");
+                }
+                e["footprint"] = fp;
+                e["sides"] = sides;
+                e["entrances"] = json::array({{x0 + shape[0][0] * 0.5 + shape[1][0] * 0.5, z0}});
+                envs.push_back(e);
+            }
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Acute"}, {"cell", 0}});
+    const json check = run("buildingCheck");
+    CAPTURE(check["counts"].dump());
+    CAPTURE(check["issues"].size() > 0 ? check["issues"][0].dump() : std::string());
+    CHECK(check["counts"]["modulesIntersecting"] == 0);
+    CHECK(check["counts"]["slotFloating"] == 0);
 }

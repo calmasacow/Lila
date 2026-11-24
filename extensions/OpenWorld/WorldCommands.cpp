@@ -921,6 +921,39 @@ json buildWorld(json spec, const BuildOptions& o)
         if (!skipped("buildings"))
             st.run("buildings.style", [&] { return run("buildingStyle", c); });
 
+    // Enterable buildings, picked by program, landmark, style or id once every group is built.
+    if (const json en = spec.value("buildings", json::object()).value("enterable", json()); !en.is_null() && !skipped("buildings") && ops::find("buildingMakeEnterable"))
+        for (const json& pick : en.is_array() ? en : json::array({en}))
+            st.run("buildings.enterable", [&] {
+                json call = json::object();
+                for (const char* k : {"programs", "landmarks", "styles", "limit", "program", "furnish"})
+                    if (pick.contains(k))
+                        call[k] = pick[k];
+                if (pick.contains("ids"))
+                    call["building"] = pick["ids"];
+                json r = run("buildingMakeEnterable", call);
+                json brief = {{"count", r.value("count", 0)}, {"buildings", json::array()}};
+                for (const json& b : r.value("buildings", json::array()))
+                    brief["buildings"].push_back({{"building", b.value("building", std::string())}, {"program", b.value("program", std::string())},
+                                                  {"rooms", b.value("rooms", 0)}, {"entries", b.value("entries", json::array()).size()}});
+                if (r.contains("note"))
+                    brief["note"] = r["note"];
+                return brief;
+            });
+
+    // Material layers fitted to the finished ground when the terrain spec names none: without them the terrain and its
+    // seabed draw in one flat white.
+    if (const json ts = spec.value("terrain", json::object()); !terrain.empty() && !skipped("terrain") && !(ts.is_object() && ts.contains("materials")))
+        st.run("terrain.materials", [&] {
+            json call = {{"args", {terrain}}, {"layers", "default"}};
+            const json sea = ts.is_object() ? ts.value("water", json::object()).value("sea", json::object()) : json::object();
+            if (sea.contains("level") && sea["level"].is_number())
+                call["seaLevel"] = sea["level"];
+            json r = run("terrainMaterialRules", call);
+            notes.push_back("terrain materials: default layers fitted to the terrain (terrain.materials in the spec sets your own)");
+            return r;
+        });
+
     // Zones: the set's spec, then the generators (districts, water, terrain masks), then the play area.
     if (spec.contains("zones") && spec["zones"].is_object() && !skipped("zones") && !terrain.empty())
     {

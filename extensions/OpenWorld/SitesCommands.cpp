@@ -7,6 +7,7 @@
 
 #include <lila/Command.h>
 #include <lila/Deformer.h>
+#include <lila/Events.h>
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
@@ -18,6 +19,10 @@
 #include <lila/Profile.h>
 #include <lila/Slots.h>
 #include <lila/Transform.h>
+#include <lila/Undo.h>
+
+#include <glm/ext/matrix_relational.hpp>
+#include <glm/ext/vector_relational.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -147,6 +152,30 @@ SiteRef findSite(const std::string& name, const std::string& cmd)
 std::string siteArg(const Args& a) { return a.positional.empty() || !a.positional[0].is_string() ? std::string() : a.positional[0].get<std::string>(); }
 
 void storeSpec(const SiteRef& r, const sites::Spec& s) { ops::execute("setAttr", {{"args", {r.modifier + "." + kSpecAttr, s.toJson().dump()}}}); }
+
+/**
+ * Folds a move or turn of the site mesh's own transform into the spec's origin and heading and puts the transform back
+ * to identity, so the layout and its grading follow where the mesh was dragged. Tilt and scale can't be laid on the
+ * ground: they are dropped with a warning. False when the transform is already identity.
+ */
+bool foldTransform(const SiteRef& r, sites::Spec& s, const std::string& cmd)
+{
+    Graph& g = Graph::current();
+    Node* mesh = g.find(r.mesh);
+    if (!mesh)
+        return false;
+    const glm::dmat4 L = scene::Transform::localMatrix(*mesh);
+    if (glm::all(glm::equal(L, glm::dmat4(1.0), 1e-9)))
+        return false;
+    const glm::dvec3 x = glm::dvec3(L[0]), y = glm::dvec3(L[1]);
+    if (std::abs(glm::length(x) - 1.0) > 1e-6 || std::abs(glm::length(y) - 1.0) > 1e-6 || std::abs(y.y - 1.0) > 1e-6)
+        log::warn("{}: {} keeps only its move and turn about up; tilt and scale are dropped", cmd, r.mesh);
+    const glm::dvec4 o = L * glm::dvec4(s.at.x, 0.0, s.at.y, 1.0);
+    s.at = {o.x, o.z};
+    s.heading = std::remainder(s.heading + glm::degrees(std::atan2(-x.z, x.x)), 360.0);
+    scene::Transform::setLocalMatrix(g, mesh->id(), glm::dmat4(1.0));
+    return true;
+}
 void storeGround(const SiteRef& r, const json& j) { ops::execute("setAttr", {{"args", {r.modifier + "." + kGroundAttr, j.dump()}}}); }
 
 /** Evaluates the site's mesh so its node publishes what it laid out. */
@@ -411,6 +440,56 @@ int sendDirect(const std::vector<std::pair<std::string, json>>& direct, const st
     return sent;
 }
 
+/**
+ * Culverts where the sites' pads stand across streams: terrainCheck names each pad over a stream with the stream's way
+ * across it, and a registered culvert is laid along that way, recorded with the site's other stamps so a regrade or
+ * siteRemove takes it away. Returns how many were laid.
+ */
+int layCulverts(const std::vector<SiteRef>& sites, std::vector<json*>& records, const std::string& terrain, std::vector<std::string>& errors)
+{
+    LILA_ZONE();
+    if (terrain.empty() || !ops::find("terrainCheck") || !ops::find("terrainAddFeature"))
+        return 0;
+    json check;
+    try
+    {
+        check = ops::execute("terrainCheck", {{"args", {terrain}}});
+    }
+    catch (const std::exception& e)
+    {
+        errors.push_back(std::string("culverts not laid: terrainCheck failed: ") + e.what());
+        return 0;
+    }
+    const std::string prefix = std::string(kLayer) + "/";
+    json calls = json::array();
+    std::map<std::string, int> perStamp;
+    for (const json& i : check.value("issues", json::array()))
+    {
+        const std::string about = i.value("about", std::string());
+        if (i.value("type", std::string()) != "blocksFlow" || !about.starts_with(prefix) || !i.contains("crossing"))
+            continue;
+        const std::string stamp = about.substr(prefix.size());
+        for (size_t k = 0; k < sites.size(); ++k)
+            if (stamp.starts_with(sites::ownerOf(sites[k].spec.id) + "/"))
+            {
+                json path = json::array();
+                for (const json& p : i["crossing"])
+                    path.push_back({p[0], p[2]});
+                const std::string id = stamp + "/culvert" + std::to_string(perStamp[stamp]++);
+                calls.push_back({{"command", "terrainAddFeature"},
+                                 {"flags", {{"args", {terrain}}, {"kind", "culvert"}, {"id", id}, {"path", path}, {"width", 300.0}, {"layer", kLayer}}}});
+                records[k]->push_back({{"id", id}, {"command", "terrainAddFeature"}, {"layer", kLayer}, {"op", "culvert"}});
+                break;
+            }
+    }
+    if (calls.empty())
+        return 0;
+    const json done = ops::execute("terrainBatch", {{"calls", calls}});
+    for (const json& e : done.value("errors", json::array()))
+        errors.push_back("culvert: " + e.value("error", std::string()));
+    return done.value("ran", 0);
+}
+
 json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
 {
     LILA_ZONE();
@@ -449,6 +528,10 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
         }
     }
     sent += sendDirect(plan.direct, cmd, errors);
+    {
+        std::vector<json*> records = {&record};
+        out["culverts"] = layCulverts({r}, records, terrain, errors);
+    }
     storeGround(r, {{"terrain", terrain}, {"ops", record}, {"hash", layoutGroundHash(r.spec, *L)}});
     out["sent"] = sent;
     out["ops"] = record.size();
@@ -504,6 +587,19 @@ json gradeMany(const std::vector<SiteRef>& sitesIn, const std::string& cmd)
         }
     }
     sent += sendDirect(direct, cmd, errors);
+    int culverts = 0;
+    for (const std::string& t : std::set<std::string>(terrains.begin(), terrains.end()))
+    {
+        std::vector<SiteRef> on;
+        std::vector<json*> records;
+        for (size_t i = 0; i < sitesIn.size(); ++i)
+            if (terrains[i] == t && plans[i].layout)
+            {
+                on.push_back(sitesIn[i]);
+                records.push_back(&plans[i].record);
+            }
+        culverts += layCulverts(on, records, t, errors);
+    }
     for (size_t i = 0; i < sitesIn.size(); ++i)
         if (!terrains[i].empty() && plans[i].layout)
         {
@@ -512,7 +608,7 @@ json gradeMany(const std::vector<SiteRef>& sitesIn, const std::string& cmd)
         }
     for (const std::string& e : errors)
         log::warn("{}", e);
-    return {{"sites", out}, {"sent", sent}, {"errors", errors}};
+    return {{"sites", out}, {"sent", sent}, {"culverts", culverts}, {"errors", errors}};
 }
 
 // Info
@@ -656,9 +752,23 @@ std::string uniqueId(const std::string& kind)
             return id;
 }
 
+/** Puts the site mesh's pivots on the site's origin, so the gizmo sits there and turns it in place. */
+void placePivot(const SiteRef& r, const sites::Evaluated& ev)
+{
+    Graph& g = Graph::current();
+    Node* mesh = g.find(r.mesh);
+    if (!mesh)
+        return;
+    const glm::dvec3 at(r.spec.at.x, ev.originHeight, r.spec.at.y);
+    for (int attr : {int(scene::Transform::kRotatePivot), int(scene::Transform::kScalePivot)})
+        if (glm::any(glm::notEqual(std::get<glm::dvec3>(g.value({mesh->id(), attr, -1})), at, 1e-6)))
+            g.setValue({mesh->id(), attr, -1}, at);
+}
+
 json created(const SiteRef& r, const json& groundOut, const std::string& cmd)
 {
     const sites::Evaluated ev = evaluate(r, cmd);
+    placePivot(r, ev);
     json out = info(r, ev, false);
     out["envelopes"] = ev.layout->envelopes.size();
     out["ground"] = groundOut;
@@ -968,6 +1078,86 @@ json rebuildSiteBuildings(const std::string& cmd)
 
 /** Turns a site's greybox massing off (its buildings come from the Buildings generator) or back on. */
 void setMassing(const SiteRef& r, bool on) { ops::execute("setAttr", {{"args", {r.modifier + ".massing", on}}}); }
+int& transformListener()
+{
+    static int id = -1;
+    return id;
+}
+
+/** Site meshes a top-level move, rotate or xform call left with a transform of their own. */
+std::vector<std::string> movedSites(const json& call)
+{
+    Graph& g = Graph::current();
+    std::vector<scene::NodeId> targets;
+    if (call.contains("args") && call["args"].is_array() && !call["args"].empty())
+    {
+        for (const json& n : call["args"])
+            if (n.is_string())
+                if (Node* node = g.find(n.get<std::string>()))
+                    targets.push_back(node->id());
+    }
+    else
+        targets.assign(g.selection().begin(), g.selection().end());
+    std::vector<std::string> out;
+    for (scene::NodeId id : targets)
+        if (Node* mod = siteModifierOf(g, g.node(id)))
+        {
+            const scene::NodeId mesh = scene::modifiers::meshOf(g, mod->id());
+            if (Node* m = g.node(mesh); m && !glm::all(glm::equal(scene::Transform::localMatrix(*m), glm::dmat4(1.0), 1e-9)))
+                out.push_back(m->path());
+        }
+    return out;
+}
+
+/**
+ * After the transform gizmo (or move/rotate/xform) moves a site mesh, its spec takes the move in the same undo step:
+ * the step is reopened, the call replayed and siteEdit folds the transform in.
+ */
+void followTransform(const ExecuteEvent& e)
+{
+    static bool busy = false;
+    static uint64_t stepBefore = 0;
+    if (busy || ops::previewing() || (e.name != "move" && e.name != "rotate" && e.name != "xform"))
+        return;
+    UndoStack& undo = UndoStack::get();
+    if (!e.done)
+    {
+        stepBefore = undo.newestId();
+        return;
+    }
+    if (!e.ok || undo.replaying())
+        return;
+    const std::vector<std::string> moved = movedSites(e.call);
+    if (moved.empty())
+        return;
+    busy = true;
+    struct Done
+    {
+        ~Done() { busy = false; }
+    } done;
+    try
+    {
+        if (undo.chunkOpen())
+        {
+            for (const std::string& m : moved)
+                ops::execute("siteEdit", {{"args", {m}}});
+            return;
+        }
+        if (undo.newestId() == stepBefore || !undo.reopenNewest("Move Site"))
+            return;
+        struct Close
+        {
+            ~Close() { UndoStack::get().closeChunk(); }
+        } close;
+        ops::execute(e.name, e.call);
+        for (const std::string& m : movedSites(e.call))
+            ops::execute("siteEdit", {{"args", {m}}});
+    }
+    catch (const std::exception& ex)
+    {
+        log::warn("Move Site: {}", ex.what());
+    }
+}
 } // namespace
 
 void registerSites(ext::Context& ctx)
@@ -1158,7 +1348,8 @@ void registerSites(ext::Context& ctx)
         .doc = "Change a site: its kit settings (the same flags as siteCreate, only its kind's), name, seed, placement, water level or "
                "terrain. The layout follows live; with ground=True (default) the terrain is graded again and the parts the site no longer "
                "has are taken off it. Slot ids of parts that stay where they were stay the same. Returns the site as siteInfo does with what "
-               "the grading sent.",
+               "the grading sent. A move or turn of the site mesh (the transform gizmo, move, rotate) is folded into at and heading and "
+               "the transform reset; that happens on its own after move and rotate (fromTransform says when it did).",
         .positionalDoc = "site mesh, modifier or id (default the selected or only site)",
         .flags = editFlags,
         .run = [](const Args& a) -> json {
@@ -1180,6 +1371,7 @@ void registerSites(ext::Context& ctx)
             }
             if (a.has("seed"))
                 s.seed = a.get<int64_t>("seed");
+            const bool folded = foldTransform(r, s, cmd);
             if (a.has("at"))
                 s.at = atOf(a.flags["at"], cmd);
             if (a.has("heading"))
@@ -1219,6 +1411,7 @@ void registerSites(ext::Context& ctx)
                 r = findSite(r.mesh, cmd);
             }
             json out = created(r, groundOut, cmd);
+            out["fromTransform"] = folded;
             if (!massingOn(r) && s.toJson() != before)
                 out["buildings"] = rebuildSiteBuildings(cmd);
             return out;
@@ -1229,7 +1422,7 @@ void registerSites(ext::Context& ctx)
     ctx.registerCommand({
         .name = "siteGround",
         .doc = "Grade the terrain under a site again from its spec (after editing the terrain, or with ground=False edits), or take "
-               "everything the site put on the terrain off it with remove=True. Returns what was sent and removed.",
+               "everything the site put on the terrain off it with remove=True. Lays a culvert where one of its pads stands across a stream. Returns what was sent and removed and the culverts laid.",
         .positionalDoc = "site mesh, modifier or id",
         .flags = {{"remove", "rm", T::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."},
                   {"sites", "s", T::List, nullptr, "Several sites graded in one terrain change (ids or meshes); every site with all=True."},
@@ -1457,5 +1650,26 @@ void registerSites(ext::Context& ctx)
                                                         "and the envelope style tags. Read before calling siteCreate.",
                                          .mimeType = "application/json",
                                          .read = [] { return ops::execute("siteKinds", json::object()).dump(2); }});
+
+    unregisterSites();
+    transformListener() = ops::addExecuteListener(followTransform);
+    // An opened scene's imported real names reach the layouts before anything draws them.
+    for (events::Event e : {events::Event::SceneOpened, events::Event::SceneImported})
+        ctx.subscribe(e, [](const events::EventData&) {
+            const uint64_t before = sites::avoidRevision();
+            refreshAvoid();
+            if (sites::avoidRevision() == before)
+                return;
+            Graph& g = Graph::current();
+            for (Node* n : siteModifiers(g))
+                gn::rerunModifier(g, n->id());
+        });
+}
+
+void unregisterSites()
+{
+    if (transformListener() >= 0)
+        ops::removeExecuteListener(transformListener());
+    transformListener() = -1;
 }
 } // namespace openworld

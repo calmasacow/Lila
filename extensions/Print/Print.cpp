@@ -975,6 +975,52 @@ void registerCommands(ext::Context& ctx)
                           }});
 }
 
+int gExportListener = -1;
+
+/**
+ * Meshes written by exportStl become print targets and are checked straight away, so an STL exported for printing
+ * gets the same printability issues as one prepared with the Print commands.
+ */
+void checkStlExport(const ExecuteEvent& e)
+{
+    if (e.name != "exportStl" || !e.done || !e.ok || ops::previewing())
+        return;
+    Graph& g = Graph::current();
+    std::vector<NodeId> roots;
+    const json& args = e.call.contains("args") && e.call["args"].is_array() ? e.call["args"] : json::array();
+    for (size_t i = 1; i < args.size(); ++i)
+        if (args[i].is_string())
+            if (Node* n = g.find(args[i].get<std::string>()))
+                roots.push_back(n->id());
+    if (roots.empty())
+        roots = g.selection();
+    std::vector<Node*> nodes;
+    std::set<NodeId> seen;
+    auto add = [&](NodeId id) {
+        if (Node* n = g.node(id); n && n->type().isA("mesh") && seen.insert(id).second)
+            nodes.push_back(n);
+    };
+    for (NodeId r : roots)
+    {
+        add(r);
+        for (NodeId d : g.descendants(r))
+            add(d);
+    }
+    if (nodes.empty())
+        return;
+    for (Node* n : nodes)
+        gTargets.insert(n->id());
+    CheckOptions o;
+    o.minWall = currentPrinter().minWall * kMmToCm;
+    runChecks(nodes, o, true);
+    size_t issues = 0;
+    for (Node* n : nodes)
+        for (const dx::Issue* i : dx::issuesOf(n->id()))
+            issues += i->source == kSource;
+    if (issues)
+        log::warn("Print: {} printability issue(s) on the exported meshes (Validation lists them)", issues);
+}
+
 /** "Size 52.0 x 30.0 x 12.0 mm, fits Prusa MK4" for the selection, under an export's unit field. */
 std::string selectionSizeNote()
 {
@@ -1168,6 +1214,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
 {
     print::registerCommands(ctx);
     print::registerUi(ctx);
+    print::gExportListener = lila::ops::addExecuteListener(print::checkStlExport);
     print::gTargetListener = lila::scene::Graph::current().addListener(
         [](lila::scene::Change c, lila::scene::NodeId id) {
             if (c == lila::scene::Change::Cleared)
@@ -1183,6 +1230,9 @@ LILA_EXTENSION_EXPORT void lilaExtensionUninit(lila::ext::Context&)
 {
     print::gPlacingHole = false;
     print::gLegend = {};
+    if (print::gExportListener >= 0)
+        lila::ops::removeExecuteListener(print::gExportListener);
+    print::gExportListener = -1;
     if (print::gTargetListener >= 0)
         lila::scene::Graph::current().removeListener(print::gTargetListener);
     print::gTargetListener = -1;

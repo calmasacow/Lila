@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <map>
 
 using namespace openworld;
@@ -337,4 +338,44 @@ TEST_CASE("remix: cut coastline is re-merged along sea level")
     CHECK(merged >= 1);
     const json c = checkRemix(s, *r);
     CHECK(countKind(c, "coastGap") == int(r->coastEnds.size() - joined));
+}
+
+TEST_CASE("remix: a road crossing a delete strip narrower than the probe step is still cut")
+{
+    json j = base();
+    // 4 m wide, far under half the 30 m seam the probe steps by.
+    j["regions"] = json::array({{{"id", "strip"}, {"op", "delete"}, {"polygon", box(39800, -200000, 40200, 200000)}}});
+    j["seams"]["width"] = 3000;
+    j["seams"]["roads"] = false;
+    const RemixSpec s = specFromJson(j);
+    const std::shared_ptr<RemixResult> r = runRemix(s);
+    CHECK(r->roadEnds.size() >= 2);
+    CHECK(countKind(checkRemix(s, *r), "danglingRoad") >= 2);
+}
+TEST_CASE("remix: a pasted region is levelled to the ground round it, its seam widened to a gentle slope")
+{
+    auto steepestAcrossEdge = [](const RemixResult& r) {
+        // The target's west edge at x = 90000, crossed by rows from 2 km outside to 2 km inside.
+        double worst = 0.0;
+        for (double z = -15000.0; z <= 15000.0; z += 5000.0)
+            for (double x = 88000.0; x < 92000.0; x += r.after.cell)
+                worst = std::max(worst, std::abs(r.after.heightAt(x + r.after.cell, z) - r.after.heightAt(x, z)) / r.after.cell);
+        return worst;
+    };
+    json j = base();
+    j["sources"].push_back(inland({250000, -60000}));
+    j["regions"] = json::array({{{"id", "town"}, {"op", "cut"}, {"polygon", box(230000, -80000, 270000, -40000)}, {"translate", {-140000, 60000}}}});
+    const std::shared_ptr<RemixResult> matched = runRemix(specFromJson(j));
+    REQUIRE(matched->stats.contains("regionLevels"));
+    const json lv = matched->stats["regionLevels"][0];
+    CHECK(lv["region"] == "town");
+    CHECK(lv["seam"].get<double>() >= specFromJson(j).seams.width);
+    // The step left fits the seam at the gentle grade, unless the seam reached its cap of a quarter of the region.
+    CHECK((lv["stepLeft"].get<double>() <= lv["seam"].get<double>() * kSeamGrade + 1.0 || lv["seam"].get<double>() >= 0.25 * 40000.0 - 1.0));
+    j["regions"][0]["matchHeight"] = false;
+    const std::shared_ptr<RemixResult> raw = runRemix(specFromJson(j));
+    CHECK_FALSE(raw->stats.contains("regionLevels"));
+    MESSAGE("steepest across the edge: matched " << steepestAcrossEdge(*matched) << ", raw " << steepestAcrossEdge(*raw) << ", offset " << lv["offset"]);
+    CHECK(steepestAcrossEdge(*matched) < steepestAcrossEdge(*raw));
+    CHECK(toJson(specFromJson(j))["regions"][0]["matchHeight"] == false);
 }

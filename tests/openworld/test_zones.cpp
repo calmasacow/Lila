@@ -4,6 +4,7 @@
 #include "Zones.h"
 
 #include "extensions/ExtensionManager.h"
+#include "math/MathCore.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
 
@@ -260,6 +261,27 @@ TEST_CASE("zones: mask outlines and convex pieces")
     for (const Polygon& p : convexPieces(cw))
         sumCw += area(p);
     CHECK(sumCw == doctest::Approx(area(L)));
+
+    // A square with two holes, one of them an L: the pieces cover the square less the holes, and none lies in a hole.
+    const Polygon square = {{0, 0}, {1000, 0}, {1000, 1000}, {0, 1000}};
+    const std::vector<Polygon> squareHoles = {{{200, 200}, {400, 200}, {400, 400}, {200, 400}},
+                                              {{550, 550}, {900, 550}, {900, 650}, {650, 650}, {650, 900}, {550, 900}}};
+    double holed = 0.0;
+    for (const Polygon& p : convexPieces(square, squareHoles))
+    {
+        holed += area(p);
+        for (size_t i = 0; i < p.size(); ++i)
+        {
+            const Vec2 a = p[i], b = p[(i + 1) % p.size()], c = p[(i + 2) % p.size()];
+            CHECK((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) >= -1e-6);
+        }
+        Vec2 mid(0.0);
+        for (Vec2 q : p)
+            mid += q / double(p.size());
+        CHECK(!(mid.x > 200 && mid.x < 400 && mid.y > 200 && mid.y < 400));
+    }
+    CHECK(holed == doctest::Approx(1000.0 * 1000.0 - 200.0 * 200.0 - std::abs(area(squareHoles[1]))));
+    CHECK(convexPieces(square, {}).size() == 1);
 }
 
 TEST_CASE("zones: convex pieces of a long traced ring stay quick and exact")
@@ -438,4 +460,26 @@ TEST_CASE("zone commands: create, paint, query, list, check, undo, districts, te
     for (double x = -45000; x <= 45000; x += 7500)
         CHECK(run("zoneQuery", {{"point", {x, x * 0.3}}})["layers"] == answers[k++]);
     std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("zone commands: on a Z-up scene zones lie on world XY")
+{
+    loadPackages();
+    run("newScene");
+    lila::math::setUpAxis(lila::math::UpAxis::Z);
+    run("terrainCreate", {{"size", {100000.0, 100000.0}}, {"resolution", 129}, {"flat", true}, {"name", "Ground"}});
+    run("terrainStroke", {{"args", {"Ground"}}, {"brush", "mask"}, {"mask", "market"}, {"points", {{20000.0, -30000.0}}}, {"radius", 6000.0},
+                          {"strength", 1.0}, {"value", 1.0}, {"stage", "final"}});
+    run("zoneFromTerrain", {{"masks", {"market"}}, {"layer", "peds"}, {"type", "pedSpawn"}});
+    CHECK(run("zoneQuery", {{"point", {20000, -30000}}, {"layer", "peds"}})["layers"]["peds"]["zone"] == "market");
+    CHECK(run("zoneQuery", {{"point", {20000, -30000, 0}}, {"layer", "peds"}})["layers"]["peds"]["zone"] == "market");
+    CHECK(run("zoneQuery", {{"point", {-30000, 20000}}, {"layer", "peds"}})["layers"]["peds"]["zone"].is_null());
+
+    // A closed curve drawn on the XY ground outlines the zone it was drawn as.
+    const std::string c = run("curve", {{"points", {{0, 10000, 0}, {0, 20000, 0}, {10000, 20000, 0}, {10000, 10000, 0}, {0, 10000, 0}}}, {"type", "poly"}})
+                              .get<std::string>();
+    run("zoneCreate", {{"layer", "district"}, {"type", "district"}, {"id", "block"}, {"curve", c}});
+    CHECK(run("zoneQuery", {{"point", {5000, 15000, 0}}, {"layer", "district"}})["layers"]["district"]["zone"] == "block");
+    CHECK(run("zoneQuery", {{"point", {5000, 0, 15000}}, {"layer", "district"}})["layers"]["district"]["zone"].is_null());
+    lila::math::setUpAxis(lila::math::UpAxis::Y);
 }

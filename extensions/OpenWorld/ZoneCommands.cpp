@@ -12,6 +12,7 @@
 #include <lila/Graph.h>
 #include <lila/ImageIO.h>
 #include <lila/Log.h>
+#include <lila/Math.h>
 #include <lila/Mcp.h>
 #include <lila/Node.h>
 #include <lila/Paths.h>
@@ -327,7 +328,7 @@ Polygon ringOf(const json& pts, const std::string& what, const std::string& cmd)
     return r;
 }
 
-/** Every closed spline of the curves, world space, as rings on the XZ plane. */
+/** Every closed spline of the curves, world space, as rings on the ground plane. */
 std::vector<Polygon> curveRings(const json& curves, const std::string& cmd)
 {
     std::vector<Polygon> out;
@@ -346,7 +347,7 @@ std::vector<Polygon> curveRings(const json& curves, const std::string& cmd)
         {
             Polygon r;
             for (const json& p : sp.value("points", json::array()))
-                r.push_back(Vec2(p[0].get<double>(), p[2].get<double>()));
+                r.push_back(planeOf({p[0].get<double>(), p[1].get<double>(), p[2].get<double>()}));
             if (r.size() > 3 && glm::length(r.front() - r.back()) < 1e-6)
                 r.pop_back();
             if (r.size() >= 3)
@@ -600,14 +601,14 @@ json unrealZones(const ZoneSpec& s, const Ground& gr, double height, double dept
             auto ring3 = [&](const Polygon& ring) {
                 json pts = json::array();
                 for (Vec2 p : ring)
-                    pts.push_back(ue({p.x, 0.0, p.y}));
+                    pts.push_back(ue(worldOf(p, 0.0)));
                 return pts;
             };
             json outline = json::array(), holeJ = json::array(), pieces = json::array();
             for (const Polygon& ring : rings)
             {
                 outline.push_back(ring3(ring));
-                for (const Polygon& piece : convexPieces(ring))
+                for (const Polygon& piece : convexPieces(ring, holes))
                     pieces.push_back(ring3(piece));
             }
             for (const Polygon& h : holes)
@@ -621,8 +622,8 @@ json unrealZones(const ZoneSpec& s, const Ground& gr, double height, double dept
                        {"outline", outline},
                        {"holes", holeJ},
                        {"pieces", pieces},
-                       {"bottom", ue({0.0, bottom, 0.0})[2]},
-                       {"top", ue({0.0, top, 0.0})[2]}};
+                       {"bottom", ue(worldOf({0.0, 0.0}, bottom))[2]},
+                       {"top", ue(worldOf({0.0, 0.0}, top))[2]}};
             glm::ivec2 a, b;
             if (z.mask.cellBounds(a, b))
             {
@@ -631,8 +632,8 @@ json unrealZones(const ZoneSpec& s, const Ground& gr, double height, double dept
                 for (int y = 0; y < size.y; ++y)
                     for (int x = 0; x < size.x; ++x)
                         v[size_t(y) * size_t(size.x) + size_t(x)] = z.mask.cellValue(a.x + x, a.y + y);
-                const json o = ue({a.x * z.mask.cell, 0.0, a.y * z.mask.cell});
-                const json ex = ue({z.mask.cell, 0.0, 0.0}), ez = ue({0.0, 0.0, z.mask.cell});
+                const json o = ue(worldOf(Vec2(a) * z.mask.cell, 0.0));
+                const json ex = ue(worldOf({z.mask.cell, 0.0}, 0.0)), ez = ue(worldOf({0.0, z.mask.cell}, 0.0));
                 zj["mask"] = {{"origin", o}, {"axisU", ex}, {"axisV", ez}, {"size", {size.x, size.y}}, {"values", base64(v)}};
             }
             zones.push_back(std::move(zj));
@@ -691,13 +692,19 @@ std::string setName(const Args& a)
 
 // ----------------------------------------------------------------------------------------------------------------------
 
+bool zUp() { return math::upAxis() == math::UpAxis::Z; }
+
+glm::dvec3 worldOf(Vec2 p, double up) { return zUp() ? glm::dvec3(p.x, p.y, up) : glm::dvec3(p.x, up, p.y); }
+Vec2 planeOf(const glm::dvec3& w) { return zUp() ? Vec2(w.x, w.y) : Vec2(w.x, w.z); }
+double upOf(const glm::dvec3& w) { return zUp() ? w.z : w.y; }
+
 double Ground::heightAt(Vec2 p) const
 {
     if (!valid())
         return 0.0;
-    const glm::dvec3 l = glm::dvec3(inv * glm::dvec4(p.x, 0.0, p.y, 1.0));
+    const glm::dvec3 l = glm::dvec3(inv * glm::dvec4(worldOf(p, 0.0), 1.0));
     const double y = h->heightAt(l.x, l.z);
-    return glm::dvec3(world * glm::dvec4(l.x, y, l.z, 1.0)).y;
+    return upOf(glm::dvec3(world * glm::dvec4(l.x, y, l.z, 1.0)));
 }
 
 bool Ground::extent(Vec2& lo, Vec2& hi) const
@@ -710,8 +717,8 @@ bool Ground::extent(Vec2& lo, Vec2& hi) const
     for (glm::dvec2 c : {o, glm::dvec2(e.x, o.y), e, glm::dvec2(o.x, e.y)})
     {
         const glm::dvec3 w = glm::dvec3(world * glm::dvec4(c.x, 0.0, c.y, 1.0));
-        lo = glm::min(lo, Vec2(w.x, w.z));
-        hi = glm::max(hi, Vec2(w.x, w.z));
+        lo = glm::min(lo, planeOf(w));
+        hi = glm::max(hi, planeOf(w));
     }
     return true;
 }
@@ -784,7 +791,7 @@ Vec2 planePoint(const json& v, const std::string& what, const std::string& cmd)
 {
     if (!v.is_array() || v.size() < 2 || v.size() > 3)
         throw CommandError(cmd + ": " + what + " takes [x, z] or [x, y, z] points");
-    return v.size() == 3 ? Vec2(v[0].get<double>(), v[2].get<double>()) : Vec2(v[0].get<double>(), v[1].get<double>());
+    return v.size() == 3 ? planeOf({v[0].get<double>(), v[1].get<double>(), v[2].get<double>()}) : Vec2(v[0].get<double>(), v[1].get<double>());
 }
 
 void registerZoneCommands(ext::Context& ctx)
@@ -1368,7 +1375,7 @@ void registerZoneCommands(ext::Context& ctx)
                 for (const json& p : d["outline"])
                 {
                     const glm::dvec3 w = glm::dvec3(world * glm::dvec4(p[0].get<double>(), 0.0, p[1].get<double>(), 1.0));
-                    ring.push_back({w.x, w.z});
+                    ring.push_back(planeOf(w));
                 }
                 z.polygons = {ring};
                 z.name = d.value("name", std::string());
@@ -1455,7 +1462,7 @@ void registerZoneCommands(ext::Context& ctx)
                     for (int cx = c0.x; cx <= c1.x; ++cx)
                     {
                         const Vec2 p = (Vec2(cx, cz) + 0.5) * z.mask.cell;
-                        const glm::dvec3 lp = glm::dvec3(gr.inv * glm::dvec4(p.x, 0.0, p.y, 1.0));
+                        const glm::dvec3 lp = glm::dvec3(gr.inv * glm::dvec4(worldOf(p, 0.0), 1.0));
                         if (!gr.h->contains(lp.x, lp.z))
                             continue;
                         const double v = gr.h->maskAt(name, lp.x, lp.z);

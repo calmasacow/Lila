@@ -12,6 +12,7 @@
 #include <lila/Mesh.h>
 #include <lila/Names.h>
 #include <lila/Node.h>
+#include <lila/Prefs.h>
 #include <lila/Profile.h>
 #include <lila/Slots.h>
 #include <lila/Transform.h>
@@ -77,12 +78,13 @@ void ensureGroup()
     json inputs = json::array({
         {{"name", "spec"}, {"type", "string"}, {"default", "[]"}, {"description", "Buildings as JSON (buildingCreate)."}},
         {{"name", "edits"}, {"type", "string"}, {"default", "{}"}, {"description", "Edits by building id (buildingEdit)."}},
-        {{"name", "lod"}, {"type", "string"}, {"default", "near"}, {"description", "near, hlod or far."}},
+        {{"name", "lod"}, {"type", "string"}, {"default", "near"}, {"description", "near, hlod, far or auto (by camera distance)."}},
         {{"name", "cell"}, {"type", "string"}, {"default", ""}, {"description", "Cell (x_z) or building id."}},
         {{"name", "modules"}, {"type", "bool"}, {"default", true}, {"description", "Draw modules."}},
+        {{"name", "realize"}, {"type", "bool"}, {"default", false}, {"description", "Modules flattened into the cell mesh."}},
     });
     json links = json::array();
-    for (const char* in : {"spec", "edits", "lod", "cell", "modules"})
+    for (const char* in : {"spec", "edits", "lod", "cell", "modules", "realize"})
         links.push_back(std::string("GroupInput.") + in + " -> Build." + in);
     links.push_back("Build.geometry -> GroupOutput.geometry");
     ops::execute("gnBuildGroup", {{"args", {json{{"name", kGroupName},
@@ -467,10 +469,10 @@ int ensureMaterials(const std::set<std::string>& styleIds)
 {
     scene::Graph& g = G();
     int made = 0;
-    auto make = [&](const std::string& name, glm::vec3 c, double rough) {
+    auto make = [&](const std::string& name, glm::vec3 c, double rough, bool instanceColor = true) {
         if (scene::materials::find(g, name))
             return;
-        json call = {{"args", {name}}, {"baseColor", {c.r, c.g, c.b}}, {"roughness", rough}};
+        json call = {{"args", {name}}, {"baseColor", {c.r, c.g, c.b}}, {"roughness", rough}, {"instanceColor", instanceColor}};
         if (name == matName(MatGlassClear))
         {
             call["blendMode"] = "translucent";
@@ -489,7 +491,7 @@ int ensureMaterials(const std::set<std::string>& styleIds)
         {MatConcrete, {0.45f, 0.44f, 0.42f}}, {MatStone, {0.4f, 0.37f, 0.33f}}, {MatWater, {0.03f, 0.25f, 0.35f}}, {MatWood, {0.25f, 0.14f, 0.07f}},
         {MatDark, {0.03f, 0.03f, 0.03f}},     {MatGlassClear, {0.55f, 0.65f, 0.7f}}};
     for (auto& [m, c] : kShared)
-        make(matName(m), c, m == MatGlass || m == MatWater || m == MatGlassClear ? 0.1 : m == MatMetal ? 0.5 : 0.8);
+        make(matName(m), c, m == MatGlass || m == MatWater || m == MatGlassClear ? 0.1 : m == MatMetal ? 0.5 : 0.8, false);
 
     return made;
 }
@@ -941,7 +943,7 @@ void touchAll()
     scene::Graph& g = G();
     for (auto& [mesh, mod] : buildingMeshes())
         if (scene::Node* n = g.find(mod))
-            g.touch(n->id());
+            gn::rerunModifier(g, n->id());
 }
 
 json deepMerge(json base, const json& over)
@@ -1583,10 +1585,12 @@ void registerCommands(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "buildingLod",
-        .doc = "What building meshes show: near (shell and modules), hlod (a simplified proxy: tiers and roofs, no openings) or far "
-               "(flat-roof massing). Per mesh, so per cell. Slots stay published whatever is shown.",
+        .doc = "What building meshes show: near (shell and modules), hlod (a simplified proxy: tiers and roofs, no openings), far "
+               "(flat-roof massing) or auto (near, hlod or far by the mesh's distance from the viewport camera; the distances are "
+               "the prefs buildings/lodNear and buildings/lodFar, default 400 m and 2 km). Per mesh, so per cell. Slots stay "
+               "published whatever is shown.",
         .positionalDoc = "building meshes (default every one)",
-        .flags = {{"lod", "l", T::String, "near", "near, hlod or far.", {"near", "hlod", "far"}}},
+        .flags = {{"lod", "l", T::String, "near", "near, hlod, far or auto.", {"near", "hlod", "far", "auto"}}},
         .run = [](const Args& a) -> json {
             const std::string lod = a.get<std::string>("lod", "near");
             int n = 0;
@@ -1767,7 +1771,8 @@ void registerCommands(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "buildingTrimSheet",
-        .doc = "The LilaBuilding trim sheet shells are laid on: copied into the workspace's TrimSheets folder and baked with Trim Sheets "
+        .doc = "The LilaBuilding trim sheet shells are laid on: copied into the workspace's TrimSheets folder (the user's trim-sheets "
+               "folder when no workspace is open) and baked with Trim Sheets "
                "(needs that extension), then building meshes point at the copy. The strips: Render, Plinth, Cornice, Band, Coping, "
                "Pilaster, RoofTile, Sheet. Returns the file and the bake result.",
         .flags = {{"bake", "b", T::Bool, true, "Bake the sheet's maps."}},
@@ -1777,15 +1782,16 @@ void registerCommands(ext::Context& ctx)
             std::error_code ec;
             if (src.empty() || !fs::exists(src, ec))
                 throw CommandError("buildingTrimSheet: the shipped LilaBuilding.lilatrim is missing from the Buildings resources");
-            fs::path dst = src;
-            if (lila::Workspace::get().isOpen())
-            {
-                dst = lila::Workspace::get().root() / "TrimSheets" / "LilaBuilding.lilatrim";
-                fs::create_directories(dst.parent_path(), ec);
-                if (!fs::exists(dst, ec))
-                    fs::copy_file(src, dst, ec);
-            }
-            json out = {{"file", dst.generic_string()}};
+            // Baking writes maps beside the file, so it goes to the workspace, else the user's folder, never the shipped resources.
+            const bool inWorkspace = lila::Workspace::get().isOpen();
+            const fs::path dst = (inWorkspace ? lila::Workspace::get().root() / "TrimSheets" : lila::PrefStore::get().userDir() / "trim-sheets") /
+                                 "LilaBuilding.lilatrim";
+            fs::create_directories(dst.parent_path(), ec);
+            if (!fs::exists(dst, ec))
+                fs::copy_file(src, dst, ec);
+            if (ec)
+                throw CommandError("buildingTrimSheet: could not copy the sheet to " + dst.generic_string() + " (" + ec.message() + ")");
+            json out = {{"file", dst.generic_string()}, {"fileFrom", inWorkspace ? "workspace" : "user folder (no workspace open)"}};
             if (a.get<bool>("bake", true))
             {
                 if (!ops::find("trimSheetCreate"))

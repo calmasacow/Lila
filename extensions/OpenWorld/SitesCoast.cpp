@@ -57,6 +57,9 @@ json heightFromWater(json flags, double above)
 }
 } // namespace
 
+/** Yards sit at a fixed height above the water: their skirt widens to stay a slope the town's streets can meet, percent. */
+constexpr double kYardSkirtGrade = 8.0;
+
 void buildPort(Kit& k)
 {
     const Spec& s = k.spec;
@@ -65,7 +68,9 @@ void buildPort(Kit& k)
     k.L.boundary = rect(x0, -4500.0, x1, D);
 
     k.ground("yard", "terrainStampPad",
-             heightFromWater({{"footprint", pts(rect(x0, 0.0, x1, D))}, {"mode", "flatten"}, {"falloff", 3000.0}, {"masks", {"paved", "port", "cityFootprint"}}}, 250.0));
+             heightFromWater({{"footprint", pts(rect(x0, 0.0, x1, D))}, {"mode", "flatten"}, {"falloff", 3000.0}, {"skirtGrade", kYardSkirtGrade},
+                              {"masks", {"paved", "port", "cityFootprint"}}},
+                             250.0));
     k.ground("quay", "terrainStampQuay",
              heightFromWater({{"path", json::array({pt({x0, 0.0}), pt({x1, 0.0})})}, {"kind", "quay"}, {"side", "left"}, {"depth", dredge}, {"width", 600.0}}, 250.0));
     k.ground("berths", "terrainStampRegion",
@@ -83,6 +88,7 @@ void buildPort(Kit& k)
     // Liveries: fictional shipping lines, one container subtype each.
     const int nLiveries = s.i("liveries");
     std::vector<std::pair<std::string, std::string>> liveries; // (name, slug)
+    std::vector<std::string> liveryColours;
     for (int li = 1; li <= nLiveries; ++li)
     {
         const std::string n = k.name("livery:" + std::to_string(li), NK::Business, "shipping");
@@ -91,7 +97,8 @@ void buildPort(Kit& k)
             if (other == slug)
                 slug += std::to_string(li);
         liveries.push_back({n, slug});
-        k.L.liveries.push_back({{"id", li}, {"name", n}, {"slug", slug}, {"colour", hexColour(k.rnd(77, li), 0.75, 0.8)},
+        liveryColours.push_back(hexColour(k.rnd(77, li), 0.75, 0.8));
+        k.L.liveries.push_back({{"id", li}, {"name", n}, {"slug", slug}, {"colour", liveryColours.back()},
                                 {"types", {"container.20ft." + slug, "container.40ft." + slug, "container.reefer." + slug}}});
     }
     auto livery = [&](uint64_t a, uint64_t b, uint64_t c) { return size_t(k.rnd(a, b, c) * double(liveries.size())) % liveries.size(); };
@@ -163,7 +170,8 @@ void buildPort(Kit& k)
                             const size_t li = livery(uint64_t(bi * 1000 + bj) * 64 + uint64_t(i), uint64_t(r * 16 + t), salt);
                             SlotOut& c = k.slot(path, base + "." + liveries[li].second, {cx, z}, kPi * 0.5, t * 259.0);
                             c.tags = {"livery"};
-                            c.data = {{"livery", liveries[li].first}, {"liveryId", int(li) + 1}};
+                            // "color" is what the viewport and Unreal tint each container with.
+                            c.data = {{"livery", liveries[li].first}, {"liveryId", int(li) + 1}, {"color", liveryColours[li]}};
                             ++containers;
                         };
                         if (twenty)
@@ -265,7 +273,9 @@ void buildCruise(Kit& k)
     k.ground("quay", "terrainStampQuay",
              heightFromWater({{"path", json::array({pt({-Ls * 0.5, 0.0}), pt({Ls * 0.5, 0.0})})}, {"kind", "quay"}, {"side", "left"}, {"depth", 1000.0}, {"width", 500.0}}, 200.0));
     k.ground("plaza", "terrainStampRegion",
-             heightFromWater({{"footprint", pts(rect(-Ls * 0.5, 0.0, Ls * 0.5, 11000.0))}, {"mode", "flatten"}, {"falloff", 1500.0}, {"masks", {"paved", "cityFootprint"}}}, 220.0));
+             heightFromWater({{"footprint", pts(rect(-Ls * 0.5, 0.0, Ls * 0.5, 11000.0))}, {"mode", "flatten"}, {"falloff", 1500.0}, {"skirtGrade", kYardSkirtGrade},
+                              {"masks", {"paved", "cityFootprint"}}},
+                             220.0));
     k.ground("berths", "terrainStampRegion",
              heightFromWater({{"footprint", pts(rect(-Wp * 0.5 - 5500.0, -Lp - 500.0, Wp * 0.5 + 5500.0, -1200.0))}, {"mode", "carve"}, {"falloff", 300.0}, {"masks", {"port"}}},
                              -1100.0));

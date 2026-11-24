@@ -187,6 +187,8 @@ json toJson(const RemixSpec& s)
         }
         if (r.seam)
             j["seam"] = *r.seam;
+        if (!r.matchHeight)
+            j["matchHeight"] = false;
         regions.push_back(j);
     }
     for (const Pin& p : s.pins)
@@ -200,7 +202,7 @@ json toJson(const RemixSpec& s)
                 {"pins", pins},
                 {"warp", {{"falloff", s.warp.falloff}, {"maxSteps", s.warp.maxSteps}}},
                 {"bathymetry", s.bathymetry},
-                {"seams", {{"width", s.seams.width}, {"erosion", s.seams.erosion}, {"detail", s.seams.detail}, {"roads", s.seams.roads},
+                {"seams", {{"width", s.seams.width}, {"maxSlope", s.seams.maxSlope}, {"erosion", s.seams.erosion}, {"detail", s.seams.detail}, {"roads", s.seams.roads},
                            {"roadReach", s.seams.roadReach}, {"rivers", s.seams.rivers}, {"coast", s.seams.coast}, {"seed", s.seams.seed}}},
                 {"view", s.view}};
     if (s.origin)
@@ -291,7 +293,7 @@ RemixSpec specFromJson(const json& j)
             const std::string where = "regions[" + std::to_string(i) + "].";
             if (!e.is_object())
                 throw std::runtime_error(where + " is a dict");
-            onlyKeys(e, {"id", "op", "polygon", "translate", "angle", "pivot", "seam"}, where);
+            onlyKeys(e, {"id", "op", "polygon", "translate", "angle", "pivot", "seam", "matchHeight"}, where);
             Region r;
             r.id = str(e, "id", where);
             if (r.id.empty())
@@ -309,6 +311,12 @@ RemixSpec specFromJson(const json& j)
                 r.pivot = vec2(e["pivot"], where + "pivot");
             if (e.contains("seam") && !e["seam"].is_null())
                 r.seam = std::max(0.0, num(e, "seam", 0.0, where));
+            if (e.contains("matchHeight"))
+            {
+                if (!e["matchHeight"].is_boolean())
+                    throw std::runtime_error(where + "matchHeight is true or false");
+                r.matchHeight = e["matchHeight"].get<bool>();
+            }
             if (s.region(r.id))
                 throw std::runtime_error(where + "id '" + r.id + "' is used twice");
             s.regions.push_back(std::move(r));
@@ -344,8 +352,9 @@ RemixSpec specFromJson(const json& j)
     if (j.contains("seams"))
     {
         const json& m = j["seams"];
-        onlyKeys(m, {"width", "erosion", "detail", "roads", "roadReach", "rivers", "coast", "seed"}, "seams.");
+        onlyKeys(m, {"width", "maxSlope", "erosion", "detail", "roads", "roadReach", "rivers", "coast", "seed"}, "seams.");
         s.seams.width = std::max(0.0, num(m, "width", s.seams.width, "seams."));
+        s.seams.maxSlope = std::max(0.0, num(m, "maxSlope", s.seams.maxSlope, "seams."));
         s.seams.erosion = std::clamp(num(m, "erosion", s.seams.erosion, "seams."), 0, 2000);
         s.seams.detail = std::max(0.0, num(m, "detail", s.seams.detail, "seams."));
         s.seams.roads = num(m, "roads", s.seams.roads, "seams.");
@@ -429,7 +438,8 @@ json remixSpecSchema()
                 {"translate", point},
                 {"angle", {{"type", "number"}}},
                 {"pivot", point},
-                {"seam", {{"type", "number"}, {"description", "Seam band width cm; default seams.width."}}}}}}}}},
+                {"seam", {{"type", "number"}, {"description", "Seam band width cm; default seams.width."}}},
+                {"matchHeight", {{"type", "boolean"}, {"description", "cut and duplicate: raise or lower the pasted ground by the median step along its edge and widen the seam where what is left would be steeper than 8% (default true)."}}}}}}}}},
           {"pins",
            {{"type", "array"},
             {"items", {{"type", "object"}, {"required", {"at"}}, {"properties", {{"id", {{"type", "string"}}}, {"at", point}, {"to", point}}}}},
@@ -443,6 +453,10 @@ json remixSpecSchema()
            {{"type", "object"},
             {"properties",
              {{"width", {{"type", "number"}, {"description", "Blend band cm. Default 1500."}}},
+              {"maxSlope",
+               {{"type", "number"},
+                {"description", "Steepest seam slope (rise over run) left where a pasted region meets the ground round it. "
+                                "Default 0.08; 0 uses the default."}}},
               {"erosion", {{"type", "integer"}, {"description", "Erosion steps re-run in seam bands."}}},
               {"detail", {{"type", "number"}}},
               {"roads", {{"type", "boolean"}, {"description", "Reconnect cut roads with terrainRoute, keeping their class."}}},

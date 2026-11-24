@@ -158,13 +158,14 @@ QString display(const std::string& camel)
 // ----------------------------------------------------------------------------------------------------------------------
 // Overlay
 
-glm::dvec3 draped(const Ground& g, Vec2 p) { return {p.x, g.heightAt(p) + 30.0, p.y}; }
+glm::dvec3 draped(const Ground& g, Vec2 p) { return worldOf(p, g.heightAt(p) + 30.0); }
 
 struct LayerDraw
 {
+    /** A run of cells along x, draped at every cell corner so neighbouring runs share their edges' points (no seams). */
     struct Quad
     {
-        std::array<glm::dvec3, 4> c;
+        std::vector<glm::dvec3> top, bottom;
         glm::vec4 color;
     };
     struct Line
@@ -226,7 +227,14 @@ LayerDraw buildLayer(const Layer& l, const Ground& g, int resolution)
             const glm::vec3 c = zoneColor(l, l.zones[size_t(w)]);
             const float a = l.density ? std::clamp(float(lv + 1) / 8.0f, 0.1f, 1.0f) : 1.0f;
             const Vec2 p0 = r.origin + Vec2(x, z) * r.cell, p1 = r.origin + Vec2(x1 + 1, z + 1) * r.cell;
-            d.quads.push_back({{draped(g, p0), draped(g, {p1.x, p0.y}), draped(g, p1), draped(g, {p0.x, p1.y})}, glm::vec4(c, a)});
+            LayerDraw::Quad q{{}, {}, glm::vec4(c, a)};
+            for (int k = x; k <= x1 + 1; ++k)
+            {
+                const double px = r.origin.x + double(k) * r.cell;
+                q.top.push_back(draped(g, {px, p0.y}));
+                q.bottom.push_back(draped(g, {px, p1.y}));
+            }
+            d.quads.push_back(std::move(q));
             x = x1 + 1;
         }
     auto addRing = [&](const Polygon& ring, int zone) {
@@ -339,12 +347,19 @@ void drawZones(render::FrameState&, OverlayPainter& p, const ViewInfo& view)
             const float a = float(opacity) * (active || !isCurrent ? 1.0f : 0.7f);
             for (const LayerDraw::Quad& q : d.quads)
             {
-                std::vector<QPointF> pts;
-                for (const glm::dvec3& c : q.c)
-                    if (auto s = view.project(c))
-                        pts.push_back(*s);
-                if (pts.size() == 4)
-                    p.fill(pts, glm::vec4(glm::vec3(q.color), q.color.a * a));
+                const glm::vec4 color(glm::vec3(q.color), q.color.a * a);
+                std::optional<QPointF> t0 = view.project(q.top[0]), b0 = view.project(q.bottom[0]);
+                for (size_t k = 1; k < q.top.size(); ++k)
+                {
+                    const std::optional<QPointF> t1 = view.project(q.top[k]), b1 = view.project(q.bottom[k]);
+                    if (t0 && b0 && t1 && b1)
+                    {
+                        p.triangle(*t0, *t1, *b1, color);
+                        p.triangle(*t0, *b1, *b0, color);
+                    }
+                    t0 = t1;
+                    b0 = b1;
+                }
             }
             if (!active)
                 continue;
@@ -389,25 +404,25 @@ bool groundHit(const Ground& g, QPointF px, const ViewInfo& view, Vec2& out)
 {
     glm::dvec3 o, d;
     view.ray(px, o, d);
-    if (std::abs(d.y) < 1e-9)
+    if (std::abs(upOf(d)) < 1e-9)
         return false;
     // March along the ray until it drops under the ground, then bisect; a flat plane at 0 without a ground.
     if (!g.valid())
     {
-        const double t = -o.y / d.y;
+        const double t = -upOf(o) / upOf(d);
         if (t <= 0.0)
             return false;
-        out = Vec2(o.x + d.x * t, o.z + d.z * t);
+        out = planeOf(o + d * t);
         return true;
     }
     Vec2 lo, hi;
     g.extent(lo, hi);
-    const double span = glm::length(hi - lo) * 2.0 + glm::length(Vec2(o.x, o.z) - (lo + hi) * 0.5);
+    const double span = glm::length(hi - lo) * 2.0 + glm::length(planeOf(o) - (lo + hi) * 0.5);
     const double step = std::max(g.h->cell * 0.5, span / 4000.0);
     double t0 = 0.0;
     auto below = [&](double t) {
         const glm::dvec3 p = o + d * t;
-        return p.y < g.heightAt({p.x, p.z});
+        return upOf(p) < g.heightAt(planeOf(p));
     };
     if (below(0.0))
         return false;
@@ -421,18 +436,17 @@ bool groundHit(const Ground& g, QPointF px, const ViewInfo& view, Vec2& out)
                 const double m = (a + b) * 0.5;
                 (below(m) ? b : a) = m;
             }
-            const glm::dvec3 p = o + d * b;
-            out = Vec2(p.x, p.z);
+            out = planeOf(o + d * b);
             return true;
         }
         t0 = t;
     }
     // Past the ground's edge: fall onto the plane of its lowest point so painting off the map still works.
     const double base = g.h->range().x;
-    const double t = (base - o.y) / d.y;
+    const double t = (base - upOf(o)) / upOf(d);
     if (t <= 0.0)
         return false;
-    out = Vec2(o.x + d.x * t, o.z + d.z * t);
+    out = planeOf(o + d * t);
     return true;
 }
 
@@ -877,6 +891,28 @@ public:
             if (mOutline.size() >= 3)
                 if (auto a = view.project(draped(ground, mOutline.front())), b = view.project(draped(ground, mOutline.back())); a && b)
                     p.dashedLine(*a, *b, 1.0f, 3.0f, glm::vec4(1.0f, 1.0f, 1.0f, 0.4f));
+        }
+        // Preselection: in Pick, the zone the click would read is outlined under the cursor.
+        if (st.mode == Mode::Pick && layer && mView == view.camera && !layer->zones.empty())
+        {
+            Vec2 c;
+            if (groundHit(ground, mHover, view, c))
+                if (const std::vector<const Zone*> at = zonesAt(*layer, c); !at.empty())
+                {
+                    const int index = int(at.front() - layer->zones.data());
+                    p.setShadow(true);
+                    for (const LayerDraw::Line& line : layerDraw(set->id(), *spec, 0, *layer, ground).lines)
+                        if (line.zone == index)
+                        {
+                            std::vector<QPointF> pts;
+                            for (const glm::dvec3& w : line.pts)
+                                if (auto s = view.project(w))
+                                    pts.push_back(*s);
+                            p.polyline(pts, 3.0f, glm::vec4(1.0f), true);
+                        }
+                    p.label(mHover + QPointF(14.0, -10.0), QString::fromStdString(at.front()->name.empty() ? at.front()->id : at.front()->name));
+                    p.setShadow(false);
+                }
         }
         if ((st.mode == Mode::Paint || st.mode == Mode::Erase) && mView == view.camera)
         {

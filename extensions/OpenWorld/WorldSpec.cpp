@@ -117,7 +117,10 @@ const json& worldSpecSchema()
                                  {"lod", {{"type", "string"}, {"enum", {"near", "hlod", "far"}}, {"description", "Level of detail new building cells start at (per settlement: buildings.lod); default near."}}},
                                  {"styles", {{"type", "array"},
                                              {"description", "buildingStyle calls run after everything is built: {style, polygon} or {style, building}."},
-                                             {"items", {{"type", "object"}}}}}})},
+                                             {"items", {{"type", "object"}}}}},
+                                 {"enterable", {{"description", "Buildings given real interiors (buildingMakeEnterable) once everything is built: one pick or a "
+                                                                 "list of them, each {programs: [police, church, civic, shop, ...], landmarks: true, styles: [...], "
+                                                                 "ids: [building ids], limit, program, furnish}. A building is picked when any filter matches."}}}})},
               {"slots", obj("Slot swap rules, per-slot overrides and pins (lila.slots).",
                             {{"rules", {{"type", "array"}, {"description", "Rules as slotRule(rule=) takes them, applied in order."}, {"items", {{"type", "object"}}}}},
                              {"overrides", obj("{slot id: payload}.")},
@@ -230,6 +233,18 @@ void validateSpec(const json& spec)
         }
         if (b.contains("styles"))
             need(b["styles"].is_array(), "buildings.styles is a list of buildingStyle calls");
+        if (b.contains("enterable"))
+        {
+            const json& en = b["enterable"];
+            need(en.is_object() || en.is_array(), "buildings.enterable is a pick {programs, landmarks, styles, ids, limit} or a list of them");
+            for (const json& p : en.is_array() ? en : json::array({en}))
+            {
+                need(p.is_object(), "buildings.enterable picks are dicts");
+                for (const auto& [k, v] : p.items())
+                    need(k == "programs" || k == "landmarks" || k == "styles" || k == "ids" || k == "limit" || k == "program" || k == "furnish",
+                         "buildings.enterable has no key '" + k + "' (programs, landmarks, styles, ids, limit, program, furnish)");
+            }
+        }
     }
     if (spec.contains("export"))
     {

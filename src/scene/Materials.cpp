@@ -210,6 +210,9 @@ std::vector<AttrDef> materialAttrs()
         a[kVolumeNoiseOffset] = std::move(offset);
     }
     a[kVolumeEdgeFade] = floatAttr("volumeEdgeFade", 0.0, "Volume: depth inside a filled mesh over which density fades in from its surface, cm; 0 is a hard edge.", 0.0);
+    a[kInstanceColor] = {.name = "instanceColor", .type = PlugType::Bool, .defaultValue = true, .flags = AttrInput | AttrStorable,
+                         .doc = "Shows the colour instances carry (container liveries, building palettes): it replaces the base colour, "
+                                "or tints the base colour map. Off keeps this material's own colour on coloured instances."};
     stylisedAttrs(a);
     heightAttrs(a);
     samplingAttrs(a);

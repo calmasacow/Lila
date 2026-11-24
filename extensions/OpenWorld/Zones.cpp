@@ -3,6 +3,7 @@
 
 #include "Zones.h"
 
+#include <clipper2/clipper.h>
 #include <miniz.h>
 
 #include <algorithm>
@@ -1062,6 +1063,60 @@ std::vector<Polygon> convexPieces(const Polygon& poly0)
     for (size_t i = 0; i < pieces.size(); ++i)
         if (alive[i])
             out.push_back(asPoly(pieces[i]));
+    return out;
+}
+
+std::vector<Polygon> convexPieces(const Polygon& ring, const std::vector<Polygon>& holes)
+{
+    Vec2 lo(1e300), hi(-1e300);
+    for (Vec2 p : ring)
+    {
+        lo = glm::min(lo, p);
+        hi = glm::max(hi, p);
+    }
+    auto path = [](const Polygon& p) {
+        Clipper2Lib::PathD out;
+        for (Vec2 q : p)
+            out.push_back({q.x, q.y});
+        return out;
+    };
+    Clipper2Lib::PathsD cut;
+    // A vertical cut through each hole's middle leaves every strip between cuts with no hole of its own.
+    std::vector<double> xs = {lo.x - 1.0, hi.x + 1.0};
+    for (const Polygon& h : holes)
+    {
+        Vec2 a(1e300), b(-1e300);
+        for (Vec2 p : h)
+        {
+            a = glm::min(a, p);
+            b = glm::max(b, p);
+        }
+        if (h.size() < 3 || b.x <= lo.x || a.x >= hi.x || b.y <= lo.y || a.y >= hi.y)
+            continue;
+        cut.push_back(path(h));
+        xs.push_back((a.x + b.x) * 0.5);
+    }
+    if (cut.empty())
+        return convexPieces(ring);
+    std::sort(xs.begin(), xs.end());
+    std::vector<Polygon> out;
+    for (size_t i = 0; i + 1 < xs.size(); ++i)
+    {
+        if (xs[i + 1] - xs[i] < 1e-6)
+            continue;
+        const Clipper2Lib::PathsD strip = {{{xs[i], lo.y - 1.0}, {xs[i + 1], lo.y - 1.0}, {xs[i + 1], hi.y + 1.0}, {xs[i], hi.y + 1.0}}};
+        const Clipper2Lib::PathsD inside = Clipper2Lib::Intersect({path(ring)}, strip, Clipper2Lib::FillRule::NonZero, 4);
+        for (const Clipper2Lib::PathD& piece : Clipper2Lib::Difference(inside, cut, Clipper2Lib::FillRule::NonZero, 4))
+        {
+            if (Clipper2Lib::Area(piece) <= 0.0)
+                continue;
+            Polygon p;
+            for (const Clipper2Lib::PointD& q : piece)
+                p.push_back({q.x, q.y});
+            for (Polygon& c : convexPieces(p))
+                out.push_back(std::move(c));
+        }
+    }
     return out;
 }
 

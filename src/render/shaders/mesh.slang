@@ -11,6 +11,7 @@ struct InstanceData
 {
     float4x4 world;
     float4 color; // wire colour; for shaded draws the wire meshWirePS draws over them, alpha 0 for none
+    float4 tint;  // instance colour: linear rgb, a how much it shows (read under kInstanceColor)
 };
 
 /** One light; matches render::GpuLight. Kinds: 0 point, 1 spot, 2 directional, 3 area, 4 disc. */
@@ -417,6 +418,7 @@ static const uint kOneSidedLighting = 1 << 16;
 static const uint kNormalXY = 1 << 17; // the normal map stores X and Y only (BC5)
 static const uint kGreyBase = 1 << 18;  // the base colour map supplies opacity only
 static const uint kGrunge = 1 << 19;    // a grunge block (render::packGrunge) follows the style block
+static const uint kInstanceColor = 1 << 20; // some placement of the batch carries an instance colour
 
 /** The lean pipelines: the section reads no tangent, vertex colour or second uv (Renderer.cpp's leanPush). */
 [vk::constant_id(0)] const bool kLean = false;
@@ -1297,6 +1299,11 @@ float4 shadeMesh(VSOut i, bool front, Centers center)
         if ((flags & kGreyBase) == 0)
             baseColor = t.rgb;
         opacity *= t.a;
+    }
+    if ((flags & kInstanceColor) != 0)
+    {
+        const float4 tint = pc.instances[i.instance].tint;
+        baseColor = lerp(baseColor, (flags & kBaseColorMap) != 0 ? baseColor * tint.rgb : tint.rgb, saturate(tint.a));
     }
     baseColor *= 1.0 - eyeRing;
     if ((flags & kMasked) != 0 && opacity < pc.surface.w)

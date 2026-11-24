@@ -33,5 +33,7 @@ void registerRemix(lila::ext::Context& ctx);
 void registerRemixUi(lila::ext::Context& ctx);
 /** Site kits (Sites*.cpp). */
 void registerSites(lila::ext::Context& ctx);
+/** Drops the listener that folds site mesh moves into their specs. */
+void unregisterSites();
 void registerSitesUi(lila::ext::Context& ctx);
 } // namespace openworld

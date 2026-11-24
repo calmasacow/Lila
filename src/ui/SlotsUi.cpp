@@ -488,7 +488,13 @@ struct CachedDraw
 {
     uint64_t graphVersion = 0;
     uint64_t revision = 0;
-    std::vector<std::pair<std::shared_ptr<const render::RenderMesh>, std::shared_ptr<const std::vector<glm::mat4>>>> batches;
+    struct Batch
+    {
+        std::shared_ptr<const render::RenderMesh> mesh;
+        std::shared_ptr<const std::vector<glm::mat4>> instances;
+        std::shared_ptr<const std::vector<glm::vec4>> colors; // null when no slot of it carries a colour
+    };
+    std::vector<Batch> batches;
     std::vector<glm::dvec3> points;
 };
 std::unordered_map<scene::NodeId, CachedDraw>& drawCache()
@@ -511,7 +517,8 @@ const CachedDraw& cachedDraw(scene::NodeId id)
     {
         for (const glm::mat4& m : b.transforms)
             c.points.push_back(glm::dvec3(m[3]));
-        c.batches.push_back({renderMeshFor(b.mesh), std::make_shared<const std::vector<glm::mat4>>(std::move(b.transforms))});
+        c.batches.push_back({renderMeshFor(b.mesh), std::make_shared<const std::vector<glm::mat4>>(std::move(b.transforms)),
+                             b.colors.empty() ? nullptr : std::make_shared<const std::vector<glm::vec4>>(std::move(b.colors))});
     }
     return c;
 }
@@ -523,13 +530,14 @@ void drawSlotSet(drawOverrides::DrawContext& c)
         return;
     const CachedDraw& d = cachedDraw(c.node.id());
     const bool selected = c.highlight == drawOverrides::Highlight::Selected || c.highlight == drawOverrides::Highlight::UnderSelected;
-    for (const auto& [mesh, instances] : d.batches)
+    for (const CachedDraw::Batch& b : d.batches)
     {
-        if (!mesh || instances->empty())
+        if (!b.mesh || b.instances->empty())
             continue;
         render::MeshDraw m;
-        m.mesh = mesh;
-        m.instances = instances;
+        m.mesh = b.mesh;
+        m.instances = b.instances;
+        m.instanceColors = b.colors;
         m.baseColor = glm::vec3(0.55f);
         m.flags = render::DrawShaded | (c.highlight != drawOverrides::Highlight::None ? render::DrawWire : 0u);
         m.wireColor = selected || c.highlight == drawOverrides::Highlight::Preselected ? c.color : glm::vec4(0.0f);

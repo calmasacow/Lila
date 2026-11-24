@@ -20,6 +20,7 @@
 #include <cmath>
 #include <deque>
 #include <filesystem>
+#include <format>
 #include <list>
 #include <mutex>
 #include <set>
@@ -410,6 +411,8 @@ struct Sample
 };
 
 /** The base map at b: sources blended in order (later on top) over the sea floor; flat sea in a source takes the floor too. */
+Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks);
+
 Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
 {
     Sample out;
@@ -455,6 +458,38 @@ Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
         out.covered = true;
     }
     return out;
+}
+
+/** How a pasted region meets the ground round it: the median height step along its edge, the step left, the band it needs. */
+struct PasteLevel
+{
+    double offset = 0.0, residual = 0.0, band = 0.0;
+};
+
+PasteLevel pasteLevel(const Work& w, const MaskSet& m, const Heightfield& h, const Polygon& t, const Rigid& motion, double extent)
+{
+    std::vector<float> mk(m.names.size());
+    std::vector<double> steps;
+    for (size_t k = 0; k < t.size(); ++k)
+    {
+        const Vec2 a = t[k], b = t[(k + 1) % t.size()];
+        const int n = std::max(1, int(glm::length(b - a) / h.cell));
+        for (int i = 0; i < n; ++i)
+        {
+            const Vec2 q = a + (b - a) * (double(i) / n);
+            steps.push_back(baseSample(w, m, motion.inverse(q), mk.data()).height - h.heightAt(q.x, q.y));
+        }
+    }
+    PasteLevel lv;
+    if (steps.empty())
+        return lv;
+    std::nth_element(steps.begin(), steps.begin() + steps.size() / 2, steps.end());
+    lv.offset = steps[steps.size() / 2];
+    for (double s : steps)
+        lv.residual = std::max(lv.residual, std::abs(s - lv.offset));
+    // A quarter of the region at most: past that the paste would be mostly seam.
+    lv.band = std::min(lv.residual / (w.spec.seams.maxSlope > 0.0 ? w.spec.seams.maxSlope : kSeamGrade), 0.25 * extent);
+    return lv;
 }
 
 /** Push-pull: unknown samples (known 0) filled smoothly from the known ones, then relaxed. */
@@ -955,6 +990,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
 
     // Pasted regions, in order, blended in over their seam band.
     size_t pasted = 0;
+    json regionLevels = json::array();
     for (size_t r = 0; r < spec.regions.size(); ++r)
     {
         const Region& reg = spec.regions[r];
@@ -962,10 +998,18 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
             continue;
         const Polygon& t = w.targets[r];
         const Rigid motion = reg.rigid();
-        const double band = std::max(spec.seamOf(reg), h.cell);
+        double band = std::max(spec.seamOf(reg), h.cell);
         Vec2 tlo(1e300), thi(-1e300);
         for (Vec2 p : t)
             tlo = glm::min(tlo, p), thi = glm::max(thi, p);
+        double offset = 0.0;
+        if (reg.matchHeight)
+        {
+            const PasteLevel lv = pasteLevel(w, m, h, t, motion, std::min(thi.x - tlo.x, thi.y - tlo.y));
+            offset = lv.offset;
+            band = std::max(band, lv.band);
+            regionLevels.push_back({{"region", reg.id}, {"offset", std::round(offset)}, {"seam", std::round(band)}, {"stepLeft", std::round(lv.residual)}});
+        }
         tlo -= Vec2(band), thi += Vec2(band);
         const int xa = std::max(0, int(std::floor((tlo.x - h.origin.x) / h.cell))), xb = std::min(h.nx - 1, int(std::ceil((thi.x - h.origin.x) / h.cell)));
         const int za = std::max(0, int(std::floor((tlo.y - h.origin.y) / h.cell))), zb = std::min(h.nz - 1, int(std::ceil((thi.y - h.origin.y) / h.cell)));
@@ -982,7 +1026,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
                     continue;
                 const double wt = smooth01(sd / band);
                 const Sample s = baseSample(w, m, motion.inverse(q), mk.data());
-                h.heights[i] = float(h.heights[i] + (s.height - h.heights[i]) * wt);
+                h.heights[i] = float(h.heights[i] + (s.height - offset - h.heights[i]) * wt);
                 for (size_t k = 0; k < nm; ++k)
                     masks[k][i] = m.code[k] ? (wt >= 0.5 ? mk[k] : masks[k][i]) : float(masks[k][i] + (mk[k] - masks[k][i]) * wt);
             }
@@ -990,6 +1034,8 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
         ++pasted;
     }
     timing["paste"] = ms();
+    if (!regionLevels.empty())
+        out.stats["regionLevels"] = regionLevels;
 
     for (size_t k = 0; k < nm; ++k)
     {

@@ -45,6 +45,8 @@ struct Drag
     double startAngle = 0.0;
 };
 std::optional<Drag> gDrag;
+/** The handle under the cursor in Edit mode ("region:<id>" or "pin:<id>"), drawn larger. */
+std::string gHover;
 
 const glm::vec4 kBright{0.95f, 0.95f, 0.95f, 0.95f};
 const glm::vec4 kDim{0.75f, 0.75f, 0.75f, 0.55f};
@@ -180,7 +182,7 @@ void drawRemix(OverlayPainter& p, const ViewInfo& view, const Placed& r)
         {
             const bool handle = gEdit && (reg.op == RegionOp::Cut || reg.op == RegionOp::Move || reg.op == RegionOp::Duplicate);
             if (handle)
-                p.smoothDisc(*b, gDrag && gDrag->region == reg.id ? 7.0 : 5.0, kBright);
+                p.smoothDisc(*b, (gDrag && gDrag->region == reg.id) || gHover == "region:" + reg.id ? 7.0 : 5.0, kBright);
             p.label(*b + QPointF(9, -9), QString::fromStdString(reg.id + ": " + regionOpNames()[size_t(reg.op)]));
         }
     }
@@ -196,7 +198,7 @@ void drawRemix(OverlayPainter& p, const ViewInfo& view, const Placed& r)
             continue;
         if (a && glm::length(to - pin.at) > 1e-6 && !r.p.before)
             p.line(*a, *b, 1.5f, kDim);
-        p.smoothDisc(*b, gDrag && gDrag->pin == pin.id ? 6.0 : 4.0, kBright);
+        p.smoothDisc(*b, (gDrag && gDrag->pin == pin.id) || (gEdit && gHover == "pin:" + pin.id) ? 6.0 : 4.0, kBright);
         if (glm::length(to - pin.at) < 1e-6)
             p.arc(*b, 8.0, 0.0, 360.0, 1.5f, kBright);
     }
@@ -262,11 +264,9 @@ std::optional<Vec2> mapAt(const Placed& r, QPointF px, const ViewInfo& view, dou
 
 double angleOf(Vec2 v) { return std::atan2(-v.y, v.x) * 57.29577951308232; }
 
-bool pressDrag(QMouseEvent* e, const ViewInfo& view)
+/** The region or pin handle nearest px within 12 pixels, as the drag it would start. */
+std::optional<Drag> handleAt(QPointF px, const ViewInfo& view, bool rotate)
 {
-    if (!gEdit || e->button() != Qt::LeftButton || (e->modifiers() & (Qt::AltModifier | Qt::ShiftModifier)))
-        return false;
-    const QPointF px = e->position();
     double best = 12.0;
     std::optional<Drag> hit;
     for (const Placed& r : remixes())
@@ -282,7 +282,7 @@ bool pressDrag(QMouseEvent* e, const ViewInfo& view)
             if (auto s = view.project(worldOf(r, c, 100.0)); s && std::hypot(s->x() - px.x(), s->y() - px.y()) < best)
             {
                 best = std::hypot(s->x() - px.x(), s->y() - px.y());
-                hit = Drag{r.modifier, reg.id, {}, bool(e->modifiers() & Qt::ControlModifier), c, h.heightAt(c.x, c.y) + 100.0, Vec2(0.0), 0.0, c, 0.0};
+                hit = Drag{r.modifier, reg.id, {}, rotate, c, h.heightAt(c.x, c.y) + 100.0, Vec2(0.0), 0.0, c, 0.0};
             }
         }
         for (const Pin& pin : r.p.spec.pins)
@@ -292,6 +292,27 @@ bool pressDrag(QMouseEvent* e, const ViewInfo& view)
                 hit = Drag{r.modifier, {}, pin.id, false, pin.to, h.heightAt(pin.to.x, pin.to.y) + 100.0, Vec2(0.0), 0.0, pin.to, 0.0};
             }
     }
+    return hit;
+}
+
+bool hoverDrag(QPointF px, const ViewInfo& view)
+{
+    std::string now;
+    if (gEdit)
+        if (const std::optional<Drag> h = handleAt(px, view, false))
+            now = h->region.empty() ? "pin:" + h->pin : "region:" + h->region;
+    if (now == gHover)
+        return false;
+    gHover = now;
+    return true;
+}
+
+bool pressDrag(QMouseEvent* e, const ViewInfo& view)
+{
+    if (!gEdit || e->button() != Qt::LeftButton || (e->modifiers() & (Qt::AltModifier | Qt::ShiftModifier)))
+        return false;
+    const QPointF px = e->position();
+    std::optional<Drag> hit = handleAt(px, view, bool(e->modifiers() & Qt::ControlModifier));
     if (!hit)
         return false;
     for (const Placed& r : remixes())
@@ -506,7 +527,7 @@ void registerRemixUi(ext::Context& ctx)
               {.action = "openworld.remixOverlay", .text = "Overlay", .rare = true}});
 
     viewportHooks::addDrawer(ctx, "openworld.remix", drawAll);
-    viewportHooks::setDragHook("openworld.remix", {.press = pressDrag, .move = moveDrag, .release = releaseDrag});
+    viewportHooks::setDragHook("openworld.remix", {.press = pressDrag, .move = moveDrag, .release = releaseDrag, .hover = hoverDrag});
     ctx.track("dragHook:openworld.remix", [] { viewportHooks::removeDragHook("openworld.remix"); });
 }
 } // namespace openworld
