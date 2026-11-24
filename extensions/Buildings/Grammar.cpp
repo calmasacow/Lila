@@ -1512,12 +1512,15 @@ void extras(Ctx& c, const TierPlan& base)
             const Vec2 q = mid + along * (-span * 0.5 + span * k / (n - 1)) + nrm * depth;
             c.addModule(groundModule({q.x, c.floor0, q.y}, nrm, "column", "column", fp + "/portico/c" + std::to_string(k), {50.0, h, 50.0}));
         }
-        Module slab = groundModule({mid.x + nrm.x * depth * 0.5, c.floor0 + h, mid.y + nrm.y * depth * 0.5}, nrm, "portico", "portico",
-                                   fp + "/portico", {span + 120.0, 70.0, depth + 60.0});
+        // The slab runs from the wall face out past the columns, clear of the roof behind the wall.
+        Module slab = groundModule({mid.x + nrm.x * (depth + 30.0) * 0.5, c.floor0 + h, mid.y + nrm.y * (depth + 30.0) * 0.5}, nrm, "portico", "portico",
+                                   fp + "/portico", {span + 120.0, 70.0, depth + 30.0});
         c.addModule(std::move(slab));
-        // The porch floor.
-        c.addModule(groundModule({mid.x + nrm.x * depth * 0.5, c.groundLo, mid.y + nrm.y * depth * 0.5}, nrm, "steps", "steps", fp + "/portico/floor",
-                                 {span + 160.0, std::max(15.0, c.floor0 - c.groundLo), depth + 80.0}));
+        // The porch floor stands on the ground in front of the door, not the building's lowest corner.
+        const Vec2 porch = mid + nrm * depth * 0.5;
+        const double porchGround = std::min(c.spec.groundAt(porch), c.floor0 - 15.0);
+        c.addModule(groundModule({porch.x, porchGround, porch.y}, nrm, "steps", "steps", fp + "/portico/floor",
+                                 {span + 160.0, c.floor0 - porchGround, depth + 80.0}));
     }
 
     // Perimeter wall round the lot, with a gate on the front, and a pool behind the house.

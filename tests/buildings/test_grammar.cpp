@@ -306,3 +306,27 @@ TEST_CASE("buildings: placeholders have uvs and faces for every kind")
         face = face || m == MatSignFace;
     CHECK(face);
 }
+
+TEST_CASE("buildings: a portico's floor stands on the ground in front of the door, on slopes too")
+{
+    for (const char* style : {"narcoMansion", "mausoleum"})
+        for (const std::vector<double>& corners : {std::vector<double>{0.0, 0.0, 0.0, 0.0}, std::vector<double>{400.0, 400.0, 0.0, 0.0},
+                                                   std::vector<double>{0.0, 0.0, 400.0, 400.0}, std::vector<double>{0.0, 350.0, 350.0, 0.0}})
+        {
+            Spec s = rect(0, 0, 2000, 1400, 2);
+            s.cornerGround = corners;
+            s.ground = *std::min_element(corners.begin(), corners.end());
+            s.highGround = *std::max_element(corners.begin(), corners.end());
+            const auto r = generate(s, styles().at(style), {});
+            int floors = 0;
+            for (const Module& m : r->modules)
+                if (m.path.find("portico/floor") != std::string::npos)
+                {
+                    ++floors;
+                    const double ground = s.groundAt({m.origin.x, m.origin.z});
+                    CHECK_MESSAGE(std::abs(m.origin.y - ground) <= 120.0, style << " ground " << ground << " floor " << m.origin.y);
+                    CHECK(m.size.y >= 15.0);
+                }
+            CHECK_MESSAGE(floors == 1, style);
+        }
+}
