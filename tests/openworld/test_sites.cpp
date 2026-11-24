@@ -306,3 +306,22 @@ TEST_CASE("site commands: moving or turning the site mesh moves the site and its
     CHECK(e["fromTransform"] == true);
     CHECK(e["spec"]["at"][0].get<double>() == doctest::Approx(-38000));
 }
+
+TEST_CASE("site commands: airstrips on a low flat coast clear their corridors")
+{
+    loadSitePackages();
+    ops::execute("newScene", json::object());
+    const std::string terrain = coastTerrain();
+    // Inland, at the shore with a corridor out over the sea, near the shore, and a twin on a long turned strip.
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {0, 100000}}, {"id", "inland"}});
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {-150000, -57000}}, {"id", "shore"}});
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {150000, -30000}}, {"id", "along"}});
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {150000, 150000}}, {"heading", 30}, {"id", "twin"},
+                                {"aircraft", "twin"}, {"runwayLength", 110000}});
+    const json c = ops::execute("siteCheck", json::object());
+    CAPTURE(c["issues"].dump(1));
+    CHECK(issuesOf(c, "airClearance") == 0);
+    const json w = ops::execute("waterCheck", {{"args", {terrain}}});
+    for (const json& i : w["issues"])
+        CHECK(i.value("kind", std::string()) != "airClearance");
+}
