@@ -18,6 +18,8 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <optional>
+#include <chrono>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -1144,18 +1146,9 @@ json sendToUnreal(const Args& a)
     json sent = json::object(), errors = json::array();
     json warnings = json::array(), paintLayersRemoved = json::array();
     std::set<std::string> failed;
-    auto send = [&](const SyncItem& i) -> json {
+    // PCG cells and placements: many small calls, sent pipelined (see below).
+    auto request = [&](const SyncItem& i) -> std::optional<link::RpcClient::Request> {
         const Vec2 mid = i.cell.center(cellSize);
-        if (i.kind == "roads" && mode == "meshes")
-            return sendCellMesh(*c, roadMeshes.at(i.cell), "SM_" + assetName(label) + "_Roads_" + i.cell.name(), i.key,
-                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
-        if (i.kind == "roads" || i.kind == "paths")
-            return sendSplines(*c, r, a, key, label, i.kind == "paths", cmd);
-        if (i.kind == "levels")
-            return sendLevels(*c, r, key, label, cmd);
-        if (i.kind == "massing")
-            return sendCellMesh(*c, massingCells.at(i.cell), "SM_" + assetName(label) + "_Massing_" + i.cell.name(), i.key,
-                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
         if (i.kind == "pcg" && o.partition)
         {
             json params = pcgData(r, net, &cells.at(i.cell));
@@ -1170,15 +1163,7 @@ json sendToUnreal(const Args& a)
                 params["graph"] = graph;
                 params["makeGraph"] = a.get<bool>("makeGraph", false);
             }
-            return call(*c, "setSettlementCell", params, cmd);
-        }
-        if (i.kind == "pcg")
-        {
-            json params = pcgData(r, net);
-            params["id"] = key;
-            params["asset"] = folder + "/PCG_" + assetName(label);
-            params["label"] = label;
-            return call(*c, "setSettlementData", params, cmd);
+            return link::RpcClient::Request{"setSettlementCell", std::move(params), 300000};
         }
         if (i.kind == "place")
         {
@@ -1186,13 +1171,35 @@ json sendToUnreal(const Args& a)
             for (int k : cells.at(i.cell).placements)
                 if (r.layout.placements[size_t(k)].asset == i.asset)
                     list.push_back(placementJson(r.layout.placements[size_t(k)]));
-            return call(*c, "placeInstances",
-                        {{"group", i.key},
-                         {"label", label + "_" + safeName(i.asset.substr(i.asset.find_last_of('/') + 1)) + "_" + i.cell.name()},
-                         {"mesh", objectPath(i.asset)},
-                         {"mode", placeMode},
-                         {"placements", list}},
-                        cmd, 600000);
+            return link::RpcClient::Request{"placeInstances",
+                                            {{"group", i.key},
+                                             {"label", label + "_" + safeName(i.asset.substr(i.asset.find_last_of('/') + 1)) + "_" + i.cell.name()},
+                                             {"mesh", objectPath(i.asset)},
+                                             {"mode", placeMode},
+                                             {"placements", list}},
+                                            600000};
+        }
+        return std::nullopt;
+    };
+    auto send = [&](const SyncItem& i) -> json {
+        const Vec2 mid = i.cell.center(cellSize);
+        if (i.kind == "roads" && mode == "meshes")
+            return sendCellMesh(*c, roadMeshes.at(i.cell), "SM_" + assetName(label) + "_Roads_" + i.cell.name(), i.key,
+                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
+        if (i.kind == "roads" || i.kind == "paths")
+            return sendSplines(*c, r, a, key, label, i.kind == "paths", cmd);
+        if (i.kind == "levels")
+            return sendLevels(*c, r, key, label, cmd);
+        if (i.kind == "massing")
+            return sendCellMesh(*c, massingCells.at(i.cell), "SM_" + assetName(label) + "_Massing_" + i.cell.name(), i.key,
+                                {mid.x, 0.0, mid.y}, cellFolder, dir, cmd);
+        if (i.kind == "pcg")
+        {
+            json params = pcgData(r, net);
+            params["id"] = key;
+            params["asset"] = folder + "/PCG_" + assetName(label);
+            params["label"] = label;
+            return call(*c, "setSettlementData", params, cmd);
         }
         if (i.kind == "zoneGraph")
         {
@@ -1210,11 +1217,52 @@ json sendToUnreal(const Args& a)
     // Placements of an asset the project doesn't have are one finding per asset, not one error per cell.
     std::map<std::string, int> missingAssets;
     constexpr std::string_view kNoMesh = "no static mesh at ";
+    // Seconds per item kind, in the result.
+    std::map<std::string, double> kindSeconds;
+    struct Lap
+    {
+        double& into;
+        std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+        ~Lap() { into += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); }
+    };
+    // Meshes the project lacks, asked once per mesh: their placements are skipped (and tried again next send).
+    std::set<std::string> lacking;
+    {
+        Lap lap{kindSeconds["assetCheck"]};
+        std::vector<std::string> assets;
+        for (const std::vector<std::string>* keys : {&d.added, &d.changed})
+            for (const std::string& k : *keys)
+                if (byKey[k]->kind == "place" && std::ranges::find(assets, objectPath(byKey[k]->asset)) == assets.end())
+                    assets.push_back(objectPath(byKey[k]->asset));
+        std::vector<link::RpcClient::Request> asks;
+        for (const std::string& p : assets)
+            asks.push_back({"assetInfo", {{"path", p}}, 30000});
+        const std::vector<link::RpcResult> got = c->callMany(asks);
+        for (size_t k = 0; k < got.size(); ++k)
+            if (!got[k].ok && got[k].error.starts_with("No asset at"))
+                lacking.insert(assets[k]);
+    }
+    std::vector<std::string> pipelined;
+    std::vector<link::RpcClient::Request> requests;
     for (const std::vector<std::string>* keys : {&d.added, &d.changed})
         for (const std::string& k : *keys)
             try
             {
-                sent[k] = send(*byKey[k]);
+                const SyncItem& item = *byKey[k];
+                if (item.kind == "place" && lacking.contains(objectPath(item.asset)))
+                {
+                    failed.insert(k);
+                    ++missingAssets[objectPath(item.asset)];
+                    continue;
+                }
+                if (std::optional<link::RpcClient::Request> req = request(item))
+                {
+                    pipelined.push_back(k);
+                    requests.push_back(std::move(*req));
+                    continue;
+                }
+                Lap lap{kindSeconds[item.kind]};
+                sent[k] = send(item);
                 if (const std::string& kind = byKey[k]->kind; kind == "paths" || kind == "levels" || (kind == "roads" && mode != "meshes"))
                     liftSplineReport(sent[k], warnings, paintLayersRemoved);
             }
@@ -1227,6 +1275,25 @@ json sendToUnreal(const Args& a)
                 else
                     errors.push_back(k + ": " + what);
             }
+    {
+        Lap lap{kindSeconds["cellsAndPlacements"]};
+        const std::vector<link::RpcResult> replies = c->callMany(requests);
+        for (size_t n = 0; n < replies.size(); ++n)
+        {
+            const std::string& k = pipelined[n];
+            if (replies[n].ok)
+            {
+                sent[k] = replies[n].result;
+                continue;
+            }
+            failed.insert(k);
+            const std::string what = std::string(cmd) + ": " + requests[n].method + ": " + replies[n].error;
+            if (const size_t at = what.find(kNoMesh); byKey[k]->kind == "place" && at != std::string::npos)
+                ++missingAssets[what.substr(at + kNoMesh.size())];
+            else
+                errors.push_back(k + ": " + what);
+        }
+    }
 
     // What the last send made that this layout no longer has.
     const json before = previous.is_object() ? previous.value("items", json::object()) : json::object();
@@ -1305,6 +1372,7 @@ json sendToUnreal(const Args& a)
     if (!paintLayersRemoved.empty())
         out["paintLayersRemoved"] = paintLayersRemoved;
     out["manifest"] = manifestPath.generic_string();
+    out["seconds"] = kindSeconds;
     return out;
 }
 } // namespace

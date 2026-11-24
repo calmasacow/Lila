@@ -36,8 +36,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <format>
 #include <map>
+#include <optional>
 #include <random>
 #include <unordered_map>
 
@@ -1327,6 +1329,7 @@ void registerPlacementCommands()
                   {"wait", "w", T::Bool, false, "Block until Unreal has imported and placed everything."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
+            const auto started = std::chrono::steady_clock::now();
             scene::Graph& g = scene::Graph::current();
             std::vector<scene::NodeId> roots;
             for (const std::string& name : a.objects())
@@ -1357,6 +1360,7 @@ void registerPlacementCommands()
                 for (scene::NodeId m : scene::instancing::members(g, scene::NodeId(grp["sourceId"].get<uint64_t>())))
                     sent.push_back(m);
             plan["issues"] = preflight(g, sent, "unrealPlaceInstances", a.get<bool>("validate", true));
+            plan["planSeconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
             for (const json& i : plan["issues"])
                 log::warn("unrealPlaceInstances: {}: {}", i["target"].get<std::string>(), i["message"].get<std::string>());
             logChannels(plan["lightingChannels"]);
@@ -1429,6 +1433,14 @@ void registerPlacementCommands()
             const bool resend = a.get<bool>("resend", false);
             auto job = [plan, meshes, alone, withChildren, hlod, linkedHlod, slotTablePath, hashes, resend, dir = cacheDir()]() mutable {
                 LILA_ZONE_N("Unreal placements");
+                // Seconds per phase, so a slow send says where its time went (Lila's export or Unreal's calls).
+                std::map<std::string, double> seconds;
+                auto timed = [&seconds](const char* phase, auto&& f) {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    auto r = f();
+                    seconds[phase] += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+                    return r;
+                };
                 std::shared_ptr<RpcClient> client = Link::get().client();
                 if (!client)
                     throw std::runtime_error("not connected");
@@ -1444,17 +1456,26 @@ void registerPlacementCommands()
                 }
                 std::error_code ec;
                 fs::create_directories(dir, ec);
-                std::map<std::string, std::string> importedThisSend;
                 // What the level already holds per group (signature, actor count): unchanged groups are skipped, so a
                 // rule swap or a one-building edit sends only what changed.
                 json inLevel = json::object();
                 if (hashes && !resend)
-                    if (RpcResult h = client->call("placementHashes", json::object(), placementTimeoutMs(0)); h.ok && h.result.is_object())
+                    if (RpcResult h = timed("hashes", [&] { return client->call("placementHashes", json::object(), placementTimeoutMs(0)); }); h.ok && h.result.is_object())
                         inLevel = h.result.value("groups", json::object());
                 int unchanged = 0;
+                // Two passes, each without waiting for every reply: the imports, then the placements, which need the
+                // imported meshes in the project.
+                struct Placing
+                {
+                    json* grp;
+                    std::string mesh, signature, sharesWith;
+                    std::optional<size_t> import;
+                };
+                std::vector<Placing> placing;
+                std::map<std::string, size_t> importOf; // content path -> its first group in placing
+                RpcPipeline imports(*client, 8);
                 for (json& grp : plan["groups"])
                 {
-                    const std::string source = grp["source"].get<std::string>();
                     if (grp.value("remove", false))
                     {
                         // Its geometry nodes instance everything, so the source itself has nothing left to place.
@@ -1476,44 +1497,70 @@ void registerPlacementCommands()
                         }
                     }
                     // Slots naming an Unreal class or mesh use what the project has: nothing to export.
-                    std::string mesh = grp.value("unrealMesh", std::string());
-                    if (!grp.contains("actorClass") && !grp.contains("unrealMesh") && importedThisSend.contains(grp["contentPath"].get<std::string>()))
-                    {
-                        mesh = importedThisSend[grp["contentPath"].get<std::string>()];
-                        grp["import"] = {{"shared", true}};
-                    }
-                    else if (!grp.contains("actorClass") && !grp.contains("unrealMesh"))
+                    Placing pl{&grp, grp.value("unrealMesh", std::string()), signature, {}, std::nullopt};
+                    if (!grp.contains("actorClass") && !grp.contains("unrealMesh"))
                     {
                         const std::string asset = grp["contentPath"].get<std::string>();
-                        const fs::path file = dir / (assetSafe(asset.substr(asset.rfind('/') + 1)) + "_instance.fbx");
-                        std::string err;
-                        const bool written = grp.contains("gnMesh")
-                                                 ? writeMeshFbx(meshes[grp["gnMesh"].get<size_t>()], asset.substr(asset.rfind('/') + 1), file, &err)
-                                                 : (grp.value("ucxChildren", false) && withChildren ? withChildren : alone)(
-                                                       {scene::NodeId(grp["sourceId"].get<uint64_t>())}, file, &err);
-                        if (!written)
+                        if (importOf.contains(asset))
                         {
-                            grp["error"] = "export failed: " + err;
+                            pl.sharesWith = asset;
+                            grp["import"] = {{"shared", true}};
+                        }
+                        else
+                        {
+                            const fs::path file = dir / (assetSafe(asset.substr(asset.rfind('/') + 1)) + "_instance.fbx");
+                            std::string err;
+                            const bool written = timed("export", [&] {
+                                return grp.contains("gnMesh") ? writeMeshFbx(meshes[grp["gnMesh"].get<size_t>()], asset.substr(asset.rfind('/') + 1), file, &err)
+                                                              : (grp.value("ucxChildren", false) && withChildren ? withChildren : alone)(
+                                                                    {scene::NodeId(grp["sourceId"].get<uint64_t>())}, file, &err);
+                            });
+                            if (!written)
+                            {
+                                grp["error"] = "export failed: " + err;
+                                continue;
+                            }
+                            const json mapping = {{"contentPath", grp["contentPath"]}, {"kind", "static"},       {"collision", grp["collision"]},
+                                                  {"nanite", grp["nanite"]},           {"reapplyOptions", true}};
+                            json params = importParams(file, mapping, grp["materials"]);
+                            // An asset the project already holds with this content (an earlier send to any level) is used as it is.
+                            if (const std::string h = assetContentHash(grp, meshes); !h.empty())
+                                params["contentHash"] = h;
+                            pl.import = timed("import", [&] { return imports.send("importAsset", params, importCallOptions()); });
+                            importOf[asset] = placing.size();
+                        }
+                    }
+                    placing.push_back(std::move(pl));
+                }
+                const std::vector<RpcResult> imported = timed("import", [&] { return imports.finish(); });
+                RpcPipeline places(*client);
+                std::vector<json*> sentGroups;
+                for (Placing& pl : placing)
+                {
+                    json& grp = *pl.grp;
+                    if (pl.import)
+                    {
+                        const RpcResult& r = imported[*pl.import];
+                        grp["import"] = r.ok ? r.result : json{{"error", r.error}};
+                        if (!r.ok)
+                            continue;
+                        pl.mesh = grp["objectPath"].get<std::string>();
+                        if (json assets = r.result.value("assets", json::array()); assets.is_array() && !assets.empty() && assets[0].is_string())
+                            pl.mesh = assets[0].get<std::string>();
+                    }
+                    else if (!pl.sharesWith.empty())
+                    {
+                        const Placing& first = placing[importOf[pl.sharesWith]];
+                        if (!first.import || !imported[*first.import].ok)
+                        {
+                            grp["error"] = "its mesh's import failed (see " + (*first.grp)["source"].get<std::string>() + ")";
                             continue;
                         }
-                        const json mapping = {{"contentPath", grp["contentPath"]}, {"kind", "static"},       {"collision", grp["collision"]},
-                                              {"nanite", grp["nanite"]},           {"reapplyOptions", true}};
-                        json params = importParams(file, mapping, grp["materials"]);
-                        // An asset the project already holds with this content (an earlier send to any level) is used as it is.
-                        if (const std::string h = assetContentHash(grp, meshes); !h.empty())
-                            params["contentHash"] = h;
-                        RpcResult imported = client->call("importAsset", params, importCallOptions());
-                        grp["import"] = imported.ok ? imported.result : json{{"error", imported.error}};
-                        if (!imported.ok)
-                            continue;
-                        mesh = grp["objectPath"].get<std::string>();
-                        if (json assets = imported.result.value("assets", json::array()); assets.is_array() && !assets.empty() && assets[0].is_string())
-                            mesh = assets[0].get<std::string>();
-                        importedThisSend[asset] = mesh;
+                        pl.mesh = first.mesh;
                     }
                     json params = {{"group", grp["key"]},
-                                   {"label", grp.value("label", source)},
-                                   {"mesh", mesh},
+                                   {"label", grp.value("label", grp["source"].get<std::string>())},
+                                   {"mesh", pl.mesh},
                                    {"mode", grp["mode"]},
                                    {"collision", grp["collision"]},
                                    {"customData", grp.value("customData", json::array())},
@@ -1525,13 +1572,19 @@ void registerPlacementCommands()
                         params["linkedHlodLayer"] = linkedHlod;
                     if (grp.contains("actorClass"))
                         params["actorClass"] = grp["actorClass"];
-                    if (!signature.empty())
-                        params["hash"] = signature;
-                    RpcResult placed = client->call("placeInstances", params, placementTimeoutMs(grp["placements"].size()));
-                    grp["placed"] = placed.ok ? placed.result : json{{"error", placed.error}};
+                    if (!pl.signature.empty())
+                        params["hash"] = pl.signature;
+                    timed("place", [&] { return places.send("placeInstances", params, placementTimeoutMs(grp["placements"].size())); });
+                    sentGroups.push_back(&grp);
                 }
+                const std::vector<RpcResult> replies = timed("place", [&] { return places.finish(); });
+                for (size_t k = 0; k < replies.size(); ++k)
+                    (*sentGroups[k])["placed"] = replies[k].ok ? replies[k].result : json{{"error", replies[k].error}};
                 plan["unchanged"] = unchanged;
-                sendInstanceColorMaterials(*client, plan);
+                timed("instanceColor", [&] {
+                    sendInstanceColorMaterials(*client, plan);
+                    return 0;
+                });
                 // Meshes a source's geometry nodes no longer instance leave the level.
                 for (json& src : plan["gnSources"])
                 {
@@ -1544,8 +1597,10 @@ void registerPlacementCommands()
                     json sources = json::array();
                     for (const json& src : plan["gnSources"])
                         sources.push_back(src["prefix"]);
-                    RpcResult wrote = client->call("writeSlotTable", {{"path", slotTablePath}, {"rows", plan["slotTable"]}, {"sources", sources}},
-                                                   placementTimeoutMs(plan["slotTable"].size()));
+                    RpcResult wrote = timed("slotTable", [&] {
+                        return client->call("writeSlotTable", {{"path", slotTablePath}, {"rows", plan["slotTable"]}, {"sources", sources}},
+                                            placementTimeoutMs(plan["slotTable"].size()));
+                    });
                     plan["slotTableWritten"] = wrote.ok ? wrote.result : json{{"error", wrote.error}};
                 }
                 if (!plan["lights"].empty())
@@ -1553,6 +1608,7 @@ void registerPlacementCommands()
                     RpcResult placed = client->call("placeLights", {{"lights", plan["lights"]}}, placementTimeoutMs(plan["lights"].size()));
                     plan["lightsPlaced"] = placed.ok ? placed.result : json{{"error", placed.error}};
                 }
+                plan["seconds"] = seconds;
                 return plan;
             };
             if (a.get<bool>("wait"))
