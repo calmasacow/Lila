@@ -31,4 +31,7 @@ void addTools(lila::ext::Context& ctx, const std::vector<std::string>& menuOrder
 /** Part registrations, called from the extension's entry point. */
 void registerRemix(lila::ext::Context& ctx);
 void registerRemixUi(lila::ext::Context& ctx);
+/** Site kits (Sites*.cpp). */
+void registerSites(lila::ext::Context& ctx);
+void registerSitesUi(lila::ext::Context& ctx);
 } // namespace openworld

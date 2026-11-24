@@ -44,5 +44,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
 {
     openworld::registerRemix(ctx);
     openworld::registerRemixUi(ctx);
+    openworld::registerSites(ctx);
+    openworld::registerSitesUi(ctx);
     return 0;
 }

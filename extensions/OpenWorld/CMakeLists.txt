@@ -6,7 +6,7 @@ set(_terrain_sources ${_terrain}/Core.cpp ${_terrain}/Erosion.cpp ${_terrain}/In
     ${_terrain}/Fetch.cpp ${_terrain}/LandCover.cpp ${_terrain}/Stamps.cpp ${_terrain}/Brushes.cpp ${_terrain}/Shaping.cpp ${_terrain}/Painted.cpp)
 lila_add_extension(lila_openworld_extension ID OpenWorld MANIFEST extension.json UI RESOURCES resources
     SOURCES OpenWorld.cpp OpenWorld.h RemixNode.h OsmDoc.cpp OsmDoc.h RemixSpec.cpp RemixSpec.h Warp.cpp Warp.h Remix.cpp Remix.h RemixWork.h
-            Features.cpp Repair.cpp Check.cpp RemixNode.cpp RemixCommands.cpp RemixUi.cpp
+            Features.cpp Repair.cpp Check.cpp RemixNode.cpp RemixCommands.cpp RemixUi.cpp Sites.h SitesKit.h SitesLayout.cpp SitesCoast.cpp SitesLand.cpp SitesCompound.cpp SitesNode.h SitesNode.cpp SitesCommands.cpp SitesUi.cpp
             ${_terrain_sources})
 set_source_files_properties(${_terrain_sources} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(lila_openworld_extension PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${_terrain})
