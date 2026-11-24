@@ -41,6 +41,8 @@
 #include <cctype>
 #include <cmath>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <limits>
 #include <set>
 
@@ -64,6 +66,33 @@ double upOf(const glm::dvec3& w) { return zUp() ? w.z : w.y; }
 glm::dvec2 groundOf(const glm::dvec3& w) { return zUp() ? glm::dvec2(w.x, w.y) : glm::dvec2(w.x, w.z); }
 glm::dvec3 fromGround(glm::dvec2 g, double up = 0.0) { return zUp() ? glm::dvec3(g.x, g.y, up) : glm::dvec3(g.x, up, g.y); }
 const char* secondAxis() { return zUp() ? "y" : "z"; }
+
+/**
+ * A landscape send's content: the setLandscape parameters, the surface material's and the bytes of the heightmap and
+ * every weightmap. LilaLink tags it on the landscape and leaves a landscape that already carries it as it is.
+ */
+std::string landscapeHash(const json& params, const json& surface)
+{
+    uint64_t h = 1469598103934665603ull;
+    auto mix = [&h](const char* p, size_t n) {
+        for (size_t i = 0; i < n; ++i)
+            h = (h ^ static_cast<unsigned char>(p[i])) * 1099511628211ull;
+    };
+    auto file = [&](const json& path) {
+        if (!path.is_string())
+            return;
+        std::ifstream f(paths::fromUtf8(path.get<std::string>()), std::ios::binary);
+        std::vector<char> buf(1 << 16);
+        while (f.read(buf.data(), std::streamsize(buf.size())) || f.gcount() > 0)
+            mix(buf.data(), size_t(f.gcount()));
+    };
+    const std::string text = params.dump() + surface.dump();
+    mix(text.data(), text.size());
+    file(params.value("heightmap", json()));
+    for (const json& l : params.value("layers", json::array()))
+        file(l.value("weightmap", json()));
+    return std::format("{:016x}", h);
+}
 
 /** A terrain mesh's placement: world from the heightfield's own space (X, Z across, Y up) and back. */
 struct Frame
@@ -2549,13 +2578,16 @@ void registerCommands(ext::Context& ctx)
                 throw CommandError(std::string("terrainSendToUnreal: ") + e.what());
             }
             const int timeoutMs = int(std::clamp(a.get<double>("timeout", 300.0), 1.0, 3600.0) * 1000.0);
+            params["hash"] = landscapeHash(params, surface);
             link::RpcResult r = client->call("setLandscape", params, timeoutMs);
             if (!r.ok)
                 throw CommandError("terrainSendToUnreal: " + r.error);
             json out = r.result;
             out["settings"] = settings;
             // Before the volume, which puts the holes' visibility mask into the landscape's material.
-            if (!surface.is_null())
+            if (out.value("unchanged", false))
+                log::info("terrainSendToUnreal: {} unchanged since the last send; heights, layers and material left as they are", name);
+            else if (!surface.is_null())
                 out["terrainMaterial"] = sendSurfaceMaterial(client, surface, timeoutMs);
             try
             {
