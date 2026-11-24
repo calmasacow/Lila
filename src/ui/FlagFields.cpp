@@ -239,6 +239,9 @@ FlagFieldWidgets makeFlagField(const opt::Field& f, const json& value, std::func
         }
         else
             combo = new QComboBox(parent);
+        // A long choice label elides rather than setting the panel's minimum width.
+        combo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        combo->setMinimumContentsLength(6);
         for (size_t i = 0; i < f.choices.size(); ++i)
             combo->addItem(flagChoiceLabel(f, i), QString::fromStdString(f.choices[i]));
         auto select = [combo](const json& v) {

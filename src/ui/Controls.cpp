@@ -45,6 +45,7 @@ QString labelFor(const std::string& actionId, const QString& label)
     return a ? QString::fromStdString(actions::displayLabel(actionId)) : QString::fromStdString(actionId);
 }
 
+constexpr int kValueFieldMinWidth = 44;
 constexpr int kRowHeight = 30;
 constexpr int kRowIcon = 18;
 constexpr int kRowPad = 10;
@@ -387,6 +388,8 @@ QDoubleSpinBox* valueField(double lo, double hi, int decimals, const QString& un
     if (!unit.isEmpty())
         s->setSuffix(" " + unit);
     s->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    // Qt sizes a spin box's minimum to fit its largest value, which pins panels wide; values scroll in a narrow field.
+    s->setMinimumWidth(kValueFieldMinWidth);
     return s;
 }
 
@@ -396,6 +399,7 @@ SliderField::SliderField(QWidget* parent) : QDoubleSpinBox(parent)
     setButtonSymbols(QAbstractSpinBox::NoButtons);
     setKeyboardTracking(false);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    setMinimumWidth(kValueFieldMinWidth);
     setRole(this, "slider");
     connect(this, &QDoubleSpinBox::valueChanged, this, qOverload<>(&QWidget::update));
 }
