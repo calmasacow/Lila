@@ -395,3 +395,16 @@ TEST_CASE("remix: a tall region pasted onto low coast gets a seam wide enough to
     CHECK(steepest(*own) > 0.6);
     std::filesystem::remove(dem);
 }
+
+TEST_CASE("remix: a road crossing a delete strip narrower than the probe step is still cut")
+{
+    json j = base();
+    // 4 m wide, far under half the 30 m seam the probe steps by.
+    j["regions"] = json::array({{{"id", "strip"}, {"op", "delete"}, {"polygon", box(39800, -200000, 40200, 200000)}}});
+    j["seams"]["width"] = 3000;
+    j["seams"]["roads"] = false;
+    const RemixSpec s = specFromJson(j);
+    const std::shared_ptr<RemixResult> r = runRemix(s);
+    CHECK(r->roadEnds.size() >= 2);
+    CHECK(countKind(checkRemix(s, *r), "danglingRoad") >= 2);
+}
