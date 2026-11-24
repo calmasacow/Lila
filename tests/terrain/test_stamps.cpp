@@ -507,3 +507,31 @@ TEST_CASE("gpu erosion: timing at 4097" * doctest::skip())
     const double cpuS = std::chrono::duration<double>(std::chrono::steady_clock::now() - t1).count();
     MESSAGE("4097x4097: CPU " << cpuS / 2.0 << " s per iteration (2 run), about " << cpuS / 2.0 * 60.0 << " s for 60");
 }
+
+TEST_CASE("stamps: a pad over a small stream lays culverts under it; over a river it lays none")
+{
+    for (const float strength : {0.6f, 0.9f})
+    {
+        geo::Heightfield h = slope();
+        std::vector<float>& flow = h.masks["flow"];
+        flow.assign(h.size(), 0.0f);
+        // A stream down the x = 20000 line.
+        for (int z = 0; z < h.nz; ++z)
+            for (int x = 0; x < h.nx; ++x)
+                if (std::abs(h.samplePos(x, z).x - 20000.0) < h.cell * 0.6)
+                    flow[h.index(x, z)] = strength;
+        terrain::Stamp s;
+        s.id = "yard";
+        s.polygon = rect({20000.0, -10000.0}, {6000.0, 4000.0});
+        const terrain::StampResult r = terrain::applyStamp(h, s, terrain::footprintFromPolygon(s.polygon));
+        CAPTURE(strength);
+        if (strength < 0.75f)
+        {
+            REQUIRE(!r.culverts.empty());
+            for (const glm::dvec2& c : r.culverts)
+                CHECK(std::abs(c.x - 20000.0) < h.cell);
+        }
+        else
+            CHECK(r.culverts.empty());
+    }
+}

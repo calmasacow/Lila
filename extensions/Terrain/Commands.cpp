@@ -1953,8 +1953,11 @@ void registerContractCommands(ext::Context& ctx)
                     if (!e.stamp.polygon.empty())
                     {
                         const std::vector<uint8_t> cover = footprintMask(h, footprintFromPolygon(e.stamp.polygon));
+                        // A stream small enough for the culverts the pad was laid with runs under it.
+                        const std::vector<float>* flow = h.findMask("flow");
+                        auto culverted = [&](size_t i) { return !e.result.culverts.empty() && flow && flow->size() == h.size() && (*flow)[i] < 0.75f; };
                         for (size_t i = 0; i < cover.size(); ++i)
-                            if (cover[i] && an->reachOf()[i] >= 0 && an->reaches()[size_t(an->reachOf()[i])].order >= 2)
+                            if (cover[i] && an->reachOf()[i] >= 0 && an->reaches()[size_t(an->reachOf()[i])].order >= 2 && !culverted(i))
                             {
                                 issue("blocksFlow", about, at, "stands in river " + std::to_string(an->reachOf()[i]));
                                 break;
