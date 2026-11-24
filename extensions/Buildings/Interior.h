@@ -71,6 +71,7 @@ struct Room
     double y = 0.0, height = 0.0, area = 0.0; // area m2
     Vec2 label{0.0};                           // a point inside, world xz
     std::vector<std::array<Vec2, 4>> rects;     // the room's floor as rectangles, world xz
+    std::vector<double> rectY;                  // each rectangle's floor level (a stepped ground floor has terraces); y is the lowest
     bool entry = false, reachable = false, user = false;
     std::vector<std::string> doors;
 };
@@ -83,11 +84,14 @@ struct InteriorDoor
     double width = 0.0, height = 0.0, thickness = 0.0;
     int floor = 0;
     bool user = false;
+    bool open = false; // an opening with no leaf (no slot): a compact stair's landing face
+    bool up = false;   // the foot of a straight flight, on a floor the flight below also arrives at
 };
 
 struct Stair
 {
     std::string id, core; // "core0/l2", "core0"
+    std::string kind = "u"; // u (two flights, landings in the core), dogleg (landings in the rooms), straight (one flight a floor)
     int floor = 0;
     double y0 = 0.0, y1 = 0.0;
     int risers = 0;
@@ -104,6 +108,7 @@ struct FloorGrid
     double u0 = 0.0, v0 = 0.0, cell = 20.0;
     int nx = 0, nz = 0;
     std::vector<int> room; // room index, -1 none, -2 core
+    std::vector<double> level; // per cell floor level on a stepped ground floor; empty when the floor is flat at y
     std::string prefix;    // "l2", or "t1/l2" when two plates share a floor
 };
 
@@ -130,6 +135,8 @@ struct Interior
     std::vector<std::string> orphanEdits;
     /** The room under a point (index into rooms), or -1; core cells give -2. */
     int roomAt(Vec3 p) const;
+    /** The floor level under a point (a stepped ground floor's terrace), or nothing off every floor. */
+    std::optional<double> floorAt(Vec3 p) const;
     const Room* room(const std::string& id) const;
 };
 

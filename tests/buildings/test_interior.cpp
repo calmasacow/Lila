@@ -183,10 +183,12 @@ TEST_CASE("interiors: every program gives rooms the entry reaches, on rectangles
                 // Every part has geometry and every door a slot.
                 for (const InteriorPart& p : in->parts)
                     CHECK(p.soup.faces() > 0);
-                size_t doorSlots = 0;
+                size_t doorSlots = 0, leaves = 0;
                 for (const Module& m : in->slots)
                     doorSlots += m.type.rfind("door.interior", 0) == 0 ? 1 : 0;
-                CHECK(doorSlots == in->doors.size());
+                for (const InteriorDoor& d : in->doors)
+                    leaves += d.open ? 0 : 1;
+                CHECK(doorSlots == leaves);
             }
     }
 }
@@ -289,6 +291,155 @@ TEST_CASE("interiors: stairs keep to the character profile, and the check flags 
     REQUIRE(in2->stairs.size() == 2);
     for (const Stair& k : in2->stairs)
         CHECK(k.slope <= 28.0 + 1e-6);
+}
+
+TEST_CASE("interiors: tight floors get a dog-leg or a straight flight, and every floor is reachable")
+{
+    const CharacterProfile prof;
+    struct Case
+    {
+        double w, d;
+        int floors;
+        const char* kind;
+    };
+    // A wide house keeps the U; a small square one fits a dog-leg; a slot two metres wide fits only a straight flight.
+    for (const Case& c : {Case{1200, 1000, 3, "u"}, Case{440, 440, 2, "dogleg"}, Case{440, 440, 3, "dogleg"}, Case{200, 1200, 2, "straight"},
+                          Case{200, 1200, 4, "straight"}})
+    {
+        CAPTURE(c.w);
+        CAPTURE(c.d);
+        CAPTURE(c.floors);
+        const Style& st = styles().at("residential");
+        Spec s = rectSpec(c.w, c.d, c.floors, "residential", 0x700 + uint64_t(c.w) + uint64_t(c.floors));
+        auto r = build(s, st);
+        auto in = generateInterior(s, *r, st, json::object(), prof);
+        CAPTURE(in->warnings);
+        CAPTURE(in->notes);
+        REQUIRE(in->stairs.size() == size_t(r->floors - 1));
+        for (const Stair& k : in->stairs)
+        {
+            CHECK(k.kind == c.kind);
+            CHECK(k.straight == (std::string(c.kind) == "straight"));
+            CHECK(k.riser <= 18.0 + 1e-6);
+            CHECK(k.slope <= prof.maxSlope);
+            CHECK(k.headroom >= prof.height);
+            CHECK(k.width >= 2.0 * prof.radius);
+        }
+        for (const Room& rm : in->rooms)
+        {
+            CAPTURE(rm.id);
+            CHECK(rm.reachable);
+            if (!rm.reachable)
+                for (const InteriorDoor& d : in->doors)
+                    MESSAGE(d.id << " " << d.a << " " << d.b << " w " << d.width << " at " << d.origin.x << "," << d.origin.z);
+        }
+        std::set<int> floorsWithRooms;
+        for (const Room& rm : in->rooms)
+            floorsWithRooms.insert(rm.floor);
+        CHECK(floorsWithRooms.size() == size_t(r->floors));
+        const json chk = checkInterior(*in, prof);
+        CAPTURE(chk.dump());
+        CHECK(chk["ok"].get<bool>());
+        int open = 0, up = 0;
+        for (const InteriorDoor& d : in->doors)
+        {
+            open += d.open ? 1 : 0;
+            up += d.up ? 1 : 0;
+            if (d.open)
+                CHECK(d.width >= 2.0 * prof.radius);
+        }
+        if (std::string(c.kind) == "u")
+            CHECK(open == 0);
+        else
+            CHECK(open >= r->floors);
+        // A straight flight on a middle floor starts at a second opening, where the one below did not arrive.
+        CHECK(up == (std::string(c.kind) == "straight" ? r->floors - 2 : 0));
+        for (const InteriorPart& p : in->parts)
+            CHECK(p.soup.faces() > 0);
+    }
+}
+
+TEST_CASE("interiors: a stepped ground floor on a slope: rooms at their doors' level, steps between levels")
+{
+    const CharacterProfile prof;
+    for (const char* program : {"shop", "residential"})
+        for (int floors : {1, 2})
+        {
+            CAPTURE(program);
+            CAPTURE(floors);
+            const Style& st = styles().at(std::string(program) == "shop" ? "colonialCentro" : "residential");
+            Spec s = rectSpec(2400, 1200, floors, program, 0x880 + uint64_t(floors) + (std::string(program) == "shop" ? 10 : 0));
+            s.style = st.id;
+            s.cornerGround = {0.0, 260.0, 260.0, 0.0}; // rising along the street
+            s.ground = 0.0;
+            s.highGround = 260.0;
+            auto r = build(s, st);
+            auto in = generateInterior(s, *r, st, json::object(), prof);
+            CAPTURE(in->warnings);
+            const double floor0 = r->plates.front().y;
+            std::set<int> levels;
+            for (const Room& rm : in->rooms)
+            {
+                CAPTURE(rm.id);
+                CHECK(rm.reachable);
+                if (rm.floor != 0)
+                    continue;
+                // Lower rooms keep the ceiling where it was: the floor above doesn't move.
+                CHECK(rm.y <= floor0 + 0.01);
+                CHECK(rm.y >= 5.0 - 0.01);
+                CHECK(rm.y + rm.height == doctest::Approx(floor0 + r->plates.front().height));
+                for (double y : rm.rectY)
+                {
+                    CHECK(y >= rm.y);
+                    CHECK(y <= floor0 + 0.01);
+                    levels.insert(int(std::lround(y)));
+                }
+            }
+            CHECK(levels.size() >= 2);
+            // Every street door opens level with the room behind it, as the facade stepped it.
+            int entries = 0;
+            for (const Opening& op : r->openings)
+            {
+                if (op.kind == "window" || op.bay.find("/l0/") == std::string::npos)
+                    continue;
+                const Vec3 inPt = op.origin - op.normal * 60.0;
+                const std::optional<double> floorY = in->floorAt({inPt.x, op.origin.y + 1.0, inPt.z});
+                if (!floorY || in->roomAt({inPt.x, op.origin.y + 50.0, inPt.z}) < 0)
+                    continue;
+                CAPTURE(op.bay);
+                CHECK(*floorY == doctest::Approx(op.origin.y));
+                ++entries;
+            }
+            CHECK(entries > 0);
+            // A door between floors at different levels has steps, each riser within the character's step.
+            int stepped = 0;
+            for (const InteriorDoor& d : in->doors)
+            {
+                if (d.floor != 0)
+                    continue;
+                const Vec3 at{d.origin.x, floor0 - 1.0, d.origin.z};
+                const std::optional<double> fa = in->floorAt(at - d.normal * 10.0), fb = in->floorAt(at + d.normal * 10.0);
+                REQUIRE(fa);
+                REQUIRE(fb);
+                CAPTURE(d.id);
+                CHECK(d.origin.y == doctest::Approx(std::max(*fa, *fb)));
+                const auto st2 = std::find_if(in->stairs.begin(), in->stairs.end(), [&](const Stair& k) { return k.id == d.id + "/steps"; });
+                if (std::abs(*fa - *fb) < 0.5)
+                {
+                    CHECK(st2 == in->stairs.end());
+                    continue;
+                }
+                ++stepped;
+                REQUIRE(st2 != in->stairs.end());
+                CHECK(st2->kind == "steps");
+                CHECK(st2->riser <= 18.0 + 1e-6);
+                CHECK(st2->risers * st2->riser == doctest::Approx(std::abs(*fa - *fb)));
+            }
+            MESSAGE("terraces " << levels.size() << ", stepped doors " << stepped);
+            const json chk = checkInterior(*in, prof);
+            CAPTURE(chk.dump());
+            CHECK(chk["ok"].get<bool>());
+        }
 }
 
 TEST_CASE("interiors: layout edits replay by room id")

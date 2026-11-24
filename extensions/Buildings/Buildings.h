@@ -283,6 +283,13 @@ struct Spec
     /** From Settlement's published envelope (settlementEnvelopes). */
     static Spec fromEnvelope(const json& env, const std::string& settlement);
     double groundAt(Vec2 p) const;
+    /** Lowest and highest ground under the building: its sampled corners, else ground and highGround. */
+    std::pair<double, double> groundRange() const;
+    /** Whether the ground floor steps with the ground: sampled corners more than 60 cm apart. */
+    bool sloped() const;
+    /** A stepped ground floor's level over a point: the ground there plus the plinth, in 30 cm steps, between the lowest
+     *  ground (plus 5 cm) and the level of the ground floor (`floor0`, the highest ground plus the plinth). */
+    double steppedLevel(Vec2 p, double plinth, double floor0) const;
 };
 
 /** Whether the building has shops on its ground floor: businesses, or a commercial program or use. */

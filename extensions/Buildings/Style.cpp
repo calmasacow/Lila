@@ -451,6 +451,26 @@ double Spec::groundAt(Vec2 p) const
     return sh / sw;
 }
 
+std::pair<double, double> Spec::groundRange() const
+{
+    if (cornerGround.empty())
+        return {ground, std::max(highGround, ground)};
+    return {*std::min_element(cornerGround.begin(), cornerGround.end()), *std::max_element(cornerGround.begin(), cornerGround.end())};
+}
+
+bool Spec::sloped() const
+{
+    const auto [lo, hi] = groundRange();
+    return !cornerGround.empty() && hi - lo > 60.0;
+}
+
+double Spec::steppedLevel(Vec2 p, double plinth, double floor0) const
+{
+    const double lo = groundRange().first;
+    const double stepped = lo + std::floor((groundAt(p) + plinth - lo) / 30.0 + 0.5) * 30.0;
+    return std::clamp(stepped, lo + 5.0, std::max(floor0, lo + 5.0));
+}
+
 // Edits -------------------------------------------------------------------------------------------------------------------
 
 bool Edits::empty() const

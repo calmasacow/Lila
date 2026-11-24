@@ -12,6 +12,7 @@
 #include "curve/Roof.h"
 
 #include <algorithm>
+#include <tuple>
 #include <cmath>
 #include <numbers>
 
@@ -731,9 +732,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             if (ground && c.slope)
             {
                 const Vec3 mid = f.at(sc, 0.0);
-                const double local = c.spec.groundAt({mid.x, mid.z});
-                const double stepped = c.groundLo + std::floor((local + st.plinth - c.groundLo) / 30.0 + 0.5) * 30.0;
-                y0 = std::clamp(stepped, c.groundLo + 5.0, fl.y0);
+                y0 = c.spec.steppedLevel({mid.x, mid.z}, st.plinth, fl.y0);
             }
             const double y1 = fl.y1;
             const double bh = y1 - y0;
@@ -1749,15 +1748,9 @@ std::shared_ptr<const Result> generate(const Spec& spec, const Style& style, con
     }
 
     // Ground, floors and heights.
-    c.groundLo = spec.ground;
-    c.groundHi = std::max(spec.highGround, spec.ground);
-    if (!spec.cornerGround.empty())
-    {
-        c.groundLo = *std::min_element(spec.cornerGround.begin(), spec.cornerGround.end());
-        c.groundHi = *std::max_element(spec.cornerGround.begin(), spec.cornerGround.end());
-    }
+    std::tie(c.groundLo, c.groundHi) = spec.groundRange();
     // Stepping needs to know where the ground is high: only with sampled corners.
-    c.slope = !spec.cornerGround.empty() && c.groundHi - c.groundLo > 60.0;
+    c.slope = spec.sloped();
     c.floor0 = c.groundHi + c.st.plinth;
     const bool given = ed.floors.has_value();
     c.floors = given ? std::clamp(*ed.floors, 1, 120) : std::clamp(spec.floors, c.st.minFloors, c.st.maxFloors);
