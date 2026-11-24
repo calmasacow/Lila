@@ -576,12 +576,15 @@ ViewportHeader::ViewportHeader(ViewportWidget* view, QWidget* parent) : QWidget(
 
     mSymmetryRefresh = new QTimer(this);
     mSymmetryRefresh->setSingleShot(true);
-    // Value changes arrive per drag step, so coalesce them; the label only needs the latest state.
+    // Value changes arrive per drag step, so coalesce them: at most one refresh per 30 ms, with the latest state.
     mSymmetryRefresh->setInterval(30);
     connect(mSymmetryRefresh, &QTimer::timeout, this, &ViewportHeader::refreshSymmetry);
     mGraphListener = scene::Graph::current().addListener([this](scene::Change c, scene::NodeId) {
         if (c != scene::Change::Renamed && c != scene::Change::Reparented)
-            mSymmetryRefresh->start();
+        {
+            if (!mSymmetryRefresh->isActive())
+                mSymmetryRefresh->start();
+        }
         else
             refresh();
     });
