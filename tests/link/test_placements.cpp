@@ -314,6 +314,48 @@ TEST_CASE("unrealPlaceInstances mode=customHlod: hidden proxies placed as Custom
     fs::remove_all(dir);
 }
 
+TEST_CASE("slot table: a send replaces only its own sources' rows")
+{
+    setupPlacementTest();
+    run("newScene");
+    const json lamp = {{"unrealClass", "/Game/BP/BP_Lamp.BP_Lamp_C"}};
+    run("slotPublish", {{"args", {"Lamps"}},
+                        {"slots", {{{"id", "street/1/lamp/0"}, {"type", "lamp.street"}, {"position", {0, 0, 0}}, {"payload", lamp}},
+                                   {{"id", "street/1/lamp/1"}, {"type", "lamp.street"}, {"position", {500, 0, 0}}, {"payload", lamp}}}}});
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    FakeServer server([](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "slots"}}});
+        if (m == "placeInstances")
+            return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        if (m == "writeSlotTable")
+            return FakeServer::reply(req, {{"rows", req["params"]["rows"].size()}});
+        if (m == "removePlacements")
+            return FakeServer::reply(req, {{"removed", 0}});
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    run("unrealPlaceInstances", {{"args", {"Lamps"}}, {"wait", true}, {"validate", false}});
+    json table;
+    for (const json& r : server.requests())
+        if (r["method"] == "writeSlotTable")
+            table = r["params"];
+    REQUIRE(table.is_object());
+    REQUIRE(table["rows"].size() == 2);
+    REQUIRE(table["sources"].size() == 1);
+    // Every row's group starts with a source the send names, so Unreal keeps every other send's rows.
+    for (const json& row : table["rows"])
+        CHECK(row["group"].get<std::string>().starts_with(table["sources"][0].get<std::string>()));
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+}
+
 TEST_CASE("placement plan: a live array's copies are placements of their source's asset")
 {
     setupPlacementTest();

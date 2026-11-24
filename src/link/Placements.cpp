@@ -1304,7 +1304,11 @@ void registerPlacementCommands()
                 }
                 if (!plan["slotTable"].empty())
                 {
-                    RpcResult wrote = client->call("writeSlotTable", {{"path", slotTablePath}, {"rows", plan["slotTable"]}},
+                    // Rows of the sources sent replace theirs; other sends' rows stay in the table.
+                    json sources = json::array();
+                    for (const json& src : plan["gnSources"])
+                        sources.push_back(src["prefix"]);
+                    RpcResult wrote = client->call("writeSlotTable", {{"path", slotTablePath}, {"rows", plan["slotTable"]}, {"sources", sources}},
                                                    placementTimeoutMs(plan["slotTable"].size()));
                     plan["slotTableWritten"] = wrote.ok ? wrote.result : json{{"error", wrote.error}};
                 }

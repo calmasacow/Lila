@@ -30,12 +30,14 @@
 #include "Animation/AnimCurveMetadata.h"
 #include "Animation/AnimSequence.h"
 #include "Animation/Skeleton.h"
+#include "Engine/Texture.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/SkeletalMeshSocket.h"
 #include "Engine/StaticMesh.h"
 #include "Containers/Ticker.h"
 #include "Editor.h"
 #include "HAL/PlatformTime.h"
+#include "Materials/MaterialInterface.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "PhysicsEngine/BodySetup.h"
@@ -413,7 +415,14 @@ void CollectResults(const UE::Interchange::FAssetImportResultRef& Result, FImpor
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkImport::CollectResults);
 
-	for (UObject* Object : Result->GetImportedObjects())
+	// The imported asset itself first, the materials and textures made alongside it after: callers take assets[0].
+	TArray<UObject*> Imported = Result->GetImportedObjects();
+	Imported.RemoveAll([](const UObject* O) { return O == nullptr; });
+	Imported.StableSort([](const UObject& A, const UObject& B) {
+		auto Rank = [](const UObject& O) { return O.IsA<UMaterialInterface>() || O.IsA<UTexture>() ? 1 : 0; };
+		return Rank(A) < Rank(B);
+	});
+	for (UObject* Object : Imported)
 	{
 		if (Object)
 		{

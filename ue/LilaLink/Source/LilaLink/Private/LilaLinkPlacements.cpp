@@ -897,8 +897,9 @@ TSharedPtr<FJsonValue> PlaceSlotClass(const TSharedPtr<FJsonObject>& Params, con
 }
 
 /**
- * writeSlotTable {path, rows: [{id, type, owner, group, actorClass, mesh, item, data, location, rotation, scale}]}
- * rewrites the ULilaSlotTable data asset at path (made when missing) with the rows. Returns {path, rows}.
+ * writeSlotTable {path, rows: [{id, type, owner, group, actorClass, mesh, item, data, location, rotation, scale}], sources?}
+ * writes the rows into the ULilaSlotTable data asset at path (made when missing), replacing the rows whose group starts
+ * with one of sources (every row when sources is missing). Returns {path, rows}.
  */
 TSharedPtr<FJsonValue> WriteSlotTable(const TSharedPtr<FJsonObject>& Params, FString& OutError)
 {
@@ -925,7 +926,28 @@ TSharedPtr<FJsonValue> WriteSlotTable(const TSharedPtr<FJsonObject>& Params, FSt
 		FAssetRegistryModule::AssetCreated(Table);
 	}
 	Table->Modify();
-	Table->Rows.Reset(Rows->Num());
+	// sources: the group prefixes this send covers; their rows are replaced and every other row stays. Without it the
+	// table is rewritten whole.
+	const TArray<TSharedPtr<FJsonValue>>* Sources = nullptr;
+	if (Params->TryGetArrayField(TEXT("sources"), Sources))
+	{
+		TArray<FString> Prefixes;
+		for (const TSharedPtr<FJsonValue>& S : *Sources)
+		{
+			FString Prefix;
+			if (S.IsValid() && S->TryGetString(Prefix) && !Prefix.IsEmpty())
+			{
+				Prefixes.Add(Prefix);
+			}
+		}
+		Table->Rows.RemoveAll([&Prefixes](const FLilaSlotRow& Row) {
+			return Prefixes.ContainsByPredicate([&Row](const FString& P) { return Row.Group.StartsWith(P, ESearchCase::CaseSensitive); });
+		});
+	}
+	else
+	{
+		Table->Rows.Reset(Rows->Num());
+	}
 	for (const TSharedPtr<FJsonValue>& V : *Rows)
 	{
 		const TSharedPtr<FJsonObject>* R = nullptr;
