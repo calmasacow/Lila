@@ -1211,6 +1211,7 @@ void registerPlacementCommands()
                   {"nanite", "na", T::Bool, false, "Build Nanite data for the assets."},
                   {"hlodLayer", "hl", T::String, "", "HLOD layer asset path for the placed actors; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom)."},
                   {"linkedHlodLayer", "lhl", T::String, "", "mode=customHlod: the layer whose unloading shows these (far proxies after the near ones)."},
+                  {"resend", "rs", T::Bool, false, "Send every group, also the ones the level already holds unchanged."},
                   {"validate", "va", T::Bool, true,
                    "Run the validators first: an issue blocking unrealPlaceInstances, \"unreal\" or \"*\" on what is sent stops "
                    "the send; other issues come back in the result's issues."},
@@ -1306,7 +1307,8 @@ void registerPlacementCommands()
                     slotRoots()[g.fullPath(r)] = flags;
             }
             const bool hashes = hasFeature("placementHashes");
-            auto job = [plan, meshes, alone, withChildren, hlod, linkedHlod, slotTablePath, hashes, dir = cacheDir()]() mutable {
+            const bool resend = a.get<bool>("resend", false);
+            auto job = [plan, meshes, alone, withChildren, hlod, linkedHlod, slotTablePath, hashes, resend, dir = cacheDir()]() mutable {
                 LILA_ZONE_N("Unreal placements");
                 std::shared_ptr<RpcClient> client = Link::get().client();
                 if (!client)
@@ -1327,7 +1329,7 @@ void registerPlacementCommands()
                 // What the level already holds per group (signature, actor count): unchanged groups are skipped, so a
                 // rule swap or a one-building edit sends only what changed.
                 json inLevel = json::object();
-                if (hashes)
+                if (hashes && !resend)
                     if (RpcResult h = client->call("placementHashes", json::object(), placementTimeoutMs(0)); h.ok && h.result.is_object())
                         inLevel = h.result.value("groups", json::object());
                 int unchanged = 0;

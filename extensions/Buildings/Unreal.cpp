@@ -16,6 +16,7 @@
 #include <lila/Profile.h>
 #include <lila/UnrealLink.h>
 
+#include <algorithm>
 #include <set>
 
 using namespace lila;
@@ -187,8 +188,16 @@ void registerUnreal(ext::Context& ctx)
             json entries = json::array();
             for (const json& i : interiorGroups)
             {
-                const json placed = ops::execute("unrealPlaceInstances", {{"args", {i["group"]}}, {"folder", folder + "/Interiors"}, {"mode", "actors"},
-                                                                          {"collision", "complexAsSimple"}, {"wait", true}});
+                json flags = {{"args", {i["group"]}}, {"folder", folder + "/Interiors"}, {"mode", "actors"}, {"collision", "complexAsSimple"}, {"wait", true}};
+                json placed = ops::execute("unrealPlaceInstances", flags);
+                // A Level Instance is rebuilt whole from the actors placed loose: when only some groups changed, all go again.
+                const size_t same = placed.value("unchanged", 0);
+                const size_t total = std::ranges::count_if(placed.value("groups", json::array()), [](const json& g) { return !g.value("remove", false); });
+                if (interiorMode == "levelInstance" && same > 0 && same < total)
+                {
+                    flags["resend"] = true;
+                    placed = ops::execute("unrealPlaceInstances", flags);
+                }
                 json keys = json::array();
                 for (const json& grp : placed.value("groups", json::array()))
                     keys.push_back(grp.at("key"));

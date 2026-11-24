@@ -35,6 +35,7 @@
 #include "HAL/FileManager.h"
 #include "LevelInstance/LevelInstanceActor.h"
 #include "LevelInstance/LevelInstanceInterface.h"
+#include "LevelInstance/LevelInstanceSubsystem.h"
 #include "LevelInstance/LevelInstanceTypes.h"
 #include "Misc/PackageName.h"
 #include "ObjectTools.h"
@@ -169,12 +170,20 @@ FTransform TransformOf(const TSharedPtr<FJsonObject>& P)
 	return FTransform(Rotation, VectorField(P, TEXT("location"), FVector::ZeroVector), VectorField(P, TEXT("scale"), FVector::OneVector));
 }
 
+/** An actor of a loaded Level Instance's level: part of that instance, edited only by rebuilding it (makeLevelInstance). */
+bool InsideLevelInstance(UWorld* World, const AActor* Actor)
+{
+	const ULevelInstanceSubsystem* Instances = World->GetSubsystem<ULevelInstanceSubsystem>();
+	return Instances && Actor->GetLevel() != World->PersistentLevel && Instances->GetOwningLevelInstance(Actor->GetLevel());
+}
+
+/** The level's actors with Tag, leaving out those inside Level Instances. */
 TArray<AActor*> TaggedActors(UWorld* World, const FName& Tag)
 {
 	TArray<AActor*> Out;
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
-		if (It->Tags.Contains(Tag))
+		if (It->Tags.Contains(Tag) && !InsideLevelInstance(World, *It))
 		{
 			Out.Add(*It);
 		}
@@ -1434,6 +1443,10 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	TArray<AActor*> Doomed;
 	for (TActorIterator<AActor> It(World); It; ++It)
 	{
+		if (InsideLevelInstance(World, *It))
+		{
+			continue;
+		}
 		const FString Group = Prefixes.IsEmpty() ? FString() : TagValue(*It, GroupPrefix);
 		if (!Group.IsEmpty() && !Keep.Contains(Group) && Prefixes.ContainsByPredicate([&Group](const FString& P) { return Group.StartsWith(P); }))
 		{
@@ -1670,10 +1683,25 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 		OutError = TEXT("makeLevelInstance: no level is open");
 		return nullptr;
 	}
+	// Only actors loose in the level: a resend that left every group unchanged placed none, and the instance stands as it is.
 	TArray<AActor*> Actors;
 	for (const TSharedPtr<FJsonValue>& G : *Groups)
 	{
 		Actors.Append(TaggedActors(World, GroupTag(G->AsString())));
+	}
+	const FName Tag(*(FString(AssemblyPrefix) + Key));
+	TArray<AActor*> Previous = TaggedActors(World, Tag);
+	if (Actors.IsEmpty() && !Previous.IsEmpty())
+	{
+		TSharedRef<FJsonObject> Same = MakeShared<FJsonObject>();
+		Same->SetStringField(TEXT("actor"), Previous[0]->GetActorLabel());
+		if (const ILevelInstanceInterface* Instance = Cast<ILevelInstanceInterface>(Previous[0]))
+		{
+			Same->SetStringField(TEXT("level"), Instance->GetWorldAsset().GetLongPackageName());
+		}
+		Same->SetStringField(TEXT("kind"), Kind);
+		Same->SetBoolField(TEXT("unchanged"), true);
+		return Obj(Same);
 	}
 	if (Actors.IsEmpty())
 	{
@@ -1681,8 +1709,6 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 		return nullptr;
 	}
 
-	const FName Tag(*(FString(AssemblyPrefix) + Key));
-	TArray<AActor*> Previous = TaggedActors(World, Tag);
 	// A resend refills the level the assembly was sent as before, so its file and name stay.
 	FString PackageName;
 	for (AActor* Old : Previous)

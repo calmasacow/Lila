@@ -33,8 +33,9 @@ namespace LilaLink
  *   complexity, so UCX_ hulls or its own triangles are what it collides with.
  * makeLevelInstance {key, name, kind: levelInstance | packedLevelActor, level, groups: [...]} moves the actors those
  *   placement groups made into a new level (level, or level_2, ... when taken) and places it as a Level Instance or
- *   Packed Level Actor tagged with the key; one made earlier for the key is removed first. Returns {actor, level, kind,
- *   actors, replaced}.
+ *   Packed Level Actor tagged with the key; one made earlier for the key is removed first. Only actors loose in the level
+ *   count: with none and an instance already made for the key, that instance stays ({actor, level, kind, unchanged}).
+ *   Returns {actor, level, kind, actors, replaced}. Placement and removal RPCs leave actors inside Level Instances alone.
  */
 void AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods);
 } // namespace LilaLink
