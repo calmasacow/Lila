@@ -197,6 +197,73 @@ std::string defaultCulture(std::string_view profileName)
     return "oldEnglish";
 }
 
+/** What an imported street run says of a street: its name, or (unnamed) its OSM id; by length along the street. */
+struct ImportedLabel
+{
+    std::string name, osmId;
+};
+
+/**
+ * Street id to the label of the imported run its edges lie on (within the graph's snap, running the same way), the one
+ * covering most of its length; streets laid by Settlement itself are left out.
+ */
+std::map<uint64_t, ImportedLabel> importedLabels(const Layout& l)
+{
+    std::map<uint64_t, ImportedLabel> out;
+    if (!l.gen || l.gen->importedRuns.empty())
+        return out;
+    const StreetGraph& g = l.graph;
+    constexpr double kCell = 5000.0;
+    auto cellOf = [&](Vec2 p) { return std::pair<int64_t, int64_t>{int64_t(std::floor(p.x / kCell)), int64_t(std::floor(p.y / kCell))}; };
+    std::map<std::pair<int64_t, int64_t>, std::vector<std::pair<size_t, size_t>>> grid;
+    const std::vector<ImportedStreet>& runs = l.gen->importedRuns;
+    for (size_t r = 0; r < runs.size(); ++r)
+        for (size_t i = 0; i + 1 < runs[r].pts.size(); ++i)
+        {
+            const Vec2 a = runs[r].pts[i], b = runs[r].pts[i + 1];
+            const auto ca = cellOf(glm::min(a, b)), cb = cellOf(glm::max(a, b));
+            for (int64_t x = ca.first; x <= cb.first; ++x)
+                for (int64_t z = ca.second; z <= cb.second; ++z)
+                    grid[{x, z}].push_back({r, i});
+        }
+    const double reach = std::max(200.0, g.snap() * 1.5);
+    std::map<uint64_t, std::map<size_t, double>> along;
+    for (size_t e = 0; e < g.edges.size(); ++e)
+    {
+        if (!g.isStreet(int(e)) || g.edges[e].street == 0)
+            continue;
+        const Vec2 a = g.nodes[size_t(g.edges[e].a)].p, b = g.nodes[size_t(g.edges[e].b)].p;
+        const double len = glm::length(b - a);
+        if (len < 1e-6)
+            continue;
+        const Vec2 m = (a + b) * 0.5, d = (b - a) / len;
+        size_t best = SIZE_MAX;
+        double bestD = reach;
+        const auto c = cellOf(m);
+        for (int64_t x = c.first - 1; x <= c.first + 1; ++x)
+            for (int64_t z = c.second - 1; z <= c.second + 1; ++z)
+                if (auto it = grid.find({x, z}); it != grid.end())
+                    for (const auto& [r, i] : it->second)
+                    {
+                        const Vec2 p = runs[r].pts[i], q = runs[r].pts[i + 1];
+                        const double sl = glm::length(q - p);
+                        if (sl < 1e-6 || std::abs(glm::dot((q - p) / sl, d)) < 0.9)
+                            continue;
+                        const double t = std::clamp(glm::dot(m - p, q - p) / (sl * sl), 0.0, 1.0);
+                        if (const double dist = glm::length(m - (p + (q - p) * t)); dist < bestD)
+                            best = r, bestD = dist;
+                    }
+        if (best != SIZE_MAX)
+            along[g.edges[e].street][best] += len;
+    }
+    for (const auto& [street, byRun] : along)
+    {
+        const auto top = std::max_element(byRun.begin(), byRun.end(), [](const auto& x, const auto& y) { return x.second < y.second; });
+        out[street] = {runs[top->first].name, runs[top->first].osmId};
+    }
+    return out;
+}
+
 void nameStreets(Layout& l, const Site& site)
 {
     LILA_ZONE();
@@ -228,6 +295,9 @@ void nameStreets(Layout& l, const Site& site)
         std::string name;
         bool fixed = false; // given by the user, or a grid number: shared names are meant
     };
+    // Imported streets keep the fictional names they came with (Terrain names each real street once), street by street;
+    // unnamed imported ones are named from their OSM id, so they keep their names across reruns.
+    const std::map<uint64_t, ImportedLabel> imported = importedLabels(l);
     std::vector<Named> runs;
     const double gridRad = glm::radians(l.profile.gridAngle);
     const GridAxes ax{{std::cos(gridRad), std::sin(gridRad)}, {-std::sin(gridRad), std::cos(gridRad)}};
@@ -254,6 +324,20 @@ void nameStreets(Layout& l, const Site& site)
                     n.name = it->second;
                     break;
                 }
+        if (n.name.empty() && !imported.empty())
+        {
+            std::map<std::string, double> byName, byId;
+            for (int e : edges)
+                if (auto it = imported.find(g.edges[size_t(e)].street); it != imported.end())
+                    (it->second.name.empty() ? byId[it->second.osmId] : byName[it->second.name]) += g.length(e);
+            auto longest = [](const std::map<std::string, double>& m) {
+                return std::max_element(m.begin(), m.end(), [](const auto& x, const auto& y) { return x.second < y.second; })->first;
+            };
+            if (!byName.empty())
+                n.name = longest(byName);
+            else if (!byId.empty())
+                n.key = lila::names::textKey("osm|" + longest(byId));
+        }
         if (n.name.empty() && grid && g.edges[size_t(edges.front())].cls <= StreetClass::Local)
             n.name = gridName(l, edges, ax);
         n.fixed = !n.name.empty();
@@ -266,6 +350,9 @@ void nameStreets(Layout& l, const Site& site)
     for (const Named& n : runs)
         if (n.fixed)
             taken.insert(n.name);
+    for (const auto& [street, label] : imported)
+        if (!label.name.empty())
+            taken.insert(label.name);
     for (Named& n : runs)
     {
         if (n.fixed)
@@ -281,6 +368,10 @@ void nameStreets(Layout& l, const Site& site)
     for (const Named& n : runs)
         for (int e : n.edges)
             l.streetNames[g.edges[size_t(e)].street] = n.name;
+    // A stroke can carry on from one imported street into another: each keeps its own name.
+    for (const auto& [street, label] : imported)
+        if (!label.name.empty() && !given.count(street))
+            l.streetNames[street] = label.name;
 
     std::map<uint64_t, std::string> districtGiven(site.districtNames.begin(), site.districtNames.end());
     std::set<std::string> districtTaken;

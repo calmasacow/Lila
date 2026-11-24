@@ -102,16 +102,17 @@ json osmCurveStreets(Graph& g, const std::string& name, const char* cmd)
         if (lines[k].size() < 2)
             continue;
         std::string cls = kind == "path" ? "path" : "local";
-        std::string label;
+        std::string label, id;
         if (info.is_array() && k < info.size() && info[k].is_object())
         {
             cls = info[k].value("class", cls);
             label = info[k].value("name", std::string());
+            id = info[k].contains("id") ? (info[k]["id"].is_string() ? info[k]["id"].get<std::string>() : info[k]["id"].dump()) : std::string();
         }
         json pts = json::array();
         for (const Vec2& p : lines[k])
             pts.push_back({p.x, p.y});
-        out.push_back({{"points", pts}, {"class", cls}, {"name", label}});
+        out.push_back({{"points", pts}, {"class", cls}, {"name", label}, {"id", id}});
     }
     return out;
 }

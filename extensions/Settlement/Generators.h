@@ -123,12 +123,13 @@ struct DistrictSpec
     std::vector<EraSpec> eras;
 };
 
-/** A street read from OpenStreetMap (or anywhere): points and class. */
+/** A street read from OpenStreetMap (or anywhere): points and class, and the (fictional) name and OSM id it came with. */
 struct ImportedStreet
 {
     std::vector<Vec2> pts;
     StreetClass cls = StreetClass::Local;
     std::string name;
+    std::string osmId;
 };
 
 /**
@@ -338,6 +339,7 @@ struct GenLayout
     std::vector<Polygon> cleared; // corridors axes were cut through
     int demolishedStreets = 0;   // older streets removed by axes
     int imported = 0;            // imported streets laid
+    std::vector<ImportedStreet> importedRuns; // as laid (clipped to the outline), for naming the streets they made
     std::vector<std::string> warnings; // fallbacks taken, and why
     std::shared_ptr<const GenSpec> spec;
     std::vector<OsmSite> osmSites;
