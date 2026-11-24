@@ -37,7 +37,7 @@
 
 namespace
 {
-constexpr int32 Version = 3;
+constexpr int32 Version = 4;
 const TCHAR* VersionTag = TEXT("Lila Building v");
 const TCHAR* InstanceFolder = TEXT("/Game/LilaLink/Buildings");
 
@@ -80,15 +80,17 @@ UMaterialExpressionCustom* Custom(LilaLink::FFunctionGraph& G, const FString& De
 }
 
 /**
- * MF_LilaBuildingVariation: the building's painted colour (vertex colour RGB, one colour per building and part as Lila's
- * palette picked it) multiplied into a grey base such as the LilaBuilding trim sheet's albedo, and dirt (vertex alpha)
+ * MF_LilaBuildingVariation: the building's painted colour (the instance colour Lila sent with shared module meshes, else
+ * vertex colour RGB: one colour per building and part as Lila's palette picked it) multiplied into a grey base such as
+ * the LilaBuilding trim sheet's albedo, and dirt (vertex alpha)
  * laid over it, broken up by smooth world-space noise (two octaves at DirtScale). Drop it into your own material between the base colour
  * and the output; the generated M_LilaBuilding does exactly that.
  */
 void BuildVariation(UMaterialFunction* Function)
 {
-	LilaLink::FFunctionGraph G(Function, TEXT("Lila Building Variation: per-building painted colour and dirt from the vertex colour Lila's "
-											  "Buildings writes (RGB colour, A dirt), over your base colour or the LilaBuilding trim sheet."));
+	LilaLink::FFunctionGraph G(Function, TEXT("Lila Building Variation: per-building painted colour and dirt from Lila's Buildings, over your "
+											  "base colour or the LilaBuilding trim sheet. The colour is the instance colour Lila sent (custom data "
+											  "0-3, on shared module meshes), else the vertex colour (RGB colour); dirt is vertex alpha."));
 	UMaterialExpression* Base = G.VectorInput(TEXT("BaseColor"), FLinearColor(0.8f, 0.8f, 0.8f), TEXT("Surface"),
 		TEXT("The surface's own colour, grey where the palette should show (a trim sheet's albedo)."));
 	UMaterialExpression* BaseRough = G.ScalarInput(TEXT("BaseRoughness"), 0.85f, TEXT("Surface"), TEXT("The surface's own roughness."));

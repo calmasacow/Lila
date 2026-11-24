@@ -5,8 +5,8 @@
 namespace LilaLink
 {
 /**
- * buildingMaterials: MF_LilaBuildingVariation (the per-building palette Lila writes into vertex colour, RGB the painted
- * colour and A the dirt, laid over a trim sheet or any base colour) with M_LilaBuilding built on it, made when missing,
+ * buildingMaterials: MF_LilaBuildingVariation (the per-building palette Lila sends as instance colour on shared module
+ * meshes, else writes into vertex colour, RGB the painted colour and A the dirt, laid over a trim sheet or any base colour) with M_LilaBuilding built on it, made when missing,
  * older or regenerate; and a material instance per entry of instances (one per building style).
  *
  * buildingInteriors {folder, glassAssets?: [mesh paths], interiors: [{building, name, mode: levelInstance | dataLayer,
