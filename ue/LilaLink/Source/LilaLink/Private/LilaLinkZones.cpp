@@ -360,7 +360,7 @@ TSharedPtr<FJsonValue> SetZones(const TSharedPtr<FJsonObject>& Params, FString& 
 	Asset->Layers.Reset();
 
 	TSet<FString> Sent;
-	int32 Created = 0, Updated = 0;
+	int32 Created = 0, Updated = 0, Unchanged = 0;
 	TMap<FString, TArray<AActor*>> ByDataLayer;
 	for (const TSharedPtr<FJsonValue>& LayerValue : *LayersJson)
 	{
@@ -440,6 +440,20 @@ TSharedPtr<FJsonValue> SetZones(const TSharedPtr<FJsonObject>& Params, FString& 
 
 			ALilaZoneVolume** Found = Existing.Find(Key);
 			ALilaZoneVolume* Volume = Found ? *Found : nullptr;
+			// What this zone's volume is made from: a volume already carrying it keeps its brush.
+			FString ZoneText;
+			{
+				TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer = TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&ZoneText);
+				FJsonSerializer::Serialize(ZoneJson.ToSharedRef(), Writer);
+			}
+			ZoneText += Label + Folder + Layer.Label + Type + Layer.DataLayer + Layer.Color.ToString() + Asset->GetPathName();
+			const FName HashTag(*FString::Printf(TEXT("LilaHash:%08x%08x"), FCrc::StrCrc32(*ZoneText), GetTypeHash(ZoneText)));
+			if (Volume && Volume->Tags.Contains(HashTag))
+			{
+				++Unchanged;
+				ByDataLayer.FindOrAdd(Layer.DataLayer).Add(Volume);
+				continue;
+			}
 			if (!Volume)
 			{
 				FActorSpawnParameters Spawn;
@@ -477,6 +491,8 @@ TSharedPtr<FJsonValue> SetZones(const TSharedPtr<FJsonObject>& Params, FString& 
 			Volume->ZoneData = Asset;
 			Volume->BrushColor = Layer.Color.ToFColor(true);
 			BuildBrush(Volume, Pieces, Zone.Bottom, Zone.Top, Location);
+			Volume->Tags.RemoveAll([](const FName& Tag) { return Tag.ToString().StartsWith(TEXT("LilaHash:")); });
+			Volume->Tags.Add(HashTag);
 			Volume->MarkPackageDirty();
 			ByDataLayer.FindOrAdd(Layer.DataLayer).Add(Volume);
 		}
@@ -512,11 +528,12 @@ TSharedPtr<FJsonValue> SetZones(const TSharedPtr<FJsonObject>& Params, FString& 
 		}
 	}
 
-	UE_LOG(LogLilaLink, Log, TEXT("setZones: %s (%d created, %d updated, %d removed)"), *Label, Created, Updated, Removed);
+	UE_LOG(LogLilaLink, Log, TEXT("setZones: %s (%d created, %d updated, %d unchanged, %d removed)"), *Label, Created, Updated, Unchanged, Removed);
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("volumes"), Sent.Num());
 	Out->SetNumberField(TEXT("created"), Created);
 	Out->SetNumberField(TEXT("updated"), Updated);
+	Out->SetNumberField(TEXT("unchanged"), Unchanged);
 	Out->SetNumberField(TEXT("removed"), Removed);
 	Out->SetStringField(TEXT("asset"), Asset->GetPathName());
 	Out->SetObjectField(TEXT("dataLayers"), DataLayers);

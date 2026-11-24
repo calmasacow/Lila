@@ -7,6 +7,7 @@
 #include "ops/Command.h"
 #include "scene/Graph.h"
 
+#include <chrono>
 #include <doctest/doctest.h>
 
 #include <filesystem>
@@ -259,6 +260,43 @@ TEST_CASE("zones: mask outlines and convex pieces")
     for (const Polygon& p : convexPieces(cw))
         sumCw += area(p);
     CHECK(sumCw == doctest::Approx(area(L)));
+}
+
+TEST_CASE("zones: convex pieces of a long traced ring stay quick and exact")
+{
+    // A comb: 600 teeth, 2,400 corners, the shape a traced boat lane's mask gives.
+    Polygon comb;
+    const int teeth = 600;
+    comb.push_back({0, 0});
+    comb.push_back({teeth * 200.0, 0});
+    for (int t = teeth - 1; t >= 0; --t)
+    {
+        const double x = t * 200.0;
+        comb.push_back({x + 150.0, 100.0});
+        comb.push_back({x + 150.0, 400.0 + (t % 7) * 30.0});
+        comb.push_back({x + 50.0, 400.0 + (t % 5) * 40.0});
+        comb.push_back({x + 50.0, 100.0});
+    }
+    comb.back() = {0.0, 100.0};
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::vector<Polygon> pieces = convexPieces(comb);
+    const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(seconds < 2.0);
+    CHECK(pieces.size() >= size_t(teeth));
+    double sum = 0.0;
+    size_t notConvex = 0;
+    for (const Polygon& p : pieces)
+    {
+        sum += area(p);
+        for (size_t i = 0; i < p.size(); ++i)
+        {
+            const Vec2 a = p[i], b = p[(i + 1) % p.size()], c = p[(i + 2) % p.size()];
+            if ((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) < -1e-6)
+                ++notConvex;
+        }
+    }
+    CHECK(notConvex == 0);
+    CHECK(sum == doctest::Approx(area(comb)).epsilon(1e-9));
 }
 
 TEST_CASE("zones: engine JSON round trip keeps every answer")

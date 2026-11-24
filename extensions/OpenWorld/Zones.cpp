@@ -12,6 +12,7 @@
 #include <deque>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 
 namespace openworld::zones
 {
@@ -952,83 +953,115 @@ std::vector<Polygon> convexPieces(const Polygon& poly0)
         std::reverse(poly.begin(), poly.end());
     if (convex(poly))
         return {poly};
-    // Ear clipping into triangles, then neighbours merged while the union stays convex (Hertel-Mehlhorn).
-    std::vector<size_t> idx(poly.size());
-    for (size_t i = 0; i < idx.size(); ++i)
-        idx[i] = i;
+    const size_t n = poly.size();
+    // Ear clipping into triangles over a linked ring, resuming where the last ear was cut; only reflex corners can
+    // lie inside an ear, so only they are tested.
+    std::vector<size_t> prev(n), next(n);
+    for (size_t i = 0; i < n; ++i)
+        prev[i] = (i + n - 1) % n, next[i] = (i + 1) % n;
+    auto reflex = [&](size_t i) { return cross(poly[prev[i]], poly[i], poly[next[i]]) <= 1e-9; };
+    std::vector<char> isReflex(n);
+    std::vector<size_t> reflexList;
+    for (size_t i = 0; i < n; ++i)
+        if ((isReflex[i] = reflex(i)))
+            reflexList.push_back(i);
+    std::vector<char> gone(n, 0);
+    auto isEar = [&](size_t b) {
+        if (isReflex[b])
+            return false;
+        const size_t a = prev[b], c = next[b];
+        for (size_t k : reflexList)
+            if (!gone[k] && isReflex[k] && k != a && k != b && k != c && inTriangle(poly[k], poly[a], poly[b], poly[c]))
+                return false;
+        return true;
+    };
     std::vector<std::array<size_t, 3>> tris;
-    size_t guard = 0;
-    while (idx.size() > 3 && guard++ < poly.size() * poly.size())
+    size_t left = n, at = 0, sinceCut = 0;
+    while (left > 3 && sinceCut <= left)
     {
-        bool clipped = false;
-        for (size_t i = 0; i < idx.size(); ++i)
+        if (isEar(at))
         {
-            const size_t a = idx[(i + idx.size() - 1) % idx.size()], b = idx[i], c = idx[(i + 1) % idx.size()];
-            if (cross(poly[a], poly[b], poly[c]) <= 1e-9)
-                continue;
-            bool ear = true;
-            for (size_t k : idx)
-                if (k != a && k != b && k != c && inTriangle(poly[k], poly[a], poly[b], poly[c]))
-                {
-                    ear = false;
-                    break;
-                }
-            if (!ear)
-                continue;
-            tris.push_back({a, b, c});
-            idx.erase(idx.begin() + std::ptrdiff_t(i));
-            clipped = true;
-            break;
+            const size_t a = prev[at], c = next[at];
+            tris.push_back({a, at, c});
+            gone[at] = 1;
+            next[a] = c;
+            prev[c] = a;
+            --left;
+            sinceCut = 0;
+            isReflex[a] = reflex(a);
+            isReflex[c] = reflex(c);
+            at = a;
+            continue;
         }
-        if (!clipped)
-            break;
+        at = next[at];
+        ++sinceCut;
     }
-    if (idx.size() == 3)
-        tris.push_back({idx[0], idx[1], idx[2]});
+    if (left == 3)
+        tris.push_back({prev[at], at, next[at]});
+
+    // Hertel-Mehlhorn: drop each diagonal whose two pieces stay convex together, one pass over the diagonals.
     std::vector<std::vector<size_t>> pieces;
     for (const auto& t : tris)
         pieces.push_back({t[0], t[1], t[2]});
+    std::vector<char> alive(pieces.size(), 1);
+    auto key = [](size_t u, size_t v) { return u < v ? (uint64_t(u) << 32) | v : (uint64_t(v) << 32) | u; };
+    std::unordered_map<uint64_t, std::vector<size_t>> byEdge;
+    for (size_t i = 0; i < pieces.size(); ++i)
+        for (size_t e = 0; e < 3; ++e)
+            byEdge[key(pieces[i][e], pieces[i][(e + 1) % 3])].push_back(i);
     auto asPoly = [&](const std::vector<size_t>& p) {
         Polygon out;
+        out.reserve(p.size());
         for (size_t i : p)
             out.push_back(poly[i]);
         return out;
     };
-    for (bool merged = true; merged;)
+    std::vector<uint64_t> diagonals;
+    for (const auto& [k, owners] : byEdge)
+        if (owners.size() == 2)
+            diagonals.push_back(k);
+    std::sort(diagonals.begin(), diagonals.end());
+    for (uint64_t d : diagonals)
     {
-        merged = false;
-        for (size_t i = 0; i < pieces.size() && !merged; ++i)
-            for (size_t j = i + 1; j < pieces.size() && !merged; ++j)
-            {
-                const std::vector<size_t>&A = pieces[i], &B = pieces[j];
-                for (size_t ai = 0; ai < A.size() && !merged; ++ai)
+        std::vector<size_t>& owners = byEdge[d];
+        if (owners.size() != 2 || owners[0] == owners[1] || !alive[owners[0]] || !alive[owners[1]])
+            continue;
+        const size_t i = owners[0], j = owners[1];
+        const std::vector<size_t>&A = pieces[i], &B = pieces[j];
+        std::vector<size_t> joined;
+        for (size_t ai = 0; ai < A.size() && joined.empty(); ++ai)
+        {
+            const size_t u = A[ai], v = A[(ai + 1) % A.size()];
+            if (key(u, v) != d)
+                continue;
+            for (size_t bi = 0; bi < B.size(); ++bi)
+                if (B[bi] == v && B[(bi + 1) % B.size()] == u)
                 {
-                    const size_t u = A[ai], v = A[(ai + 1) % A.size()];
-                    for (size_t bi = 0; bi < B.size(); ++bi)
-                        if (B[bi] == v && B[(bi + 1) % B.size()] == u)
-                        {
-                            // A up to u, then B from u round to v, then A from v on.
-                            std::vector<size_t> joined;
-                            for (size_t k = 0; k <= ai; ++k)
-                                joined.push_back(A[k]);
-                            for (size_t k = 2; k < B.size(); ++k)
-                                joined.push_back(B[(bi + k) % B.size()]);
-                            for (size_t k = ai + 1; k < A.size(); ++k)
-                                joined.push_back(A[k]);
-                            if (convex(asPoly(joined)))
-                            {
-                                pieces[i] = std::move(joined);
-                                pieces.erase(pieces.begin() + std::ptrdiff_t(j));
-                                merged = true;
-                            }
-                            break;
-                        }
+                    // A up to u, then B from u round to v, then A from v on.
+                    for (size_t k = 0; k <= ai; ++k)
+                        joined.push_back(A[k]);
+                    for (size_t k = 2; k < B.size(); ++k)
+                        joined.push_back(B[(bi + k) % B.size()]);
+                    for (size_t k = ai + 1; k < A.size(); ++k)
+                        joined.push_back(A[k]);
+                    break;
                 }
-            }
+        }
+        if (joined.empty() || !convex(asPoly(joined)))
+            continue;
+        // j's edges now belong to i.
+        for (size_t e = 0; e < B.size(); ++e)
+            for (size_t& o : byEdge[key(B[e], B[(e + 1) % B.size()])])
+                if (o == j)
+                    o = i;
+        owners.clear();
+        pieces[i] = std::move(joined);
+        alive[j] = 0;
     }
     std::vector<Polygon> out;
-    for (const auto& p : pieces)
-        out.push_back(asPoly(p));
+    for (size_t i = 0; i < pieces.size(); ++i)
+        if (alive[i])
+            out.push_back(asPoly(pieces[i]));
     return out;
 }
 
