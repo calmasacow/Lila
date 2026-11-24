@@ -1137,10 +1137,16 @@ std::map<std::string, json>& slotRoots()
     return r;
 }
 
+int& slotSyncPauses()
+{
+    static int n = 0;
+    return n;
+}
+
 void resyncSlots()
 {
     static bool queued = false;
-    if (queued || slotRoots().empty() || !PrefStore::get().value<bool>(kUnrealPrefFile, "/autoSync", true) || !Link::get().connected())
+    if (queued || slotSyncPauses() > 0 || slotRoots().empty() || !PrefStore::get().value<bool>(kUnrealPrefFile, "/autoSync", true) || !Link::get().connected())
         return;
     queued = true;
     // Coalesced: one send after a burst of edits (an undo of several rules).
@@ -1156,6 +1162,8 @@ void resyncSlots()
                     call = flags;
                 call["args"].push_back(root);
             }
+        if (slotSyncPauses() > 0)
+            return;
         for (auto& [key, call] : byFlags)
         {
             call["validate"] = false;
@@ -1171,6 +1179,9 @@ void resyncSlots()
     });
 }
 } // namespace
+
+SlotSyncPause::SlotSyncPause() { ++slotSyncPauses(); }
+SlotSyncPause::~SlotSyncPause() { --slotSyncPauses(); }
 
 void registerPlacementCommands()
 {

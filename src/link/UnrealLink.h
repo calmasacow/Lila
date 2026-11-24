@@ -198,6 +198,18 @@ private:
 LILA_SCENE_API void onSceneSaved();
 
 /**
+ * While one is alive, slot rule, override and pin changes don't send the last slot roots to Unreal again: a caller that
+ * rebuilds those roots (worldBuild) sends them itself once they are whole.
+ */
+struct LILA_SCENE_API SlotSyncPause
+{
+    SlotSyncPause();
+    ~SlotSyncPause();
+    SlotSyncPause(const SlotSyncPause&) = delete;
+    SlotSyncPause& operator=(const SlotSyncPause&) = delete;
+};
+
+/**
  * What onSceneSaved does, minus the pref check when `force`, then syncTextureSets. Returns how many mappings and sets were
  * queued. Given nodes, only their mappings go, and no texture sets. Skeletal and animation exports refuse when a skeleton
  * fails the Unreal check, unless unrealCheck is false.

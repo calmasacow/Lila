@@ -133,9 +133,19 @@ const json& worldSpecSchema()
               {"check", {{"description", "true (default), false, or worldCheck flags."}}},
               {"export", obj("Where the built world goes.",
                              {{"target", {{"type", "string"}, {"enum", {"none", "files", "unreal"}}, {"default", "none"},
-                                          {"description", "files: terrain, zones and the overview map as files; unreal: also sends terrain, buildings and zones over LilaLink."}}},
+                                          {"description", "files: terrain, zones and the overview map as files; unreal: also sends terrain, settlements, buildings, site kits and zones over LilaLink."}}},
                               {"folder", str("Output folder; default the workspace's openworld/world/<name>.")},
-                              {"map", {{"description", "true or worldMap flags (resolution): the overview map PNG + JSON."}}}})}}}};
+                              {"map", {{"description", "true or worldMap flags (resolution): the overview map PNG + JSON."}}},
+                              {"unreal", obj("target unreal: how the world goes into the open level. A rebuild sends only what changed and removes "
+                                             "what the world no longer makes.",
+                                             {{"folder", str("Content folder root; Buildings and Sites go under it. Default /Game/Lila.")},
+                                              {"interiors", {{"type", "string"}, {"enum", {"levelInstance", "dataLayer", "none"}}, {"description", "buildingSend interiors."}}},
+                                              {"roads", {{"type", "string"}, {"enum", {"landscape", "splines", "meshes", "none"}}, {"description", "settlementSendToUnreal roads."}}},
+                                              {"roadMesh", str("settlementSendToUnreal roadMesh.")},
+                                              {"pcgGraph", str("settlementSendToUnreal pcgGraph.")},
+                                              {"landscapeMaterial", str("terrainSendToUnreal material; default the generated one.")},
+                                              {"hlodLayer", str("buildingSend hlodLayer.")},
+                                              {"hlodProxyLayer", str("buildingSend hlodProxyLayer.")}})}})}}}};
         return out;
     }();
     return s;
@@ -225,6 +235,17 @@ void validateSpec(const json& spec)
     {
         const std::string t = spec["export"].value("target", std::string("none"));
         need(t == "none" || t == "files" || t == "unreal", "export.target is none, files or unreal");
+        if (spec["export"].contains("unreal"))
+        {
+            const json& u = spec["export"]["unreal"];
+            need(u.is_object(), "export.unreal is a dict");
+            static const std::set<std::string> keys = {"folder", "interiors", "roads", "roadMesh", "pcgGraph", "landscapeMaterial", "hlodLayer", "hlodProxyLayer"};
+            for (const auto& [k, v] : u.items())
+            {
+                need(keys.count(k) > 0, "unknown key export.unreal." + k + " (see lila://schema/world-spec)");
+                need(v.is_string(), "export.unreal." + k + " is a string");
+            }
+        }
     }
 }
 

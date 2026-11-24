@@ -20,6 +20,7 @@
 #include <lila/Paths.h>
 #include <lila/Profile.h>
 #include <lila/Slots.h>
+#include <lila/UnrealLink.h>
 #include <lila/Workspace.h>
 
 #include <algorithm>
@@ -517,6 +518,17 @@ json fillLayerGaps(const std::string& set, const std::string& terrain, const std
     return {{"layer", layerId}, {"zone", zoneId}, {"polygons", parts}, {"holes", holes}, {"areaM2", area * 1e-4}};
 }
 
+/** Interiors for the buildings the spec's edits mark enterable: an edit alone marks them, buildingMakeEnterable makes the rooms. */
+void makeEnterable(Steps& st, const std::string& groupName, const json& edits)
+{
+    json ids = json::array();
+    for (const auto& [id, e] : edits.items())
+        if (e.is_object() && e.value("enterable", false))
+            ids.push_back(id);
+    if (!ids.empty())
+        st.run("buildings.enterable." + groupName, [&] { return run("buildingMakeEnterable", {{"building", ids}}); });
+}
+
 /** Deletes what an earlier build of this world made, so a rebuild starts clean. */
 void removeBuilt(const WorldRef& w)
 {
@@ -536,8 +548,28 @@ void removeBuilt(const WorldRef& w)
     for (const std::string& p : gone)
         if (std::none_of(roots.begin(), roots.end(), [&](const std::string& r) { return p.size() > r.size() && p.compare(0, r.size(), r) == 0 && p[r.size()] == '|'; }))
             roots.push_back(p);
+    // Deleting a mesh leaves its modifier stack behind; a Buildings modifier left alone keeps publishing its slots, which
+    // then count twice beside the rebuilt ones.
+    std::vector<scene::NodeId> stacks;
+    for (const std::string& r : roots)
+        if (Node* top = g.find(r))
+        {
+            std::vector<scene::NodeId> under = g.descendants(top->id());
+            under.push_back(top->id());
+            for (scene::NodeId id : under)
+                if (Node* n = g.node(id); n && n->type().isA("mesh"))
+                {
+                    for (scene::NodeId m : scene::modifiers::stack(g, id))
+                        stacks.push_back(m);
+                    if (const scene::NodeId src = scene::modifiers::stackSource(g, id); src != scene::kNoNode && g.node(src) && !g.node(src)->type().dag)
+                        stacks.push_back(src);
+                }
+        }
     if (!roots.empty())
         run("delete", {{"args", roots}});
+    for (scene::NodeId id : stacks)
+        if (g.node(id))
+            g.deleteNode(id);
     for (const json& s : w.built.value("sites", json::array()))
         if (s.is_string())
             try
@@ -578,7 +610,9 @@ json buildWorld(json spec, const BuildOptions& o)
     const auto t0 = std::chrono::steady_clock::now();
     const double mem0 = memoryMB();
     Steps st(o.stopOnError);
-    json built = {{"nodes", json::array()}, {"settlements", json::array()}, {"sites", json::array()}, {"buildingGroups", json::array()}};
+    json built = {{"nodes", json::array()}, {"settlements", json::array()}, {"sites", json::array()}, {"siteMeshes", json::array()}, {"buildingGroups", json::array()}};
+    // Slot rules change first and the roots they would re-send are being rebuilt: the export sends them once they are whole.
+    link::SlotSyncPause slotSyncPause;
     auto made = [&](const std::string& path) {
         if (!path.empty())
             built["nodes"].push_back(path);
@@ -686,6 +720,8 @@ json buildWorld(json spec, const BuildOptions& o)
             continue;
         const std::string sid = made1.value("id", id);
         built["sites"].push_back(sid);
+        if (made1.contains("mesh") && made1["mesh"].is_string())
+            built["siteMeshes"].push_back(made1["mesh"]);
         try
         {
             const json info = run("siteInfo", {{"args", {sid}}});
@@ -850,6 +886,7 @@ json buildWorld(json spec, const BuildOptions& o)
         {
             built["buildingGroups"].push_back(grp->path());
             made(grp->path());
+            makeEnterable(st, groupName, editsByGroup.value(groupName, json::object()));
         }
         if (s.contains("furniture") && !(s["furniture"].is_boolean() && !s["furniture"].get<bool>()))
             st.run("furniture." + sname, [&] {
@@ -875,6 +912,8 @@ json buildWorld(json spec, const BuildOptions& o)
         });
     else if (!siteIds.empty() && !ops::find("buildingCreate"))
         notes.push_back("the Buildings extension is not loaded: site buildings stay greybox massing");
+    if (!siteIds.empty() && !skipped("buildings") && ops::find("buildingCreate"))
+        makeEnterable(st, "SiteBuildings", editsByGroup.value("SiteBuildings", json::object()));
 
     // Style calls over everything built.
     for (const json& c : spec.value("buildings", json::object()).value("styles", json::array()))
@@ -966,6 +1005,13 @@ json buildWorld(json spec, const BuildOptions& o)
     // The world node: the spec it was built from and what was made, for worldSpec, worldCheck and a rebuild.
     const std::string node = pathOfResult(run("group", {{"empty", true}, {"name", worldNodeName(name)}}));
     built["folder"] = paths::toUtf8(folder);
+    // Link ids from the world's name and each node's path: a rebuild keys its Unreal placements as this build does.
+    std::vector<std::string> linkRoots;
+    for (const char* k : {"nodes", "siteMeshes"})
+        for (const json& p : built[k])
+            if (p.is_string())
+                linkRoots.push_back(p.get<std::string>());
+    built["linkIds"] = assignWorldLinkIds(name, linkRoots);
     setStringAttr(node, kSpecAttr, spec.dump(), "The world spec this world was built from (worldSpec reads it back).");
     setStringAttr(node, kBuiltAttr, built.dump(), "What worldBuild made: terrain, remix, settlements, sites, zones, building groups, files.");
     WorldRef w{node, spec, built};
@@ -1002,12 +1048,8 @@ json buildWorld(json spec, const BuildOptions& o)
                 return r;
             });
         if (target == "unreal")
-        {
-            for (const json& grp : built["buildingGroups"])
-                st.run("export.buildings", [&] { return run("buildingSend", {{"args", {grp}}}); });
-            if (built.contains("zones"))
-                st.run("export.zonesToUnreal", [&] { return run("zoneSendToUnreal", {{"set", built["zones"]}}); });
-        }
+            exports["unreal"] = sendWorldToUnreal(name, built, ex.value("unreal", json::object()),
+                                                  [&](const std::string& step, const std::function<json()>& fn) { return st.run(step, fn); });
     }
 
     json out = {{"world", node},
@@ -1175,7 +1217,7 @@ A whole open-world map from one JSON: a World Remix of real places (fictional na
 - `sites`: `{kind, id, at: [x, z], heading, params, buildings: true}`; site buildings come from the Buildings generator (group SiteBuildings).
 - `buildings`: `edits` `{group: {building id: edit}}` (seeded before each group builds) and `styles` (buildingStyle calls).
 - `zones`: `{name, spec, fromDistricts: true, fromWater: true, playArea}`.
-- `export`: `{target: files | unreal, map: true}`.
+- `export`: `{target: files | unreal, map: true, unreal: {folder, interiors, roads, roadMesh, pcgGraph, landscapeMaterial}}`. unreal sends the terrain (landscape, water, routes, roads), each settlement, the buildings (shells, modules, slots, HLOD proxies, interiors), the site kits and the zones into the open level, each as a step saying what it sent, what the level already held unchanged and what it skipped. Every node the world makes has a link id from the world's name and its path, so a rebuild with replace=True sends only what changed and removes the world's groups it no longer makes (step `export.unreal.stale`).
 
 ## worldCheck kinds
 
