@@ -941,7 +941,7 @@ void touchAll()
     scene::Graph& g = G();
     for (auto& [mesh, mod] : buildingMeshes())
         if (scene::Node* n = g.find(mod))
-            g.touch(n->id());
+            gn::rerunModifier(g, n->id());
 }
 
 json deepMerge(json base, const json& over)

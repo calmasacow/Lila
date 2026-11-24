@@ -8,6 +8,7 @@
 #include <lila/Command.h>
 #include <lila/Controls.h>
 #include <lila/Extension.h>
+#include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
 #include <lila/Icons.h>
 #include <lila/Log.h>
@@ -201,7 +202,7 @@ void restoreCutaway()
         setVisible(id, true);
     gHidden.clear();
     if (setCutawayBuilding("") && gCutModifier != scene::kNoNode && scene::Graph::current().node(gCutModifier))
-        scene::Graph::current().touch(gCutModifier);
+        lila::gn::rerunModifier(scene::Graph::current(), gCutModifier);
     gCutModifier = scene::kNoNode;
 }
 
@@ -223,7 +224,7 @@ void syncCutaway()
         {
             setCutawayBuilding(gToolBuilding);
             gCutModifier = mod->id();
-            g.touch(mod->id());
+            lila::gn::rerunModifier(g, mod->id());
         }
     if (scene::Node* grp = g.find(interiorGroupOf(gToolBuilding)))
         for (scene::NodeId c : g.children(grp->id()))
