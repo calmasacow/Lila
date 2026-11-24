@@ -311,6 +311,9 @@ struct AerialPush
 constexpr double kWorldPatternPeriod = 65536.0;
 static_assert(sizeof(GpuFrame) == sizeof(GpuLight), "the light buffer's header is one light long");
 
+constexpr uint32_t kTraceInstanceColor = 1u << 0; // reflection hits show the placement's instance colour
+constexpr uint32_t kTraceBaseColorMap = 1u << 1;  // the colour multiplies in rather than replacing
+
 /** A traced placement's mesh for rtbevel.slang and rtreflect.slang: its buffers' addresses, world matrix rows and materials. */
 struct TraceInstance
 {
@@ -319,7 +322,7 @@ struct TraceInstance
     glm::vec4 rows[3]{};
     uint64_t sections = 0; // TraceSection per material section
     uint32_t sectionCount = 0;
-    uint32_t pad = 0;
+    uint32_t tint = 0; // instance colour, unorm rgba8: linear rgb, amount
 };
 
 /** A section's material for reflection hits; matches rtreflect.slang. */
@@ -328,7 +331,7 @@ struct TraceSection
     uint32_t endTriangle = 0;
     float roughness = 0.5f;
     float metallic = 0.0f;
-    float pad = 0.0f;
+    uint32_t flags = kTraceInstanceColor; // kTraceInstanceColor, kTraceBaseColorMap
     glm::vec4 baseColor{0.5f, 0.5f, 0.5f, 1.0f};
     glm::vec4 emissive{0.0f};
 };
@@ -4769,6 +4772,7 @@ struct Renderer::Impl
                     ti.rows[r] = glm::vec4(w[0][r], w[1][r], w[2][r], w[3][r]);
                 ti.sections = firstSection; // an index until the buffer's address is known
                 ti.sectionCount = sectionCount;
+                ti.tint = glm::packUnorm4x8(glm::clamp(frameBatches.instances[b.first + i].tint, 0.0f, 1.0f));
                 table.push_back(ti);
             }
         }
@@ -4887,6 +4891,7 @@ struct Renderer::Impl
                 t.emissive = glm::vec4(m.emissive, 0.0f);
                 t.roughness = m.roughness;
                 t.metallic = m.metallic;
+                t.flags = (m.flags & MatNoInstanceColor ? 0u : kTraceInstanceColor) | (m.flags & MatBaseColorMap ? kTraceBaseColorMap : 0u);
             }
             else
             {

@@ -375,3 +375,42 @@ TEST_CASE("Instanced draws: timing for 100k placements with and without instance
                                                        << colored.gpuMs);
     }
 }
+
+TEST_CASE("Instanced draws: ray-traced reflections show instance colours")
+{
+    if (!gpu("instanced draw") || !Renderer::get().gpuInfo().rayTracing)
+        return;
+    // Every placement red over a mirror floor; the reflections' change from plain to coloured is what the colour adds.
+    auto scene = [](bool colored, FrameState::Reflections r) {
+        FrameState s = threeBoxes(false);
+        if (colored)
+            s.meshes.edit()[0].instanceColors = std::make_shared<std::vector<glm::vec4>>(3, glm::vec4(0.8f, 0.05f, 0.05f, 1.0f));
+        s.reflections = r;
+        s.lighting = FrameState::Lighting::Environment;
+        s.reflectionCutoff = 1.0f;
+        MeshDraw floor;
+        floor.mesh = box(1.0f);
+        floor.world = glm::scale(glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -8.0f, 0.0f)), glm::vec3(200.0f, 0.5f, 200.0f));
+        Material mirror;
+        mirror.baseColor = glm::vec3(0.9f);
+        mirror.metallic = 1.0f;
+        mirror.roughness = 0.05f;
+        mirror.flags |= MatNoInstanceColor;
+        floor.materials = {mirror};
+        s.meshes.push_back(floor);
+        return s;
+    };
+    auto reflected = [&](bool colored) {
+        const auto on = renderInstanced(scene(colored, FrameState::Reflections::RayTraced)), off = renderInstanced(scene(colored, FrameState::Reflections::Off));
+        glm::dvec3 sum(0.0);
+        for (size_t i = 0; i < on.size(); i += 4)
+            sum += glm::dvec3(int(on[i + 2]) - int(off[i + 2]), int(on[i + 1]) - int(off[i + 1]), int(on[i]) - int(off[i]));
+        return sum;
+    };
+    const glm::dvec3 plain = reflected(false), delta = reflected(true) - plain;
+    MESSAGE("reflections against none, rgb sums: " << plain.r << " " << plain.g << " " << plain.b);
+    MESSAGE("reflection change from the colour, rgb sums: " << delta.r << " " << delta.g << " " << delta.b);
+    CHECK(delta.r > 2000.0);
+    CHECK(delta.g < -2000.0);
+    CHECK(delta.b < -2000.0);
+}
