@@ -203,7 +203,7 @@ std::string newName(const SetRef& r, const ZoneSpec& s, const Layer& l, const st
     else
         *note = "fictionalName is not in this Lila (naming cultures come with OSM places); numbered names used";
     *source = "numbered";
-    for (int k = int(l.zones.size()) + 1;; ++k)
+    for (int k = int(l.zones.size()) + (l.zone(zoneId) ? 0 : 1);; ++k)
         if (std::string n = singular(l.label) + " " + std::to_string(k); !taken.count(n))
             return n;
 }
@@ -793,7 +793,7 @@ void registerZoneCommands(ext::Context& ctx)
              .doc = "Terrain the zones drape over and whose extent is the default play area; empty lays them at height 0."},
             {.name = kOverlayAttr, .type = scene::PlugType::Bool, .defaultValue = true, .flags = scene::AttrInput | scene::AttrStorable,
              .doc = "Draw the zones over the viewport."},
-            {.name = kOpacityAttr, .type = scene::PlugType::Float, .defaultValue = 0.25, .flags = scene::AttrInput | scene::AttrStorable,
+            {.name = kOpacityAttr, .type = scene::PlugType::Float, .defaultValue = 0.35, .flags = scene::AttrInput | scene::AttrStorable,
              .doc = "Opacity of the zone fills.", .minValue = 0.0, .maxValue = 1.0},
         };
         scene::types::registerType(ctx, std::move(t));

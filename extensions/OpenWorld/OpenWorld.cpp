@@ -46,5 +46,6 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     openworld::registerRemix(ctx);
     openworld::registerRemixUi(ctx);
     openworld::zones::registerZoneCommands(ctx);
+    openworld::zones::registerZoneUi(ctx);
     return 0;
 }
