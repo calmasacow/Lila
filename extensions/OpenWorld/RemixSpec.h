@@ -57,6 +57,9 @@ inline bool warps(RegionOp op) { return op == RegionOp::Move || op == RegionOp::
 inline bool pastes(RegionOp op) { return op == RegionOp::Cut || op == RegionOp::Duplicate; }
 inline bool punches(RegionOp op) { return op == RegionOp::Cut || op == RegionOp::Delete; }
 
+/** The steepest a pasted region's seam is left, rise over run, when it matches its height to the ground round it. */
+inline constexpr double kSeamGrade = 0.08;
+
 struct Region
 {
     std::string id;
@@ -69,6 +72,11 @@ struct Region
     std::optional<Vec2> pivot;
     /** Seam band width, cm; the spec's seams.width when not given. */
     std::optional<double> seam;
+    /**
+     * A pasted region is raised or lowered by the median height step along its edge, and its seam widened where the step
+     * left would be steeper than kSeamGrade, so it meets the ground round it as a slope a road can climb.
+     */
+    bool matchHeight = true;
 
     Rigid rigid() const;
     /** Where the region ends up (the polygon for keep and delete). */

@@ -528,6 +528,38 @@ struct OpeningRect
     bool any() const { return s1 - s0 > 1.0 && t1 - t0 > 1.0; }
 };
 
+/**
+ * The bay margin at one end of a ring edge: the corner width, widened where the edge meets the next real wall (edges
+ * under 1.5 m skipped, they read as part of the corner) at an acute angle, so a module standing out of either wall stays
+ * clear of the other's.
+ */
+double acuteMargin(const Ring& ring, size_t edge, bool atEnd, double cw, double reach)
+{
+    const size_t n = ring.size();
+    const Vec2 a = ring[edge], b = ring[(edge + 1) % n];
+    const Vec2 dir = glm::normalize(b - a);
+    Vec2 other(0.0);
+    for (size_t step = 1; step < n; ++step)
+    {
+        const size_t e = atEnd ? (edge + step) % n : (edge + n - step) % n;
+        const Vec2 p = ring[e], q = ring[(e + 1) % n];
+        if (glm::length(q - p) >= 150.0)
+        {
+            other = glm::normalize(q - p);
+            break;
+        }
+    }
+    if (glm::length(other) < 0.5)
+        return cw;
+    // The turn from the incoming wall to the outgoing one; a convex corner sharper than a right angle turns past 90 degrees.
+    const Vec2 in = atEnd ? dir : other, out = atEnd ? other : dir;
+    const double turn = std::atan2(in.x * out.y - in.y * out.x, glm::dot(in, out));
+    const double interior = kPi - std::abs(turn);
+    if (turn <= 0.0 || interior >= kPi * 0.5)
+        return cw;
+    return cw + reach * (1.0 / std::tan(interior * 0.5) - 1.0);
+}
+
 void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool courtyard, int holeIndex, const Ring& ring, int side,
                 const std::string& edgeId)
 {
@@ -567,9 +599,12 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
         return;
     }
 
-    // Bays.
+    // Bays, kept back from the facade's ends by the corner width, and further at an acute corner.
     const double cw = std::min(st.cornerWidth, L * 0.15);
-    const double usable = L - 2.0 * cw;
+    // The deepest a module stands out of or into its wall: balconies and awnings, or windows at the back of an arcade.
+    const double reach = 150.0 + (st.arcade > 0.0 ? std::min(st.arcadeDepth, 450.0) : 0.0);
+    const double m0 = courtyard ? cw : acuteMargin(ring, edge, false, cw, reach), m1 = courtyard ? cw : acuteMargin(ring, edge, true, cw, reach);
+    const double usable = std::max(0.0, L - m0 - m1);
     const double bayW = c.ed.bayWidth ? std::max(80.0, *c.ed.bayWidth) : st.bayWidth;
     int nb = 0;
     if (auto it = c.ed.facadeBays.find(fpath); it != c.ed.facadeBays.end())
@@ -580,8 +615,10 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
         while (nb > 1 && usable / nb < st.minBay)
             --nb;
     }
-    if (tower)
+    if (tower && usable > 50.0)
         nb = std::max(1, std::min(nb, 2));
+    if (usable < 1.0)
+        nb = 0;
     fac.bays = nb;
     const double bw = nb > 0 ? usable / nb : usable;
 
@@ -600,7 +637,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             const Vec2 q = a + ab * std::clamp(t, 0.0, 1.0);
             if (glm::length(q - e) > 150.0 || t < -0.02 || t > 1.02)
                 continue;
-            const int k = std::clamp(int((t * L - cw) / bw), 0, nb - 1);
+            const int k = std::clamp(int((t * L - m0) / bw), 0, nb - 1);
             if (std::find(doorBays.begin(), doorBays.end(), k) == doorBays.end())
                 doorBays.push_back(k);
         }
@@ -643,7 +680,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
     if (st.pilasters && nb > 1 && !tower)
         for (int k = 1; k < nb; ++k)
         {
-            const double s = cw + k * bw;
+            const double s = m0 + k * bw;
             Module m = wallModule(f, s, tier.bottom, 0.0, "pilaster", "pilaster", fpath + "/p" + std::to_string(k), {36.0, tier.top - tier.bottom, 8.0});
             m.shell = true;
             const int owner = c.addModule(std::move(m));
@@ -661,8 +698,8 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
         wallRect(sh, f, 0.0, L, wallBottom, tier.top, 0.0, wallBottom, MatRender, TrimRender, marginOwner, PartWall, -1, c.cRender);
     else
     {
-        wallRect(sh, f, 0.0, cw, wallBottom, tier.top, 0.0, wallBottom, MatRender, TrimRender, marginOwner, PartWall, -1, c.cRender);
-        wallRect(sh, f, L - cw, L, wallBottom, tier.top, 0.0, wallBottom, MatRender, TrimRender, marginOwner, PartWall, -1, c.cRender);
+        wallRect(sh, f, 0.0, m0, wallBottom, tier.top, 0.0, wallBottom, MatRender, TrimRender, marginOwner, PartWall, -1, c.cRender);
+        wallRect(sh, f, L - m1, L, wallBottom, tier.top, 0.0, wallBottom, MatRender, TrimRender, marginOwner, PartWall, -1, c.cRender);
     }
     // Plinth band below the ground floor (base tier), stepping with the ground on slopes.
     if (plinthOwner >= 0)
@@ -671,8 +708,8 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             wallRect(sh, f, 0.0, L, tier.bottom, c.floor0, 0.0, tier.bottom, MatBase, TrimPlinth, plinthOwner, PartPlinth, -1, c.cBase);
         else
         {
-            wallRect(sh, f, 0.0, cw, tier.bottom, c.floor0, 0.0, tier.bottom, MatBase, TrimPlinth, plinthOwner, PartPlinth, -1, c.cBase);
-            wallRect(sh, f, L - cw, L, tier.bottom, c.floor0, 0.0, tier.bottom, MatBase, TrimPlinth, plinthOwner, PartPlinth, -1, c.cBase);
+            wallRect(sh, f, 0.0, m0, tier.bottom, c.floor0, 0.0, tier.bottom, MatBase, TrimPlinth, plinthOwner, PartPlinth, -1, c.cBase);
+            wallRect(sh, f, L - m1, L, tier.bottom, c.floor0, 0.0, tier.bottom, MatBase, TrimPlinth, plinthOwner, PartPlinth, -1, c.cBase);
         }
     }
 
@@ -687,7 +724,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
         const double H = fl.y1 - fl.y0;
         for (int k = 0; k < nb; ++k)
         {
-            const double s0 = cw + k * bw, s1 = s0 + bw, sc = 0.5 * (s0 + s1);
+            const double s0 = m0 + k * bw, s1 = s0 + bw, sc = 0.5 * (s0 + s1);
             const std::string bpath = P(fpath, fl.index, k);
             // Ground floor level of this bay: stepped with the ground on slopes.
             double y0 = fl.y0;
@@ -1002,7 +1039,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
     // Sign over the shopfronts.
     if (signFirst >= 0 && signTop - signBottom > 25.0)
     {
-        const double s0 = cw + signFirst * bw + 15.0, s1 = cw + (signLast + 1) * bw - 15.0;
+        const double s0 = m0 + signFirst * bw + 15.0, s1 = m0 + (signLast + 1) * bw - 15.0;
         const double h = std::min(signTop - signBottom, 110.0);
         // Under portales the sign goes on the shop wall behind the columns.
         Module m = wallModule(f, 0.5 * (s0 + s1), signBottom, arcade ? arcadeD - 1.0 : -1.0, st.signKind, "sign", fpath + "/l0/sign", {s1 - s0, h, 8.0});
@@ -1512,12 +1549,15 @@ void extras(Ctx& c, const TierPlan& base)
             const Vec2 q = mid + along * (-span * 0.5 + span * k / (n - 1)) + nrm * depth;
             c.addModule(groundModule({q.x, c.floor0, q.y}, nrm, "column", "column", fp + "/portico/c" + std::to_string(k), {50.0, h, 50.0}));
         }
-        Module slab = groundModule({mid.x + nrm.x * depth * 0.5, c.floor0 + h, mid.y + nrm.y * depth * 0.5}, nrm, "portico", "portico",
-                                   fp + "/portico", {span + 120.0, 70.0, depth + 60.0});
+        // The slab runs from the wall face out past the columns, clear of the roof behind the wall.
+        Module slab = groundModule({mid.x + nrm.x * (depth + 30.0) * 0.5, c.floor0 + h, mid.y + nrm.y * (depth + 30.0) * 0.5}, nrm, "portico", "portico",
+                                   fp + "/portico", {span + 120.0, 70.0, depth + 30.0});
         c.addModule(std::move(slab));
-        // The porch floor.
-        c.addModule(groundModule({mid.x + nrm.x * depth * 0.5, c.groundLo, mid.y + nrm.y * depth * 0.5}, nrm, "steps", "steps", fp + "/portico/floor",
-                                 {span + 160.0, std::max(15.0, c.floor0 - c.groundLo), depth + 80.0}));
+        // The porch floor stands on the ground in front of the door, not the building's lowest corner.
+        const Vec2 porch = mid + nrm * depth * 0.5;
+        const double porchGround = std::min(c.spec.groundAt(porch), c.floor0 - 15.0);
+        c.addModule(groundModule({porch.x, porchGround, porch.y}, nrm, "steps", "steps", fp + "/portico/floor",
+                                 {span + 160.0, c.floor0 - porchGround, depth + 80.0}));
     }
 
     // Perimeter wall round the lot, with a gate on the front, and a pool behind the house.

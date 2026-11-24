@@ -10,6 +10,7 @@
 
 #include <doctest/doctest.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -360,4 +361,58 @@ TEST_CASE("buildings commands: the trim sheet goes to the user's folder without 
     CHECK(r["file"].get<std::string>().find("trim-sheets") != std::string::npos);
     CHECK(std::filesystem::exists(r["file"].get<std::string>()));
     CHECK(count(shipped) == before);
+TEST_CASE("buildings commands: near detail keeps the modules as instances, realize flattens them into the cell mesh")
+{
+    loadBuildings();
+    run("newScene");
+    json envs = json::array();
+    for (int k = 0; k < 12; ++k)
+        envs.push_back(envelope(0xa0000 + uint64_t(k), (k % 4) * 1600.0, (k / 4) * 1600.0, 1200, 1100, 3, {"street", "party", "open", "party"},
+                                "colonialCentro", k % 2 ? "shop" : ""));
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Inst"}});
+    REQUIRE(!made["meshes"].empty());
+    const std::string mesh = made["meshes"][0].get<std::string>();
+    const json info = run("buildingInfo", {{"args", {mesh}}});
+    REQUIRE(info["slots"].get<int>() > 0);
+    // The mesh holds the shell only; the modules are drawn and sent as instances.
+    CHECK(run("meshInfo", {{"args", {mesh}}})["faces"].get<int>() == info["faces"].get<int>());
+    run("setAttr", {{"args", {info["modifier"].get<std::string>() + ".realize", true}}});
+    CHECK(run("meshInfo", {{"args", {mesh}}})["faces"].get<int>() > info["faces"].get<int>());
+}
+
+TEST_CASE("buildings commands: acute corners, a tiny edge between two walls and mansion porticos pass buildingCheck")
+{
+    loadBuildings();
+    run("newScene");
+    // A wedge (about 30 degrees at its tip), a quad whose short third edge hides an acute meeting, and a 45 degree kite.
+    const std::vector<std::vector<std::array<double, 2>>> shapes = {
+        {{0, 0}, {3000, 0}, {0, 1700}},
+        {{0, 0}, {2800, 0}, {2800, 60}, {0, 1500}},
+        {{0, 0}, {2400, 0}, {2400, 1000}, {1000, 1000}},
+    };
+    json envs = json::array();
+    int k = 0;
+    for (const char* style : {"modernCommercial", "colonialCentro", "residential", "narcoMansion", "malecon"})
+        for (const auto& shape : shapes)
+            for (int seed = 0; seed < 2; ++seed, ++k)
+            {
+                const double x0 = (k % 10) * 6000.0, z0 = (k / 10) * 6000.0;
+                json e = envelope(0xb000 + uint64_t(k), x0, z0, 100, 100, 3, {}, style, k % 2 ? "shop" : "");
+                json fp = json::array(), sides = json::array();
+                for (const auto& p : shape)
+                {
+                    fp.push_back({x0 + p[0], z0 + p[1]});
+                    sides.push_back("street");
+                }
+                e["footprint"] = fp;
+                e["sides"] = sides;
+                e["entrances"] = json::array({{x0 + shape[0][0] * 0.5 + shape[1][0] * 0.5, z0}});
+                envs.push_back(e);
+            }
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Acute"}, {"cell", 0}});
+    const json check = run("buildingCheck");
+    CAPTURE(check["counts"].dump());
+    CAPTURE(check["issues"].size() > 0 ? check["issues"][0].dump() : std::string());
+    CHECK(check["counts"]["modulesIntersecting"] == 0);
+    CHECK(check["counts"]["slotFloating"] == 0);
 }

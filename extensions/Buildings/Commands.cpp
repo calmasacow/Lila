@@ -81,9 +81,10 @@ void ensureGroup()
         {{"name", "lod"}, {"type", "string"}, {"default", "near"}, {"description", "near, hlod, far or auto (by camera distance)."}},
         {{"name", "cell"}, {"type", "string"}, {"default", ""}, {"description", "Cell (x_z) or building id."}},
         {{"name", "modules"}, {"type", "bool"}, {"default", true}, {"description", "Draw modules."}},
+        {{"name", "realize"}, {"type", "bool"}, {"default", false}, {"description", "Modules flattened into the cell mesh."}},
     });
     json links = json::array();
-    for (const char* in : {"spec", "edits", "lod", "cell", "modules"})
+    for (const char* in : {"spec", "edits", "lod", "cell", "modules", "realize"})
         links.push_back(std::string("GroupInput.") + in + " -> Build." + in);
     links.push_back("Build.geometry -> GroupOutput.geometry");
     ops::execute("gnBuildGroup", {{"args", {json{{"name", kGroupName},

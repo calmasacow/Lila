@@ -57,6 +57,7 @@ std::string metres(double cm) { return std::to_string(int(std::lround(cm / 100.0
 /** A block for each face that makes one, appended; seen counts the keys already given, so two never share one. */
 void addBlocks(Layout& l, std::vector<Face> faces, std::map<uint64_t, int>& seen)
 {
+    LILA_ZONE();
     const Profile& p = l.profile;
     for (Face& f : faces)
     {
@@ -764,6 +765,7 @@ void assignUses(Layout& l, const Ground& g, const std::string& era, const std::v
 
 void applyLotOverrides(Layout& l, const Site& site)
 {
+    LILA_ZONE();
     for (const LotOverride& o : site.lotOverrides)
     {
         auto it = std::ranges::find_if(l.lots, [&](const Lot& lot) { return lot.key == o.lot; });
@@ -921,6 +923,7 @@ std::vector<double> streetAccess(const StreetGraph& g)
  */
 size_t dropOverlappingLots(Layout& l, size_t first, std::vector<char>* fresh)
 {
+    LILA_ZONE();
     if (first >= l.lots.size())
         return 0;
     auto bounds = [](const Polygon& p) {
@@ -993,26 +996,29 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
     makeBlocks(l);
     typeBlocks(l, g, site, era);
 
-    for (Block& b : l.blocks)
     {
-        if (streetSides(b.outline) == 0)
-            continue;
-        std::vector<Polygon> cut = cutBlock(b, l, o, &b.courtyards, &l.parcelWarnings);
-        std::sort(cut.begin(), cut.end(), [](const Polygon& x, const Polygon& y) {
-            const Vec2 cx = centroid(x), cy = centroid(y);
-            return cx.x != cy.x ? cx.x < cy.x : cx.y < cy.y;
-        });
-        for (size_t k = 0; k < cut.size(); ++k)
+        LILA_ZONE_N("settlement.cutBlocks");
+        for (Block& b : l.blocks)
         {
-            Lot lot;
-            lot.id = int(l.lots.size());
-            lot.block = b.id;
-            lot.key = stableKey(hash64(b.key * 0x9E3779B97F4A7C15ull + uint64_t(b.method) * 131 + k));
-            lot.area = area(cut[k]) / kM2;
-            lot.outline = std::move(cut[k]);
-            lot.random = float(unitRandom(hash64(lot.key) ^ hash64(o.seed)));
-            finishLot(lot, l);
-            l.lots.push_back(std::move(lot));
+            if (streetSides(b.outline) == 0)
+                continue;
+            std::vector<Polygon> cut = cutBlock(b, l, o, &b.courtyards, &l.parcelWarnings);
+            std::sort(cut.begin(), cut.end(), [](const Polygon& x, const Polygon& y) {
+                const Vec2 cx = centroid(x), cy = centroid(y);
+                return cx.x != cy.x ? cx.x < cy.x : cx.y < cy.y;
+            });
+            for (size_t k = 0; k < cut.size(); ++k)
+            {
+                Lot lot;
+                lot.id = int(l.lots.size());
+                lot.block = b.id;
+                lot.key = stableKey(hash64(b.key * 0x9E3779B97F4A7C15ull + uint64_t(b.method) * 131 + k));
+                lot.area = area(cut[k]) / kM2;
+                lot.outline = std::move(cut[k]);
+                lot.random = float(unitRandom(hash64(lot.key) ^ hash64(o.seed)));
+                finishLot(lot, l);
+                l.lots.push_back(std::move(lot));
+            }
         }
     }
 
@@ -1024,6 +1030,7 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
     applyLotOverrides(l, site);
     for (Lot& lot : l.lots)
     {
+        LILA_ZONE_N("settlement.lotRoute");
         lot.route = routeAt(site, centroid(lot.outline));
         for (int& t : lot.outline.tag)
             t = t >= 0 ? int(l.graph.edges[size_t(t)].cls) : -1;
@@ -1031,6 +1038,7 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
 
     if (o.buildings)
     {
+        LILA_ZONE_N("settlement.envelopes");
         for (const Lot& lot : l.lots)
             if (!lot.osmId.empty() || (getsEnvelope(lot.use) && lot.frontages > 0))
             {

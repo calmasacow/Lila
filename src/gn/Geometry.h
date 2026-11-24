@@ -121,6 +121,12 @@ struct LILA_SCENE_API Geometry
     std::shared_ptr<const Volume> volume;
     /** A label for the whole geometry (Set Geometry Name); joins keep the first named part's. */
     std::string name;
+    /**
+     * The instances stay instances at the modifier stack: the output mesh is only the mesh beside them and the viewport
+     * draws them instanced. For generated kits of many repeated pieces (Buildings' modules), where realizing them would
+     * hold a copy of every piece. Joins keep it when any part has it.
+     */
+    bool keepInstances = false;
 
     bool empty() const;
 };

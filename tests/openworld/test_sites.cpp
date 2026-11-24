@@ -365,4 +365,16 @@ TEST_CASE("site commands: an opened scene's imported real names reach its sites'
     ops::execute("openScene", {{"args", {file.generic_string()}}});
     CHECK(firstLine() != line);
     std::filesystem::remove(file);
+TEST_CASE("site kits: villages find every house a spot along their streets")
+{
+    for (const auto& [id, houses, radius] : {std::tuple{"habal", 10, 12000.0}, std::tuple{"noria", 12, 14000.0}, std::tuple{"quelite", 12, 14000.0},
+                                             std::tuple{"v4", 16, 9000.0}, std::tuple{"v5", 20, 14000.0}})
+        for (int seed : {0, 1, 2})
+        {
+            CAPTURE(id);
+            CAPTURE(seed);
+            const s::Layout L = s::build(s::specFromJson({{"kind", "village"}, {"id", id}, {"seed", seed}, {"params", {{"houses", houses}, {"villageRadius", radius}}}}));
+            CHECK_MESSAGE(L.notes.empty(), (L.notes.empty() ? std::string() : L.notes[0]));
+            CHECK(L.stats["houses"].get<int>() == houses);
+        }
 }

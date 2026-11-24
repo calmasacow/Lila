@@ -468,40 +468,49 @@ void buildVillage(Kit& k)
         const std::string id = "house/" + std::to_string(h);
         const uint64_t key = lila::names::textKey(id);
         const double w = 700.0 + k.rnd(key, 1) * 300.0, d = 600.0 + k.rnd(key, 2) * 300.0;
+        const double setback = 450.0 + d * 0.5 + k.rnd(key, 3) * 200.0;
         bool ok = false;
-        for (int attempt = 0; attempt < 4 && !ok; ++attempt)
-        {
-            double t = 0.12 + 0.85 * (along / 2 + 0.5 + attempt * 0.23) / std::max(1, (perStreet + 1) / 2);
-            t = std::fmod(t, 0.97);
+        // A spot beside street st at t along it, on a side, set back further by extra; placed when it is free.
+        auto tryAt = [&](const Street& on, double t, double sd, double extra) {
             // On the bent street: first half a to m, second half m to b.
-            const P2 p = t < 0.5 ? st.a + (st.m - st.a) * (t * 2.0) : st.m + (st.b - st.m) * ((t - 0.5) * 2.0);
-            const P2 dir = glm::normalize(t < 0.5 ? st.m - st.a : st.b - st.m), n(-dir.y, dir.x);
-            const P2 c = p + n * side * (450.0 + d * 0.5 + k.rnd(key, 3) * 200.0);
-            const double heading = facing(-n * side);
+            const P2 p = t < 0.5 ? on.a + (on.m - on.a) * (t * 2.0) : on.m + (on.b - on.m) * ((t - 0.5) * 2.0);
+            const P2 dir = glm::normalize(t < 0.5 ? on.m - on.a : on.b - on.m), n(-dir.y, dir.x);
+            const P2 c = p + n * sd * (setback + extra);
+            const double heading = facing(-n * sd);
             const Ring fp = orientedRect(c, w * 0.5, d * 0.5, heading);
             const Ring pad = orientedRect(c, w * 0.5 + 150.0, d * 0.5 + 150.0, heading);
-            if (glm::length(c) < 1700.0)
-                continue;
+            if (glm::length(c) < 1700.0 || glm::length(c) > R + 1500.0)
+                return false;
             bool clash = onStreet(fp);
             for (const Ring& o : taken)
                 clash = clash || ringsOverlap(o, pad);
             if (clash)
-                continue;
+                return false;
             taken.push_back(pad);
             const bool shack = k.rnd(key, 4) < 0.15;
             EnvelopeOut& e = k.envelope(id, fp, shack ? "ruralShack" : "villageAdobe", "house", "residential", k.rnd(key, 5) < 0.1 ? 2 : 1,
                                         280.0 + k.rnd(key, 6) * 40.0, k.rnd(key, 7) < 0.5 ? "flat" : "gable");
-            e.front = -n * side;
-            e.entrances = {c - n * side * (d * 0.5)};
+            e.front = -n * sd;
+            e.entrances = {c - n * sd * (d * 0.5)};
             if (e.floors == 2)
                 e.height = 560.0;
             k.ground(id, "terrainStampPad", {{"footprint", pts(pad)}, {"mode", "flatten"}, {"falloff", 300.0}, {"masks", {"cityFootprint"}}});
             Part& pt2 = k.part(id, "building", pad, Part::Needs::Land);
             pt2.maxRelief = 120.0;
             pt2.groundOp = id;
-            ok = true;
+            return true;
+        };
+        for (int attempt = 0; attempt < 4 && !ok; ++attempt)
+            ok = tryAt(st, std::fmod(0.12 + 0.85 * (along / 2 + 0.5 + attempt * 0.23) / std::max(1, (perStreet + 1) / 2), 0.97), side, 0.0);
+        // Its own street's spots taken or on a track: along every street, both sides, set further back, nearest the plaza first.
+        for (size_t o = 0; o < streets.size() && !ok; ++o)
+            for (double extra : {0.0, 400.0, 900.0, 1500.0})
+                for (int step = 0; step <= 24 && !ok; ++step)
+                    for (double sd : {side, -side})
+                        if (!ok)
+                            ok = tryAt(streets[(size_t(h) + o) % streets.size()], 0.1 + 0.86 * step / 24.0, sd, extra);
+        if (ok)
             ++placed;
-        }
         skipped += !ok;
     }
     if (skipped > 0)

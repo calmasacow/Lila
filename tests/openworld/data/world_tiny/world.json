@@ -246,7 +246,33 @@
   }
  ],
  "buildings": {
-  "lod": "near"
+  "lod": "near",
+  "enterable": [
+   {
+    "programs": [
+     "police",
+     "government"
+    ]
+   },
+   {
+    "programs": [
+     "bar"
+    ],
+    "limit": 2
+   },
+   {
+    "programs": [
+     "mansion"
+    ],
+    "limit": 1
+   },
+   {
+    "programs": [
+     "church"
+    ],
+    "limit": 1
+   }
+  ]
  },
  "slots": {
   "rules": [

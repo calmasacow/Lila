@@ -430,6 +430,7 @@ void exec(ExecContext& c)
         std::span<glm::vec4> colors = inst->attrs.getOrAdd<glm::vec4>(lila::gn::kInstanceColorAttr);
         std::copy(moduleColors.begin(), moduleColors.end(), colors.begin());
         g.instances = inst;
+        g.keepInstances = !c.b("realize");
         spec.slots = std::move(slotList);
         out = slots::applyToInstances(lila::gn::makeGeometry(std::move(g)), lila::scene::NodeId(owner), spec);
     }
@@ -541,6 +542,11 @@ void registerNode(lila::ext::Context& ctx)
         {.id = "lod", .type = Socket::String, .defaultValue = "near", .doc = "near, hlod or far."},
         {.id = "cell", .type = Socket::String, .defaultValue = "", .doc = "The cell these buildings are in (x_z), or a building id when standalone."},
         {.id = "modules", .type = Socket::Bool, .defaultValue = true, .doc = "Draw the modules (near only)."},
+        {.id = "realize",
+         .type = Socket::Bool,
+         .defaultValue = false,
+         .doc = "Flatten the modules into the cell mesh, for exporters that take one flat mesh. Off, the mesh holds the shell and "
+                "the modules stay instances: drawn instanced and sent to Unreal as instances, at a fraction of the memory."},
     };
     d.sockets.outputs = {{.id = "geometry", .type = Socket::Geometry, .doc = "Shell mesh and module instances."}};
     d.exec = exec;

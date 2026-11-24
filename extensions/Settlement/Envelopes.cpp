@@ -170,6 +170,7 @@ const char* sideName2(int tag) { return tag == 0 ? "street" : tag == 1 ? "party"
 
 Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, const Ground& g, const Options& o, const Site& site)
 {
+    LILA_ZONE();
     const Profile& p = o.profile; // an era or district restyle passes its own profile here
     const std::string era = eraOf(p);
     const bool pm = preModern(era);
@@ -195,7 +196,16 @@ Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, con
         side = std::max(side, 300.0);
         depth = 1.6 * p.buildDepth;
     }
-    Options local = o;
+    // Everything but the generators: they hold the imported streets and buildings as JSON, megabytes for a city.
+    Options local;
+    local.seed = o.seed;
+    local.growth = o.growth;
+    local.heightScale = o.heightScale;
+    local.widthScale = o.widthScale;
+    local.lotScale = o.lotScale;
+    local.blocks = o.blocks;
+    local.buildings = o.buildings;
+    local.walk = o.walk;
     local.profile = p;
     local.profile.frontSetback = front;
     local.profile.sideSetback = side;

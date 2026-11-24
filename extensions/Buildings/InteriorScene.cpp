@@ -26,6 +26,7 @@
 #include <chrono>
 #include <fstream>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 
 using namespace lila;
@@ -335,6 +336,43 @@ json writeInterior(const std::string& id, bool reset)
         out["orphanEdits"] = in->orphanEdits;
     if (slotStats.contains("conflicts") && !slotStats["conflicts"].empty())
         out["slotConflicts"] = slotStats["conflicts"];
+    return out;
+}
+
+/**
+ * The buildings programs=, landmarks= and styles= pick among the named ones (every building when none is named), in id
+ * order, at most limit= of them. A building is picked when any given filter matches it.
+ */
+std::vector<std::string> pickEnterable(const Args& a, const char* cmd)
+{
+    IG().evaluate();
+    // Only buildings named outright narrow the pick; the selection does not.
+    const bool naming = !a.positional.empty() || a.has("building") || a.has("polygon");
+    const std::vector<std::string> named = naming ? buildingTargets(a, cmd, true) : std::vector<std::string>{};
+    const std::set<std::string> within(named.begin(), named.end());
+    auto listOf = [&](const char* flag) {
+        std::set<std::string> out;
+        if (a.has(flag))
+            for (const json& v : a.flags.at(flag).is_array() ? a.flags.at(flag) : json::array({a.flags.at(flag)}))
+                if (v.is_string())
+                    out.insert(v.get<std::string>());
+        return out;
+    };
+    const std::set<std::string> programs = listOf("programs"), styles = listOf("styles");
+    const bool landmarks = a.get<bool>("landmarks", false);
+    std::set<std::string> picked;
+    for (const auto& p : allPublished())
+        for (size_t i = 0; i < p->specs.size() && IG().node(scene::NodeId(p->modifier)); ++i)
+        {
+            const Spec& s = p->specs[i];
+            if (!within.empty() && !within.contains(s.id))
+                continue;
+            if (programs.contains(s.program) || programs.contains(s.use) || styles.contains(p->results[i]->style) || (landmarks && !s.landmark.empty()))
+                picked.insert(s.id);
+        }
+    std::vector<std::string> out(picked.begin(), picked.end());
+    if (const int64_t limit = a.get<int64_t>("limit", 0); limit > 0 && int64_t(out.size()) > limit)
+        out.resize(size_t(limit));
     return out;
 }
 
@@ -763,11 +801,18 @@ void registerInterior(ext::Context& ctx)
                   {"reset", "rs", T::Bool, false, "Regenerate hand-edited room meshes too."},
                   {"clutter", "cl", T::List, nullptr, "Library items Set Dressing strews on every room's floor (realized), replacing earlier clutter."},
                   {"clutterDensity", "cd", T::Float, 0.4, "Clutter per square metre.", {}, {}, 0.0, 10.0},
-                  {"settle", "st", T::Bool, true, "Drop the clutter with physics so it comes to rest."}},
+                  {"settle", "st", T::Bool, true, "Drop the clutter with physics so it comes to rest."},
+                  {"programs", "prs", T::List, nullptr, "Pick the buildings whose program or use is one of these (police, church, civic, shop, ...)."},
+                  {"landmarks", "lmk", T::Bool, false, "Pick the landmark buildings (cathedral, palace, market...)."},
+                  {"styles", "sty", T::List, nullptr, "Pick the buildings in these styles."},
+                  {"limit", "lim", T::Int, int64_t(0), "At most this many of the picked buildings, in id order; 0 for all.", {}, {}, 0.0}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const char* cmd = "buildingMakeEnterable";
-            const std::vector<std::string> ids = buildingTargets(a, cmd);
+            const bool picking = a.has("programs") || a.has("styles") || a.get<bool>("landmarks", false);
+            const std::vector<std::string> ids = picking ? pickEnterable(a, cmd) : buildingTargets(a, cmd);
+            if (ids.empty())
+                return {{"buildings", json::array()}, {"count", 0}, {"note", "no building matched programs=, landmarks= or styles="}};
             ensureRoomArrangements();
             changeBuildingEdits(ids, [&](const std::string&, json& e) {
                 e["enterable"] = true;
@@ -814,7 +859,8 @@ void registerInterior(ext::Context& ctx)
             return {{"buildings", results}, {"count", results.size()}};
         },
         .examples = {"buildingMakeEnterable('building:1a2b')", "buildingMakeEnterable('building:1a2b', program='bar')",
-                     "buildingMakeEnterable(['building:1a2b', 'building:3c4d'], furnish=False)"},
+                     "buildingMakeEnterable(['building:1a2b', 'building:3c4d'], furnish=False)",
+                     "buildingMakeEnterable(programs=['police', 'church'], landmarks=True, limit=10)"},
     });
 
     ctx.registerCommand({

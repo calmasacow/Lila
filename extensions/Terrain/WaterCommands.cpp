@@ -42,6 +42,7 @@ namespace fs = std::filesystem;
 constexpr const char* kNodeType = "TerrainWaterFeatures";
 constexpr const char* kNodeName = "Water";
 constexpr const char* kSourcePrefix = "WaterSource";
+constexpr const char* kWaterMaterial = "TerrainWater";
 
 using namespace terrain::edit;
 using Terrain = TerrainTarget;
@@ -189,6 +190,12 @@ std::string refreshPreview(Graph& g, const Terrain& t, const WaterResult& r)
         return {};
     }
     geo::Mesh m = waterPreviewMesh(*t.local, r, t.m);
+    // Water in its own material, so the sea reads apart from the seabed and the land under the default white.
+    if (!g.find(kWaterMaterial))
+        ops::execute("createMaterial", {{"args", {kWaterMaterial}}, {"baseColor", {0.02, 0.16, 0.24}}, {"roughness", 0.08}, {"blendMode", "translucent"}, {"opacity", 0.8}});
+    m.materialNames() = {kWaterMaterial};
+    std::span<int32_t> slot = m.faceAttrs().getOrAdd<int32_t>(geo::attr::kMaterial);
+    std::fill(slot.begin(), slot.end(), 0);
     if (!existing)
     {
         json made = ops::execute("createMesh", {{"points", json::array()}, {"faces", json::array()}, {"name", name}});

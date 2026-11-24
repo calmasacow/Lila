@@ -38,6 +38,23 @@ namespace
 {
 constexpr int kDefinitionAttr = 0;
 
+/** The mesh a result hands the stack: realized, or with keepInstances only the mesh beside the instances (shared when clean). */
+scene::MeshPtr outputMesh(const Geometry& result)
+{
+    if (!result.keepInstances || !result.instances || result.instances->size() == 0)
+        return std::make_shared<geo::Mesh>(toOutputMesh(result));
+    bool anonymous = false;
+    if (result.mesh)
+        for (size_t d = 0; d < size_t(geo::Domain::Count) && !anonymous; ++d)
+            for (const std::string& n : result.mesh->attributes(geo::Domain(d)).names())
+                anonymous = anonymous || n.starts_with("__");
+    if (result.mesh && !result.heightfield && !result.mesh->hasDeleted() && !anonymous)
+        return result.mesh;
+    Geometry base = result;
+    base.instances = nullptr;
+    return std::make_shared<geo::Mesh>(toOutputMesh(base));
+}
+
 /** Where a gn modifier type keeps each exposed parameter and Object Info input. */
 struct TypeLayout
 {
@@ -253,7 +270,7 @@ public:
             GeometryPtr result = execute(*mPlan, env);
             setModifierGizmos(id(), std::move(gizmos));
             setOutputGeometry(id(), result);
-            scene::MeshPtr out = std::make_shared<geo::Mesh>(toOutputMesh(*result));
+            scene::MeshPtr out = outputMesh(*result);
             if (InstanceViewPtr view = makeInstanceView(*result, out))
                 setInstanceView(id(), std::move(view));
             else
