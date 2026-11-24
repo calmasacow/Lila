@@ -112,6 +112,7 @@ constexpr uint32_t kOneSidedLighting = 1u << 16;
 constexpr uint32_t kNormalXY = 1u << 17; // two-channel normal map: Z rebuilt in the shader
 constexpr uint32_t kGreyBase = 1u << 18;  // base colour map supplies opacity only
 constexpr uint32_t kGrunge = 1u << 19;    // a grunge block follows the draw's style block
+constexpr uint32_t kInstanceColor = 1u << 20; // the shader reads each placement's GpuInstance::tint
 
 // Placeholder textures bound where a material has no map; never evicted.
 constexpr uint64_t kWhiteSrgbKey = ~uint64_t(0);
@@ -8001,6 +8002,9 @@ struct Renderer::Impl
             p.flags = MatTwoSided;
         }
         p.extra.z = std::clamp(s.envLightSaturation, 0.0f, 1.0f);
+        if (b.tinted && !(p.flags & (MatNoInstanceColor | kGreyBase)))
+            p.flags |= kInstanceColor;
+        p.flags &= ~uint32_t(MatNoInstanceColor);
         if (d.vertexColors != VertexColorMode::Off)
             p.flags |= (d.vertexColors == VertexColorMode::Unlit ? kVertexColorUnlit : kVertexColorShaded) |
                        (uint32_t(d.colorChannel) << kColorChannelShift);
