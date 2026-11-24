@@ -163,7 +163,7 @@ json toJson(const RemixSpec& s)
     for (const Source& src : s.sources)
     {
         json j = {{"id", src.id}, {"at", vecJson(src.at)}, {"angle", src.angle}};
-        for (auto [k, v] : {std::pair{"dem", &src.dem}, {"osm", &src.osm}, {"landcover", &src.landcover}})
+        for (auto [k, v] : {std::pair{"dem", &src.dem}, {"osm", &src.osm}, {"landcover", &src.landcover}, {"bathymetry", &src.bathymetry}})
             if (!v->empty())
                 j[k] = *v;
         if (src.bbox.size() == 4)
@@ -199,6 +199,7 @@ json toJson(const RemixSpec& s)
                 {"regions", regions},
                 {"pins", pins},
                 {"warp", {{"falloff", s.warp.falloff}, {"maxSteps", s.warp.maxSteps}}},
+                {"bathymetry", s.bathymetry},
                 {"seams", {{"width", s.seams.width}, {"erosion", s.seams.erosion}, {"detail", s.seams.detail}, {"roads", s.seams.roads},
                            {"roadReach", s.seams.roadReach}, {"rivers", s.seams.rivers}, {"coast", s.seams.coast}, {"seed", s.seams.seed}}},
                 {"view", s.view}};
@@ -211,7 +212,7 @@ RemixSpec specFromJson(const json& j)
 {
     if (!j.is_object())
         throw std::runtime_error("the remix spec is a dict (see lila://schema/remix-spec)");
-    onlyKeys(j, {"version", "scale", "origin", "map", "sources", "regions", "pins", "warp", "seams", "view"}, "");
+    onlyKeys(j, {"version", "scale", "origin", "map", "sources", "regions", "pins", "warp", "seams", "bathymetry", "view"}, "");
     RemixSpec s;
     if (j.contains("scale"))
     {
@@ -256,7 +257,7 @@ RemixSpec specFromJson(const json& j)
             const std::string where = "sources[" + std::to_string(i) + "].";
             if (!e.is_object())
                 throw std::runtime_error(where + " is a dict");
-            onlyKeys(e, {"id", "dem", "osm", "landcover", "bbox", "at", "angle", "scale"}, where);
+            onlyKeys(e, {"id", "dem", "osm", "landcover", "bathymetry", "bbox", "at", "angle", "scale"}, where);
             Source src;
             src.id = str(e, "id", where);
             if (src.id.empty())
@@ -264,6 +265,7 @@ RemixSpec specFromJson(const json& j)
             src.dem = str(e, "dem", where);
             src.osm = str(e, "osm", where);
             src.landcover = str(e, "landcover", where);
+            src.bathymetry = str(e, "bathymetry", where);
             if (e.contains("bbox") && !e["bbox"].is_null())
             {
                 if (!e["bbox"].is_array() || e["bbox"].size() != 4)
@@ -352,6 +354,18 @@ RemixSpec specFromJson(const json& j)
         s.seams.coast = num(m, "coast", s.seams.coast, "seams.");
         s.seams.seed = num(m, "seed", s.seams.seed, "seams.");
     }
+    if (j.contains("bathymetry") && !j["bathymetry"].is_null())
+    {
+        const json& b = j["bathymetry"];
+        if (!b.is_object())
+            throw std::runtime_error("bathymetry is a dict");
+        onlyKeys(b, {"enabled", "shoreSlope", "blendWidth", "smoothing", "depthScale", "shelfDepth", "shelfWidth", "dropDepth", "slopeWidth", "minDepth", "landTolerance"},
+                 "bathymetry.");
+        for (const auto& [k, v] : b.items())
+            if (k == "enabled" ? !v.is_boolean() : !v.is_number())
+                throw std::runtime_error("bathymetry." + k + (k == "enabled" ? " is true or false" : " is a number"));
+        s.bathymetry = b;
+    }
     if (j.contains("view") && j["view"].is_object())
         s.view = j["view"];
     return s;
@@ -386,7 +400,7 @@ json remixSpecSchema()
              {{"center", point},
               {"size", {{"type", "array"}, {"description", "[width, depth] cm; [0, 0] fits everything placed."}}},
               {"cell", {{"type", "number"}, {"description", "Grid spacing cm; 0 is the finest source's cell times the horizontal scale."}}},
-              {"seaDepth", {{"type", "number"}, {"description", "Height where no source covers, cm. Default -3000."}}},
+              {"seaDepth", {{"type", "number"}, {"description", "Flat sea floor where no source covers, cm, with bathymetry off. Default -3000."}}},
               {"maxResolution", {{"type", "integer"}, {"description", "Most samples along the longer side. Default 2049."}}}}}}},
           {"sources",
            {{"type", "array"},
@@ -398,6 +412,7 @@ json remixSpecSchema()
                 {"dem", {{"type", "string"}, {"description", "Elevation file (GeoTIFF, .hgt, .asc, .xyz, Terrarium PNG)."}}},
                 {"osm", {{"type", "string"}, {"description", "OSM file (.osm, Overpass .json, .osm.pbf)."}}},
                 {"landcover", {{"type", "string"}, {"description", "ESA WorldCover GeoTIFF."}}},
+                {"bathymetry", {{"type", "string"}, {"description", "Bathymetry grid around the place (GEBCO GeoTIFF): the sea floor near it."}}},
                 {"bbox", {{"type", "array"}, {"description", "[west, south, east, north] degrees: what remixFetch downloads."}}},
                 {"at", point},
                 {"angle", {{"type", "number"}}},
@@ -435,6 +450,22 @@ json remixSpecSchema()
               {"rivers", {{"type", "boolean"}, {"description", "Re-solve rivers by flow routing so they drain."}}},
               {"coast", {{"type", "boolean"}, {"description", "Re-merge cut coastline along sea level."}}},
               {"seed", {{"type", "integer"}}}}}}},
+          {"bathymetry",
+           {{"type", "object"},
+            {"description", "Sea floor where no source covers and where a source's elevation leaves the sea flat: the sources' bathymetry grids "
+                            "blended in from a shelf profile (Terrain's bathymetry). Lengths cm on the map."},
+            {"properties",
+             {{"enabled", {{"type", "boolean"}, {"description", "Default true; false lays a flat floor at map.seaDepth."}}},
+              {"shoreSlope", {{"type", "number"}, {"description", "Seabed slope off the shore, degrees. Default 1.5."}}},
+              {"blendWidth", {{"type", "number"}, {"description", "Distance from the shore over which the profile hands over to the grids. Default 30000."}}},
+              {"smoothing", {{"type", "number"}, {"description", "Blur of the grids, cm; 0 is a grid cell."}}},
+              {"depthScale", {{"type", "number"}, {"description", "Multiplies the grids' depths (after the vertical scale)."}}},
+              {"shelfDepth", {{"type", "number"}, {"description", "Profile shelf depth. Default 3000."}}},
+              {"shelfWidth", {{"type", "number"}, {"description", "Profile shelf width. Default 200000."}}},
+              {"dropDepth", {{"type", "number"}, {"description", "Depth past the shelf. Default 20000."}}},
+              {"slopeWidth", {{"type", "number"}, {"description", "Width of the drop past the shelf. Default 300000."}}},
+              {"minDepth", {{"type", "number"}, {"description", "Shallowest seabed off the shore. Default 30."}}},
+              {"landTolerance", {{"type", "number"}, {"description", "Ground this close above sea level and joined to the sea counts as flat sea. Default 50."}}}}}}},
           {"view", {{"type", "object"}, {"description", "UI state: {overlay: true, show: after|before}."}}}}},
     };
 }

@@ -225,6 +225,11 @@ OsmDoc readOsmDoc(const std::filesystem::path& path, std::vector<std::string>* n
         {
             const terrain::OsmData od = terrain::parseOsmPbf(bytes);
             OsmDoc d;
+            for (const terrain::OsmData::Node& n : od.tagged)
+            {
+                d.nodeAt[n.id] = d.nodes.size();
+                d.nodes.push_back({n.id, n.at, OsmTags(n.tags.begin(), n.tags.end())});
+            }
             for (const terrain::OsmData::Way& w : od.ways)
             {
                 OsmDoc::Way way{w.id, {}, OsmTags(w.tags.begin(), w.tags.end())};
@@ -247,8 +252,6 @@ OsmDoc readOsmDoc(const std::filesystem::path& path, std::vector<std::string>* n
                 d.relations.push_back(std::move(rel));
             }
             d.index();
-            if (notes)
-                notes->push_back(path.filename().string() + ": .pbf keeps ways and relations only; points of interest need .osm or Overpass .json");
             return d;
         }
         const size_t first = bytes.find_first_not_of(" \t\r\n\xEF\xBB\xBF");
@@ -304,6 +307,9 @@ terrain::OsmData toOsmData(const OsmDoc& d)
 {
     terrain::OsmData out;
     out.nodes = d.nodes.size();
+    for (const OsmDoc::Node& n : d.nodes)
+        if (!n.tags.empty())
+            out.tagged.push_back({n.id, n.at, terrain::OsmTags(n.tags.begin(), n.tags.end())});
     for (const OsmDoc::Way& w : d.ways)
     {
         terrain::OsmData::Way way;

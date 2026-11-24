@@ -3,13 +3,15 @@
 # terrain exists; extensions don't link each other.
 set(_terrain ${CMAKE_SOURCE_DIR}/extensions/Terrain)
 set(_terrain_sources ${_terrain}/Core.cpp ${_terrain}/Erosion.cpp ${_terrain}/Inputs.cpp ${_terrain}/Projection.cpp ${_terrain}/Osm.cpp
-    ${_terrain}/Fetch.cpp ${_terrain}/LandCover.cpp ${_terrain}/Stamps.cpp ${_terrain}/Brushes.cpp ${_terrain}/Shaping.cpp ${_terrain}/Painted.cpp)
+    ${_terrain}/Fetch.cpp ${_terrain}/LandCover.cpp ${_terrain}/Stamps.cpp ${_terrain}/Brushes.cpp ${_terrain}/Shaping.cpp ${_terrain}/Painted.cpp
+    ${_terrain}/Analysis.cpp ${_terrain}/Bathymetry.cpp ${_terrain}/ErosionGpu.cpp)
+set(_clipper ${CMAKE_SOURCE_DIR}/src/curve/third_party/clipper2)
 lila_add_extension(lila_openworld_extension ID OpenWorld MANIFEST extension.json UI RESOURCES resources
     SOURCES OpenWorld.cpp OpenWorld.h RemixNode.h OsmDoc.cpp OsmDoc.h RemixSpec.cpp RemixSpec.h Warp.cpp Warp.h Remix.cpp Remix.h RemixWork.h
             Features.cpp Repair.cpp Check.cpp RemixNode.cpp RemixCommands.cpp RemixUi.cpp
-            ${_terrain_sources})
-set_source_files_properties(${_terrain_sources} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
-target_include_directories(lila_openworld_extension PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${_terrain})
+            ${_terrain_sources} ${_clipper}/clipper.engine.cpp)
+set_source_files_properties(${_terrain_sources} ${_clipper}/clipper.engine.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+target_include_directories(lila_openworld_extension PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${_terrain} ${_clipper}/include)
 find_package(miniz CONFIG REQUIRED)
 target_link_libraries(lila_openworld_extension PRIVATE miniz::miniz)
 foreach(_host lila lilabatch)

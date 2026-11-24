@@ -59,7 +59,7 @@ struct OsmDoc
     bool empty() const { return nodes.empty() && ways.empty(); }
 };
 
-/** .osm XML, Overpass .json (out body or out geom) and .osm.pbf. PBF keeps no node tags: notes says so. Throws std::runtime_error. */
+/** .osm XML, Overpass .json (out body or out geom) and .osm.pbf, tagged nodes included. Throws std::runtime_error. */
 OsmDoc readOsmDoc(const std::filesystem::path& path, std::vector<std::string>* notes = nullptr);
 OsmDoc parseOsmDocJson(std::string_view text);
 OsmDoc parseOsmDocXml(std::string_view text);

@@ -1,9 +1,12 @@
 // OSM features through the remix: every node placed like the heights under it, ways cut where regions were cut and
-// pasted, areas kept whole, relations following their ways. Works on nodes only, so any feature kind comes along.
+// pasted, buildings kept whole, other areas clipped at region edges, relations following their ways. Works on nodes
+// only, so any feature kind comes along.
 
 #include "RemixWork.h"
 
 #include <lila/Profile.h>
+
+#include <clipper2/clipper.h>
 
 #include <algorithm>
 #include <cmath>
@@ -46,6 +49,34 @@ struct Pieces
         return a + (b - a) * lo;
     }
 };
+
+bool isBuilding(const OsmTags& t) { return !tagOf(t, "building").empty() || !tagOf(t, "building:part").empty() || tagOf(t, "type") == "building"; }
+
+std::string flippedRole(const std::string& role) { return role == "outer" ? "inner" : role == "inner" ? "outer" : role; }
+
+Clipper2Lib::PathsD clipPaths(const Polygon& p)
+{
+    Clipper2Lib::PathD path;
+    path.reserve(p.size());
+    for (Vec2 v : p)
+        path.push_back({v.x, v.y});
+    return {path};
+}
+
+/** A ring with no edge longer than step, so a warped outline follows the warp between its corners. */
+std::vector<Vec2> densified(const Clipper2Lib::PathD& ring, double step)
+{
+    std::vector<Vec2> out;
+    for (size_t i = 0; i < ring.size(); ++i)
+    {
+        const Vec2 a(ring[i].x, ring[i].y), b(ring[(i + 1) % ring.size()].x, ring[(i + 1) % ring.size()].y);
+        out.push_back(a);
+        const int n = int(glm::length(b - a) / step);
+        for (int k = 1; k < n; ++k)
+            out.push_back(a + (b - a) * (double(k) / n));
+    }
+    return out;
+}
 
 struct Run
 {
@@ -124,6 +155,42 @@ void moveFeatures(Work& w, Features& f)
         };
 
         std::map<int64_t, std::vector<int64_t>> derived;
+        // Ring ways made by clipping that are holes of the original ring: their relation role flips.
+        std::set<int64_t> flipped;
+        std::set<int64_t> members;
+        // Building relations go whole: every member way follows the piece holding most of the relation.
+        std::unordered_map<int64_t, int> wholePiece;
+        std::unordered_map<int64_t, const OsmDoc::Way*> wayById;
+        for (const OsmDoc::Way& mw : doc.ways)
+            wayById[mw.id] = &mw;
+        for (const OsmDoc::Relation& rel : doc.relations)
+        {
+            const bool building = isBuilding(rel.tags);
+            std::map<int, size_t> count;
+            for (const OsmDoc::Member& m : rel.members)
+                if (m.type == 'w')
+                {
+                    members.insert(m.ref);
+                    if (!building)
+                        continue;
+                    if (const auto it = wayById.find(m.ref); it != wayById.end())
+                        for (int64_t id : it->second->nodes)
+                            if (base.count(id))
+                                for (int p : pieces)
+                                    count[p] += present(p, id);
+                }
+            if (!building)
+                continue;
+            int best = -1;
+            size_t bestCount = 0;
+            for (const auto& [p, c] : count)
+                if (c > bestCount)
+                    best = p, bestCount = c;
+            for (const OsmDoc::Member& m : rel.members)
+                if (m.type == 'w' && best >= 0)
+                    wholePiece[m.ref] = best;
+        }
+        Polygon footprint = w.footprints[s];
         for (const OsmDoc::Way& way : doc.ways)
         {
             std::vector<int64_t> refs;
@@ -136,18 +203,99 @@ void moveFeatures(Work& w, Features& f)
             const bool closed = refs.front() == refs.back();
             const std::string cls(kind == WayKind::Road ? tagOf(way.tags, "highway") : kind == WayKind::Coastline ? "coastline" : "");
 
-            if (kind == WayKind::Area)
+            const auto whole = wholePiece.find(way.id);
+            if (kind == WayKind::Area || whole != wholePiece.end())
             {
-                // Areas are never cut: the whole outline goes with the piece holding most of it.
+                // Buildings go whole with the piece holding most of them; other areas crossing a region's edge are clipped there.
+                const size_t ringNodes = refs.size() - (closed ? 1 : 0);
                 int best = -1;
                 size_t bestCount = 0;
                 for (int p : pieces)
                 {
                     size_t c = 0;
-                    for (size_t i = 0; i + (closed ? 1 : 0) < refs.size(); ++i)
+                    for (size_t i = 0; i < ringNodes; ++i)
                         c += present(p, refs[i]);
                     if (c > bestCount)
                         best = p, bestCount = c;
+                }
+                if (whole != wholePiece.end())
+                    best = whole->second;
+                const bool building = whole != wholePiece.end() || isBuilding(way.tags);
+                if (!building && closed && ringNodes >= 3)
+                {
+                    Polygon ring;
+                    for (size_t i = 0; i < ringNodes; ++i)
+                        ring.push_back(base.at(refs[i]));
+                    bool split = bestCount < ringNodes;
+                    for (size_t r = 0; r < w.spec.regions.size() && !split; ++r)
+                    {
+                        const Region& reg = w.spec.regions[r];
+                        if (!punches(reg.op) && !pastes(reg.op))
+                            continue;
+                        if (!overlaps(ring, reg.polygon))
+                            continue;
+                        bool allIn = true;
+                        for (Vec2 v : ring)
+                            allIn = allIn && inside(reg.polygon, v);
+                        split = !allIn;
+                    }
+                    if (split)
+                    {
+                        const Clipper2Lib::PathsD subject = Clipper2Lib::Intersect(clipPaths(ring), clipPaths(footprint), Clipper2Lib::FillRule::NonZero);
+                        Clipper2Lib::PathsD punched;
+                        for (const Region& reg : w.spec.regions)
+                            if (punches(reg.op))
+                                punched = Clipper2Lib::Union(punched, clipPaths(reg.polygon), Clipper2Lib::FillRule::NonZero);
+                        const double minArea = 0.25 * w.out->after.cell * w.out->after.cell;
+                        bool firstWay = true;
+                        for (int p : pieces)
+                        {
+                            const Clipper2Lib::PathsD part =
+                                p == 0 ? Clipper2Lib::Difference(subject, punched, Clipper2Lib::FillRule::NonZero)
+                                       : Clipper2Lib::Intersect(subject, clipPaths(w.spec.regions[size_t(p - 1)].polygon), Clipper2Lib::FillRule::NonZero);
+                            std::vector<std::pair<int64_t, bool>> rings;
+                            for (const Clipper2Lib::PathD& path : part)
+                            {
+                                if (path.size() < 3 || std::abs(Clipper2Lib::Area(path)) < minArea)
+                                    continue;
+                                const bool hole = !Clipper2Lib::IsPositive(path);
+                                Features::Way out{firstWay && p == 0 ? wayId(way.id, true) : wayId(way.id, false), {}, {}, kind, false};
+                                firstWay = false;
+                                for (Vec2 b : densified(path, probe))
+                                    out.nodes.push_back(cutNode(p, b));
+                                for (int64_t id : out.nodes)
+                                    f.node(id).tags.clear();
+                                out.nodes.push_back(out.nodes.front());
+                                rings.push_back({out.id, hole});
+                                f.ways.push_back(std::move(out));
+                            }
+                            if (rings.empty())
+                                continue;
+                            if (members.count(way.id))
+                            {
+                                // A ring of a relation: the relation picks the pieces up through derived, holes with the role flipped.
+                                for (size_t k = 0; k < rings.size(); ++k)
+                                {
+                                    f.ways[f.ways.size() - rings.size() + k].tags = way.tags;
+                                    derived[way.id].push_back(rings[k].first);
+                                    if (rings[k].second)
+                                        flipped.insert(rings[k].first);
+                                }
+                            }
+                            else if (rings.size() == 1 && !rings[0].second)
+                                f.ways.back().tags = way.tags;
+                            else
+                            {
+                                OsmDoc::Relation mp{f.nextId++, {}, way.tags};
+                                mp.tags["type"] = "multipolygon";
+                                for (const auto& [id, hole] : rings)
+                                    mp.members.push_back({'w', id, hole ? "inner" : "outer"});
+                                usedRelations.insert(mp.id);
+                                f.relations.push_back(std::move(mp));
+                            }
+                        }
+                        continue;
+                    }
                 }
                 if (best < 0)
                     continue;
@@ -319,7 +467,7 @@ void moveFeatures(Work& w, Features& f)
                 {
                     if (auto it = derived.find(m.ref); it != derived.end())
                         for (int64_t id : it->second)
-                            out.members.push_back({'w', id, m.role});
+                            out.members.push_back({'w', id, flipped.count(id) ? flippedRole(m.role) : m.role});
                 }
                 else if (m.type == 'n')
                 {
@@ -344,6 +492,94 @@ void moveFeatures(Work& w, Features& f)
     }
 }
 
+} // namespace openworld::detail
+
+namespace openworld
+{
+size_t remixExtract(const RemixSpec& spec, const RemixResult& r, std::string_view source, terrain::OsmExtract& x)
+{
+    LILA_ZONE();
+
+    using namespace detail;
+    const auto at = std::find_if(spec.sources.begin(), spec.sources.end(), [&](const Source& s) { return s.id == source; });
+    if (at == spec.sources.end())
+        throw std::runtime_error("remixExtract: no source '" + std::string(source) + "'");
+    if (!r.warp)
+        throw std::runtime_error("remixExtract: the remix result has no warp");
+    Work w(spec);
+    for (const Source& s : spec.sources)
+    {
+        std::shared_ptr<const SourceData> d;
+        try
+        {
+            d = loadSource(s, spec.bathymetry.value("landTolerance", 50.0));
+        }
+        catch (const std::exception&)
+        {
+        }
+        w.data.push_back(d);
+        w.scales.push_back(s.scale > 0.0 ? s.scale : spec.horizontal);
+    }
+    const size_t si = size_t(at - spec.sources.begin());
+    if (!w.data[si])
+        throw std::runtime_error("remixExtract: source '" + std::string(source) + "' could not be read");
+    w.feather = r.feather > 0.0 ? r.feather : spec.seams.width;
+    w.warp = r.warp;
+    for (const Region& reg : spec.regions)
+        w.targets.push_back(reg.target());
+    const Pieces P{w, si};
+    std::vector<int> pieces{0};
+    for (size_t k = 0; k < spec.regions.size(); ++k)
+        if (pastes(spec.regions[k].op))
+            pieces.push_back(int(k) + 1);
+    const SourceData& d = *w.data[si];
+    const Source& src = *at;
+    auto toBase = [&](LatLon ll) { return placeOnBase(src, spec.horizontal, d.geo.toLocal(ll)); };
+
+    size_t dropped = 0;
+    // One element at a time through forEachPoint: its points pick the piece, then all of them move with it.
+    auto move = [&](terrain::OsmExtract& one) {
+        std::map<int, size_t> count;
+        terrain::forEachPoint(one, [&](LatLon& p) {
+            const Vec2 b = toBase(p);
+            for (int piece : pieces)
+                count[piece] += P.present(piece, b);
+        });
+        int best = -1;
+        size_t bestCount = 0;
+        for (const auto& [piece, c] : count)
+            if (c > bestCount)
+                best = piece, bestCount = c;
+        if (best < 0)
+        {
+            ++dropped;
+            return false;
+        }
+        terrain::forEachPoint(one, [&](LatLon& p) { p = r.geo.toGeographic(P.map(best, toBase(p))); });
+        return true;
+    };
+    auto each = [&](auto member) {
+        auto& list = x.*member;
+        std::decay_t<decltype(list)> kept;
+        for (auto& e : list)
+        {
+            terrain::OsmExtract one;
+            (one.*member).push_back(std::move(e));
+            if (move(one))
+                kept.push_back(std::move((one.*member).front()));
+        }
+        list = std::move(kept);
+    };
+    each(&terrain::OsmExtract::features);
+    each(&terrain::OsmExtract::areas);
+    each(&terrain::OsmExtract::buildings);
+    each(&terrain::OsmExtract::places);
+    return dropped;
+}
+} // namespace openworld
+
+namespace openworld::detail
+{
 void finishFeatures(Work& w, Features& f)
 {
     LILA_ZONE();
