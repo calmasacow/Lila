@@ -38,7 +38,7 @@ struct PtInstance
     float4 rows[3];
     uint firstSection;
     uint sectionCount;
-    uint2 pad;
+    uint2 tint; // halves: linear rgb, amount (read under kInstanceColor)
 };
 
 /** Matches render::PtSection: a material section's inputs as the mesh shader takes them. */
@@ -90,6 +90,7 @@ static const uint kTranslucent = 1 << 8;
 static const uint kUv1 = 1 << 10;
 static const uint kNormalXY = 1 << 17;
 static const uint kGreyBase = 1 << 18;
+static const uint kInstanceColor = 1 << 20;
 static const uint kNoHandle = 0xffff;
 
 /** The frame's parameters, loaded once by each entry point. */
@@ -422,6 +423,11 @@ Hit hitOf(uint instanceIndex, uint prim, float2 bary, float3 rayDir, float rayT,
                 h.baseColor = c.rgb;
             h.opacity *= c.a;
         }
+    }
+    if ((s.flags & kInstanceColor) != 0)
+    {
+        const float4 tint = float4(f16tof32(inst.tint.x), f16tof32(inst.tint.x >> 16), f16tof32(inst.tint.y), f16tof32(inst.tint.y >> 16));
+        h.baseColor = lerp(h.baseColor, (s.flags & kBaseColorMap) != 0 ? h.baseColor * tint.rgb : tint.rgb, saturate(tint.a));
     }
     h.masked = (s.flags & kMasked) != 0;
     h.translucent = (s.flags & kTranslucent) != 0;

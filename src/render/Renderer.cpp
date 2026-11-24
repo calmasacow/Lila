@@ -1106,8 +1106,9 @@ struct Renderer::Impl
     std::vector<SectionRecord> offscreenRecords;
     std::vector<SectionRecord>* frameRecords = &offscreenRecords;
     PathTracer pathTracer;
-    /** Per instance of the scene's top-level structure, the shaded batch it places and its trace table entry. */
+    /** Per instance of the scene's top-level structure, the shaded batch it places, its colour and its trace table entry. */
     std::vector<uint32_t> frameTlasBatches;
+    std::vector<glm::vec4> frameTlasTints;
     std::vector<TraceInstance> frameTraceInstances;
     /** Bumped whenever a bottom-level structure is built or refit: traced geometry changed. */
     uint64_t blasEpoch = 0;
@@ -3436,6 +3437,9 @@ struct Renderer::Impl
             const glm::uvec2 range = frameTlasBatches[i] < batchSections.size() ? batchSections[frameTlasBatches[i]] : glm::uvec2(0);
             pi.firstSection = range.x;
             pi.sectionCount = range.y;
+            const glm::vec4 tint = i < frameTlasTints.size() ? frameTlasTints[i] : glm::vec4(0.0f);
+            pi.tint[0] = glm::packHalf2x16(glm::vec2(tint.r, tint.g));
+            pi.tint[1] = glm::packHalf2x16(glm::vec2(tint.b, tint.a));
         }
 
         PathTracer::Inputs in;
@@ -4715,6 +4719,7 @@ struct Renderer::Impl
         std::vector<VkAccelerationStructureInstanceKHR> instances;
         std::vector<TraceInstance> table;
         frameTlasBatches.clear();
+        frameTlasTints.clear();
         std::vector<TraceSection> sections;
         bool built = false;
         for (const DrawBatch& b : frameBatches.shaded)
@@ -4746,6 +4751,7 @@ struct Renderer::Impl
             for (uint32_t i = 0; i < b.count; ++i)
             {
                 frameTlasBatches.push_back(uint32_t(&b - frameBatches.shaded.data()));
+                frameTlasTints.push_back(frameBatches.instances[b.first + i].tint);
                 const glm::mat4& w = frameBatches.instances[b.first + i].world;
                 VkAccelerationStructureInstanceKHR inst{};
                 for (int r = 0; r < 3; ++r)
