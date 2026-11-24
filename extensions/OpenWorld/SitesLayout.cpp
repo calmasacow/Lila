@@ -126,7 +126,7 @@ const std::vector<Kind>& kinds()
          {"beacon", "headland", "faro"},
          {"towerHeight", "keeperHouse"},
          "Lighthouse"},
-        {"cemetery", "Mausoleum Cemetery", "building-monument", "Inland",
+        {"cemetery", "Cemetery", "building-monument", "Inland",
          "A walled cemetery: a grid of plots on paths, family mausoleums (domes, columns, glass fronts, air-conditioned chapels) among "
          "plain graves, a chapel and the gate.",
          {"graveyard", "panteon", "mausoleum", "narco cemetery", "tombs"},
