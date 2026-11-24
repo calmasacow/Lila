@@ -2016,10 +2016,18 @@ void registerContractCommands(ext::Context& ctx)
                                 }
                             if (!open || first > last)
                                 continue;
+                            std::vector<uint32_t> way(cells.begin() + std::ptrdiff_t(first > 0 ? first - 1 : first),
+                                                      cells.begin() + std::ptrdiff_t(std::min(last + 1, cells.size() - 1)) + 1);
+                            // A reach a cell long under the pad: its way across goes on into the reaches either side.
+                            const Reach& rr = an->reaches()[size_t(reach)];
+                            if (way.front() == cells.front() && !rr.upstream.empty() && !an->reaches()[size_t(rr.upstream[0])].cells.empty())
+                                way.insert(way.begin(), an->reaches()[size_t(rr.upstream[0])].cells.back());
+                            if (way.back() == cells.back() && rr.downstream >= 0 && !an->reaches()[size_t(rr.downstream)].cells.empty())
+                                way.push_back(an->reaches()[size_t(rr.downstream)].cells.front());
                             json crossing = json::array();
-                            for (size_t k = first > 0 ? first - 1 : first; k <= std::min(last + 1, cells.size() - 1); ++k)
+                            for (uint32_t c : way)
                             {
-                                const glm::dvec2 p = h.samplePos(int(cells[k] % uint32_t(h.nx)), int(cells[k] / uint32_t(h.nx)));
+                                const glm::dvec2 p = h.samplePos(int(c % uint32_t(h.nx)), int(c / uint32_t(h.nx)));
                                 crossing.push_back(worldJson(f.frame.world(p.x, h.heightAt(p.x, p.y), p.y)));
                             }
                             issue("blocksFlow", about, at, "stands in river " + std::to_string(reach));
