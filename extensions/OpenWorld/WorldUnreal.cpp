@@ -360,6 +360,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             }
             if (r.contains("warnings"))
                 out["warnings"] = r["warnings"];
+            if (r.contains("seconds"))
+                out["seconds"] = r["seconds"];
             if (r.contains("missingAssets") && r["missingAssets"].is_object())
             {
                 size_t placements = 0;
@@ -439,6 +441,13 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
                 out["interiorsSkipped"] = r["interiorsNote"];
             if (r.contains("materials"))
                 out["materials"] = brief(r["materials"]);
+            json seconds = {{"phases", r.value("seconds", json::object())}};
+            auto sendSeconds = [](const json& plan) { return json{{"plan", plan.value("planSeconds", 0.0)}, {"send", plan.value("seconds", json::object())}}; };
+            seconds["shellsAndModules"] = sendSeconds(r.value("plan", json::object()));
+            for (const char* lod : {"near", "far"})
+                if (hl.contains(lod))
+                    seconds[std::string("proxies.") + lod] = sendSeconds(hl[lod]);
+            out["seconds"] = seconds;
             return out;
         });
 

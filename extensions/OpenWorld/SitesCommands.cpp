@@ -4,6 +4,7 @@
 
 #include "OpenWorld.h"
 #include "SitesNode.h"
+#include "WorldScene.h"
 
 #include <lila/Command.h>
 #include <lila/Deformer.h>
@@ -26,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <set>
 
@@ -816,6 +818,31 @@ std::vector<P2> samplesOf(const Ring& r)
     return out;
 }
 
+double distanceToRing(const Ring& r, P2 p)
+{
+    double best = std::numeric_limits<double>::infinity();
+    for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
+    {
+        const P2 a = r[j], ab = r[i] - a;
+        const double t = glm::dot(ab, ab) > 0.0 ? std::clamp(glm::dot(p - a, ab) / glm::dot(ab, ab), 0.0, 1.0) : 0.0;
+        best = std::min(best, glm::length(p - (a + ab * t)));
+    }
+    return best;
+}
+
+/** How far apart two rings' outlines are (0 when they overlap). */
+double ringGap(const Ring& a, const Ring& b)
+{
+    if (a.empty() || b.empty() || sites::ringsOverlap(a, b))
+        return 0.0;
+    double best = std::numeric_limits<double>::infinity();
+    for (P2 q : a)
+        best = std::min(best, distanceToRing(b, q));
+    for (P2 q : b)
+        best = std::min(best, distanceToRing(a, q));
+    return best;
+}
+
 bool bulky(const std::string& type)
 {
     for (const char* t : {"container", "crane", "truck", "greenhouse", "shadehouse", "grave", "pool", "helipad", "drum", "tree"})
@@ -906,12 +933,28 @@ json check(const std::vector<SiteRef>& list, const std::vector<SiteRef>& everyon
                 sites::Part::Needs needs;
                 double minDepth, maxSlope;
                 std::vector<P2> pts;
+                Ring ring;
             };
             std::vector<Probe> probes;
             for (const sites::Part& p : L.parts)
-                probes.push_back({p.id, p.needs, p.minDepth, p.maxSlope, samplesOf(p.ring)});
+                probes.push_back({p.id, p.needs, p.minDepth, p.maxSlope, samplesOf(p.ring), p.ring});
             for (const sites::EnvelopeOut& e : L.envelopes)
-                probes.push_back({e.path, sites::Part::Needs::Land, 0.0, 0.0, samplesOf(e.footprint)});
+                probes.push_back({e.path, sites::Part::Needs::Land, 0.0, 0.0, samplesOf(e.footprint), e.footprint});
+            // The grid draws a quay face between land and water parts as a slope one cell wide: a part's band a cell deep
+            // along the edge facing a part needing the other is not judged.
+            if (const auto hf = world::terrainHeights(terrain); hf && hf->cell > 0.0)
+                for (Probe& p : probes)
+                {
+                    using N = sites::Part::Needs;
+                    if (p.needs == N::Any)
+                        continue;
+                    for (const sites::Part& o : L.parts)
+                        if (o.needs != N::Any && o.needs != p.needs)
+                        {
+                            const double gap = ringGap(p.ring, o.ring);
+                            std::erase_if(p.pts, [&](P2 q) { return distanceToRing(o.ring, q) < gap + hf->cell; });
+                        }
+                }
             json points = json::array();
             for (const Probe& p : probes)
                 for (P2 q : p.pts)

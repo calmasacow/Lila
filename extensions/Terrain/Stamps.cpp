@@ -715,7 +715,9 @@ StampResult applyLine(Heightfield& h, const Stamp& s, const std::vector<glm::dve
     const bool oneSided = kind == "quay" || kind == "seawall" || kind == "embankment";
     const double sideSign = s.side == "right" ? -1.0 : 1.0;
     const double half = s.width * 0.5;
-    const double reach = half + s.falloff + h.cell;
+    // A quay narrower than a cell still sets the land samples next to its face, which the grid draws as a one-cell slope.
+    const double landHalf = kind == "quay" ? std::max(half, h.cell) : half;
+    const double reach = landHalf + s.falloff + h.cell;
 
     // Nearest centreline point per sample, segment by segment over each one's box.
     glm::dvec2 bl(std::numeric_limits<double>::infinity()), bh(-std::numeric_limits<double>::infinity());
@@ -765,12 +767,13 @@ StampResult applyLine(Heightfield& h, const Stamp& s, const std::vector<glm::dve
                 continue;
             // Counterclockwise in (X, Z): positive cross is to the left of travel.
             const bool landSide = (cross[i] * sideSign) >= 0.0;
-            double w = d <= half ? 1.0 : (s.falloff > 0.0 ? 1.0 - smoothstep(0.0, s.falloff, d - half) : 0.0);
+            const double core = landSide ? landHalf : half;
+            double w = d <= core ? 1.0 : (s.falloff > 0.0 ? 1.0 - smoothstep(0.0, s.falloff, d - core) : 0.0);
             if (oneSided && !landSide)
                 w = kind == "quay" && d <= half ? 1.0 : 0.0;
             if (w <= 0.0)
                 continue;
-            if (d <= half)
+            if (d <= core)
                 ++covered;
             const size_t hi = h.index(x, z);
             for (std::vector<float>* mk : masks)

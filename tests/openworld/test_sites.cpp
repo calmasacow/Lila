@@ -49,10 +49,10 @@ int issuesOf(const json& check, const std::string& kind, const std::string& site
     return n;
 }
 
-/** A coast: land 3 m up for z > -60000, sea floor 15 m down past -61000, sea level 0; 10 m cells. */
-std::string coastTerrain()
+/** A coast: land 3 m up for z > -60000, sea floor 15 m down past -61000, sea level 0; 10 m cells by default. */
+std::string coastTerrain(int resolution = 501)
 {
-    const json t = ops::execute("terrainCreate", {{"name", "Coast"}, {"flat", true}, {"size", {500000, 500000}}, {"resolution", 501}, {"center", {0, 300, 0}}});
+    const json t = ops::execute("terrainCreate", {{"name", "Coast"}, {"flat", true}, {"size", {500000, 500000}}, {"resolution", resolution}, {"center", {0, 300, 0}}});
     const std::string mesh = t["mesh"].get<std::string>();
     ops::execute("terrainStampRegion", {{"args", {mesh}},
                                         {"id", "sea"},
@@ -272,6 +272,28 @@ TEST_CASE("site commands: every kind on a coast terrain, slots published, envelo
     // Removing a site takes its stamps and roads off the terrain.
     ops::execute("siteRemove", {{"args", {"clash"}}});
     CHECK(ops::execute("siteList", json::object()).size() == 11);
+}
+
+TEST_CASE("site commands: a port on 32 m cells keeps its yard dry and its berths deep")
+{
+    loadSitePackages();
+    ops::execute("newScene", json::object());
+    const std::string terrain = coastTerrain(157);
+    ops::execute("siteCreate", {{"kind", "port"}, {"terrain", terrain}, {"at", {0, -61000}}, {"id", "port1"}});
+    const json c = ops::execute("siteCheck", json::object());
+    CAPTURE(c["issues"].dump(1));
+    CHECK(issuesOf(c, "water", "port1") == 0);
+    CHECK(issuesOf(c, "shallow", "port1") == 0);
+    // The quay sets the land next to its face though no sample lies within its width.
+    const json stamps = ops::execute("terrainStamps", {{"args", {terrain}}});
+    bool quay = false;
+    for (const auto& [layer, items] : stamps["layers"].items())
+        for (const json& it : items)
+            if (it.value("id", std::string()) == "site:port1/quay")
+                quay = it.value("applied", false);
+    CHECK(quay);
+    const json yard = ops::execute("terrainSample", {{"args", {terrain}}, {"points", {{0.0, -61000.0 + 2500.0}}}});
+    CHECK(yard[0]["height"].get<double>() > 0.0);
 }
 
 TEST_CASE("site commands: moving or turning the site mesh moves the site and its grading in one undo step")

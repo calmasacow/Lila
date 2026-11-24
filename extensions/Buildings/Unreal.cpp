@@ -18,6 +18,7 @@
 #include <lila/UnrealLink.h>
 
 #include <algorithm>
+#include <chrono>
 #include <set>
 
 using namespace lila;
@@ -97,6 +98,13 @@ void registerUnreal(ext::Context& ctx)
             out["interiors"] = interiorGroups;
             if (a.get<bool>("dryRun", false))
                 return out;
+            // Seconds per phase, in the result.
+            auto last = std::chrono::steady_clock::now();
+            auto lap = [&](const char* phase) {
+                const auto now = std::chrono::steady_clock::now();
+                out["seconds"][phase] = std::chrono::duration<double>(now - last).count();
+                last = now;
+            };
             std::vector<std::string> send = meshes;
             json nearProxies = json::array(), farProxies = json::array();
             if (a.get<bool>("proxies", true))
@@ -108,6 +116,7 @@ void registerUnreal(ext::Context& ctx)
                 for (const json& p : made["proxies"])
                     (p.value("lod", std::string()) == "far" ? farProxies : nearProxies).push_back(p["mesh"]);
                 out["proxies"] = made["proxies"].size();
+                lap("proxies");
             }
             try
             {
@@ -138,6 +147,7 @@ void registerUnreal(ext::Context& ctx)
                                                                     {"hlodLayer", shellHlod},
                                                                     {"wait", true}});
             out["plan"] = plan;
+            lap("shellsAndModules");
             // Proxies as World Partition Custom HLOD actors: the near ones show while a cell is unloaded, the far ones
             // once the level's default HLOD layer unloads there too.
             const std::string folder = a.get<std::string>("folder", "/Game/Lila/Buildings");
@@ -164,6 +174,7 @@ void registerUnreal(ext::Context& ctx)
                 }
             }
             out["hlods"] = hlods;
+            lap("hlods");
             // Every asset sent (shells, modules, proxies): their building slots get their style's instance, so modules and
             // proxies shade like the shell they sit on.
             std::set<std::string> paths;
@@ -184,6 +195,7 @@ void registerUnreal(ext::Context& ctx)
             if (!r.ok)
                 throw CommandError("buildingSend: buildingMaterials: " + r.error);
             out["materials"] = r.result;
+            lap("materials");
 
             // Interiors, and the windows' glass on every module mesh sent.
             json glass = json::array();
@@ -230,6 +242,7 @@ void registerUnreal(ext::Context& ctx)
                 throw CommandError("buildingSend: buildingInteriors: " + ir.error);
             out["interiorResult"] = ir.result;
             out["interiorLevels"] = entries;
+            lap("interiors");
             return out;
         },
         .examples = {"buildingSend()", "buildingSend('Town_Buildings_0_0', dryRun=True)"},
