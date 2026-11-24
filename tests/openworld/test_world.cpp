@@ -110,6 +110,11 @@ TEST_CASE("world spec: schema and shape checks name the bad field")
     s = tinySpec();
     s["settlements"][0]["area"] = {0, 0, -1, 5};
     fails(s, "x0 < x1");
+    s = tinySpec();
+    s["buildings"] = {{"enterable", {{"programs", {"police"}}, {"every", true}}}};
+    fails(s, "no key 'every'");
+    s["buildings"] = {{"enterable", {{{"programs", {"police"}}}, {{"landmarks", true}, {"limit", 2}}}}};
+    CHECK_NOTHROW(validateSpec(s));
 
     // Relative paths resolve against the spec's folder when the file is there.
     const fs::path dir = fs::path(LILA_TEST_OPENWORLD_DATA);
@@ -353,6 +358,26 @@ TEST_CASE("world: the tiny Sinaloa world builds headless from one spec file, rem
     // Every imported brand and street became fictional: nothing named as in the source OSM.
     const json leaks = run("realNameCheck");
     CHECK_MESSAGE(leaks.value("ok", false), leaks.dump().substr(0, 800));
+
+    // The spec's walk-in buildings: the capital's police and government palaces, a bar, a mansion, a church, each with an entry.
+    std::vector<std::string> enterable;
+    for (const json& s : r["steps"])
+        if (s["step"] == "buildings.enterable")
+            for (const json& b : s["result"].value("buildings", json::array()))
+            {
+                enterable.push_back(b["building"].get<std::string>());
+                CHECK_MESSAGE(b["entries"].get<int>() > 0, b.dump());
+                CHECK(b["rooms"].get<int>() > 0);
+            }
+    CHECK(enterable.size() >= 5);
+    CHECK(c["counts"].value("interiorNoEntry", 0) == 0);
+    // An interior taken away by hand: worldCheck lists the building as an interior without entry.
+    REQUIRE(!enterable.empty());
+    const std::string gone = "Interior_" + enterable[0].substr(enterable[0].find(':') + 1);
+    REQUIRE(g.find(gone));
+    run("delete", {{"args", {gone}}});
+    CHECK(run("worldCheck")["counts"].value("interiorNoEntry", 0) >= 1);
+    run("undo");
 
     // The terrain draws in its material layers and the sea in its own material, as built and after a reopen.
     const std::string terrainName = g.find(r["terrain"].get<std::string>())->name();

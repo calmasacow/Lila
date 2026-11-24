@@ -384,7 +384,10 @@ def build(size, out):
             {"kind": "village", "id": "noria", "at": coast.world(0.70, 0.94), "params": {"houses": 12, "villageRadius": 14000}},
             {"kind": "village", "id": "quelite", "at": coast.world(0.50, 0.94), "params": {"houses": 12, "villageRadius": 14000}},
         ]),
-        "buildings": {"lod": "near" if tiny else "hlod"},
+        "buildings": {"lod": "near" if tiny else "hlod",
+                      # A few walk-in buildings: the capital's police and government palaces, a bar, a mansion and a church.
+                      "enterable": [{"programs": ["police", "government"]}, {"programs": ["bar"], "limit": 2}, {"programs": ["mansion"], "limit": 1},
+                                    {"programs": ["church"], "limit": 1}]},
         "slots": {"rules": [{"id": "signs", "name": "Fictional signs", "type": "sign.storefront", "payload": {"poolTag": "fictional_signs"}},
                             {"id": "palms", "name": "Palms", "type": "tree.palm", "payload": {"poolTag": "palms"}}]},
         "zones": {"name": "Zones", "fromDistricts": True, "fromWater": True,
