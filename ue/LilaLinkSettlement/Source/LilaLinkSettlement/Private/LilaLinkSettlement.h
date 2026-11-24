@@ -54,11 +54,6 @@ inline const FString Feature = TEXT("settlement");
 inline const FString CellsFeature = TEXT("settlementCells");
 void RegisterMethods();
 void RegisterCellMethods();
-/**
- * Saves Settings to its project ini (TryUpdateDefaultConfigFile); when that changes the file, the file as it was is kept
- * in Saved/LilaLink/ConfigBackups first. Returns the backup's path, empty when the file did not change.
- */
-FString UpdateProjectIni(UObject* Settings);
 /** setSettlementData's work: writes the PCG data asset Params name. Null with OutError set on failure. */
 TSharedPtr<FJsonValue> WriteSettlementData(const TSharedPtr<FJsonObject>& Params, FString& OutError);
 } // namespace LilaLinkSettlement

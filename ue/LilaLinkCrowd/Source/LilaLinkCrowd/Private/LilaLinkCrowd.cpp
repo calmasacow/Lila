@@ -5,6 +5,7 @@
 #include "LilaCrowdCharacter.h"
 #include "LilaCrowdSignals.h"
 #include "LilaLinkMethodRegistry.h"
+#include "LilaLinkProjectConfig.h"
 #include "ZoneGraphCrowdLaneAnnotations.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -716,7 +717,11 @@ TSharedPtr<FJsonValue> SetMassCrowd(const TSharedPtr<FJsonObject>& Params, FStri
 		Lane.Direction = Direction;
 		Lane.Tags = FZoneGraphTagMask(CrowdTag);
 	}
-	Zone.Settings->TryUpdateDefaultConfigFile();
+	TArray<TSharedPtr<FJsonValue>> Backups;
+	if (const FString Backup = LilaLink::UpdateProjectIni(Zone.Settings); !Backup.IsEmpty())
+	{
+		Backups.Add(MakeShared<FJsonValueString>(Backup));
+	}
 	UE::ZoneGraphDelegates::OnZoneGraphTagsChanged.Broadcast();
 	if (UMassCrowdSettings* Crowd = GetMutableDefault<UMassCrowdSettings>())
 	{
@@ -729,7 +734,10 @@ TSharedPtr<FJsonValue> SetMassCrowd(const TSharedPtr<FJsonObject>& Params, FStri
 		{
 			*T = CrossingTag;
 		}
-		Crowd->TryUpdateDefaultConfigFile();
+		if (const FString Backup = LilaLink::UpdateProjectIni(Crowd); !Backup.IsEmpty())
+		{
+			Backups.Add(MakeShared<FJsonValueString>(Backup));
+		}
 	}
 
 	int32 Polygons = 0;
@@ -907,6 +915,10 @@ TSharedPtr<FJsonValue> SetMassCrowd(const TSharedPtr<FJsonObject>& Params, FStri
 	Out->SetStringField(TEXT("spawner"), Spawner->GetPathName());
 	Out->SetArrayField(TEXT("stateTrees"), Trees);
 	Out->SetArrayField(TEXT("configs"), Configs);
+	if (!Backups.IsEmpty())
+	{
+		Out->SetArrayField(TEXT("configBackups"), Backups);
+	}
 	TArray<TSharedPtr<FJsonValue>> W;
 	for (const FString& Line : Warnings)
 	{

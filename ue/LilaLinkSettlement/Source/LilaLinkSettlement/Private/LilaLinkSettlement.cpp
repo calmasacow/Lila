@@ -1,6 +1,7 @@
 #include "LilaLinkSettlement.h"
 
 #include "LilaLinkMethodRegistry.h"
+#include "LilaLinkProjectConfig.h"
 #include "LilaLinkSettlementTraffic.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -21,11 +22,7 @@
 #include "Polygon2.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
-#include "HAL/FileManager.h"
-#include "Misc/DateTime.h"
-#include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
-#include "Misc/Paths.h"
 #include "UObject/Package.h"
 #include "UObject/UnrealType.h"
 #include "ZoneGraphDelegates.h"
@@ -538,7 +535,7 @@ TSharedPtr<FJsonValue> SetZoneGraph(const TSharedPtr<FJsonObject>& Params, FStri
 			ProfileRefs.Add(Entry.Key, FZoneLaneProfileRef(*Profile));
 		}
 	}
-	const FString ConfigBackup = LilaLinkSettlement::UpdateProjectIni(Access.Settings);
+	const FString ConfigBackup = LilaLink::UpdateProjectIni(Access.Settings);
 	UE::ZoneGraphDelegates::OnZoneGraphTagsChanged.Broadcast();
 
 	const FName Tag = ZoneTagFor(Id);
@@ -1015,30 +1012,6 @@ TSharedPtr<FJsonValue> ReadRoadGrammar(const TSharedPtr<FJsonObject>& Params, FS
 TSharedPtr<FJsonValue> LilaLinkSettlement::WriteSettlementData(const TSharedPtr<FJsonObject>& Params, FString& OutError)
 {
 	return SetSettlementData(Params, OutError);
-}
-
-FString LilaLinkSettlement::UpdateProjectIni(UObject* Settings)
-{
-	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSettlement::UpdateProjectIni);
-
-	const FString File = FPaths::ConvertRelativePathToFull(Settings->GetDefaultConfigFilename());
-	FString Before;
-	const bool bExisted = FFileHelper::LoadFileToString(Before, *File);
-	Settings->TryUpdateDefaultConfigFile();
-	FString After;
-	FFileHelper::LoadFileToString(After, *File);
-	if (bExisted && Before == After)
-	{
-		return FString();
-	}
-	const FString Dir = FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir() / TEXT("LilaLink/ConfigBackups"));
-	IFileManager::Get().MakeDirectory(*Dir, /*Tree=*/true);
-	const FString Stem = Dir / FPaths::GetBaseFilename(File) + TEXT("-") + FDateTime::Now().ToString(TEXT("%Y%m%d-%H%M%S"));
-	const FString Backup = bExisted ? Stem + TEXT(".ini") : Stem + TEXT(".absent");
-	const bool bSaved = bExisted ? FFileHelper::SaveStringToFile(Before, *Backup)
-								 : FFileHelper::SaveStringToFile(FString::Printf(TEXT("%s did not exist before LilaLink wrote it: delete it to go back."), *File), *Backup);
-	UE_LOG(LogLilaLinkSettlement, Log, TEXT("%s changed; it was %s"), *File, bSaved ? *(TEXT("backed up to ") + Backup) : TEXT("not backed up (Saved is not writable)"));
-	return bSaved ? Backup : FString();
 }
 
 void LilaLinkSettlement::RegisterMethods()

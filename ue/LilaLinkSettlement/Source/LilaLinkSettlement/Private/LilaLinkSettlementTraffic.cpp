@@ -1,5 +1,6 @@
 #include "LilaLinkSettlementTraffic.h"
 
+#include "LilaLinkProjectConfig.h"
 #include "LilaLinkSettlement.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -326,7 +327,7 @@ TSharedPtr<FJsonObject> LilaLinkSettlementTraffic::ConfigureSettings(TFunctionRe
 	}
 	if (!Configured.IsEmpty())
 	{
-		const FString Backup = LilaLinkSettlement::UpdateProjectIni(Settings);
+		const FString Backup = LilaLink::UpdateProjectIni(Settings);
 		if (!Backup.IsEmpty())
 		{
 			Out->SetStringField(TEXT("configBackup"), Backup);
