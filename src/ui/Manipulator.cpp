@@ -16,6 +16,7 @@
 #include "scene/OrientPivot.h"
 #include "scene/Relocate.h"
 #include "scene/Rig.h"
+#include "scene/Transform.h"
 #include "geo/Mesh.h"
 #include "ui/GeometrySnap.h"
 #include "ui/GizmoMath.h"
@@ -61,6 +62,25 @@ scene::Space spaceFor(Tool t)
     std::string s = PrefStore::get().value<std::string>("general", key, "world");
     // Normal and component have no meaning for whole objects, so they use their own axes.
     return s == "object" || s == "normal" || s == "component" ? scene::Space::Object : s == "parent" ? scene::Space::Parent : scene::Space::World;
+}
+
+/** The Custom axis orientation: XYZ degrees from the Move settings. */
+glm::dmat3 customFrame()
+{
+    const json v = PrefStore::get().value("general", "/manipulator/customAxis", json::array({0.0, 0.0, 0.0}));
+    glm::dvec3 deg(0.0);
+    if (v.is_array() && v.size() == 3)
+        for (int i = 0; i < 3; ++i)
+            deg[i] = v[size_t(i)].is_number() ? v[size_t(i)].get<double>() : 0.0;
+    return glm::dmat3(scene::eulerToMatrix(deg, scene::RotateOrder::XYZ));
+}
+
+bool customSpace(Tool t)
+{
+    if (t != Tool::Move && t != Tool::Rotate)
+        return false;
+    std::string key = t == Tool::Rotate ? "/manipulator/rotateSpace" : "/manipulator/moveSpace";
+    return PrefStore::get().value<std::string>("general", key, "world") == "custom";
 }
 
 bool normalSpace() { return PrefStore::get().value<std::string>("general", "/manipulator/moveSpace", "world") == "normal"; }
@@ -376,6 +396,8 @@ void Manipulator::refresh()
         }
         else if ((t == Tool::Rotate && rotateComponentSpace()) || (t == Tool::Move && moveComponentSpace()))
             mFrame = scene::selectionNormalFrame();
+        else if (customSpace(t))
+            mFrame = customFrame();
         else
             mFrame = scene::xformops::frame(g, mLead, spaceFor(t));
         if (t == Tool::Move && normalSpace() && !tools::pivotEdit())
@@ -415,6 +437,8 @@ void Manipulator::refresh()
     // Object space is the pivot's own orientation. Scale shows it too: a drag along it bakes the pivot in first.
     bool pivotAxes = (tools::pivotEdit() && t == Tool::Rotate) || (space == scene::Space::Object && (t != Tool::Scale || canBakePivot(g, mLead)));
     mFrame = pivotAxes ? scene::xformops::pivotFrame(g, mLead) : scene::xformops::frame(g, mLead, space);
+    if (customSpace(t) && !(tools::pivotEdit() && t == Tool::Rotate))
+        mFrame = customFrame();
     if (t == Tool::Rotate && !tools::pivotEdit() && gimbalSpace())
     {
         mGimbal = true;
