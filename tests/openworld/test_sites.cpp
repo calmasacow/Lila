@@ -266,3 +266,43 @@ TEST_CASE("site commands: every kind on a coast terrain, slots published, envelo
     ops::execute("siteRemove", {{"args", {"clash"}}});
     CHECK(ops::execute("siteList", json::object()).size() == 11);
 }
+
+TEST_CASE("site commands: moving or turning the site mesh moves the site and its grading in one undo step")
+{
+    loadSitePackages();
+    ops::execute("newScene", json::object());
+    const std::string terrain = coastTerrain();
+    const json made = ops::execute("siteCreate", {{"kind", "compound"}, {"terrain", terrain}, {"at", {-40000, 100000}}, {"id", "yard"}});
+    const std::string mesh = made["mesh"].get<std::string>();
+    auto spec = [&] { return ops::execute("siteInfo", {{"args", {"yard"}}})["spec"]; };
+    auto translate = [&] { return ops::execute("getAttr", {{"args", {mesh + ".translate"}}}); };
+    auto stale = [&] { return issuesOf(ops::execute("siteCheck", {{"args", {"yard"}}}), "groundStale"); };
+
+    ops::execute("move", {{"args", {mesh}}, {"by", {10000, 0, 5000}}});
+    json s = spec();
+    CHECK(s["at"][0].get<double>() == doctest::Approx(-30000));
+    CHECK(s["at"][1].get<double>() == doctest::Approx(105000));
+    CHECK(translate()[0].get<double>() == doctest::Approx(0));
+    CHECK(stale() == 0);
+    CHECK(ops::execute("undoInfo", json::object())["undo"] == "Move Site");
+
+    ops::execute("rotate", {{"args", {mesh}}, {"by", {0, 30, 0}}});
+    s = spec();
+    CHECK(s["heading"].get<double>() == doctest::Approx(30));
+    CHECK(s["at"][0].get<double>() == doctest::Approx(-30000));
+
+    // One undo per drag: the turn, then the move.
+    ops::execute("undo", json::object());
+    CHECK(spec()["heading"].get<double>() == doctest::Approx(0));
+    ops::execute("undo", json::object());
+    s = spec();
+    CHECK(s["at"][0].get<double>() == doctest::Approx(-40000));
+    CHECK(translate()[0].get<double>() == doctest::Approx(0));
+    CHECK(stale() == 0);
+
+    // A transform set some other way is folded in on the next edit.
+    ops::execute("setAttr", {{"args", {mesh + ".translateX", 2000.0}}});
+    const json e = ops::execute("siteEdit", {{"args", {"yard"}}});
+    CHECK(e["fromTransform"] == true);
+    CHECK(e["spec"]["at"][0].get<double>() == doctest::Approx(-38000));
+}
