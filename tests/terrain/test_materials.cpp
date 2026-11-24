@@ -153,6 +153,64 @@ TEST_CASE("materials: layer weights sum to 1 everywhere, match their rules, and 
     CHECK_THROWS(terrain::MaterialRules::fromJson(json{{"layers", {{{"name", "a"}}, {{"name", "a"}}}}}));
 }
 
+TEST_CASE("materials: default layers on a low coast with a deep seabed: sand, grass, forest and rock, no snow")
+{
+    // 20 km across X: seabed down to 3 km under the sea, a coastal plain to 20 m, then hills to 800 m ribbed along Z.
+    geo::Heightfield h = geo::makeHeightfieldCovering({0.0, 0.0}, {2000000.0, 2000000.0}, 257);
+    for (int z = 0; z < h.nz; ++z)
+        for (int x = 0; x < h.nx; ++x)
+        {
+            const glm::dvec2 p = h.samplePos(x, z);
+            const double t = p.x / 2000000.0 + 0.5;
+            double y = 0.0;
+            if (t < 0.3)
+                y = -300000.0 * (0.3 - t) / 0.3;
+            else if (t < 0.55)
+                y = 2000.0 * (t - 0.3) / 0.25;
+            else
+                y = 2000.0 + (t - 0.55) / 0.45 * (40000.0 + 40000.0 * std::sin(p.y * 2.0 * math::kPi / 400000.0));
+            h.heights[h.index(x, z)] = float(y);
+        }
+    const terrain::RulesResult r = terrain::applyMaterialRules(h, terrain::defaultMaterialRules(h, 0.0));
+    CHECK(r.maxSumError < 1e-5);
+    terrain::SurfaceFields fields(h);
+    const std::vector<float>& slope = *fields.get("slope");
+    double snowMax = 0.0, sand = 0.0, grass = 0.0, forest = 0.0;
+    size_t shore = 0, plain = 0, hills = 0;
+    for (size_t k = 0; k < h.size(); ++k)
+    {
+        const float y = h.heights[k];
+        snowMax = std::max(snowMax, double((*h.findMask("layer_snow"))[k]));
+        if (y > 0.0f && y < 200.0f && slope[k] < 5.0f)
+        {
+            sand += (*h.findMask("layer_sand"))[k];
+            ++shore;
+        }
+        else if (y > 800.0f && y < 1900.0f && slope[k] < 5.0f)
+        {
+            grass += (*h.findMask("layer_grass"))[k];
+            ++plain;
+        }
+        else if (y > 10000.0f && slope[k] > 15.0f && slope[k] < 32.0f)
+        {
+            forest += (*h.findMask("layer_forest"))[k];
+            ++hills;
+        }
+    }
+    REQUIRE(shore > 0);
+    REQUIRE(plain > 0);
+    REQUIRE(hills > 0);
+    CHECK(snowMax < 0.01);
+    CHECK(sand / double(shore) > 0.5);
+    CHECK(grass / double(plain) > 0.5);
+    CHECK(forest / double(hills) > 0.4);
+
+    // The same ground with no sea level keeps the relative snow rule: the top of the range.
+    geo::Heightfield dry = h;
+    terrain::applyMaterialRules(dry, terrain::defaultMaterialRules(dry));
+    CHECK(meanOf(*dry.findMask("layer_snow")) > 0.05);
+}
+
 TEST_CASE("biomes: temperature falls with height, the lee is drier, and biome weights sum to 1")
 {
     geo::Heightfield h = geo::makeHeightfieldCovering({0.0, 0.0}, {400000.0, 100000.0}, 257);

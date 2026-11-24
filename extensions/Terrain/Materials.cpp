@@ -577,7 +577,8 @@ RulesResult applyMaterialRules(Heightfield& h, const MaterialRules& r)
                 {
                     const LayerRule& l = r.layers[i];
                     double a = l.opacity * ruleAt(rules[i], k);
-                    if (l.noise.amount > 0.0)
+                    // Noise breaks up the edges of where the rule holds; it never lays the layer where the rule is off.
+                    if (l.noise.amount > 0.0 && a > 0.0)
                         a = matSmooth(a + l.noise.amount * matBreakupNoise(p.x / l.noise.scale, p.y / l.noise.scale, r.seed ^ matNameSeed(l.name)));
                     const double wi = a * remaining;
                     remaining -= wi;
@@ -922,6 +923,9 @@ RulesResult applyBiomes(Heightfield& h, const BiomeSpec& s)
 
 // ---------------------------------------------------------------------------------------------------- default layers
 
+/** Lowest default snow above the sea when the terrain has no temperature: 3 km, so hills and tropical ranges stay clear. */
+constexpr double kDefaultSnowlineCm = 300000.0;
+
 MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> seaLevel)
 {
     auto term = [](const char* input, double lo, double hi, double fade) {
@@ -943,6 +947,20 @@ MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> s
     };
     MaterialRules r;
     r.layers.push_back(layer("grass", {}));
+    if (h.findMask(biomeMask("forest")))
+    {
+        LayerRule l = layer("forest", {}, 0.2, 6000.0);
+        l.biomes = {"forest"};
+        r.layers.push_back(std::move(l));
+    }
+    else
+    {
+        // Wooded hillsides over grassy flats; the coast's first metres stay open.
+        std::vector<Term> where = {term("slope", 10.0, 38.0, 4.0)};
+        if (seaLevel)
+            where.push_back(term("height", *seaLevel + 1500.0, kMatInf, 1000.0));
+        r.layers.push_back(layer("forest", std::move(where), 0.35, 6000.0));
+    }
     r.layers.push_back(layer("dirt", {term("wear", 0.25, kMatInf, 0.15)}, 0.25, 4000.0));
     r.layers.push_back(layer("gravel", {term("deposit", 0.3, kMatInf, 0.15)}, 0.2, 2500.0));
     if (seaLevel)
@@ -953,6 +971,13 @@ MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> s
     const double span = std::max(1.0, range.y - range.x);
     if (h.findMask("temperature"))
         r.layers.push_back(layer("snow", {term("temperature", -kMatInf, -2.0, 2.0), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
+    else if (seaLevel)
+    {
+        // Measured up from the sea, not the seabed, and never below a snowline: low coasts and hills stay clear.
+        const double land = std::max(0.0, range.y - *seaLevel);
+        const double line = *seaLevel + std::max(kDefaultSnowlineCm, 0.82 * land);
+        r.layers.push_back(layer("snow", {term("height", line, kMatInf, std::max(2000.0, 0.04 * land)), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
+    }
     else
         r.layers.push_back(layer("snow", {term("height", range.x + 0.82 * span, kMatInf, 0.04 * span), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
     for (const char* road : {"road", "roads", "roadSurface", "path", "paths"})
