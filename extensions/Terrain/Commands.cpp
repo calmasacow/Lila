@@ -1940,6 +1940,15 @@ void registerContractCommands(ext::Context& ctx)
             };
             const double limit = a.get<double>("cutFillLimit", 500.0);
             const double maxGrade = a.get<double>("maxGrade", 12.0);
+            // A culvert stamp carries the stream past whatever stands over it within a few cells.
+            std::vector<glm::dvec2> culvertPoints;
+            for (const StampEntry& c : stamps)
+                if (c.stamp.kind == "culvert")
+                    for (const glm::dvec3& q : c.result.centreline)
+                        culvertPoints.push_back({q.x, q.z});
+            auto culvertAt = [&](glm::dvec2 p) {
+                return std::any_of(culvertPoints.begin(), culvertPoints.end(), [&](glm::dvec2 q) { return glm::length(q - p) < 3.0 * h.cell; });
+            };
             for (const StampEntry& e : stamps)
             {
                 const json j = stampJson(f, e.stamp, e.result, e.layer);
@@ -1957,15 +1966,38 @@ void registerContractCommands(ext::Context& ctx)
                     if (!e.stamp.polygon.empty())
                     {
                         const std::vector<uint8_t> cover = footprintMask(h, footprintFromPolygon(e.stamp.polygon));
-                        // A stream small enough for the culverts the pad was laid with runs under it.
-                        const std::vector<float>* flow = h.findMask("flow");
-                        auto culverted = [&](size_t i) { return !e.result.culverts.empty() && flow && flow->size() == h.size() && (*flow)[i] < 0.75f; };
+                        std::set<int32_t> reaches;
                         for (size_t i = 0; i < cover.size(); ++i)
-                            if (cover[i] && an->reachOf()[i] >= 0 && an->reaches()[size_t(an->reachOf()[i])].order >= 2 && !culverted(i))
+                            if (cover[i] && an->reachOf()[i] >= 0 && an->reaches()[size_t(an->reachOf()[i])].order >= 2)
+                                reaches.insert(an->reachOf()[i]);
+                        // Each stream under the pad, unless a culvert stamp carries it: its way across, a cell past
+                        // each edge, so a culvert can be laid along it.
+                        for (const int32_t reach : reaches)
+                        {
+                            const std::vector<uint32_t>& cells = an->reaches()[size_t(reach)].cells;
+                            size_t first = cells.size(), last = 0;
+                            bool open = false;
+                            for (size_t k = 0; k < cells.size(); ++k)
+                                if (cover[cells[k]])
+                                {
+                                    first = std::min(first, k);
+                                    last = k;
+                                    const glm::dvec2 p = h.samplePos(int(cells[k] % uint32_t(h.nx)), int(cells[k] / uint32_t(h.nx)));
+                                    open = open || !culvertAt(p);
+                                }
+                            if (!open || first > last)
+                                continue;
+                            json crossing = json::array();
+                            for (size_t k = first > 0 ? first - 1 : first; k <= std::min(last + 1, cells.size() - 1); ++k)
                             {
-                                issue("blocksFlow", about, at, "stands in river " + std::to_string(an->reachOf()[i]));
-                                break;
+                                const glm::dvec2 p = h.samplePos(int(cells[k] % uint32_t(h.nx)), int(cells[k] / uint32_t(h.nx)));
+                                crossing.push_back(worldJson(f.frame.world(p.x, h.heightAt(p.x, p.y), p.y)));
                             }
+                            issue("blocksFlow", about, at, "stands in river " + std::to_string(reach));
+                            issues.back()["reach"] = reach;
+                            issues.back()["order"] = an->reaches()[size_t(reach)].order;
+                            issues.back()["crossing"] = std::move(crossing);
+                        }
                     }
                 }
                 else if (e.stamp.kind == "street")

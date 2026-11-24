@@ -895,18 +895,6 @@ StampResult applyStamp(Heightfield& h, const Stamp& s, const Footprint& f)
     if (r.empty())
         return res;
     const std::vector<uint8_t> core = rasterize(h, r, f);
-    // Small streams a pad covers go under it in culverts, one per few cells, as streets do; rivers are left to the check.
-    if (const std::vector<float>* flow = h.findMask("flow"); flow && flow->size() == h.size() && (s.kind == "pad" || s.kind == "region"))
-        for (int z = r.z0; z <= r.z1; ++z)
-            for (int x = r.x0; x <= r.x1; ++x)
-            {
-                const float v = (*flow)[h.index(x, z)];
-                if (!core[r.at(x, z)] || v < 0.55f || v >= 0.75f)
-                    continue;
-                const glm::dvec2 p = h.samplePos(x, z);
-                if (std::none_of(res.culverts.begin(), res.culverts.end(), [&](glm::dvec2 c) { return glm::length(c - p) < 4.0 * h.cell; }))
-                    res.culverts.push_back(p);
-            }
 
     std::vector<float> ground;
     for (int z = r.z0; z <= r.z1; ++z)

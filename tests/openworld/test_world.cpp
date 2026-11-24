@@ -359,6 +359,12 @@ TEST_CASE("world: the tiny Sinaloa world builds headless from one spec file, rem
     const json leaks = run("realNameCheck");
     CHECK_MESSAGE(leaks.value("ok", false), leaks.dump().substr(0, 800));
 
+    // Site pads standing across streams were laid with culverts: no site stamp blocks a stream.
+    int sitePadsInStreams = 0;
+    for (const json& i : run("terrainCheck", {{"args", {r["terrain"]}}})["issues"])
+        sitePadsInStreams += i["type"] == "blocksFlow" && i["about"].get<std::string>().starts_with("Sites/");
+    CHECK(sitePadsInStreams == 0);
+
     // The spec's walk-in buildings: the capital's police and government palaces, a bar, a mansion, a church, each with an entry.
     std::vector<std::string> enterable;
     for (const json& s : r["steps"])

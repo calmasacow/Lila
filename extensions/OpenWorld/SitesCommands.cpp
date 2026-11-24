@@ -411,6 +411,56 @@ int sendDirect(const std::vector<std::pair<std::string, json>>& direct, const st
     return sent;
 }
 
+/**
+ * Culverts where the sites' pads stand across streams: terrainCheck names each pad over a stream with the stream's way
+ * across it, and a registered culvert is laid along that way, recorded with the site's other stamps so a regrade or
+ * siteRemove takes it away. Returns how many were laid.
+ */
+int layCulverts(const std::vector<SiteRef>& sites, std::vector<json*>& records, const std::string& terrain, std::vector<std::string>& errors)
+{
+    LILA_ZONE();
+    if (terrain.empty() || !ops::find("terrainCheck") || !ops::find("terrainAddFeature"))
+        return 0;
+    json check;
+    try
+    {
+        check = ops::execute("terrainCheck", {{"args", {terrain}}});
+    }
+    catch (const std::exception& e)
+    {
+        errors.push_back(std::string("culverts not laid: terrainCheck failed: ") + e.what());
+        return 0;
+    }
+    const std::string prefix = std::string(kLayer) + "/";
+    json calls = json::array();
+    std::map<std::string, int> perStamp;
+    for (const json& i : check.value("issues", json::array()))
+    {
+        const std::string about = i.value("about", std::string());
+        if (i.value("type", std::string()) != "blocksFlow" || !about.starts_with(prefix) || !i.contains("crossing"))
+            continue;
+        const std::string stamp = about.substr(prefix.size());
+        for (size_t k = 0; k < sites.size(); ++k)
+            if (stamp.starts_with(sites::ownerOf(sites[k].spec.id) + "/"))
+            {
+                json path = json::array();
+                for (const json& p : i["crossing"])
+                    path.push_back({p[0], p[2]});
+                const std::string id = stamp + "/culvert" + std::to_string(perStamp[stamp]++);
+                calls.push_back({{"command", "terrainAddFeature"},
+                                 {"flags", {{"args", {terrain}}, {"kind", "culvert"}, {"id", id}, {"path", path}, {"width", 300.0}, {"layer", kLayer}}}});
+                records[k]->push_back({{"id", id}, {"command", "terrainAddFeature"}, {"layer", kLayer}, {"op", "culvert"}});
+                break;
+            }
+    }
+    if (calls.empty())
+        return 0;
+    const json done = ops::execute("terrainBatch", {{"calls", calls}});
+    for (const json& e : done.value("errors", json::array()))
+        errors.push_back("culvert: " + e.value("error", std::string()));
+    return done.value("ran", 0);
+}
+
 json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
 {
     LILA_ZONE();
@@ -449,6 +499,10 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
         }
     }
     sent += sendDirect(plan.direct, cmd, errors);
+    {
+        std::vector<json*> records = {&record};
+        out["culverts"] = layCulverts({r}, records, terrain, errors);
+    }
     storeGround(r, {{"terrain", terrain}, {"ops", record}, {"hash", layoutGroundHash(r.spec, *L)}});
     out["sent"] = sent;
     out["ops"] = record.size();
@@ -504,6 +558,19 @@ json gradeMany(const std::vector<SiteRef>& sitesIn, const std::string& cmd)
         }
     }
     sent += sendDirect(direct, cmd, errors);
+    int culverts = 0;
+    for (const std::string& t : std::set<std::string>(terrains.begin(), terrains.end()))
+    {
+        std::vector<SiteRef> on;
+        std::vector<json*> records;
+        for (size_t i = 0; i < sitesIn.size(); ++i)
+            if (terrains[i] == t && plans[i].layout)
+            {
+                on.push_back(sitesIn[i]);
+                records.push_back(&plans[i].record);
+            }
+        culverts += layCulverts(on, records, t, errors);
+    }
     for (size_t i = 0; i < sitesIn.size(); ++i)
         if (!terrains[i].empty() && plans[i].layout)
         {
@@ -512,7 +579,7 @@ json gradeMany(const std::vector<SiteRef>& sitesIn, const std::string& cmd)
         }
     for (const std::string& e : errors)
         log::warn("{}", e);
-    return {{"sites", out}, {"sent", sent}, {"errors", errors}};
+    return {{"sites", out}, {"sent", sent}, {"culverts", culverts}, {"errors", errors}};
 }
 
 // Info
@@ -1229,7 +1296,7 @@ void registerSites(ext::Context& ctx)
     ctx.registerCommand({
         .name = "siteGround",
         .doc = "Grade the terrain under a site again from its spec (after editing the terrain, or with ground=False edits), or take "
-               "everything the site put on the terrain off it with remove=True. Returns what was sent and removed.",
+               "everything the site put on the terrain off it with remove=True. Lays a culvert where one of its pads stands across a stream. Returns what was sent and removed and the culverts laid.",
         .positionalDoc = "site mesh, modifier or id",
         .flags = {{"remove", "rm", T::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."},
                   {"sites", "s", T::List, nullptr, "Several sites graded in one terrain change (ids or meshes); every site with all=True."},
