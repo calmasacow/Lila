@@ -77,7 +77,7 @@ void ensureGroup()
     json inputs = json::array({
         {{"name", "spec"}, {"type", "string"}, {"default", "[]"}, {"description", "Buildings as JSON (buildingCreate)."}},
         {{"name", "edits"}, {"type", "string"}, {"default", "{}"}, {"description", "Edits by building id (buildingEdit)."}},
-        {{"name", "lod"}, {"type", "string"}, {"default", "near"}, {"description", "near, hlod or far."}},
+        {{"name", "lod"}, {"type", "string"}, {"default", "near"}, {"description", "near, hlod, far or auto (by camera distance)."}},
         {{"name", "cell"}, {"type", "string"}, {"default", ""}, {"description", "Cell (x_z) or building id."}},
         {{"name", "modules"}, {"type", "bool"}, {"default", true}, {"description", "Draw modules."}},
     });
@@ -1583,10 +1583,12 @@ void registerCommands(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "buildingLod",
-        .doc = "What building meshes show: near (shell and modules), hlod (a simplified proxy: tiers and roofs, no openings) or far "
-               "(flat-roof massing). Per mesh, so per cell. Slots stay published whatever is shown.",
+        .doc = "What building meshes show: near (shell and modules), hlod (a simplified proxy: tiers and roofs, no openings), far "
+               "(flat-roof massing) or auto (near, hlod or far by the mesh's distance from the viewport camera; the distances are "
+               "the prefs buildings/lodNear and buildings/lodFar, default 400 m and 2 km). Per mesh, so per cell. Slots stay "
+               "published whatever is shown.",
         .positionalDoc = "building meshes (default every one)",
-        .flags = {{"lod", "l", T::String, "near", "near, hlod or far.", {"near", "hlod", "far"}}},
+        .flags = {{"lod", "l", T::String, "near", "near, hlod, far or auto.", {"near", "hlod", "far", "auto"}}},
         .run = [](const Args& a) -> json {
             const std::string lod = a.get<std::string>("lod", "near");
             int n = 0;

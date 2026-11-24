@@ -57,12 +57,18 @@ struct Published
     double ms = 0.0;      // last evaluation, milliseconds
     int generated = 0;    // buildings generated (cache misses) in it
     size_t slots = 0, faces = 0;
+    /** The lod input is auto: what shows follows the camera (setViewLod). */
+    bool autoLod = false;
+    /** The buildings' footprints at their ground, world space. */
+    Vec3 lo{1e300}, hi{-1e300};
 };
 std::shared_ptr<const Published> published(uint64_t modifier);
 std::vector<std::shared_ptr<const Published>> allPublished();
 void forgetPublished(uint64_t modifier);
 
 void registerNode(lila::ext::Context& ctx);
+/** What a modifier with lod auto shows (near, hlod or far); true when it changed, so the caller reruns it. */
+bool setViewLod(uint64_t modifier, const std::string& lod);
 /** Leaves one building's shell and modules out of its mesh (Edit Rooms' cutaway); empty for none. True when it changed. */
 bool setCutawayBuilding(const std::string& id);
 /** Drops cached generation results (after a style edit). */
@@ -83,6 +89,8 @@ std::string& currentBuilding();
 void refreshSections();
 void registerAgent(lila::ext::Context& ctx);
 void registerUnreal(lila::ext::Context& ctx);
+/** Switches lod auto building meshes between near, hlod and far by their distance from the viewport camera. */
+void registerViewLod(lila::ext::Context& ctx);
 /** Rebuilds a settlement's stale buildings after commands that edit it. */
 void registerLiveRefresh(lila::ext::Context& ctx);
 void unregisterLiveRefresh();

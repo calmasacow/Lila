@@ -31,7 +31,7 @@ bool editsSettlement(std::string_view name)
     return def && def->undoable;
 }
 
-void follow(const ExecuteEvent& e)
+void followSettlement(const ExecuteEvent& e)
 {
     static bool busy = false;
     if (busy || !e.done || !e.ok || ops::previewing() || UndoStack::get().replaying() || !editsSettlement(e.name))
@@ -66,7 +66,7 @@ void follow(const ExecuteEvent& e)
 void registerLiveRefresh(lila::ext::Context&)
 {
     unregisterLiveRefresh();
-    gListener = ops::addExecuteListener(follow);
+    gListener = ops::addExecuteListener(followSettlement);
 }
 
 void unregisterLiveRefresh()
