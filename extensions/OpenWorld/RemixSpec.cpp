@@ -200,7 +200,7 @@ json toJson(const RemixSpec& s)
                 {"pins", pins},
                 {"warp", {{"falloff", s.warp.falloff}, {"maxSteps", s.warp.maxSteps}}},
                 {"bathymetry", s.bathymetry},
-                {"seams", {{"width", s.seams.width}, {"erosion", s.seams.erosion}, {"detail", s.seams.detail}, {"roads", s.seams.roads},
+                {"seams", {{"width", s.seams.width}, {"maxSlope", s.seams.maxSlope}, {"erosion", s.seams.erosion}, {"detail", s.seams.detail}, {"roads", s.seams.roads},
                            {"roadReach", s.seams.roadReach}, {"rivers", s.seams.rivers}, {"coast", s.seams.coast}, {"seed", s.seams.seed}}},
                 {"view", s.view}};
     if (s.origin)
@@ -344,8 +344,9 @@ RemixSpec specFromJson(const json& j)
     if (j.contains("seams"))
     {
         const json& m = j["seams"];
-        onlyKeys(m, {"width", "erosion", "detail", "roads", "roadReach", "rivers", "coast", "seed"}, "seams.");
+        onlyKeys(m, {"width", "maxSlope", "erosion", "detail", "roads", "roadReach", "rivers", "coast", "seed"}, "seams.");
         s.seams.width = std::max(0.0, num(m, "width", s.seams.width, "seams."));
+        s.seams.maxSlope = std::max(0.0, num(m, "maxSlope", s.seams.maxSlope, "seams."));
         s.seams.erosion = std::clamp(num(m, "erosion", s.seams.erosion, "seams."), 0, 2000);
         s.seams.detail = std::max(0.0, num(m, "detail", s.seams.detail, "seams."));
         s.seams.roads = num(m, "roads", s.seams.roads, "seams.");
@@ -443,6 +444,10 @@ json remixSpecSchema()
            {{"type", "object"},
             {"properties",
              {{"width", {{"type", "number"}, {"description", "Blend band cm. Default 1500."}}},
+              {"maxSlope",
+               {{"type", "number"},
+                {"description", "Steepest seam slope (rise over run) before a pasted region without its own seam gets a wider band. "
+                                "Default 0.35; 0 keeps width."}}},
               {"erosion", {{"type", "integer"}, {"description", "Erosion steps re-run in seam bands."}}},
               {"detail", {{"type", "number"}}},
               {"roads", {{"type", "boolean"}, {"description", "Reconnect cut roads with terrainRoute, keeping their class."}}},

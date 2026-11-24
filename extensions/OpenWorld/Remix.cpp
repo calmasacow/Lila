@@ -20,6 +20,7 @@
 #include <cmath>
 #include <deque>
 #include <filesystem>
+#include <format>
 #include <list>
 #include <mutex>
 #include <set>
@@ -410,6 +411,40 @@ struct Sample
 };
 
 /** The base map at b: sources blended in order (later on top) over the sea floor; flat sea in a source takes the floor too. */
+Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks);
+
+/**
+ * The seam band a pasted region needs so the step between it and the land around stays under seams.maxSlope: the
+ * height step along its edge (90th percentile, so a few spikes don't widen it all) over the slope, with smoothstep's
+ * peak of 1.5 times the mean. At most a quarter of the region's smaller side, so its core stays as it was.
+ */
+double autoSeam(const Work& w, const MaskSet& m, const Heightfield& h, const Polygon& t, const Rigid& motion, double band)
+{
+    std::vector<double> steps;
+    std::vector<float> mk(m.names.size());
+    Vec2 lo(1e300), hi(-1e300);
+    for (size_t i = 0; i < t.size(); ++i)
+    {
+        const Vec2 a = t[i], b = t[(i + 1) % t.size()];
+        lo = glm::min(lo, a), hi = glm::max(hi, a);
+        const int n = std::max(1, int(glm::length(b - a) / h.cell));
+        for (int k = 0; k < n; ++k)
+        {
+            const Vec2 q = a + (b - a) * (double(k) / n);
+            const int x = int(std::round((q.x - h.origin.x) / h.cell)), z = int(std::round((q.y - h.origin.y) / h.cell));
+            if (x < 0 || z < 0 || x >= h.nx || z >= h.nz)
+                continue;
+            steps.push_back(std::abs(baseSample(w, m, motion.inverse(q), mk.data()).height - h.heights[h.index(x, z)]));
+        }
+    }
+    if (steps.empty())
+        return band;
+    std::sort(steps.begin(), steps.end());
+    const double step = steps[size_t(0.9 * double(steps.size() - 1))];
+    const double cap = 0.25 * std::min(hi.x - lo.x, hi.y - lo.y);
+    return std::max(band, std::min(cap, 1.5 * step / w.spec.seams.maxSlope));
+}
+
 Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
 {
     Sample out;
@@ -962,7 +997,15 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
             continue;
         const Polygon& t = w.targets[r];
         const Rigid motion = reg.rigid();
-        const double band = std::max(spec.seamOf(reg), h.cell);
+        double band = std::max(spec.seamOf(reg), h.cell);
+        if (!reg.seam && spec.seams.maxSlope > 0.0)
+            if (const double widened = autoSeam(w, m, h, t, motion, band); widened > band)
+            {
+                out.notes.push_back(std::format("region {}: seam widened to {:.0f} m for its height step at the edge (seams.maxSlope {:.2f}; "
+                                                "give the region a seam to fix it)",
+                                                reg.id, widened / 100.0, spec.seams.maxSlope));
+                band = widened;
+            }
         Vec2 tlo(1e300), thi(-1e300);
         for (Vec2 p : t)
             tlo = glm::min(tlo, p), thi = glm::max(thi, p);
