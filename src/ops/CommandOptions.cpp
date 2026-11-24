@@ -411,6 +411,11 @@ std::vector<Field> fields(std::string_view command, const json& fixed)
         bool overriddenChoices = o && o->choices.contains(flag.name);
         if (o && contains(o->hidden, flag.name))
             continue;
+        // A field that only applies under values of a flag the call already fixes otherwise can never apply.
+        if (o)
+            if (auto w = o->enabledWhen.find(flag.name); w != o->enabledWhen.end() && fixed.is_object() && fixed.contains(w->second.first))
+                if (const json& v = fixed[w->second.first]; !v.is_string() || !contains(w->second.second, v.get<std::string>()))
+                    continue;
         if (!forced && (flag.name == "name" || (flag.type == ArgType::List && flag.nodeType.empty())))
             continue;
         if (!forced && flag.type == ArgType::Any && !overriddenChoices && choicesFromDoc(flag.doc, flag.defaultValue).empty())

@@ -422,7 +422,7 @@ private:
             const auto w = mFieldWidgets.find(flag);
             if (w == mFieldWidgets.end())
                 continue;
-            const json v = mValues.contains(when.first) ? mValues[when.first] : mDefaults[when.first];
+            const json v = mCall.contains(when.first) ? mCall[when.first] : mValues.contains(when.first) ? mValues[when.first] : mDefaults[when.first];
             const bool warned = mWarningShown && std::find(o->warned.begin(), o->warned.end(), flag) != o->warned.end();
             const bool on = !warned && v.is_string() && std::find(when.second.begin(), when.second.end(), v.get<std::string>()) != when.second.end();
             for (QWidget* x : {w->second.first, w->second.second})
