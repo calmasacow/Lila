@@ -19,9 +19,11 @@ namespace LilaLink
  *
  * Landscape mode also takes per spline layer (paint layer, added to the landscape when missing), layerWidth (share of the width
  * it paints, 0-1) and deform (overrides deformTerrain), and replies paintLayers, paintLayersAdded and regionsLoaded (landscape
- * regions a World Partition level had unloaded, loaded so the redraw reaches them).
+ * regions a World Partition level had unloaded, loaded so the redraw reaches them). Paint layers it adds are Lila's (an
+ * ALandscape tag LilaLink.PaintLayer:<layer>): once no landscape spline paints one, it leaves the landscape and Lila's
+ * generated material, unless something other than splines painted it. paintLayersRemoved lists them.
  *
- * removeSpline {id} deletes what setSpline made for id. Replies {removed, regionsLoaded}.
+ * removeSpline {id} deletes what setSpline made for id. Replies {removed, regionsLoaded, paintLayersRemoved}.
  */
 void AddSplineMethods(TMap<FString, FLilaLinkMethod>& Methods);
 
@@ -42,7 +44,7 @@ FBox SplineBounds(const ULandscapeSplinesComponent* Component, const FString& Pr
 
 /**
  * Has the landscape redraw its splines edit layer now (added first with bAddLayer) and marks the regions it changed dirty for
- * Save All.
+ * Save All. Lila's paint layers no spline paints any more go first; their names are added to LayersRemoved.
  */
-void RedrawSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings);
+void RedrawSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings, TArray<FString>* LayersRemoved = nullptr);
 } // namespace LilaLink

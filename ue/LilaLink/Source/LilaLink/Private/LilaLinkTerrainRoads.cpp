@@ -421,12 +421,17 @@ TSharedPtr<FJsonValue> SetTerrainRoads(const TSharedPtr<FJsonObject>& Params, FS
 	Component->MarkRenderStateDirty();
 	Component->MarkPackageDirty();
 	// Also when nothing deforms: a re-send that turns it off takes the earlier shape and paint out of the landscape.
-	LilaLink::RedrawSplineLayer(Landscape, bDeforms, Warnings);
+	TArray<FString> LayersRemoved;
+	LilaLink::RedrawSplineLayer(Landscape, bDeforms, Warnings, &LayersRemoved);
 
-	TArray<TSharedPtr<FJsonValue>> WarningValues;
+	TArray<TSharedPtr<FJsonValue>> WarningValues, RemovedValues;
 	for (const FString& W : Warnings)
 	{
 		WarningValues.Add(MakeShared<FJsonValueString>(W));
+	}
+	for (const FString& L : LayersRemoved)
+	{
+		RemovedValues.Add(MakeShared<FJsonValueString>(L));
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetStringField(TEXT("actor"), OwnerPath);
@@ -435,6 +440,7 @@ TSharedPtr<FJsonValue> SetTerrainRoads(const TSharedPtr<FJsonObject>& Params, FS
 	Out->SetNumberField(TEXT("controlPoints"), PointCount);
 	Out->SetNumberField(TEXT("segments"), SegmentCount);
 	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
+	Out->SetArrayField(TEXT("paintLayersRemoved"), RemovedValues);
 	Out->SetArrayField(TEXT("warnings"), WarningValues);
 	UE_LOG(LogLilaLink, Log, TEXT("setTerrainRoads: %d road(s) on %s"), Roads.Num(), *Landscape->GetActorLabel());
 	return MakeShared<FJsonValueObject>(Out);
@@ -490,19 +496,24 @@ TSharedPtr<FJsonValue> RemoveTerrainRoads(const TSharedPtr<FJsonObject>& Params,
 			}
 		}
 	}
-	TArray<FString> Warnings;
+	TArray<FString> Warnings, LayersRemoved;
 	for (ALandscape* Landscape : Reshaped)
 	{
-		LilaLink::RedrawSplineLayer(Landscape, /*bAddLayer=*/false, Warnings);
+		LilaLink::RedrawSplineLayer(Landscape, /*bAddLayer=*/false, Warnings, &LayersRemoved);
 	}
-	TArray<TSharedPtr<FJsonValue>> WarningValues;
+	TArray<TSharedPtr<FJsonValue>> WarningValues, RemovedValues;
 	for (const FString& W : Warnings)
 	{
 		WarningValues.Add(MakeShared<FJsonValueString>(W));
 	}
+	for (const FString& L : LayersRemoved)
+	{
+		RemovedValues.Add(MakeShared<FJsonValueString>(L));
+	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetBoolField(TEXT("removed"), bRemoved);
 	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
+	Out->SetArrayField(TEXT("paintLayersRemoved"), RemovedValues);
 	Out->SetArrayField(TEXT("warnings"), WarningValues);
 	return MakeShared<FJsonValueObject>(Out);
 }
