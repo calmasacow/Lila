@@ -352,6 +352,9 @@ Spec Spec::fromEnvelope(const json& env, const std::string& settlement)
     Spec s;
     s.source = "settlement";
     uint64_t key = env.value("lotId", uint64_t(0));
+    // Site kit envelopes carry no lot: their stable id keys them instead.
+    if (key == 0 && env.contains("id") && env["id"].is_string())
+        key = fnv(env["id"].get<std::string>());
     if (key == 0)
         key = fnv(settlement + "/" + std::to_string(env.value("lot", 0)));
     s.key = key;
