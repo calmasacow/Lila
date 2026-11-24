@@ -521,20 +521,12 @@ json fillLayerGaps(const std::string& set, const std::string& terrain, const std
 void removeBuilt(const WorldRef& w)
 {
     Graph& g = Graph::current();
-    for (const json& s : w.built.value("sites", json::array()))
-        if (s.is_string())
-            try
-            {
-                run("siteRemove", {{"args", {s}}});
-            }
-            catch (const std::exception&)
-            {
-            }
+    // The made nodes go first (terrain, building groups, settlements, zones): the sites' removal then has no terrain to
+    // regrade and no site buildings to rebuild, which on a big world is most of the cost.
     std::vector<std::string> gone;
-    for (const char* k : {"nodes"})
-        for (const json& n : w.built.value(k, json::array()))
-            if (n.is_string() && g.find(n.get<std::string>()))
-                gone.push_back(g.find(n.get<std::string>())->path());
+    for (const json& n : w.built.value("nodes", json::array()))
+        if (n.is_string() && g.find(n.get<std::string>()))
+            gone.push_back(g.find(n.get<std::string>())->path());
     if (g.find(w.node))
         gone.push_back(w.node);
     // A parent and its child both listed: delete the parents only.
@@ -546,6 +538,15 @@ void removeBuilt(const WorldRef& w)
             roots.push_back(p);
     if (!roots.empty())
         run("delete", {{"args", roots}});
+    for (const json& s : w.built.value("sites", json::array()))
+        if (s.is_string())
+            try
+            {
+                run("siteRemove", {{"args", {s}}});
+            }
+            catch (const std::exception&)
+            {
+            }
 }
 
 json buildWorld(json spec, const BuildOptions& o)
