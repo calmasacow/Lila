@@ -1368,6 +1368,9 @@ void MaterialEditor::rebuild()
     });
     color("Base Color", kBaseColor);
     texture("Base Color Map", "baseColor", kBaseColorMap);
+    check("Instance Color", kInstanceColor)
+        ->setToolTip("Colours instances carry (liveries, building palettes) replace the base colour or tint the base colour map. "
+                     "Off keeps this material's own colour.");
     slider("Metallic", kMetallic, 0.0, 1.0);
     texture("Metallic Map", "metallic", kMetallicMap);
     slider("Specular", kSpecular, 0.0, 1.0);
