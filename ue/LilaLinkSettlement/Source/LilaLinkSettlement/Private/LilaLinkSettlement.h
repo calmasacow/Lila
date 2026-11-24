@@ -24,6 +24,10 @@
  *
  * removeSettlement {id} deletes the ZoneGraph actor made for id. Replies {removed}.
  *
+ * Lane profiles, tags and MassTraffic's lane filters live in the project's DefaultPlugins.ini: before a send changes it,
+ * the file as it was is copied to Saved/LilaLink/ConfigBackups (a .absent note when it did not exist yet), and the reply
+ * names the copy as configBackup.
+ *
  * setRoadGrammar {asset, label, modules: [{symbol, size, scalable}], grammar} writes a road cross-section as a PCG data
  * asset: pin ModulesInfo (Symbol, Size, Scalable, DebugColor per module, as Subdivide Segment reads them) and pin Grammar
  * (a Grammar string attribute). Replies {asset, modules}.
@@ -50,6 +54,11 @@ inline const FString Feature = TEXT("settlement");
 inline const FString CellsFeature = TEXT("settlementCells");
 void RegisterMethods();
 void RegisterCellMethods();
+/**
+ * Saves Settings to its project ini (TryUpdateDefaultConfigFile); when that changes the file, the file as it was is kept
+ * in Saved/LilaLink/ConfigBackups first. Returns the backup's path, empty when the file did not change.
+ */
+FString UpdateProjectIni(UObject* Settings);
 /** setSettlementData's work: writes the PCG data asset Params name. Null with OutError set on failure. */
 TSharedPtr<FJsonValue> WriteSettlementData(const TSharedPtr<FJsonObject>& Params, FString& OutError);
 } // namespace LilaLinkSettlement
