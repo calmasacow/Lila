@@ -683,7 +683,10 @@ TEST_CASE("terrain inputs: terrainImportOsm drapes curves on the terrain, adds l
     const std::string road = o["curves"]["road"];
     CHECK(run("getAttr", {{"args", {road + ".terrainFeature"}}}) == "road");
     const json feats = json::parse(run("getAttr", {{"args", {road + ".osmFeatures"}}}).get<std::string>());
-    CHECK(feats[0]["name"] == "Main & High");
+    // Every name is fictional; the real one is kept only in the hidden source attribute.
+    CHECK(feats[0]["name"] != "Main & High");
+    CHECK_FALSE(feats[0]["name"].get<std::string>().empty());
+    CHECK(json::parse(run("getAttr", {{"args", {road + ".sourceNames"}}}).get<std::string>())["100"] == "Main & High");
     // Draped: every point sits on the ground.
     const json data = run("curveData", {{"args", {road}}, {"worldSpace", true}});
     double worst = 0.0;
