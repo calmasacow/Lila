@@ -849,3 +849,30 @@ TEST_CASE("interiors commands: clutter strewn on every room's floor through Set 
     const json again = run("buildingMakeEnterable", {{"args", {"building:4a1"}}, {"clutter", {crate}}, {"clutterDensity", 1.0}, {"settle", false}});
     CHECK(again["buildings"][0]["clutter"]["placed"] == c["placed"]);
 }
+
+TEST_CASE("interiors commands: compact stairs land in the room with room to step off, and buildingCheck stays clean")
+{
+    loadPackages(false);
+    run("newScene");
+    // Small square houses fit only a dog-leg, a narrow one a straight flight.
+    run("buildingCreate", {{"envelopes", json::array({env(0x5a1, 0, 0, 480, 480, 3, "residential", "residential"),
+                                                       env(0x5a2, 2000, 0, 200, 1200, 4, "residential", "residential"),
+                                                       env(0x5a3, 4000, 0, 440, 440, 3, "residential", "residential")})},
+                           {"name", "Compact"}});
+    const json made = run("buildingMakeEnterable", {{"args", {"building:5a1", "building:5a2", "building:5a3"}}});
+    REQUIRE(made["count"] == 3);
+    std::set<std::string> kinds;
+    for (const char* b : {"building:5a1", "building:5a2", "building:5a3"})
+    {
+        const json info = run("buildingInterior", {{"args", {b}}});
+        for (const json& st : info["stairs"])
+            kinds.insert(st["kind"].get<std::string>());
+    }
+    CHECK(kinds.contains("dogleg"));
+    CHECK(kinds.contains("straight"));
+    // Each archway onto a compact stair has floor in front of it: a door check ray started 40 cm back meets no wall.
+    const json check = run("buildingCheck");
+    CAPTURE(check.dump());
+    CHECK(check["counts"]["doorNoOpening"] == 0);
+    CHECK(check["counts"]["roomUnreachable"] == 0);
+}

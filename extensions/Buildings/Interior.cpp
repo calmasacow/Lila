@@ -1872,7 +1872,9 @@ void placeCore(Gen& x, const std::vector<int>& served, Vec2 preferW, bool houseL
         }
     std::sort(windows.begin(), windows.end());
     windows.erase(std::unique(windows.begin(), windows.end()), windows.end());
-    for (int attempt = 0; attempt < 4; ++attempt)
+    // Every kind with room to step off its landing first; only then compact stairs whose landing is a shallow strip.
+    constexpr std::pair<int, bool> kTries[] = {{0, false}, {1, false}, {2, false}, {3, false}, {2, true}, {3, true}};
+    for (const auto& [attempt, shallow] : kTries)
     {
         const CoreDims d = coreDims(x, hMax, lift, attempt);
         const int nL = int(std::lround(d.L / x.g.c)), nW = int(std::lround(d.coreW / x.g.c));
@@ -1889,21 +1891,24 @@ void placeCore(Gen& x, const std::vector<int>& served, Vec2 preferW, bool houseL
                     if (!full(i0, j0, ni, nj))
                         continue;
                     // The landing's open side must face cells of the plate; a straight flight's far end too, where it arrives.
+                    // A compact stair lands in the room: two cells clear in front of it, so a character can step off.
+                    const int rows = d.kind == CoreKind::U || shallow ? 1 : 2;
                     auto openAt = [&](bool farEnd) {
                         int open = 0, total = 0;
                         const bool low = (dir == 0 || dir == 2) != farEnd;
-                        if (alongU)
-                        {
-                            const int ia = low ? i0 - 1 : i0 + ni;
-                            for (int j = j0; j < j0 + nj; ++j, ++total)
-                                open += ia >= 0 && ia < x.g.nx && fit[size_t(x.g.id(ia, j))] ? 1 : 0;
-                        }
-                        else
-                        {
-                            const int ja = low ? j0 - 1 : j0 + nj;
-                            for (int i = i0; i < i0 + ni; ++i, ++total)
-                                open += ja >= 0 && ja < x.g.nz && fit[size_t(x.g.id(i, ja))] ? 1 : 0;
-                        }
+                        for (int k = 1; k <= rows; ++k)
+                            if (alongU)
+                            {
+                                const int ia = low ? i0 - k : i0 + ni - 1 + k;
+                                for (int j = j0; j < j0 + nj; ++j, ++total)
+                                    open += ia >= 0 && ia < x.g.nx && fit[size_t(x.g.id(ia, j))] ? 1 : 0;
+                            }
+                            else
+                            {
+                                const int ja = low ? j0 - k : j0 + nj - 1 + k;
+                                for (int i = i0; i < i0 + ni; ++i, ++total)
+                                    open += ja >= 0 && ja < x.g.nz && fit[size_t(x.g.id(i, ja))] ? 1 : 0;
+                            }
                         return open * 10 >= total * 7;
                     };
                     if (!openAt(false) || (d.kind == CoreKind::Straight && !openAt(true)))
@@ -1971,6 +1976,8 @@ void placeCore(Gen& x, const std::vector<int>& served, Vec2 preferW, bool houseL
             x.out.notes.push_back("the stair is a straight flight on each floor: the floors are too narrow for a dog-leg");
         if (lift && !d.lift)
             x.out.notes.push_back("no lift: the floors only fit a compact stair");
+        if (shallow)
+            x.out.notes.push_back("the stair's landing is a shallow strip: the floors are too small for room in front of it");
         for (int pi : served)
         {
             x.plates[size_t(pi)].core = int(x.cores.size());

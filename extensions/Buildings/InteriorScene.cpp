@@ -733,20 +733,31 @@ json interiorIssues(const std::vector<std::string>& ids, const CharacterProfile&
         std::vector<geo::MeshBvh> bvhs(keep.size());
         for (size_t k = 0; k < keep.size(); ++k)
             bvhs[k].build(*keep[k]);
-        for (const InteriorDoor& d : in->doors)
-        {
-            const Vec3 mid = d.origin + Vec3(0.0, std::min(100.0, d.height * 0.5), 0.0);
-            const Vec3 from = mid - d.normal * 40.0;
-            bool blocked = false;
+        auto blockedAt = [&](const Vec3& mid, const Vec3& normal) {
+            const Vec3 from = mid - normal * 40.0;
             for (const geo::MeshBvh& b : bvhs)
             {
                 geo::BvhHit hit;
-                if (b.raycast(from, d.normal, hit) && hit.t < 80.0)
+                if (b.raycast(from, normal, hit) && hit.t < 80.0)
+                    return true;
+            }
+            return false;
+        };
+        for (const InteriorDoor& d : in->doors)
+        {
+            const Vec3 mid = d.origin + Vec3(0.0, std::min(100.0, d.height * 0.5), 0.0);
+            // An open archway onto a compact stair has the flights' spine behind its middle: any clear lane through it will do.
+            std::vector<double> lanes = {0.0};
+            if (d.open)
+                lanes = {0.0, -0.3, 0.3, -0.15, 0.15};
+            const Vec3 across = glm::normalize(glm::cross(Vec3(0.0, 1.0, 0.0), d.normal));
+            bool blocked = true;
+            for (double f : lanes)
+                if (!blockedAt(mid + across * (f * d.width), d.normal))
                 {
-                    blocked = true;
+                    blocked = false;
                     break;
                 }
-            }
             if (blocked)
             {
                 issues.push_back({{"kind", "doorNoOpening"}, {"building", id}, {"id", d.id}, {"what", d.id + ": the wall has no opening for this door"},
