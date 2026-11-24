@@ -4,6 +4,7 @@
 #include "geo/Mesh.h"
 #include "geo/Primitives.h"
 #include "gn/Geometry.h"
+#include "gn/Gn.h"
 #include "scene/Graph.h"
 #include "scene/MeshNodes.h"
 #include "scene/Modifiers.h"
@@ -141,8 +142,10 @@ namespace detail
 void touchPublishers()
 {
     Graph& g = Graph::current();
+    // A generator node that publishes its own slots (site kits, buildings) keeps its step result while its inputs stay the
+    // same, so a rule or override would not reach its instances until the modifier runs again from scratch.
     for (NodeId n : publishedNodes())
-        if (g.node(n))
+        if (g.node(n) && !gn::rerunModifier(g, n))
             g.touch(n);
     for (NodeId id : g.nodes())
         if (const Node* n = g.node(id); n && n->type().isA(kSetType))
