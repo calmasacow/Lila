@@ -9747,6 +9747,144 @@ def slideMedia(*objects: Any, frames: float | None = None, f: float | None = Non
         slideMedia('shot010', 'shot010Ref', frames=-6)
     """
 
+def slotFind(type: str | None = None, region: str | None = None, tag: Any | None = None, owner: str | None = None, id: Any | None = None, rule: str | None = None, near: Sequence[Any] | None = None, radius: float | None = None, limit: int | None = None, full: bool | None = None, select: bool | None = None, *, t: str | None = None, r: str | None = None, tg: Any | None = None, o: str | None = None, ru: str | None = None, n: Sequence[Any] | None = None, rad: float | None = None, l: int | None = None, f: bool | None = None, sl: bool | None = None) -> Any:
+    """Find slots by type, region, tag, owner, rule or distance, with each one's resolved payload and what decided it (default, rule:<id>, override, pin). select=True selects the nodes publishing them.
+
+    Args:
+        type: Type pattern: "door" covers every door, "door.*" only the subtypes, a comma list any. Short form t.
+        region: A region the slot lies in ("settlement:Town", "district:" for any district). Short form r.
+        tag: Tags the slot must all carry (one or a list). Short form tg.
+        owner: Owner id or a prefix of it ("lot/1a2b"). Short form o.
+        id: Exact slot ids (one or a list).
+        rule: Only slots this rule applies to. Short form ru.
+        near: [x, y, z]: nearest first (with radius, only within it). Short form n.
+        radius: With near: furthest distance, cm; 0 for any. Short form rad. Default 0.0.
+        limit: Most slots listed, 0 for all; count is always the full number. Short form l. Default 500.
+        full: Add regions, tags, default payload and matrix. Short form f. Default False.
+        select: Select the nodes publishing them. Short form sl. Default False.
+
+    Examples:
+        slotFind(type='sign.storefront', region='district:', limit=10)
+
+        slotFind(near=[0, 0, 0], radius=5000, select=True)
+    """
+
+def slotPin(*objects: Any, owner: str | None = None, remove: bool | None = None, o: str | None = None, rm: bool | None = None) -> Any:
+    """Pin slots, or every slot of an owner (a building, block or arrangement), as they are now: regenerating leaves them where they are with what they show, and differences are reported as conflicts. With no key, lists the pins.
+
+    Args:
+        objects: slot id, or owner:<owner id>.
+        owner: Pin every slot of this owner (same as owner:<id>). Short form o.
+        remove: Unpin. Short form rm. Default False.
+
+    Examples:
+        slotPin('owner:settlement:Town/lot/1a2b')
+
+        slotPin('b/12/f0/door0', remove=True)
+
+        slotPin()
+    """
+
+def slotPublish(*objects: Any, slots: Sequence[Any] | None = None, parent: str | None = None, source: str | None = None, s: Sequence[Any] | None = None, p: str | None = None, src: str | None = None) -> Any:
+    """Write slots into a slotSet node (made under parent when missing), for scripts and generators without nodes of their own. Each slot: {id | owner + path, type, matrix (16, column-major) | position [x, y, z] + rotateY degrees, regions, tags, payload}. Pinned slots keep their pinned frame.
+
+    Args:
+        objects: slotSet name.
+        slots: The slots, world space. Short form s.
+        parent: Node to put a new slotSet under. Short form p.
+        source: What wrote them (shown on the node). Short form src.
+
+    Examples:
+        slotPublish('shopSlots', slots=[{'owner': 'lot/7', 'path': 'f0/door', 'type': 'door.shop', 'position': [0, 0, 500]}])
+    """
+
+def slotReport(validate: bool | None = None, *, v: bool | None = None) -> Any:
+    """Counts of slots per type, rule and owner, the rules with how many slots each covers, orphaned overrides (with the nearest slot of their type to reassign to), pin conflicts, duplicate ids, unregistered types and payloads that fell back to placeholders. validate=True also lists them in the Validation panel.
+
+    Args:
+        validate: Report problems to the Validation panel too. Short form v. Default True.
+
+    Examples:
+        r = slotReport()
+        r['byType'], r['orphans']
+    """
+
+def slotRule(*objects: Any, id: str | None = None, name: str | None = None, level: str | None = None, type: str | None = None, region: str | None = None, owner: str | None = None, tag: Sequence[Any] | None = None, enabled: bool | None = None, index: int | None = None, rule: Any | None = None, replacePayload: bool | None = None, item: str | None = None, pool: Sequence[Any] | None = None, poolTag: str | None = None, mesh: str | None = None, placeholder: str | None = None, unrealMesh: str | None = None, unrealClass: str | None = None, hidden: bool | None = None, data: Any | None = None, nm: str | None = None, lv: str | None = None, t: str | None = None, r: str | None = None, o: str | None = None, tg: Sequence[Any] | None = None, en: bool | None = None, ix: int | None = None, rl: Any | None = None, rp: bool | None = None, it: str | None = None, pl: Sequence[Any] | None = None, pt: str | None = None, ms: str | None = None, ph: str | None = None, um: str | None = None, uc: str | None = None, hd: bool | None = None, dt: Any | None = None) -> Any:
+    """Add, edit, remove, move or list swap rules. A rule gives every slot it covers its payload (an item, a variant pool, a mesh, an Unreal class, data); rules apply global, then region, then owner, each in list order, then per-slot overrides. Rules are saved in the scene; every change undoes.
+
+    Args:
+        objects: action: add | edit | remove | move | list.
+        id: The rule (edit, remove, move); add takes it as the new rule's id.
+        name: A label for the rule. Short form nm.
+        level: global, region or owner: rules apply in that order, then overrides. Short form lv. One of 'global', 'region', 'owner'.
+        type: Type pattern the rule covers ("sign.storefront", "door", "*"). Short form t.
+        region: Region rule: a region slots list ("district:3", "settlement:Town"). Short form r.
+        owner: Owner rule: an owner id or its prefix (a building, lot, street). Short form o.
+        tag: Slots must carry every tag. Short form tg.
+        enabled: Switch the rule on or off. Short form en.
+        index: Position in the list (add, move); -1 for the end. Short form ix. Default -1.
+        rule: The whole rule as JSON ({level, type, region, owner, tags, payload, enabled}). Short form rl.
+        replacePayload: edit: start the payload over instead of overlaying the given fields. Short form rp. Default False.
+        item: Library item id (Set Dressing library, "Collection/Asset"). Short form it.
+        pool: Variant pool: item ids, one picked per slot by its id. Short form pl.
+        poolTag: Variant pool from library tags ("fictional_signs", "a+b" for both). Short form pt.
+        mesh: A scene mesh (or group of meshes) drawn and exported in place of the slot. Short form ms.
+        placeholder: A shipped stand-in shape sized to the type's footprint. Short form ph. One of 'box', 'panel', 'door', 'window', 'sign', 'awning', 'pole', 'lamp', 'tree', 'palm', 'bush', 'plant', 'cylinder', 'cone', 'row'.
+        unrealMesh: Unreal static mesh path for instanced placement ("/Game/Props/SM_Door"). Short form um.
+        unrealClass: Unreal actor class spawned per slot ("/Game/BP/BP_Door.BP_Door_C"); "-" clears it. Short form uc.
+        hidden: Remove the part (true) or bring it back (false). Short form hd.
+        data: Gameplay key/values merged into the slot's data ({"locked": true}); a null value removes a key. Short form dt.
+
+    Examples:
+        slotRule('add', type='sign.storefront', poolTag='fictional_signs', name='Fictional signs')
+
+        slotRule('add', level='region', region='district:3', type='door.shop', unrealClass='/Game/BP/BP_ShopDoor.BP_ShopDoor_C')
+
+        slotRule('edit', id='r1', enabled=False)
+
+        slotRule('remove', id='r1')
+    """
+
+def slotSet(id: Any | None = None, clear: bool | None = None, remove: bool | None = None, reassign: str | None = None, item: str | None = None, pool: Sequence[Any] | None = None, poolTag: str | None = None, mesh: str | None = None, placeholder: str | None = None, unrealMesh: str | None = None, unrealClass: str | None = None, hidden: bool | None = None, data: Any | None = None, *, cl: bool | None = None, rm: bool | None = None, ra: str | None = None, it: str | None = None, pl: Sequence[Any] | None = None, pt: str | None = None, ms: str | None = None, ph: str | None = None, um: str | None = None, uc: str | None = None, hd: bool | None = None, dt: Any | None = None) -> Any:
+    """Override slots by id: the payload fields given replace what rules gave (item, pool, mesh, Unreal class), data merges key by key. Overrides are keyed by the stable slot id, so they survive regenerating the generator; one whose slot disappears is reported as an orphan (Validation panel) and can be reassigned.
+
+    Args:
+        id: Slot ids (one or a list).
+        clear: Start the override over before applying the given fields. Short form cl. Default False.
+        remove: Drop the override: the slot goes back to its rules. Short form rm. Default False.
+        reassign: Move an orphaned override from id to this slot id. Short form ra.
+        item: Library item id (Set Dressing library, "Collection/Asset"). Short form it.
+        pool: Variant pool: item ids, one picked per slot by its id. Short form pl.
+        poolTag: Variant pool from library tags ("fictional_signs", "a+b" for both). Short form pt.
+        mesh: A scene mesh (or group of meshes) drawn and exported in place of the slot. Short form ms.
+        placeholder: A shipped stand-in shape sized to the type's footprint. Short form ph. One of 'box', 'panel', 'door', 'window', 'sign', 'awning', 'pole', 'lamp', 'tree', 'palm', 'bush', 'plant', 'cylinder', 'cone', 'row'.
+        unrealMesh: Unreal static mesh path for instanced placement ("/Game/Props/SM_Door"). Short form um.
+        unrealClass: Unreal actor class spawned per slot ("/Game/BP/BP_Door.BP_Door_C"); "-" clears it. Short form uc.
+        hidden: Remove the part (true) or bring it back (false). Short form hd.
+        data: Gameplay key/values merged into the slot's data ({"locked": true}); a null value removes a key. Short form dt.
+
+    Examples:
+        slotSet(id='settlement:Town/st1a2b/lamp-3c', item='Street/LampOld')
+
+        slotSet(id=['b/12/f0/door0'], unrealClass='/Game/BP/BP_Door.BP_Door_C', data={'locked': True, 'missionId': 'm04'})
+
+        slotSet(id='old/id', reassign='new/id')
+    """
+
+def slotTypes(*objects: Any, tag: str | None = None, add: Any | None = None, tg: str | None = None, a: Any | None = None) -> Any:
+    """The slot types: id, label, tags, footprint (cm, width/height/depth), attach frame and placeholder shape. Types are dotted, most general first (door.shop is a door); rules naming door cover every door type.
+
+    Args:
+        objects: type pattern.
+        tag: Only types carrying this tag. Short form tg.
+        add: Register a type for this session: {id, label, tags, footprint [w, h, d], attach, placeholder, doc}. Extensions register theirs in code so they come back on load. Short form a.
+
+    Examples:
+        slotTypes('door')
+
+        slotTypes(add={'id': 'sign.neon', 'footprint': [200, 60, 10], 'attach': 'wall', 'placeholder': 'sign'})
+    """
+
 def smartJoin(*objects: Any, segments: int | None = None, tension: float | None = None, twist: int | None = None, holeScale: float | None = None, offsetU: float | None = None, offsetV: float | None = None, limbLoop: int | None = None, deleteBuried: bool | None = None, relax: int | None = None, trimMargin: float | None = None, keepOriginals: bool | None = None, flip: bool | None = None, name: str | None = None) -> Any:
     """Join a limb mesh to a body mesh with a quad bridge, changing only a local region of each. The smaller mesh is the limb unless flip=True. Returns {name, confidence (0-100), summary, reasons, counts...}.
 
@@ -11970,8 +12108,8 @@ def unrealMorphPaths(*objects: Any, skeletalMesh: str | None = None, postProcess
         dryRun: Return what would be sent without connecting to Unreal. Short form dry. Default False.
     """
 
-def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | None = None, threshold: int | None = None, lightingChannels: bool | None = None, collision: str | None = None, nanite: bool | None = None, hlodLayer: str | None = None, validate: bool | None = None, dryRun: bool | None = None, wait: bool | None = None, f: str | None = None, m: str | None = None, t: int | None = None, lc: bool | None = None, col: str | None = None, na: bool | None = None, hl: str | None = None, va: bool | None = None, w: bool | None = None) -> Any:
-    """Send meshes to Unreal as one static mesh asset per instance source, placed in the open level: an actor per member referencing that asset, or one instanced static mesh component (ISM or HISM) for a large group. Lights among them go as light actors (point, spot, directional, rect; discs as square rect lights, domes skipped). Lighting channels map onto Unreal's three: default is channel 0, the next two channels the sent nodes use (in scene order) 1 and 2; any more are dropped, with a warning naming them, and what is left in none goes on 0. Placements are keyed by each node's linkId, given on the first send and saved with the scene, so sending a group again moves, adds and removes its actors to match, also after a rename or reopening the scene. Validators run first: a blocking issue stops the send, others come back in issues. Returns the plan, with each group's import and placement results when wait=True.
+def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | None = None, threshold: int | None = None, lightingChannels: bool | None = None, collision: str | None = None, nanite: bool | None = None, hlodLayer: str | None = None, validate: bool | None = None, slotTable: str | None = None, dryRun: bool | None = None, wait: bool | None = None, f: str | None = None, m: str | None = None, t: int | None = None, lc: bool | None = None, col: str | None = None, na: bool | None = None, hl: str | None = None, va: bool | None = None, stb: str | None = None, w: bool | None = None) -> Any:
+    """Send meshes to Unreal as one static mesh asset per instance source, placed in the open level: an actor per member referencing that asset, or one instanced static mesh component (ISM or HISM) for a large group. Lights among them go as light actors (point, spot, directional, rect; discs as square rect lights, domes skipped). Lighting channels map onto Unreal's three: default is channel 0, the next two channels the sent nodes use (in scene order) 1 and 2; any more are dropped, with a warning naming them, and what is left in none goes on 0. Placements are keyed by each node's linkId, given on the first send and saved with the scene, so sending a group again moves, adds and removes its actors to match, also after a rename or reopening the scene. Validators run first: a blocking issue stops the send, others come back in issues. Slots (slotSet nodes, Slots geometry nodes) go keyed by slot id: as actors of their payload's Unreal class, instances of its Unreal mesh, or their Lila visual; actors carry the tags LilaSlot:<id>, LilaSlotType:<type> and LilaSlotData:<key>=<value>, and every slot is listed in the slotTable data asset. A slot rule or override change sends the last slot roots again while auto-sync is on. Returns the plan, with each group's import and placement results when wait=True.
 
     Args:
         objects: objects.
@@ -11983,6 +12121,7 @@ def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | N
         nanite: Build Nanite data for the assets. Short form na. Default False.
         hlodLayer: HLOD layer asset path for the placed actors. Short form hl.
         validate: Run the validators first: an issue blocking unrealPlaceInstances, "unreal" or "*" on what is sent stops the send; other issues come back in the result's issues. Short form va. Default True.
+        slotTable: Data asset the sent slots are listed in (id, type, owner, class, mesh, data, transform), for game code to look slots up by id. Short form stb. Default '/Game/Lila/Slots/DA_LilaSlotTable'.
         dryRun: Return the plan without exporting or contacting Unreal. Default False.
         wait: Block until Unreal has imported and placed everything. Short form w. Default False.
 
