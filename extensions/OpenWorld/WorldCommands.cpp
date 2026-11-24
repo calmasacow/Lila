@@ -7,6 +7,8 @@
 #include "WorldScene.h"
 #include "Zones.h"
 
+#include <clipper2/clipper.h>
+
 #include <lila/Command.h>
 #include <lila/Deformer.h>
 #include <lila/Extension.h>
@@ -342,6 +344,47 @@ std::vector<glm::dvec2> worldPositions(const OsmDoc& d, const std::string& terra
     return out;
 }
 
+/**
+ * Every site road on the terrain (ids under site:) as a closed corridor round its centreline, its paved width plus 3 m
+ * each side: the left edge out and the right edge back, so one polygon per road.
+ */
+json siteRoadCorridors(const std::string& terrain)
+{
+    json out = json::array();
+    const json roads = run("terrainRoads", {{"args", {terrain}}, {"detail", true}});
+    const json layers = roads.value("layers", json::object());
+    for (const auto& [layer, list] : layers.items())
+        for (const json& r : list)
+        {
+            if (r.value("id", std::string()).rfind("site:", 0) != 0)
+                continue;
+            const double half = r.value("pavedWidth", r.value("width", 400.0)) * 0.5 + 300.0;
+            std::vector<glm::dvec2> line;
+            for (const json& p : r.value("centreline", json::array()))
+                if (p.size() >= 3)
+                    line.push_back({p[0].get<double>(), p[2].get<double>()});
+            if (line.size() < 2)
+                continue;
+            std::vector<glm::dvec2> left, right;
+            for (size_t i = 0; i < line.size(); ++i)
+            {
+                const glm::dvec2 d = glm::normalize(line[std::min(i + 1, line.size() - 1)] - line[i > 0 ? i - 1 : 0]);
+                const glm::dvec2 n(-d.y, d.x);
+                // Ends pushed out along the road too, so the corridor covers the road's rounded end.
+                const glm::dvec2 along = i == 0 ? -d * half : i + 1 == line.size() ? d * half : glm::dvec2(0.0);
+                left.push_back(line[i] + n * half + along);
+                right.push_back(line[i] - n * half + along);
+            }
+            json poly = json::array();
+            for (const glm::dvec2& p : left)
+                poly.push_back({p.x, p.y});
+            for (auto it = right.rbegin(); it != right.rend(); ++it)
+                poly.push_back({it->x, it->y});
+            out.push_back(std::move(poly));
+        }
+    return out;
+}
+
 /** Seeds a Buildings group with edits before it is built, so buildingCreate hands them to the buildings they name. */
 void seedEdits(const std::string& groupName, const json& edits)
 {
@@ -377,13 +420,24 @@ struct BuildOptions
     std::vector<std::string> skip;
 };
 
+Clipper2Lib::PathD fillPath(const Polygon& p)
+{
+    Clipper2Lib::PathD path;
+    path.reserve(p.size());
+    for (const Vec2& v : p)
+        path.push_back({v.x, v.y});
+    return path;
+}
+
 /**
- * Fills what a must-cover layer leaves of the play area with one painted zone, so a district layer made from
- * settlements also covers the countryside between them. The play area is the set's, else the terrain's extent; the
- * zone gets a fictional district name. Returns what was painted.
+ * Fills what a must-cover layer leaves of the play area with one zone, so a district layer made from settlements also
+ * covers the countryside between them: the play area (the set's, else the terrain's extent) minus every zone of the
+ * layer, as polygons with holes, so the fill meets each zone edge exactly (no sliver of gap or overlap). Painted zones
+ * count by their traced outline. The zone gets a fictional district name.
  */
 json fillLayerGaps(const std::string& set, const std::string& terrain, const std::string& layerId)
 {
+    using namespace Clipper2Lib;
     zones::ZoneSpec spec = zones::zonesFromJson(run("zoneSpec", {{"set", set}}));
     zones::Layer* layer = nullptr;
     for (zones::Layer& l : spec.layers)
@@ -393,49 +447,55 @@ json fillLayerGaps(const std::string& set, const std::string& terrain, const std
         throw std::runtime_error("no layer " + layerId + " in " + set);
     const std::string zoneId = "outlying";
     std::erase_if(layer->zones, [&](const zones::Zone& z) { return z.id == zoneId; });
-    Vec2 lo, hi;
+    PathsD play;
     if (!spec.playArea.empty())
-    {
-        lo = Vec2(1e300), hi = Vec2(-1e300);
         for (const Polygon& p : spec.playArea)
-            for (const Vec2& q : p)
-                lo = glm::min(lo, q), hi = glm::max(hi, q);
-    }
+            play.push_back(fillPath(p));
     else if (auto h = terrainHeights(terrain))
-        lo = h->origin, hi = h->origin + h->extent();
+    {
+        const Vec2 lo = h->origin, hi = h->origin + h->extent();
+        play.push_back(fillPath({lo, {hi.x, lo.y}, hi, {lo.x, hi.y}}));
+    }
     else
         throw std::runtime_error("no play area and no terrain to fill " + layerId + " over");
-    const double cell = spec.maskCell;
-    const Vec2 origin = glm::floor(lo / cell) * cell;
-    const zones::Raster r = zones::rasterize(*layer, origin, hi, cell);
-    auto inPlay = [&](Vec2 p) {
-        if (spec.playArea.empty())
-            return true;
-        for (const Polygon& poly : spec.playArea)
+    PathsD cover;
+    for (const zones::Zone& z : layer->zones)
+    {
+        PathsD outer, holes;
+        for (const Polygon& p : z.polygons)
+            outer.push_back(fillPath(p));
+        for (const Polygon& p : z.holes)
+            holes.push_back(fillPath(p));
+        if (z.hasMask())
         {
-            bool in = false;
-            for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
-                if ((poly[i].y > p.y) != (poly[j].y > p.y) && p.x < (poly[j].x - poly[i].x) * (p.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x)
-                    in = !in;
-            if (in)
-                return true;
+            std::vector<Polygon> rings, maskHoles;
+            zones::maskOutline(z.mask, 128, z.mask.cell * 0.25, rings, maskHoles);
+            for (const Polygon& p : rings)
+                outer.push_back(fillPath(p));
+            for (const Polygon& p : maskHoles)
+                holes.push_back(fillPath(p));
         }
-        return false;
-    };
+        const PathsD covered = holes.empty() ? Union(outer, FillRule::NonZero, 2) : Difference(outer, holes, FillRule::NonZero, 2);
+        cover.insert(cover.end(), covered.begin(), covered.end());
+    }
+    const PathsD rest = Difference(play, Union(cover, FillRule::NonZero, 2), FillRule::NonZero, 2);
     zones::Zone z;
     z.id = zoneId;
-    z.mask.cell = cell;
-    const glm::ivec2 base(int(std::lround(origin.x / cell)), int(std::lround(origin.y / cell)));
-    size_t painted = 0;
-    for (int zz = 0; zz < r.nz; ++zz)
-        for (int x = 0; x < r.nx; ++x)
-            if (r.winner[size_t(zz) * r.nx + x] < 0 && inPlay(r.at(x, zz)))
-            {
-                z.mask.setCell(base.x + x, base.y + zz, 255);
-                ++painted;
-            }
-    if (painted == 0)
-        return {{"layer", layerId}, {"cells", 0}};
+    double area = 0.0;
+    for (const PathD& path : rest)
+    {
+        Polygon poly;
+        for (const PointD& q : path)
+            poly.push_back({q.x, q.y});
+        if (poly.size() < 3)
+            continue;
+        const double a = Area(path);
+        area += a;
+        // Clipper2 gives outers counter-clockwise (positive area) and holes clockwise.
+        (a > 0.0 ? z.polygons : z.holes).push_back(std::move(poly));
+    }
+    if (z.polygons.empty() || area < 1.0)
+        return {{"layer", layerId}, {"areaM2", 0}};
     z.priority = -1;
     try
     {
@@ -451,9 +511,10 @@ json fillLayerGaps(const std::string& set, const std::string& terrain, const std
         z.name = "Outlying " + layerId;
         z.nameSource = "given";
     }
+    const size_t parts = z.polygons.size(), holes = z.holes.size();
     layer->zones.push_back(std::move(z));
     run("zoneSpec", {{"set", set}, {"spec", zones::toJson(spec)}});
-    return {{"layer", layerId}, {"zone", zoneId}, {"cells", painted}, {"areaM2", double(painted) * cell * cell * 1e-4}};
+    return {{"layer", layerId}, {"zone", zoneId}, {"polygons", parts}, {"holes", holes}, {"areaM2", area * 1e-4}};
 }
 
 /** Deletes what an earlier build of this world made, so a rebuild starts clean. */
@@ -634,7 +695,19 @@ json buildWorld(json spec, const BuildOptions& o)
             siteIds.push_back(sid);
     }
     if (!built["sites"].empty())
+    {
         st.run("sites.grade", [&] { return run("siteGround", {{"sites", built["sites"]}}); });
+        // A site's access roads and tracks reach past its outline: settlements keep clear of them too.
+        try
+        {
+            for (const json& corridor : siteRoadCorridors(terrain))
+                siteOutlines.push_back(corridor);
+        }
+        catch (const std::exception& e)
+        {
+            notes.push_back(std::string("site roads not kept clear of settlements: ") + e.what());
+        }
+    }
 
     // Settlements: each from OSM (the remix's or a file, clipped to its area) or laid out by Settlement, then its buildings.
     const json editsByGroup = spec.value("buildings", json::object()).value("edits", json::object());

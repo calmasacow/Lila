@@ -130,7 +130,7 @@ def coast_height(u, v, tiny):
         if d < r:
             return max(1.5, h * (1.0 - d / r) ** 0.7)
     if u < xs:
-        return max(-80.0, -3.0 - (xs - u) * 450.0)
+        return max(-80.0, -0.5 - (xs - u) * 450.0)
     lu, lv, rx, ry = LAGOON
     e = ((u - lu) / rx) ** 2 + ((v - lv) / ry) ** 2
     if e < 1.0:
@@ -139,7 +139,7 @@ def coast_height(u, v, tiny):
     if abs(v - lv) < 0.006 and u < lu:
         return -1.5
     land = u - xs
-    h = 2.5 + land * 110.0 + 3.0 * noise(u, v, 3)
+    h = 2.0 + land * 110.0 + 3.0 * noise(u, v, 3) * smooth(0.0, 0.04, land)
     # Barrier and mangrove flats round the lagoon stay low.
     if e < 2.2:
         h = min(h, 0.6 + (e - 1.0) * 2.0)
@@ -313,11 +313,13 @@ def build(size, out):
         cap.rect(u, v, u + cap.m(24.0), v + cap.m(40.0), tags)
         buildings += 1
     # Mansion district: few large houses on big lots to the north-east.
-    for k in range(4 if tiny else 24):
-        u, v = 0.66 + (k % 6) * 0.03, 0.66 + (k // 6) * 0.03
+    north = cv0 + gr * cap.m(110.0)
+    for k in range(4 if tiny else 12):
+        u, v = 0.42 + (k % 6) * 0.027, north + 0.012 + (k // 6) * 0.022
         cap.rect(u, v, u + 0.012, v + 0.01, {"building": "house", "building:levels": "2", "luxury": "yes"})
         buildings += 1
-    cap.way([(0.66, 0.66), (0.66 + 0.18, 0.66)], {"highway": "residential", "name": "Calle Los Pinos"})
+    cap.way([(0.42, north + 0.008), (0.58, north + 0.008)], {"highway": "residential", "name": "Calle Los Pinos"})
+    cap.way([(0.5, north), (0.5, north + 0.008)], {"highway": "residential", "name": "Privada Los Pinos"})
     # Cemetery (the site kit lays its mausoleums out; this is the land use).
     cap.rect(0.2, 0.62, 0.28, 0.72, {"landuse": "cemetery", "name": "Jardines del Humaya"})
     for k in range(10 if tiny else 60):
@@ -366,21 +368,21 @@ def build(size, out):
             {"name": "Capital", "osm": "remix", "area": [cap_lo[0], cap_lo[1], cap_hi[0], cap_hi[1]], "profile": "usTown", "fill": "none" if tiny else "sparse", "buildings": {"lod": "near"}},
         ],
         "sites": [
-            {"kind": "port", "id": "port", "at": [sea_x(0.125) + 5000, coast.world(0.2, 0.125)[1]], "heading": 90, "params": {"quayLength": 50000 if not tiny else 40000, "tiers": 3}},
+            {"kind": "port", "id": "port", "at": [sea_x(0.135) + 7000, coast.world(0.2, 0.135)[1]], "heading": 90, "params": {"quayLength": 50000 if not tiny else 40000, "tiers": 3}},
             {"kind": "cruise", "id": "cruise", "at": [sea_x(0.30) + 4000, coast.world(0.2, 0.30)[1]], "heading": 90},
             {"kind": "lighthouse", "id": "faro", "at": coast.world(ISLANDS[0][0] + 0.008, ISLANDS[0][1]), "heading": 90},
             {"kind": "island", "id": "isla", "at": coast.world(ISLANDS[1][0], ISLANDS[1][1]), "heading": 90,
-             "params": {"islandRadius": round(ISLANDS[1][2] * span * 100 * 0.85), "raiseIsland": False}},
+             "params": {"islandRadius": round(ISLANDS[1][2] * span * 100 * 0.8), "dockLength": 16000, "raiseIsland": False}},
             {"kind": "cemetery", "id": "panteon", "at": [target[0] - half - 15000, target[1] + 20000]},
             {"kind": "compound", "id": "mansion", "at": [target[0] + half + 15000, target[1] - 10000]},
-            {"kind": "farm", "id": "farm1", "at": coast.world(0.55, 0.12)},
+            {"kind": "farm", "id": "farm1", "at": coast.world(0.5, 0.18)},
             {"kind": "airstrip", "id": "pista1", "at": coast.world(0.42, 0.52), "heading": 90},
             {"kind": "village", "id": "habal", "at": coast.world(0.74, 0.12), "params": {"houses": 10, "villageRadius": 12000}},
         ] + ([] if tiny else [
             {"kind": "farm", "id": "farm2", "at": coast.world(0.64, 0.12), "heading": 90},
-            {"kind": "airstrip", "id": "pista2", "at": coast.world(0.5, 0.76), "heading": 0},
-            {"kind": "village", "id": "noria", "at": coast.world(0.70, 0.94)},
-            {"kind": "village", "id": "quelite", "at": coast.world(0.50, 0.94)},
+            {"kind": "airstrip", "id": "pista2", "at": coast.world(0.42, 0.68), "heading": 90},
+            {"kind": "village", "id": "noria", "at": coast.world(0.70, 0.94), "params": {"houses": 12, "villageRadius": 14000}},
+            {"kind": "village", "id": "quelite", "at": coast.world(0.50, 0.94), "params": {"houses": 12, "villageRadius": 14000}},
         ]),
         "buildings": {"lod": "near" if tiny else "hlod"},
         "slots": {"rules": [{"id": "signs", "name": "Fictional signs", "type": "sign.storefront", "payload": {"poolTag": "fictional_signs"}},

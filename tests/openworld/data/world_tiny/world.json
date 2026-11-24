@@ -158,8 +158,8 @@
    "kind": "port",
    "id": "port",
    "at": [
-    -449130,
-    600000
+    -449918,
+    584000
    ],
    "heading": 90,
    "params": {
@@ -194,7 +194,8 @@
    ],
    "heading": 90,
    "params": {
-    "islandRadius": 40800,
+    "islandRadius": 38400,
+    "dockLength": 16000,
     "raiseIsland": false
    }
   },
@@ -218,8 +219,8 @@
    "kind": "farm",
    "id": "farm1",
    "at": [
-    80000,
-    608000
+    0,
+    512000
    ]
   },
   {

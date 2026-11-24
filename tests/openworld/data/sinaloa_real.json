@@ -175,12 +175,13 @@
    "kind": "port",
    "id": "port",
    "at": [
-    -449130,
-    600000
+    -445919,
+    632000
    ],
    "heading": 90,
    "params": {
     "quayLength": 50000,
+    "yardDepth": 24000,
     "tiers": 3
    }
   },
@@ -211,7 +212,7 @@
    ],
    "heading": 90,
    "params": {
-    "islandRadius": 40800,
+    "islandRadius": 48000,
     "raiseIsland": false
    }
   },
@@ -273,10 +274,10 @@
    "kind": "airstrip",
    "id": "pista2",
    "at": [
-    0,
-    -416000
+    -128000,
+    -288000
    ],
-   "heading": 0
+   "heading": 90
   },
   {
    "kind": "village",
@@ -284,7 +285,11 @@
    "at": [
     320000,
     -704000
-   ]
+   ],
+   "params": {
+    "houses": 12,
+    "villageRadius": 14000
+   }
   },
   {
    "kind": "village",
@@ -292,7 +297,11 @@
    "at": [
     0,
     -704000
-   ]
+   ],
+   "params": {
+    "houses": 12,
+    "villageRadius": 14000
+   }
   }
  ],
  "buildings": {
