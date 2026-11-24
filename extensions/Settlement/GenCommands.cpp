@@ -9,11 +9,13 @@
 #include <lila/Curves.h>
 #include <lila/Extension.h>
 #include <lila/Graph.h>
+#include <lila/Names.h>
 #include <lila/Node.h>
 #include <lila/Profile.h>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 
 using namespace lila;
@@ -114,6 +116,109 @@ json osmCurveStreets(Graph& g, const std::string& name, const char* cmd)
     return out;
 }
 
+std::string curveAttr(Graph& g, const std::string& name, const char* attr)
+{
+    try
+    {
+        const json v = ops::execute("getAttr", {{"args", {g.find(name)->path() + "." + attr}}});
+        if (v.is_string())
+            return v.get<std::string>();
+    }
+    catch (const std::exception&)
+    {
+    }
+    return {};
+}
+
+json xzRing(const std::vector<Vec2>& pts)
+{
+    json out = json::array();
+    const bool repeated = pts.size() > 2 && glm::length(pts.back() - pts.front()) < 1e-6;
+    for (size_t k = 0; k + (repeated ? 1 : 0) < pts.size(); ++k)
+        out.push_back({pts[k].x, pts[k].y});
+    return out;
+}
+
+/** Buildings from a building curve terrainImportOsm made: outer rings with their holes and what osmFeatures says of each. */
+json osmCurveBuildings(Graph& g, const std::string& name, const char* cmd)
+{
+    const std::vector<std::vector<Vec2>> lines = curveLines(g, name, cmd);
+    const json info = json::parse(curveAttr(g, name, "osmFeatures"), nullptr, false);
+    json out = json::array();
+    if (!info.is_array())
+        return out;
+    std::map<size_t, size_t> outerAt; // spline -> index in out
+    for (size_t k = 0; k < lines.size() && k < info.size(); ++k)
+    {
+        const json& i = info[k];
+        if (!i.is_object() || lines[k].size() < 3)
+            continue;
+        if (i.value("ring", std::string("outer")) == "inner")
+        {
+            if (auto it = outerAt.find(i.value("outer", size_t(0))); it != outerAt.end())
+                out[it->second]["holes"].push_back(xzRing(lines[k]));
+            continue;
+        }
+        json b = {{"id", i.value("id", std::to_string(k))}, {"outer", xzRing(lines[k])}, {"holes", json::array()}};
+        for (const char* key : {"part", "building", "program", "kind", "name", "height", "minHeight", "roofHeight", "levels", "minLevel",
+                                "roofLevels", "roofShape", "colour", "roofColour", "material", "roofMaterial", "startDate"})
+            if (i.contains(key) && !i[key].is_null())
+                b[key] = i[key];
+        outerAt[k] = out.size();
+        out.push_back(std::move(b));
+    }
+    return out;
+}
+
+/** Places from a place curve terrainImportOsm made: areas from its splines, points from its osmPlaces. */
+json osmCurvePlaces(Graph& g, const std::string& name, const char* cmd)
+{
+    json out = json::array();
+    const json points = json::parse(curveAttr(g, name, "osmPlaces"), nullptr, false);
+    auto place = [](const json& i) {
+        json p = json::object();
+        for (const char* key : {"id", "key", "value", "program", "kind", "name"})
+            if (i.contains(key) && i[key].is_string())
+                p[key] = i[key];
+        return p;
+    };
+    if (points.is_array())
+        for (const json& i : points)
+            if (i.is_object() && i.contains("at"))
+            {
+                json p = place(i);
+                p["at"] = i["at"];
+                out.push_back(std::move(p));
+            }
+    Node* n = g.find(name);
+    if (!n || !n->type().isA("curve"))
+        return out;
+    const std::vector<std::vector<Vec2>> lines = curveLines(g, name, cmd);
+    const json info = json::parse(curveAttr(g, name, "osmFeatures"), nullptr, false);
+    if (!info.is_array())
+        return out;
+    std::map<std::string, size_t> byId;
+    for (size_t k = 0; k < lines.size() && k < info.size(); ++k)
+    {
+        if (!info[k].is_object() || lines[k].size() < 3)
+            continue;
+        const std::string id = info[k].value("id", std::to_string(k));
+        auto it = byId.find(id);
+        if (it == byId.end())
+        {
+            json p = place(info[k]);
+            p["rings"] = json::array();
+            it = byId.emplace(id, out.size()).first;
+            out.push_back(std::move(p));
+        }
+        out[it->second]["rings"].push_back(xzRing(lines[k]));
+    }
+    return out;
+}
+
+/** The real names in the scene as hashes, for the generators' avoid list. */
+json avoidHashes(Graph& g) { return json::parse(lila::names::sceneRealNames(g).hashes().toJson()); }
+
 const CommandDef* needCommand(const char* name, const char* extension, const char* cmd)
 {
     const CommandDef* def = ops::find(name);
@@ -201,6 +306,9 @@ json genSummary(const Rebuilt& r)
     out["megablocks"] = gen.megablocks.size();
     out["warnings"] = gen.warnings;
     out["statistics"] = toJson(streetStats(l.graph, l.blocks));
+    if (hasOsmBuildings(l))
+        out["osm"] = {{"buildingLots", gen.osmLots}, {"fillLots", gen.osmFillLots}, {"denseBlocks", gen.osmDenseBlocks},
+                      {"sparseBlocks", gen.osmSparseBlocks}, {"outside", gen.osmOutside}, {"parts", gen.osmParts}, {"sites", osmSitesJson(l)}};
     return out;
 }
 } // namespace
@@ -222,6 +330,11 @@ std::vector<FlagDef> generatorFlags()
                                         "highway value or a street class."},
         {"osmFile", "of", GenArg::String, nullptr, "OSM file (.osm, .json, .osm.pbf) read through terrainImportOsm onto the ground."},
         {"osmOrigin", "oo", GenArg::List, nullptr, "[latitude, longitude] of the ground's centre, for osmFile on a terrain not from real data."},
+        {"osmBuildings", "obl", GenArg::Bool, true, "With osmFile: buildings and places come in too, as lots, envelopes, businesses and landmarks."},
+        {"osmFill", "ofl", GenArg::String, "sparse", "Lots Settlement cuts beside imported buildings: sparse (in blocks they cover less than "
+                                                     "osmCoverage of), all, or none.", {"sparse", "all", "none"}},
+        {"osmCoverage", "ocv", GenArg::Float, 0.25, "Share of a block imported buildings must cover for it to count as dense (no lots of Settlement's own).", {}, {}, 0.0, 1.0},
+        {"osmCulture", "ocu", GenArg::String, "", "Naming culture for every imported name (namingCultures); empty chooses one from where the data lies."},
         {"example", "eg", GenArg::Any, nullptr, "Grow like another street network: a settlement by name, or {orientation, degree, "
                                            "blockAreaMedianM2, meanSegment} (settlementGenerators statistics), or {streets}."},
         {"contourStreets", "cst", GenArg::Bool, false, "Streets along the ground's contours from terrainContourStreets (the ground must be a Terrain)."},
@@ -250,36 +363,78 @@ void resolveGeneratorFlags(Graph& g, const Args& a, json& values, std::span<cons
         pattern = "tensor";
     if (a.has("osm") || a.has("osmFile"))
     {
-        json streets = json::array();
+        json streets = json::array(), buildings = json::array(), places = json::array();
+        auto takeCurve = [&](const std::string& name) {
+            const std::string kind = curveAttr(g, name, "terrainFeature");
+            if (kind == "building")
+                for (json& b : osmCurveBuildings(g, name, cmd))
+                    buildings.push_back(std::move(b));
+            else if (kind == "place")
+                for (json& p : osmCurvePlaces(g, name, cmd))
+                    places.push_back(std::move(p));
+            else
+                for (const json& s : osmCurveStreets(g, name, cmd))
+                    streets.push_back(s);
+        };
         for (const json& item : a.has("osm") ? a.flags["osm"] : json::array())
         {
             if (item.is_string())
-                for (const json& s : osmCurveStreets(g, item.get<std::string>(), cmd))
-                    streets.push_back(s);
+                takeCurve(item.get<std::string>());
             else
                 streets.push_back(item);
         }
+        std::string culture = a.get<std::string>("osmCulture", "");
         if (a.has("osmFile"))
         {
             needCommand("terrainImportOsm", "Terrain", cmd);
             if (ground.empty())
                 throw CommandError(std::string(cmd) + ": osmFile needs ground= (the terrain the OSM data lies on)");
-            json call = {{"args", {a.get<std::string>("osmFile")}}, {"terrain", ground}, {"kinds", {"road", "path"}}, {"landcover", false}};
+            json kinds = {"road", "path"};
+            if (a.get<bool>("osmBuildings", true))
+                kinds = {"road", "path", "building", "place"};
+            json call = {{"args", {a.get<std::string>("osmFile")}}, {"terrain", ground}, {"kinds", kinds}, {"landcover", false}};
             if (a.has("osmOrigin"))
                 call["origin"] = a.flags["osmOrigin"];
+            if (!culture.empty())
+                call["culture"] = culture;
             const json made = ops::execute("terrainImportOsm", call);
+            culture = made.value("culture", culture);
             const json curves = made.value("curves", json::object());
-            for (const char* kind : {"road", "path"})
+            for (const char* kind : {"road", "path", "building", "place"})
                 if (curves.contains(kind) && curves[kind].is_string())
-                    for (const json& s : osmCurveStreets(g, curves[kind].get<std::string>(), cmd))
-                        streets.push_back(s);
+                    takeCurve(curves[kind].get<std::string>());
             if (streets.empty())
                 throw CommandError(std::string(cmd) + ": " + a.get<std::string>("osmFile") + " has no roads or paths on the ground");
         }
         gen["osm"] = streets;
+        if (!buildings.empty())
+            gen["osmBuildings"] = buildings;
+        else
+            gen.erase("osmBuildings");
+        if (!places.empty())
+            gen["osmPlaces"] = places;
+        else
+            gen.erase("osmPlaces");
+        gen["osmFill"] = {{"mode", a.get<std::string>("osmFill", "sparse")}, {"coverage", a.get<double>("osmCoverage", 0.25)}};
+        // Settlement's own street and district names steer clear of the real ones the import replaced.
+        gen["avoid"] = avoidHashes(g);
+        // The settlement names its streets in the import's culture unless it has one of its own.
+        if (!culture.empty() && values.contains("edits"))
+        {
+            json edits = json::object();
+            if (values["edits"].is_string() && !values["edits"].get<std::string>().empty())
+                edits = json::parse(values["edits"].get<std::string>(), nullptr, false);
+            if (edits.is_object() && edits.value("naming", json::object()).value("culture", std::string()).empty())
+            {
+                edits["naming"]["culture"] = culture;
+                values["edits"] = edits.dump();
+            }
+        }
         if (pattern.empty())
             pattern = "osm";
     }
+    else if (a.has("osmFill") || a.has("osmCoverage"))
+        gen["osmFill"] = {{"mode", a.get<std::string>("osmFill", "sparse")}, {"coverage", a.get<double>("osmCoverage", 0.25)}};
     if (a.has("example"))
     {
         const json ex = jsonFlag(a, "example");
@@ -573,6 +728,85 @@ void registerGeneratorCommands(ext::Context& ctx)
         .examples = {"settlementCreate(profile='scifiMegacity', size=200000, levels={'decks': [{'polygon': [[-30000, -30000], [30000, -30000], "
                      "[30000, 30000], [-30000, 30000]], 'height': 4000}], 'airHeights': [20000, 40000], 'megablock': 20000})\n"
                      "settlementLevels('Settlement')['air']['connected']"},
+    });
+    std::vector<std::string> cultureValues = {""};
+    for (const std::string& c : lila::names::cultures())
+        cultureValues.push_back(c);
+    std::vector<std::string> profiles;
+    for (const std::string& p : profileNames())
+        profiles.push_back(p);
+    ctx.registerCommand({
+        .name = "settlementFromOsm",
+        .doc = "A settlement from an OpenStreetMap file on a terrain: terrainImportOsm brings its streets, buildings and places "
+               "onto the ground with fictional names, the settlement's outline is fitted round them, and settlementCreate lays "
+               "it out with pattern osm: the streets as they are, every building a lot and envelope (heights, levels, parts, "
+               "courtyards, roof shape, colours), shops and offices businesses on the building they stand in, areas (cemeteries, "
+               "schools, ports, farmland) the use and landmark of the lots inside, and Settlement's own lots in blocks the data "
+               "leaves sparse. Returns what settlementCreate returns, with the import's counts, culture and curves.",
+        .positionalDoc = "OSM file (.osm, Overpass .json, .osm.pbf)",
+        .flags = {nodeFlag({"ground", "gd", GenArg::String, nullptr, "The terrain the data lies on."}, "mesh"),
+                  {"origin", "or", GenArg::List, nullptr, "[latitude, longitude] of the terrain's centre, for terrains not from real data."},
+                  {"profile", "pr", GenArg::String, "usTown", "Style for heights, roofs and the lots Settlement cuts itself.", profiles},
+                  {"culture", "cu", GenArg::String, "", "Naming culture for every name (namingCultures); empty chooses one from where the data lies.", cultureValues},
+                  {"fill", "fl", GenArg::String, "sparse", "Settlement's own lots beside the imported buildings: sparse (in blocks they "
+                                                           "cover less than coverage of), all, or none.", {"sparse", "all", "none"}},
+                  {"coverage", "cv", GenArg::Float, 0.25, "Share of a block the imported buildings must cover for it to count as dense.", {}, {}, 0.0, 1.0},
+                  {"margin", "mg", GenArg::Float, 2000.0, "Room left round the imported streets and buildings, cm.", {}, {}, 0.0},
+                  {"name", "n", GenArg::String, "Town", "Name of the settlement's mesh."}},
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+            const char* cmd = "settlementFromOsm";
+            Graph& g = Graph::current();
+            if (a.positional.empty())
+                throw CommandError(std::string(cmd) + ": give the OSM file");
+            const std::string ground = a.get<std::string>("ground", "");
+            if (ground.empty())
+                throw CommandError(std::string(cmd) + ": give ground= (the terrain the data lies on)");
+            needCommand("terrainImportOsm", "Terrain", cmd);
+            json call = {{"args", {a.positional[0]}}, {"terrain", ground}, {"kinds", {"road", "path", "building", "place"}}, {"landcover", false}};
+            if (a.has("origin"))
+                call["origin"] = a.flags["origin"];
+            if (!a.get<std::string>("culture", "").empty())
+                call["culture"] = a.get<std::string>("culture", "");
+            const json made = ops::execute("terrainImportOsm", call);
+            const json curves = made.value("curves", json::object());
+            json osm = json::array();
+            Vec2 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
+            for (const char* kind : {"road", "path", "building", "place"})
+                if (curves.contains(kind) && curves[kind].is_string())
+                {
+                    const std::string name = curves[kind].get<std::string>();
+                    osm.push_back(name);
+                    if (std::string_view(kind) == "place")
+                        continue;
+                    for (const std::vector<Vec2>& line : curveLines(g, name, cmd))
+                        for (const Vec2& q : line)
+                            lo = glm::min(lo, q), hi = glm::max(hi, q);
+                }
+            if (!curves.contains("road") && !curves.contains("path"))
+                throw CommandError(std::string(cmd) + ": " + a.positional[0].get<std::string>() + " has no roads or paths on the ground");
+            const double m = std::max(0.0, a.get<double>("margin", 2000.0));
+            lo -= Vec2(m), hi += Vec2(m);
+            const json outline = {{lo.x, lo.y}, {hi.x, lo.y}, {hi.x, hi.y}, {lo.x, hi.y}};
+            json out = ops::execute("settlementCreate", {{"profile", a.get<std::string>("profile", "usTown")},
+                                                         {"ground", ground},
+                                                         {"outline", outline},
+                                                         {"osm", osm},
+                                                         {"osmFill", a.get<std::string>("fill", "sparse")},
+                                                         {"osmCoverage", a.get<double>("coverage", 0.25)},
+                                                         {"osmCulture", made.value("culture", std::string())},
+                                                         {"terrainWater", false},
+                                                         {"name", a.get<std::string>("name", "Town")}});
+            out["import"] = {{"features", made.value("features", json::object())},
+                             {"culture", made.value("culture", std::string())},
+                             {"cultureFrom", made.value("cultureFrom", json())},
+                             {"named", made.value("named", 0)},
+                             {"curves", curves},
+                             {"attributionFile", made.value("attributionFile", std::string())}};
+            return out;
+        },
+        .examples = {"settlementFromOsm('osm/town.osm', ground='Terrain')",
+                     "s = settlementFromOsm('city.osm.pbf', ground='Coast', origin=[23.2, -106.42], fill='none')\ns['import']['culture']"},
     });
 }
 } // namespace settlement

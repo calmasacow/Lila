@@ -1,6 +1,6 @@
 // Settlement: measures and checks for agents, the layout as JSON, and meshes for the viewport and export.
 
-#include "SettlementCore.h"
+#include "Generators.h"
 #include "Parcels.h"
 #include "Streetscape.h"
 
@@ -389,7 +389,7 @@ json toJson(const Layout& l)
     json districts = json::array();
     for (const District& d : l.districts)
         districts.push_back({{"id", d.id}, {"name", d.name}, {"areaM2", d.area}, {"center", xz(d.center)}, {"outline", ring(d.outline)}});
-    return {{"format", "lila.settlement"},
+    json out = {{"format", "lila.settlement"},
             {"version", 1},
             {"units", "cm"},
             {"up", "y"},
@@ -409,6 +409,9 @@ json toJson(const Layout& l)
             {"roadProfiles", roads},
             {"culture", l.culture},
             {"districts", districts}};
+    if (hasOsmBuildings(l))
+        out["osmSites"] = osmSitesJson(l);
+    return out;
 }
 
 MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o)

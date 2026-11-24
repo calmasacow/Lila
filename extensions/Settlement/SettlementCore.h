@@ -642,6 +642,15 @@ struct Block
     int era = 0;
 };
 
+/** A business or institution on a lot's ground floor, from an imported point of interest: fictional name, what it is, where. */
+struct Business
+{
+    std::string name;
+    std::string program; // pharmacy, taqueria, carParts, ... (lila::names::programs)
+    std::string osmId;   // the imported place it came from ("n123")
+    Vec2 at{0.0};
+};
+
 struct Lot
 {
     int id = 0;
@@ -660,6 +669,10 @@ struct Lot
     std::vector<std::string> reasons; // why a landmark is where it is
     BuildingRoute route = BuildingRoute::Outline;
     int era = 0;
+    std::string osmId;   // the imported OpenStreetMap building it is ("w123", "r9.1"); empty for a lot Settlement cut
+    std::string name;    // fictional name of the building or its main business; empty for none
+    std::string program; // what it is for, finer than use: pharmacy, school, cathedral, warehouse, ...
+    std::vector<Business> businesses;
 };
 
 /** The space a building may fill on its lot, and what it is for. Buildings themselves are made elsewhere. */
@@ -699,6 +712,12 @@ struct Envelope
     int wealth = 1;
     BuildingRoute route = BuildingRoute::Outline;
     int era = 0; // the era its lot was laid out in; floors and roof follow that era's profile
+    /** The program a building generator builds: name, what it is for, the style it is guessed to be, its ground floor units. */
+    std::string name, program, style, styleFrom;
+    std::vector<Business> businesses;
+    /** Imported buildings: the OSM id, where height and roof came from (height, levels, district, profile; tag or profile), tagged colours and material. */
+    std::string osmId, heightSource, roofSource, roofShape, colour, roofColour, material, roofMaterial;
+    std::vector<Polygon> holes; // courtyards inside the footprint (imported multipolygons), counter-clockwise
 };
 
 /** A path off the ground: on the walkable surface, across ramps, terraces and floors at any height. */
