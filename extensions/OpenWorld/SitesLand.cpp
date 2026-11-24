@@ -419,7 +419,45 @@ void buildVillage(Kit& k)
         k.street("street:" + std::to_string(t + 1), 2);
     }
 
-    // Houses along the streets on both sides, fronts to the street, each on its own pad.
+    // Houses along the streets on both sides, fronts to the street, each on its own pad, clear of every street's track
+    // (a house set off one street's straight can still reach across its bend or a neighbouring street near the plaza).
+    constexpr double kTrackClear = 450.0;
+    // The bent polyline, a smooth curve through it and the straight chord: Terrain's road design may lay any of them
+    // (a track's curve radius can pull the bend out entirely).
+    auto trackSegments = [](P2 a, P2 m, P2 b) {
+        std::vector<std::pair<P2, P2>> out = {{a, m}, {m, b}, {a, b}};
+        const P2 ctrl[5] = {a, a, m, b, b};
+        P2 last = a;
+        for (int seg = 0; seg < 2; ++seg)
+            for (int i = 1; i <= 8; ++i)
+            {
+                const double t = i / 8.0, t2 = t * t, t3 = t2 * t;
+                const P2 &p0 = ctrl[seg], &p1 = ctrl[seg + 1], &p2 = ctrl[seg + 2], &p3 = ctrl[seg + 3];
+                const P2 q = 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+                out.push_back({last, q});
+                last = q;
+            }
+        return out;
+    };
+    auto onStreet = [&](const Ring& pad) {
+        auto dist = [](P2 p, P2 a, P2 b) {
+            const P2 ab = b - a;
+            const double t = std::clamp(glm::dot(p - a, ab) / std::max(1e-9, glm::dot(ab, ab)), 0.0, 1.0);
+            return glm::length(p - (a + ab * t));
+        };
+        for (const Street& st : streets)
+            for (const auto& [a, b] : trackSegments(st.a, st.m, st.b))
+            {
+                for (size_t i = 0; i < pad.size(); ++i)
+                    if (dist(pad[i], a, b) < kTrackClear || dist(a, pad[i], pad[(i + 1) % pad.size()]) < kTrackClear ||
+                        dist(b, pad[i], pad[(i + 1) % pad.size()]) < kTrackClear)
+                        return true;
+                for (int k2 = 1; k2 < 8; ++k2)
+                    if (insideRing(pad, a + (b - a) * (k2 / 8.0)))
+                        return true;
+            }
+        return false;
+    };
     int placed = 0, skipped = 0;
     for (int h = 0; h < nH; ++h)
     {
@@ -444,7 +482,7 @@ void buildVillage(Kit& k)
             const Ring pad = orientedRect(c, w * 0.5 + 150.0, d * 0.5 + 150.0, heading);
             if (glm::length(c) < 1700.0)
                 continue;
-            bool clash = false;
+            bool clash = onStreet(fp);
             for (const Ring& o : taken)
                 clash = clash || ringsOverlap(o, pad);
             if (clash)

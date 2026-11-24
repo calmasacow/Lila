@@ -825,12 +825,69 @@ json check(const std::vector<SiteRef>& list, const std::vector<SiteRef>& everyon
     }
     return {{"ok", issues.empty()}, {"issues", list2}, {"counts", counts}, {"sites", perSite}, {"notes", notes}};
 }
+/** The group the Buildings generator builds every site's envelopes under. */
+constexpr const char* kSiteBuildings = "SiteBuildings";
+
+bool massingOn(const SiteRef& r)
+{
+    const json v = ops::execute("getAttr", {{"args", {r.modifier + ".massing"}}});
+    return !v.is_boolean() || v.get<bool>();
+}
+
+/**
+ * Builds the envelopes of every site whose massing is off with the Buildings generator, under one group, so its
+ * styles, slots and edits apply to site buildings like any other; the group goes when no site is left on it. Edits,
+ * overrides and pins carry over by building id (each envelope's id hashed to a stable building key).
+ */
+json rebuildSiteBuildings(const std::string& cmd)
+{
+    Graph& g = Graph::current();
+    json envs = json::array();
+    std::string terrain;
+    json sitesOn = json::array();
+    for (const SiteRef& r : allSites(cmd))
+    {
+        if (massingOn(r))
+            continue;
+        sitesOn.push_back(r.spec.id);
+        if (terrain.empty())
+            terrain = r.ground.value("terrain", std::string());
+        const sites::Evaluated ev = evaluate(r, cmd);
+        for (size_t i = 0; i < ev.layout->envelopes.size(); ++i)
+        {
+            json e = sites::envelopeJson(ev, i);
+            e["lotId"] = slots::idHash(e["id"].get<std::string>());
+            envs.push_back(std::move(e));
+        }
+    }
+    if (envs.empty())
+    {
+        if (Node* n = g.find(kSiteBuildings))
+            ops::execute("delete", {{"args", {n->path()}}});
+        return {{"group", nullptr}, {"buildings", 0}, {"sites", sitesOn}};
+    }
+    if (!ops::find("buildingCreate"))
+        throw CommandError(cmd + ": site buildings need the Buildings extension (buildingCreate)");
+    json call = {{"envelopes", envs}, {"name", kSiteBuildings}};
+    if (!terrain.empty() && g.find(terrain))
+        call["ground"] = terrain;
+    json made = ops::execute("buildingCreate", call);
+    return {{"group", made.value("group", json())},  {"buildings", made.value("buildings", 0)}, {"styles", made.value("styles", json::object())},
+            {"slots", made.value("slots", 0)},       {"sites", sitesOn},                        {"ground", terrain.empty() ? json() : json(terrain)},
+            {"warnings", made.value("warnings", json::array())}};
+}
+
+/** Turns a site's greybox massing off (its buildings come from the Buildings generator) or back on. */
+void setMassing(const SiteRef& r, bool on) { ops::execute("setAttr", {{"args", {r.modifier + ".massing", on}}}); }
 } // namespace
 
 void registerSites(ext::Context& ctx)
 {
     for (const sites::TypeDef& t : sites::slotTypes())
     {
+        // Types another extension registered first (Buildings' wall, gate, pool) are shared rather than registered twice.
+        if (slots::types().find(t.id))
+            continue;
         slots::SlotType st;
         st.id = t.id;
         st.label = t.label;
@@ -858,6 +915,7 @@ void registerSites(ext::Context& ctx)
         {"ground", "gr", T::Bool, true, "Grade the terrain: pads, quays, roads, canals, the airstrip."},
         {"waterLevel", "wl", T::Float, nullptr, "Water level its quays, docks and ships sit at, cm; default the terrain's sea level, else 0."},
         {"params", "pm", T::Any, nullptr, "Kit settings as one object, as the flags below take them."},
+        {"buildings", "bl", T::Bool, false, "Build its buildings with the Buildings generator (styles, slots, edits) instead of greybox massing."},
     };
     for (FlagDef& f : paramFlags())
         createFlags.push_back(std::move(f));
@@ -979,6 +1037,11 @@ void registerSites(ext::Context& ctx)
             out["atFrom"] = atFrom;
             out["waterLevelFrom"] = waterFrom;
             out["group"] = group;
+            if (a.get<bool>("buildings", false))
+            {
+                setMassing(r, false);
+                out["buildings"] = rebuildSiteBuildings(cmd);
+            }
             ops::execute("select", {{"args", {r.mesh}}});
             return out;
         },
@@ -1013,6 +1076,7 @@ void registerSites(ext::Context& ctx)
             const std::string cmd = "siteEdit";
             SiteRef r = findSite(siteArg(a), cmd);
             sites::Spec s = r.spec;
+            const json before = r.spec.toJson();
             const sites::Kind* kind = sites::findKind(s.kind);
             const json given = givenParams(a, *kind, cmd);
             for (const auto& [key, v] : given.items())
@@ -1064,6 +1128,8 @@ void registerSites(ext::Context& ctx)
                 r = findSite(r.mesh, cmd);
             }
             json out = created(r, groundOut, cmd);
+            if (!massingOn(r) && s.toJson() != before)
+                out["buildings"] = rebuildSiteBuildings(cmd);
             return out;
         },
         .examples = {"siteEdit('port1', tiers=6, fill=0.9)", "siteEdit('CargoPort', at=[5000, -21000], heading=12)"},
@@ -1110,7 +1176,10 @@ void registerSites(ext::Context& ctx)
             }
             slots::unpublish(r.modifierId);
             sites::forgetSite(r.modifierId);
-            return {{"site", r.spec.id}, {"mesh", r.mesh}, {"terrainRemoved", removed}, {"errors", errors}};
+            json out = {{"site", r.spec.id}, {"mesh", r.mesh}, {"terrainRemoved", removed}, {"errors", errors}};
+            if (Graph::current().find(kSiteBuildings))
+                out["buildings"] = rebuildSiteBuildings(cmd);
+            return out;
         },
         .examples = {"siteRemove('cemetery1')"},
     });
@@ -1161,6 +1230,34 @@ void registerSites(ext::Context& ctx)
             return {{"envelopes", envs}, {"count", envs.size()}, {"styles", styles}, {"sites", list.size()}};
         },
         .examples = {"e = siteEnvelopes()\n[x['style'] for x in e['envelopes']][:5]"},
+    });
+
+    ctx.registerCommand({
+        .name = "siteBuildings",
+        .doc = "Build site kits' buildings with the Buildings generator: each envelope (siteEnvelopes) becomes a procedural building "
+               "in its kit's style (portShed, warehouse, packingPlant, mausoleum, hangar, narcoMansion, church, civic, colonialCentro, "
+               "villageAdobe, ruralShack, terminal, lighthouse), under the group SiteBuildings, and the site's greybox massing turns "
+               "off. Building ids are stable per envelope, so edits, slot overrides and pins carry over; siteEdit rebuilds them when "
+               "the layout changes. remove=True turns massing back on and drops those buildings. Returns the group, building count, "
+               "styles and slots.",
+        .positionalDoc = "sites (ids or meshes; default every site)",
+        .flags = {{"remove", "rm", T::Bool, false, "Back to greybox massing."}},
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+            const std::string cmd = "siteBuildings";
+            std::vector<SiteRef> list;
+            for (const json& p : a.positional)
+                if (p.is_string())
+                    list.push_back(findSite(p.get<std::string>(), cmd));
+            if (list.empty())
+                list = allSites(cmd);
+            if (list.empty())
+                throw CommandError(cmd + ": no site in the scene (make one with siteCreate)");
+            for (const SiteRef& r : list)
+                setMassing(r, a.get<bool>("remove", false));
+            return rebuildSiteBuildings(cmd);
+        },
+        .examples = {"siteBuildings()", "siteBuildings('port1')['styles']", "siteBuildings('cemetery1', remove=True)"},
     });
 
     ctx.registerCommand({
