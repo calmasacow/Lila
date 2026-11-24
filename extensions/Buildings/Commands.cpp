@@ -468,10 +468,10 @@ int ensureMaterials(const std::set<std::string>& styleIds)
 {
     scene::Graph& g = G();
     int made = 0;
-    auto make = [&](const std::string& name, glm::vec3 c, double rough) {
+    auto make = [&](const std::string& name, glm::vec3 c, double rough, bool instanceColor = true) {
         if (scene::materials::find(g, name))
             return;
-        json call = {{"args", {name}}, {"baseColor", {c.r, c.g, c.b}}, {"roughness", rough}};
+        json call = {{"args", {name}}, {"baseColor", {c.r, c.g, c.b}}, {"roughness", rough}, {"instanceColor", instanceColor}};
         if (name == matName(MatGlassClear))
         {
             call["blendMode"] = "translucent";
@@ -490,7 +490,7 @@ int ensureMaterials(const std::set<std::string>& styleIds)
         {MatConcrete, {0.45f, 0.44f, 0.42f}}, {MatStone, {0.4f, 0.37f, 0.33f}}, {MatWater, {0.03f, 0.25f, 0.35f}}, {MatWood, {0.25f, 0.14f, 0.07f}},
         {MatDark, {0.03f, 0.03f, 0.03f}},     {MatGlassClear, {0.55f, 0.65f, 0.7f}}};
     for (auto& [m, c] : kShared)
-        make(matName(m), c, m == MatGlass || m == MatWater || m == MatGlassClear ? 0.1 : m == MatMetal ? 0.5 : 0.8);
+        make(matName(m), c, m == MatGlass || m == MatWater || m == MatGlassClear ? 0.1 : m == MatMetal ? 0.5 : 0.8, false);
 
     return made;
 }

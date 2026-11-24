@@ -3,6 +3,7 @@
 // OSM fixture town through Settlement's buildings route, and a performance budget.
 
 #include "extensions/ExtensionManager.h"
+#include "gn/InstanceView.h"
 #include "gn/NodeLib.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
@@ -101,6 +102,23 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
     CHECK(made["buildings"] == 2);
     CHECK(made["slots"].get<int>() > 20);
     const std::string A = "building:1111", B = "building:2222";
+
+    // Modules carry their building's palette colour into the instanced draw; shared module materials keep their own.
+    {
+        scene::Graph& g = scene::Graph::current();
+        for (int k = 0; k < 3; ++k)
+            g.evaluate();
+        size_t colored = 0;
+        for (scene::NodeId id : g.nodes())
+            if (gn::InstanceViewPtr v = gn::instanceViewFor(g, id))
+                for (const gn::InstancePart& p : v->parts)
+                    if (p.colors)
+                        for (const glm::vec4& c : *p.colors)
+                            colored += c.a == 1.0f && c != glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        CHECK(colored > 10);
+        CHECK(run("getAttr", {{"args", {"bld_glass.instanceColor"}}}) == false);
+        CHECK(run("getAttr", {{"args", {"Bld_colonialCentro_render0.instanceColor"}}}) == true);
+    }
     const uint64_t before = hashIds(slotIds(B));
     const std::vector<std::string> aBefore = slotIds(A);
 
