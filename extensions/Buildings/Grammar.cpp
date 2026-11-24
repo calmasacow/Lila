@@ -336,10 +336,22 @@ std::vector<TierPlan> planTiers(Ctx& c)
                     t.edgeIds.push_back("f" + std::to_string(e));
             }
             t.bottom = base ? c.groundLo - 20.0 : ts[k].bottom;
+            // A part standing inside a lower volume rises from that volume's top, not from inside it.
+            if (!base)
+                for (const TierPlan& below : tiers)
+                    if (below.top > t.bottom + 1.0 && inside(below.ring, centroid(t.ring)))
+                    {
+                        bool all = true;
+                        for (const Vec2& q : t.ring)
+                            all = all && (inside(below.ring, q) || glm::length(q - below.ring[0]) < 1.0);
+                        if (all || overlapArea(t.ring, below.ring) > 0.9 * std::abs(signedArea(t.ring)))
+                            t.bottom = std::max(t.bottom, below.top);
+                    }
             t.top = std::max(ts[k].top, t.bottom + 250.0);
+
             if (base)
                 t.holes = sp.holes;
-            double y = base ? c.floor0 : ts[k].bottom;
+            double y = base ? c.floor0 : t.bottom;
             int idx = base ? 0 : 100 * int(k);
             for (int f = 0; y < t.top - 150.0 && f < 200; ++f)
             {
@@ -443,7 +455,8 @@ void addTowers(Ctx& c, std::vector<TierPlan>& tiers)
         t.cap = cap;
         tiers.push_back(std::move(t));
     };
-    if (c.st.bellTowers > 0)
+    // Imported parts already give a building its towers.
+    if (c.st.bellTowers > 0 && c.spec.tiers.size() < 2)
     {
         // The front facade: the street edge facing most along the front.
         int front = -1;

@@ -232,7 +232,8 @@ TEST_CASE("buildings commands: the OSM fixture town through Settlement's buildin
     for (const json& s : signs["slots"])
         CHECK_FALSE(s["payload"]["data"].value("text", std::string()).empty());
     const json check = run("buildingCheck");
-    CHECK(check["counts"]["realName"] == 0);
+    CAPTURE(check["counts"].dump());
+    CHECK(check["ok"] == true);
     CHECK(run("realNameCheck", {{"scene", true}})["ok"] == true);
 
     // One rule swaps every storefront sign.

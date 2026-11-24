@@ -774,12 +774,24 @@ std::map<std::string, std::vector<std::string>> editBuildings(const std::vector<
 {
     std::map<std::string, std::vector<std::string>> byMod;
     std::map<std::string, std::string> modOf;
-    for (auto& [mesh, mod] : buildingMeshes())
-        for (const json& s : parseArray(getString(mod + ".spec")))
-            modOf[s.value("id", std::string())] = mod;
+    // What the nodes published says where each building is; the specs are read only for buildings it doesn't know yet.
+    scene::Graph& g = G();
+    for (const auto& p : allPublished())
+        if (scene::Node* mod = g.node(scene::NodeId(p->modifier)))
+            for (const auto& [id, index] : p->byId)
+                modOf[id] = mod->path();
+    bool scanned = false;
     for (const std::string& id : ids)
     {
         auto it = modOf.find(id);
+        if (it == modOf.end() && !scanned)
+        {
+            scanned = true;
+            for (auto& [mesh, mod] : buildingMeshes())
+                for (const json& s : parseArray(getString(mod + ".spec")))
+                    modOf[s.value("id", std::string())] = mod;
+            it = modOf.find(id);
+        }
         if (it == modOf.end())
             throw CommandError(std::string(cmd) + ": no building " + id);
         byMod[it->second].push_back(id);
@@ -1087,11 +1099,15 @@ void registerCommands(ext::Context& ctx)
             }
             int named = 0;
             {
+                // Names may repeat across a city (NameBook's no-repeat rule runs out of words over thousands of shops); never a real one.
                 lila::names::NameBook book(culture);
                 for (Spec& s : specs)
                     if (isBusiness(s) && s.businesses.empty() && s.name.empty())
                     {
-                        s.name = book.place(lila::names::Kind::Business, s.program.empty() ? "shop" : s.program, s.key);
+                        for (int attempt = 0; attempt < 8 && (s.name.empty() || book.real(s.name)); ++attempt)
+                            s.name = lila::names::placeName(culture, lila::names::Kind::Business, s.program.empty() ? "shop" : s.program, s.key, attempt);
+                        if (book.real(s.name))
+                            s.name.clear();
                         ++named;
                     }
             }

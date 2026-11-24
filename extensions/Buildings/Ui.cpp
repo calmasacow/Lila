@@ -173,8 +173,13 @@ QWidget* buildingForm(scene::NodeId meshId)
     for (size_t i = 0; i < pub->specs.size(); ++i)
     {
         const Spec& s = pub->specs[i];
-        const std::string text = (s.name.empty() ? s.id.substr(9) : s.name) + "  " + pub->results[i]->style;
+        const std::string label = s.name.empty() ? "Building " + std::to_string(i + 1) : s.name;
+        std::string styleLabel = pub->results[i]->style;
+        if (std::shared_ptr<const Style> st = findStyle(styleLabel))
+            styleLabel = st->label;
+        const std::string text = label + "  (" + styleLabel + ")";
         which->addItem(qs(text), qs(s.id));
+        which->setItemData(int(i), qs(s.id), Qt::ToolTipRole);
     }
     which->setCurrentIndex(index);
     which->setToolTip("The building the fields below edit; Paint Bays picks one by clicking it");
@@ -426,10 +431,10 @@ void registerUi(ext::Context& ctx)
 
     levelToolkit::add(ctx, {.id = "buildings",
                             .title = "Buildings",
-                            .items = {{.action = "buildings.create", .icon = "building-community", .text = "Create", .shelf = "Buildings", .group = "Buildings"},
-                                      {.action = "buildings.paint", .icon = "brush", .text = "Paint Bays", .shelf = "Bays", .group = "Buildings"},
-                                      {.action = "buildings.style", .icon = "palette", .text = "Style", .group = "Buildings"},
-                                      {.action = "buildings.check", .icon = "list-check", .text = "Check", .group = "Buildings"},
+                            .items = {{.action = "buildings.create", .icon = "building-community", .text = "Create", .shelf = "Buildings"},
+                                      {.action = "buildings.paint", .icon = "brush", .text = "Paint Bays", .shelf = "Bays"},
+                                      {.action = "buildings.style", .icon = "palette", .text = "Style"},
+                                      {.action = "buildings.check", .icon = "list-check", .text = "Check"},
                                       {.action = "buildings.age", .text = "Age"},
                                       {.action = "buildings.standalone", .text = "Standalone"},
                                       {.action = "buildings.lod", .text = "LOD", .rare = true},

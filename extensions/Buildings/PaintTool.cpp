@@ -50,7 +50,7 @@ const Brush kBrushes[] = {
     {"awning", "Awning", "tent", "Add or remove an awning over a shopfront", true},
     {"ac", "AC Unit", "air-conditioning", "Add or remove an AC unit by the window", true},
     {"grille", "Grille", "grid-4x4", "Add or remove window bars", true},
-    {"shutter", "Shutter", "blind", "Add or remove a roll-up shutter", true},
+    {"shutter", "Shutter", "layout-rows", "Add or remove a roll-up shutter", true},
     {"reset", "Reset", "eraser", "Back to what the style makes", true},
 };
 int gBrush = 0;
