@@ -471,8 +471,14 @@ std::vector<DrawBatch> drawBatches(Graph& g, NodeId set)
             continue;
         auto [it, added] = at.try_emplace(v.key, out.size());
         if (added)
-            out.push_back({v.mesh, v.key, {}});
-        out[it->second].transforms.push_back(glm::mat4(s.transform));
+            out.push_back({v.mesh, v.key, {}, {}});
+        DrawBatch& b = out[it->second];
+        const std::optional<glm::vec4> color = dataColor(r.payload.data);
+        if (color && b.colors.empty())
+            b.colors.assign(b.transforms.size(), glm::vec4(0.0f));
+        b.transforms.push_back(glm::mat4(s.transform));
+        if (!b.colors.empty())
+            b.colors.push_back(color.value_or(glm::vec4(0.0f)));
     }
     return out;
 }

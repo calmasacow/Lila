@@ -1,7 +1,9 @@
 #include "slots/SlotsGn.h"
 
 #include "geo/Mesh.h"
+#include "gn/InstanceView.h"
 #include "gn/NodesCommon.h"
+#include "math/Color.h"
 #include "scene/Graph.h"
 
 #include <algorithm>
@@ -119,6 +121,38 @@ gn::GeometryPtr applyToInstances(const gn::GeometryPtr& in, NodeId publisher, co
     return applySlots(in, publisher, std::move(slots));
 }
 
+std::optional<glm::vec4> dataColor(const json& data)
+{
+    if (!data.is_object())
+        return std::nullopt;
+    auto it = data.find("color");
+    if (it == data.end())
+        return std::nullopt;
+    if (it->is_string())
+    {
+        std::string hex = it->get<std::string>();
+        if (!hex.empty() && hex.front() == '#')
+            hex.erase(0, 1);
+        if (hex.size() != 6 || hex.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+            return std::nullopt;
+        const unsigned long v = std::stoul(hex, nullptr, 16);
+        return glm::vec4(math::srgbToLinear(float((v >> 16) & 255) / 255.0f), math::srgbToLinear(float((v >> 8) & 255) / 255.0f),
+                         math::srgbToLinear(float(v & 255) / 255.0f), 1.0f);
+    }
+    if (it->is_array() && (it->size() == 3 || it->size() == 4))
+    {
+        glm::vec4 c(1.0f);
+        for (size_t i = 0; i < it->size(); ++i)
+        {
+            if (!(*it)[i].is_number())
+                return std::nullopt;
+            c[int(i)] = (*it)[i].get<float>();
+        }
+        return c;
+    }
+    return std::nullopt;
+}
+
 gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vector<Slot> slots)
 {
     if (!in || !in->instances)
@@ -143,6 +177,8 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
     std::map<std::string, int> refOfKey;
     bool missing = false;
     std::vector<int32_t> slotIndex;
+    // Payload colours (rules and overrides included) over the generator's own instance colours.
+    std::vector<std::pair<size_t, glm::vec4>> payloadColors;
     for (const Slot& s : pinned)
     {
         auto at = byId.find(s.id);
@@ -186,9 +222,22 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
         if (generated)
             out->attrs.copyFrom(src.attrs, row, at->second);
         slotIndex.push_back(generated ? int32_t(at->second) : -1);
+        if (std::optional<glm::vec4> c = dataColor(r.payload.data))
+            payloadColors.push_back({row, *c});
     }
     std::span<int32_t> idx = out->attrs.getOrAdd<int32_t>("slotIndex");
     std::copy(slotIndex.begin(), slotIndex.end(), idx.begin());
+    if (!payloadColors.empty())
+    {
+        std::vector<glm::vec4> colors(out->size());
+        for (size_t k = 0; k < colors.size(); ++k)
+            colors[k] = gn::instanceColor(*out, k);
+        for (const auto& [row, c] : payloadColors)
+            colors[row] = c;
+        out->attrs.remove(gn::kInstanceColorAttr);
+        std::span<glm::vec4> dst = out->attrs.getOrAdd<glm::vec4>(gn::kInstanceColorAttr);
+        std::copy(colors.begin(), colors.end(), dst.begin());
+    }
     (void)missing;
     gn::Geometry g = *in;
     g.instances = std::move(out);

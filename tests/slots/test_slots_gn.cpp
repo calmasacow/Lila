@@ -38,7 +38,7 @@ size_t instanceCount(const gn::InstanceViewPtr& v)
 
 struct Scatter
 {
-    std::string mesh, cube, slotsNode;
+    std::string mesh, cube, slotsNode, instancer;
 };
 
 Scatter scatter()
@@ -51,6 +51,7 @@ Scatter scatter()
     const std::string grid = gnAdd("Props", "MeshGrid"), dist = gnAdd("Props", "DistributePointsOnFaces"), iop = gnAdd("Props", "InstanceOnPoints");
     s.cube = gnAdd("Props", "MeshCube");
     s.slotsNode = gnAdd("Props", "Slots");
+    s.instancer = iop;
     gnSet("Props", grid + ".sizeX", 400);
     gnSet("Props", grid + ".sizeY", 400);
     gnSet("Props", dist + ".density", 2);
@@ -127,4 +128,56 @@ TEST_CASE("int attributes make the path when given")
         CHECK(id.starts_with("yard:Port/missing?"));
     const json rep = gnRun("slotReport", {{"validate", false}});
     CHECK_FALSE(rep["duplicates"].empty());
+}
+
+TEST_CASE("instance colours: a stored colour, a rule's data colour and an override's reach the instanced draw")
+{
+    const Scatter s = scatter();
+    gn::InstanceViewPtr v = settle(s.mesh);
+    const size_t n = instanceCount(v);
+    REQUIRE(n > 10);
+    REQUIRE(v->parts.size() == 1);
+    CHECK_FALSE(v->parts[0].colors);
+
+    // A colour the generator stores on its instances.
+    const std::string store = gnAdd("Props", "StoreNamedAttribute");
+    gnSet("Props", store + ".dataType", "color");
+    gnSet("Props", store + ".domain", "instance");
+    gnSet("Props", store + ".name", "color");
+    gnSet("Props", store + ".value", json::array({0.0, 1.0, 0.0, 1.0}));
+    gnLink("Props", s.instancer + ".instances", store + ".geometry");
+    gnLink("Props", store + ".geometry", s.slotsNode + ".instances");
+    v = settle(s.mesh);
+    REQUIRE(v->parts.size() == 1);
+    REQUIRE(v->parts[0].colors);
+    REQUIRE(v->parts[0].colors->size() == n);
+    for (const glm::vec4& c : *v->parts[0].colors)
+        CHECK(c == glm::vec4(0, 1, 0, 1));
+
+    // A rule's data colour (sRGB hex) wins over it, and an override's over the rule's.
+    gnRun("slotRule", {{"args", {"add"}}, {"type", "container"}, {"data", {{"color", "#ff0000"}}}});
+    v = settle(s.mesh);
+    REQUIRE(v->parts[0].colors);
+    for (const glm::vec4& c : *v->parts[0].colors)
+        CHECK(c == glm::vec4(1, 0, 0, 1));
+    const std::string first = slotIds().front();
+    gnRun("slotSet", {{"id", first}, {"data", {{"color", json::array({0.0, 0.0, 1.0, 0.5})}}}});
+    v = settle(s.mesh);
+    int blue = 0, red = 0, other = 0;
+    for (const glm::vec4& c : *v->parts[0].colors)
+    {
+        if (c == glm::vec4(0, 0, 1, 0.5f))
+            ++blue;
+        else if (c == glm::vec4(1, 0, 0, 1))
+            ++red;
+        else
+            ++other;
+    }
+    CHECK(blue == 1);
+    CHECK(red == int(n) - 1);
+    CHECK(other == 0);
+
+    CHECK(slots::dataColor({{"color", "#808080"}})->r == doctest::Approx(0.2158f).epsilon(0.01));
+    CHECK_FALSE(slots::dataColor({{"color", "red"}}));
+    CHECK_FALSE(slots::dataColor({{"livery", "x"}}));
 }
