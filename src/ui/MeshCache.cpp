@@ -1,4 +1,5 @@
 #include "ui/MeshCache.h"
+#include "core/Release.h"
 
 #include "core/Log.h"
 #include "core/PrefStore.h"
@@ -479,7 +480,7 @@ void dropExpired(std::unordered_map<const geo::Mesh*, Entry>& c)
             ++it;
     constexpr size_t kOnItsOwn = 64;
     if (doomed.size() >= kOnItsOwn)
-        std::thread([d = std::move(doomed)] {}).detach();
+        release::laterEach(std::move(doomed));
 }
 
 const Entry* entryFor(const scene::MeshPtr& mesh, bool tangents = false, scene::NodeId owner = scene::kNoNode)
@@ -622,7 +623,7 @@ void dropExpiredMasked()
             ++it;
     constexpr size_t kOnItsOwn = 64;
     if (doomed.size() >= kOnItsOwn)
-        std::thread([d = std::move(doomed)] {}).detach();
+        release::laterEach(std::move(doomed));
 }
 
 /** The subset of full's triangles and wire that faces (null: all) shows; reads only, so meshes can be masked in parallel. */

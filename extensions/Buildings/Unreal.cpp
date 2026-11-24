@@ -9,6 +9,7 @@
 #include "BuildingsScene.h"
 
 #include <lila/Command.h>
+#include <lila/Deformer.h>
 #include <lila/Extension.h>
 #include <lila/Graph.h>
 #include <lila/GeometryNodes.h>

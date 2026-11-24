@@ -161,7 +161,7 @@ public:
         return *r;
     }
 
-    fs::path start(int seconds, int maxSeconds = kMaxSeconds)
+    fs::path start(int seconds, bool fromCommand = false)
     {
         if (busy())
             throw std::runtime_error("A recording is already running.");
@@ -179,7 +179,7 @@ public:
         const std::string stem = "lila-perf-" + QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss").toStdString();
         mTrace = folder() / (stem + ".tracy");
         mZip = folder() / (stem + ".zip");
-        mSeconds = std::clamp(seconds, 1, maxSeconds);
+        mSeconds = recordingSeconds(seconds, fromCommand);
         mError.clear();
         mSystemTracing = false;
         mOutput.clear();
@@ -527,7 +527,9 @@ QPointer<TraceDialog> gDialog;
 
 fs::path folder() { return paths::userConfigDir() / "perf-traces"; }
 
-fs::path record(int seconds) { return Recorder::get().start(seconds, kMaxCommandSeconds); }
+fs::path record(int seconds) { return Recorder::get().start(seconds, true); }
+
+int recordingSeconds(int seconds, bool fromCommand) { return std::clamp(seconds, 1, fromCommand ? kMaxCommandSeconds : kMaxSeconds); }
 
 json status()
 {

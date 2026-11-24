@@ -3,6 +3,7 @@
 #include "core/Log.h"
 #include "core/Paths.h"
 #include "core/Profile.h"
+#include "core/Release.h"
 #include "render/Atmosphere.h"
 #include "render/Backdrop.h"
 #include "render/CameraRelative.h"
@@ -807,6 +808,8 @@ struct Viewport
     int retries = 0;       // redraws in a row after an out-of-date swapchain
     int msaaGeneration = -1; // Impl::msaaGeneration the targets were made for
     FrameState state;
+    /** The replaced frame's vertex lists, for the main thread's next frame. */
+    FrameState spare;
     /** The last frame's mesh draws and their batches, reused while a new frame draws the same list. Render thread only. */
     DrawList keptMeshes;
     DrawBatches keptBatches;
@@ -9022,6 +9025,7 @@ void Renderer::submit(ViewportId id, FrameState state)
         if (it == m->viewports.end())
             return;
         previous = std::exchange(it->second->state, std::move(state));
+        render::reuseBuffers(it->second->spare, previous);
         ++it->second->submitted;
         it->second->pending = true;
         it->second->hasState = true;
@@ -9030,7 +9034,14 @@ void Renderer::submit(ViewportId id, FrameState state)
     m->cv.notify_all();
     // The frame before can hold the last references to a replaced scene's draws: gigabytes, freed off the main thread.
     if (constexpr size_t kOnItsOwn = 1000; previous.meshes.size() >= kOnItsOwn)
-        std::thread([p = std::move(previous)] {}).detach();
+        release::later(std::move(previous));
+}
+
+void Renderer::reuseBuffers(ViewportId id, FrameState& state)
+{
+    std::scoped_lock lock(m->mutex);
+    if (auto it = m->viewports.find(id); it != m->viewports.end())
+        render::reuseBuffers(state, it->second->spare);
 }
 
 Renderer::FrameStats Renderer::stats(ViewportId id) const
