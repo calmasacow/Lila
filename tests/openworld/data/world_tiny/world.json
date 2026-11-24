@@ -148,7 +148,9 @@
    ],
    "profile": "usTown",
    "fill": "none",
-   "buildings": true
+   "buildings": {
+    "lod": "near"
+   }
   }
  ],
  "sites": [
@@ -242,6 +244,9 @@
    }
   }
  ],
+ "buildings": {
+  "lod": "near"
+ },
  "slots": {
   "rules": [
    {

@@ -357,6 +357,18 @@ void seedEdits(const std::string& groupName, const json& edits)
     setStringAttr(grp, "buildingsOrphanEdits", merged.dump(), "Buildings edits waiting for the buildings they name.");
 }
 
+/** The level of detail a Buildings group's new cells start at (near, hlod or far). */
+void seedLod(const std::string& groupName, const std::string& lod)
+{
+    if (lod != "near" && lod != "hlod" && lod != "far")
+        throw std::runtime_error("buildings lod is near, hlod or far, not " + lod);
+    Graph& g = Graph::current();
+    std::string grp = g.find(groupName) ? g.find(groupName)->path() : std::string();
+    if (grp.empty())
+        grp = pathOfResult(run("group", {{"empty", true}, {"name", groupName}}));
+    setStringAttr(grp, "buildingsLod", lod, "The level of detail new building cells start at.");
+}
+
 struct BuildOptions
 {
     bool replace = false;
@@ -599,7 +611,8 @@ json buildWorld(json spec, const BuildOptions& o)
         const std::string id = s.value("id", std::string());
         json made1;
         if (!st.run("site." + (id.empty() ? s["kind"].get<std::string>() : id), [&] {
-                json call = {{"kind", s["kind"]}, {"terrain", terrain}, {"culture", s.value("culture", culture)}};
+                // Graded all together after the loop: one terrain change instead of one per site.
+                json call = {{"kind", s["kind"]}, {"terrain", terrain}, {"culture", s.value("culture", culture)}, {"ground", false}};
                 for (const char* k : {"id", "name", "seed", "at", "heading", "waterLevel", "params"})
                     if (s.contains(k) && !s[k].is_null())
                         call[k] = s[k];
@@ -620,6 +633,9 @@ json buildWorld(json spec, const BuildOptions& o)
         if (s.value("buildings", true))
             siteIds.push_back(sid);
     }
+    if (!built["sites"].empty())
+        st.run("sites.grade", [&] { return run("siteGround", {{"sites", built["sites"]}}); });
+
     // Settlements: each from OSM (the remix's or a file, clipped to its area) or laid out by Settlement, then its buildings.
     const json editsByGroup = spec.value("buildings", json::object()).value("edits", json::object());
     std::optional<OsmDoc> remixDoc;
@@ -723,6 +739,9 @@ json buildWorld(json spec, const BuildOptions& o)
         const std::string groupName = g.find(mesh) ? g.find(mesh)->name() + "_Buildings" : sname + "_Buildings";
         st.run("buildings." + sname, [&] {
             seedEdits(groupName, editsByGroup.value(groupName, json::object()));
+            const std::string lod = b.is_object() && b.contains("lod") ? b["lod"].get<std::string>() : spec.value("buildings", json::object()).value("lod", std::string());
+            if (!lod.empty())
+                seedLod(groupName, lod);
             json call = {{"args", {mesh}}, {"route", "buildings"}};
             if (b.is_object())
             {
@@ -766,6 +785,8 @@ json buildWorld(json spec, const BuildOptions& o)
     if (!siteIds.empty() && !skipped("buildings") && ops::find("buildingCreate"))
         st.run("buildings.sites", [&] {
             seedEdits("SiteBuildings", editsByGroup.value("SiteBuildings", json::object()));
+            if (const std::string lod = spec.value("buildings", json::object()).value("lod", std::string()); !lod.empty())
+                seedLod("SiteBuildings", lod);
             json call = {{"args", siteIds}};
             json r = run("siteBuildings", call);
             if (r.contains("group") && r["group"].is_string())

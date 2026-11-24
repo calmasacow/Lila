@@ -179,6 +179,10 @@ TEST_CASE("world: worldBuild on a tiny world, read back, rebuilt the same, mappe
     lila::scene::Graph& g = lila::scene::Graph::current();
     CHECK(g.find("Pueblo_Buildings"));
     CHECK(g.find("SiteBuildings"));
+    // Zones are named from the naming cultures: Settlement's district names, fictional names for the rest, none numbered.
+    for (const json& l : run("zoneSpec")["layers"])
+        for (const json& z : l["zones"])
+            CHECK_MESSAGE(z.value("nameSource", std::string()) != "numbered", z.dump().substr(0, 200));
     // Site buildings come from Buildings in their kits' styles; the site draws no massing.
     const json sb = run("siteBuildings", {{"args", {"v1", "c1"}}});
     CHECK(sb["buildings"].get<int>() > 3);

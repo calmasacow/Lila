@@ -80,7 +80,7 @@ const json& worldSpecSchema()
              {"margin", num("Room round the imported streets, cm.")},
              {"culture", str("Naming culture; default the world's.")},
              {"create", obj("settlementCreate flags, for a settlement laid out by Settlement alone (outline, profile, seed, ...).")},
-             {"buildings", {{"description", "true, or {style, cell, culture, districts: {district name: style}}: build it with the Buildings generator."}}},
+             {"buildings", {{"description", "true, or {style, cell, lod, districts: {district name: style}}: build it with the Buildings generator."}}},
              {"furniture", {{"description", "true or settlementFurniture flags: street furniture as slots."}}}});
         json site = obj("A site kit: siteCreate's spec (siteInfo()['spec']) plus buildings.",
                         {{"kind", str("port, cruise, lighthouse, cemetery, airstrip, farm, village, compound, island (siteKinds).")},
@@ -114,6 +114,7 @@ const json& worldSpecSchema()
               {"buildings", obj("Buildings across the world.",
                                 {{"edits", obj("{group name: {building id: edit}}: Buildings edits (style, floors, bays, palette, enterable, ...) by "
                                                "building id, seeded into each group before it builds, so they survive a rebuild.")},
+                                 {"lod", {{"type", "string"}, {"enum", {"near", "hlod", "far"}}, {"description", "Level of detail new building cells start at (per settlement: buildings.lod); default near."}}},
                                  {"styles", {{"type", "array"},
                                              {"description", "buildingStyle calls run after everything is built: {style, polygon} or {style, building}."},
                                              {"items", {{"type", "object"}}}}}})},

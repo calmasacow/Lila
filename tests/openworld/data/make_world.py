@@ -363,7 +363,7 @@ def build(size, out):
         "settlements": [
             {"name": "Puerto", "osm": "remix", "area": [city_lo[0], city_lo[1], city_hi[0], city_hi[1]], "profile": "usTown", "fill": "none" if tiny else "sparse",
              "buildings": {"cell": 6400, "districts": {}}},
-            {"name": "Capital", "osm": "remix", "area": [cap_lo[0], cap_lo[1], cap_hi[0], cap_hi[1]], "profile": "usTown", "fill": "none" if tiny else "sparse", "buildings": True},
+            {"name": "Capital", "osm": "remix", "area": [cap_lo[0], cap_lo[1], cap_hi[0], cap_hi[1]], "profile": "usTown", "fill": "none" if tiny else "sparse", "buildings": {"lod": "near"}},
         ],
         "sites": [
             {"kind": "port", "id": "port", "at": [sea_x(0.125) + 5000, coast.world(0.2, 0.125)[1]], "heading": 90, "params": {"quayLength": 50000 if not tiny else 40000, "tiers": 3}},
@@ -382,6 +382,7 @@ def build(size, out):
             {"kind": "village", "id": "noria", "at": coast.world(0.70, 0.94)},
             {"kind": "village", "id": "quelite", "at": coast.world(0.50, 0.94)},
         ]),
+        "buildings": {"lod": "near" if tiny else "hlod"},
         "slots": {"rules": [{"id": "signs", "name": "Fictional signs", "type": "sign.storefront", "payload": {"poolTag": "fictional_signs"}},
                             {"id": "palms", "name": "Palms", "type": "tree.palm", "payload": {"poolTag": "palms"}}]},
         "zones": {"name": "Zones", "fromDistricts": True, "fromWater": True,
@@ -398,8 +399,13 @@ def build(size, out):
         real["name"] = "SinaloaReal"
         real["description"] = ("Real data for Mazatlan and Culiacan, fetched with remixSource(fetch=True) only after the size is shown and "
                                "accepted: DEM (Copernicus 30 m via OpenTopography), OSM (Overpass), WorldCover land cover, GEBCO bathymetry. "
-                               "Run the fetch first; positions match the synthetic spec, check them against the fetched map.")
-        real["remix"]["scale"] = {"horizontal": "1:3", "vertical": "1:1.5"}
+                               "Run the fetch first (remixCreate with these sources, then remixSource(id=..., bbox=..., fetch=True) for each, "
+                               "and terrainBathymetry(fetch=True, estimate=True) for the GEBCO size), point the file paths at what it wrote, "
+                               "then worldBuild. Settlement areas and site positions follow the synthetic map: check them on worldMap first.")
+        # The real Mazatlan box is about 22 km across: 1:1.4 fits it to the 16 km map; the capital cut is downtown Culiacan.
+        real["remix"]["scale"] = {"horizontal": "1:1.4", "vertical": "1:1.2"}
+        h = 250000.0
+        real["remix"]["regions"][0]["polygon"] = [[cap_at[0] - h, cap_at[1] - h], [cap_at[0] + h, cap_at[1] - h], [cap_at[0] + h, cap_at[1] + h], [cap_at[0] - h, cap_at[1] + h]]
         real["remix"]["sources"] = [
             {"id": "coast", "bbox": [-106.52, 23.13, -106.30, 23.32], "dem": "real/mazatlan_dem.tif", "osm": "real/mazatlan.osm.pbf",
              "landcover": "real/mazatlan_worldcover.tif", "bathymetry": "real/gebco_mazatlan.tif", "at": [0, 0]},
