@@ -130,7 +130,22 @@ void BuildVariation(UMaterialFunction* Function)
 	G.Finish();
 }
 
-void Master(UMaterial* Material, UMaterialFunction* Function, TArray<FString>& OutWarnings)
+/** MF_LilaBuildingGlass: the clear glazing of enterable buildings, a tinted pane you see the rooms through. */
+void BuildGlass(UMaterialFunction* Function)
+{
+	LilaLink::FFunctionGraph G(Function, TEXT("Lila Building Glass: clear window glass for enterable buildings (tint, opacity, roughness)."));
+	UMaterialExpression* Tint = G.VectorInput(TEXT("GlassTint"), FLinearColor(0.55f, 0.62f, 0.66f), TEXT("Glass"), TEXT("Colour of the pane."));
+	UMaterialExpression* Opacity = G.ScalarInput(TEXT("GlassOpacity"), 0.18f, TEXT("Glass"), TEXT("0 is invisible, 1 opaque."));
+	UMaterialExpression* Rough = G.ScalarInput(TEXT("GlassRoughness"), 0.04f, TEXT("Glass"), TEXT("Roughness of the pane."));
+	G.Output(Custom(G, TEXT("tint"), TEXT("return T;"), CMOT_Float3, {Wire(TEXT("T"), Tint)}, -200), TEXT("BaseColor"), TEXT("The pane's colour."));
+	G.Output(Custom(G, TEXT("opacity"), TEXT("return saturate(O);"), CMOT_Float1, {Wire(TEXT("O"), Opacity)}, -200), TEXT("Opacity"),
+		TEXT("Opacity for a translucent material."));
+	G.Output(Custom(G, TEXT("roughness"), TEXT("return saturate(R);"), CMOT_Float1, {Wire(TEXT("R"), Rough)}, -200), TEXT("Roughness"),
+		TEXT("The pane's roughness."));
+	G.Finish();
+}
+
+void Master(UMaterial* Material,UMaterialFunction* Function, TArray<FString>& OutWarnings)
 {
 	UMaterialExpressionMaterialFunctionCall* Call = LilaLink::ResetToFunctionCall(Material, Function);
 	if (!LilaLink::ConnectFunctionOutputs(Call, {{TEXT("BaseColor"), MP_BaseColor}, {TEXT("Roughness"), MP_Roughness}}))
@@ -400,21 +415,29 @@ TSharedRef<FJsonObject> AssignGlass(const TArray<TSharedPtr<FJsonValue>>& Assets
 	{
 		Card = InstanceFor(TEXT("MI_Bld_InteriorCard"), Interior, Created, Warnings);
 	}
-	UMaterial* Glass = LoadObject<UMaterial>(nullptr, TEXT("/Game/LilaLink/Buildings/M_LilaBuildingGlass.M_LilaBuildingGlass"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	FString Error;
+	const LilaLink::FMaterialPair GlassPair =
+		LilaLink::FindOrCreateMaterialPair(LilaLink::MastersFolderPath(), TEXT("MF_LilaBuildingGlass"), TEXT("M_LilaBuildingGlass"), Error);
+	UMaterial* Glass = GlassPair.Material;
 	if (!Glass)
 	{
-		UPackage* Package = CreatePackage(TEXT("/Game/LilaLink/Buildings/M_LilaBuildingGlass"));
-		Glass = NewObject<UMaterial>(Package, TEXT("M_LilaBuildingGlass"), RF_Public | RF_Standalone | RF_Transactional);
+		Warnings.Add(TEXT("M_LilaBuildingGlass: ") + Error);
+	}
+	else if (GlassPair.bCreated || VersionOf(GlassPair.Function) < Version)
+	{
+		BuildGlass(GlassPair.Function);
+		LilaLink::ConnectFunctionOutputs(LilaLink::ResetToFunctionCall(Glass, GlassPair.Function),
+			{{TEXT("BaseColor"), MP_BaseColor}, {TEXT("Opacity"), MP_Opacity}, {TEXT("Roughness"), MP_Roughness}});
 		Glass->BlendMode = BLEND_Translucent;
-		Glass->TranslucencyLightingMode = TLM_Surface;
-		Glass->bUsedWithInstancedStaticMeshes = true;
-		FAssetRegistryModule::AssetCreated(Glass);
+		Glass->TranslucencyLightingMode = TLM_SurfacePerPixelLighting;
+		Glass->SetUsageByFlag(MATUSAGE_InstancedStaticMeshes, true);
 		Glass->PostEditChange();
 		Glass->MarkPackageDirty();
+		Created.AddUnique(GlassPair.Function->GetPathName());
 		Created.AddUnique(Glass->GetPathName());
 	}
 	UMaterialInterface* Clear = Glass ? InstanceFor(TEXT("MI_Bld_GlassClear"), Glass, Created, Warnings) : nullptr;
-	int32 Slots = 0, Meshes = 0;
+	int32 Slots = 0, Meshes = 0, NotNanite = 0;
 	for (const TSharedPtr<FJsonValue>& V : Assets)
 	{
 		UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *V->AsString(), nullptr, LOAD_NoWarn | LOAD_Quiet);
@@ -422,11 +445,14 @@ TSharedRef<FJsonObject> AssignGlass(const TArray<TSharedPtr<FJsonValue>>& Assets
 		{
 			continue;
 		}
-		bool bChanged = false;
+		// Recorded for undo before anything changes; the package is dirtied only if something does.
+		Mesh->Modify(false);
+		bool bChanged = false, bTranslucent = false;
 		for (FStaticMaterial& S : Mesh->GetStaticMaterials())
 		{
 			const FString Name = S.MaterialSlotName.ToString();
 			UMaterialInterface* Use = Name == TEXT("bld_glass") ? Card : Name == TEXT("bld_glassClear") ? Clear : nullptr;
+			bTranslucent |= Use && Use == Clear;
 			if (Use && S.MaterialInterface != Use)
 			{
 				S.MaterialInterface = Use;
@@ -434,9 +460,17 @@ TSharedRef<FJsonObject> AssignGlass(const TArray<TSharedPtr<FJsonValue>>& Assets
 				++Slots;
 			}
 		}
+		// Nanite draws translucent sections with the default material, so a mesh with clear glass renders without it.
+		if (bTranslucent && Mesh->GetNaniteSettings().bEnabled)
+		{
+			FMeshNaniteSettings Nanite = Mesh->GetNaniteSettings();
+			Nanite.bEnabled = false;
+			Mesh->SetNaniteSettings(Nanite);
+			bChanged = true;
+			++NotNanite;
+		}
 		if (bChanged)
 		{
-			Mesh->Modify();
 			Mesh->PostEditChange();
 			Mesh->MarkPackageDirty();
 			Created.AddUnique(Mesh->GetPathName());
@@ -449,6 +483,7 @@ TSharedRef<FJsonObject> AssignGlass(const TArray<TSharedPtr<FJsonValue>>& Assets
 	}
 	Out->SetNumberField(TEXT("assets"), Meshes);
 	Out->SetNumberField(TEXT("slots"), Slots);
+	Out->SetNumberField(TEXT("naniteOff"), NotNanite);
 	return Out;
 }
 
