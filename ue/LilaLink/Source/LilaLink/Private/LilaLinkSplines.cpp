@@ -17,12 +17,16 @@
 #include "LandscapeSplineControlPoint.h"
 #include "LandscapeSplineSegment.h"
 #include "LandscapeSplinesComponent.h"
+#include "LandscapeStreamingProxy.h"
 #include "Materials/Material.h"
 #include "Misc/Crc.h"
 #include "Misc/PackageName.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
+#include "WorldPartition/LoaderAdapter/LoaderAdapterActorList.h"
 #include "WorldPartition/WorldPartition.h"
+#include "WorldPartition/WorldPartitionActorDescInstance.h"
+#include "WorldPartition/WorldPartitionHelpers.h"
 
 namespace
 {
@@ -171,6 +175,13 @@ void UpdateSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& W
 		Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the splines do not deform it"));
 	}
 	Landscape->RequestSplineLayerUpdate();
+	// Redrawn now rather than on a later tick, so the regions it changed can be marked dirty: the editor only records
+	// automatic landscape changes as modified, and Save All would leave them out.
+	Landscape->ForceUpdateLayersContent();
+	if (ULandscapeInfo* Info = Landscape->GetLandscapeInfo())
+	{
+		Info->MarkModifiedPackagesAsDirty();
+	}
 }
 
 /**
@@ -228,6 +239,30 @@ bool EnsurePaintLayer(ALandscape* Landscape, FName Layer, TArray<FString>& Added
 		Warnings.Add(FString::Printf(TEXT("the landscape's material does not sample paint layer %s: the roads' paint is there but not drawn"), *Layer.ToString()));
 	}
 	return true;
+}
+
+/**
+ * World bounds of what a landscape splines component's points named with Prefix (all with an empty Prefix) shape and paint:
+ * each control point grown by its half width and falloffs. Built from the saved point settings, since the computed spline
+ * bounds are empty until the points are updated.
+ */
+FBox SplineBounds(const ULandscapeSplinesComponent* Component, const FString& Prefix)
+{
+	FBox Box(ForceInit);
+	if (!Component)
+	{
+		return Box;
+	}
+	const FTransform ToWorld = Component->GetComponentTransform();
+	for (const ULandscapeSplineControlPoint* Point : Component->GetControlPoints())
+	{
+		if (Point && (Prefix.IsEmpty() || Point->GetName().StartsWith(Prefix)))
+		{
+			const double Reach = (Point->Width + Point->SideFalloff + Point->EndFalloff) * ToWorld.GetMaximumAxisScale();
+			Box += FBox::BuildAABB(ToWorld.TransformPosition(Point->Location), FVector(Reach));
+		}
+	}
+	return Box;
 }
 
 ESplineMeshAxis::Type AxisFrom(const FString& Name)
@@ -463,10 +498,23 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	ULandscapeSplinesComponent* Component = nullptr;
 	FString Prefix = LandscapePrefix(Id);
 	FString OwnerPath;
+	int32 RegionsLoaded = 0;
 	if (World->GetWorldPartition())
 	{
 		// In a partitioned world each curve gets its own landscape spline actor, found again by its tag.
 		ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged);
+		// Only loaded landscape takes a redraw: load what the earlier and the new splines cover, before the Splines layer is
+		// added, so every region gets that layer too.
+		FBox Covered = SplineActor ? SplineBounds(SplineActor->GetSplinesComponent(), FString()) : FBox(ForceInit);
+		for (const FLilaSpline& Spline : Splines)
+		{
+			for (const FLilaSplinePoint& In : Spline.Points)
+			{
+				// Half width plus the engine's default end falloff, the widest reach a control point paints or shapes.
+				Covered += FBox::BuildAABB(Location + In.Position, FVector(Width * FMath::Abs(In.Scale.Y) + 2000.0));
+			}
+		}
+		RegionsLoaded = LilaLink::LoadLandscapeUnder(World, Covered);
 		if (Tagged && !SplineActor)
 		{
 			World->EditorDestroyActor(Tagged, true);
@@ -631,6 +679,7 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	Out->SetNumberField(TEXT("segments"), SegmentCount);
 	Out->SetArrayField(TEXT("paintLayers"), PaintValues);
 	Out->SetArrayField(TEXT("paintLayersAdded"), AddedValues);
+	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
 	return MakeShared<FJsonValueObject>(Out);
 }
 
@@ -736,10 +785,16 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 	}
 	FScopedTransaction Transaction(NSLOCTEXT("LilaLink", "RemoveSpline", "Lila: Remove Spline"));
 	bool bRemoved = false;
+	int32 RegionsLoaded = 0;
 	TArray<ALandscape*> Reshaped;
 	if (AActor* Tagged = FindTagged(World, TagFor(Id)))
 	{
 		const ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged);
+		if (SplineActor)
+		{
+			// The redraw that takes the splines out reaches loaded landscape only.
+			RegionsLoaded = LilaLink::LoadLandscapeUnder(World, SplineBounds(SplineActor->GetSplinesComponent(), FString()));
+		}
 		const ULandscapeInfo* Info = SplineActor ? SplineActor->GetLandscapeInfo() : nullptr;
 		if (ALandscape* Landscape = Info ? Info->LandscapeActor.Get() : nullptr)
 		{
@@ -770,6 +825,7 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetBoolField(TEXT("removed"), bRemoved);
+	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
 	return MakeShared<FJsonValueObject>(Out);
 }
 } // namespace
@@ -778,4 +834,47 @@ void LilaLink::AddSplineMethods(TMap<FString, FLilaLinkMethod>& Methods)
 {
 	Methods.Add(TEXT("setSpline"), LilaLink::Sync(&SetSpline));
 	Methods.Add(TEXT("removeSpline"), LilaLink::Sync(&RemoveSpline));
+}
+
+int32 LilaLink::LoadLandscapeUnder(UWorld* World, const FBox& Box)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::LoadLandscapeUnder);
+
+	UWorldPartition* Partition = World ? World->GetWorldPartition() : nullptr;
+	if (!Partition || !Box.IsValid)
+	{
+		return 0;
+	}
+	const FBox Column(FVector(Box.Min.X, Box.Min.Y, -UE_OLD_WORLD_MAX), FVector(Box.Max.X, Box.Max.Y, UE_OLD_WORLD_MAX));
+	TArray<FGuid> Guids;
+	FWorldPartitionHelpers::ForEachActorDescInstance(Partition, ALandscapeStreamingProxy::StaticClass(), [&](const FWorldPartitionActorDescInstance* Desc) {
+		if (!Desc->IsLoaded() && Desc->GetEditorBounds().Intersect(Column))
+		{
+			Guids.Add(Desc->GetGuid());
+		}
+		return true;
+	});
+	if (Guids.IsEmpty())
+	{
+		return 0;
+	}
+	// Released when its level's World Partition shuts down, before the world goes (as LoadLilaActors' loader).
+	static TWeakObjectPtr<UWorldPartition> Owner;
+	static TUniquePtr<FLoaderAdapterActorList> Loader;
+	if (!Loader || Owner.Get() != Partition)
+	{
+		Loader = MakeUnique<FLoaderAdapterActorList>(World);
+		Owner = Partition;
+		TWeakObjectPtr<UWorldPartition> Bound = Partition;
+		World->OnWorldPartitionUninitialized().AddLambda([Bound](UWorldPartition* Gone) {
+			if (Gone == Bound.Get() && Owner.Get() == Gone)
+			{
+				Loader.Reset();
+				Owner.Reset();
+			}
+		});
+	}
+	Loader->AddActors(Guids);
+	UE_LOG(LogLilaLink, Log, TEXT("Loaded %d landscape region(s) under splines so their redraw reaches them"), Guids.Num());
+	return Guids.Num();
 }

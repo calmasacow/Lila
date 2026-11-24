@@ -15,9 +15,16 @@ namespace LilaLink
  * scale}]}. Replies {actor, components, segments, warnings}.
  *
  * Landscape mode also takes per spline layer (paint layer, added to the landscape when missing), layerWidth (share of the width
- * it paints, 0-1) and deform (overrides deformTerrain), and replies paintLayers and paintLayersAdded.
+ * it paints, 0-1) and deform (overrides deformTerrain), and replies paintLayers, paintLayersAdded and regionsLoaded (landscape
+ * regions a World Partition level had unloaded, loaded so the redraw reaches them).
  *
- * removeSpline {id} deletes what setSpline made for id. Replies {removed}.
+ * removeSpline {id} deletes what setSpline made for id. Replies {removed, regionsLoaded}.
  */
 void AddSplineMethods(TMap<FString, FLilaLinkMethod>& Methods);
+
+/**
+ * In a World Partition level, loads the landscape streaming proxies under Box (XY) that are unloaded, so a splines layer
+ * redraw reaches them; they stay loaded until the level closes, for Save All to write what changed. Returns how many it loaded.
+ */
+int32 LoadLandscapeUnder(UWorld* World, const FBox& Box);
 } // namespace LilaLink

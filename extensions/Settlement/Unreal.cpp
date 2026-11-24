@@ -1288,7 +1288,7 @@ void registerUnrealCommands(ext::Context& ctx)
                "Everything spatial is cut into World Partition cells of side cell, one actor per cell, so the level streams "
                "it. Roads go as landscape splines (roads='landscape', joined at junctions, shaping the landscape and painting "
                "roadLayer over the carriageways and shoulderLayer over sidewalks and verges, layers added when the landscape "
-               "lacks them), as spline "
+               "lacks them; landscape regions World Partition had unloaded are loaded for the redraw), as spline "
                "actors (roads='splines', with spline meshes of roadMesh along them), as ribbon meshes per cell "
                "(roads='meshes') or not at all; paths on the walkable mesh go as a spline actor. massing=True sends each "
                "cell's envelopes as a static mesh. pcg=True writes PCG data: per cell (partition=True) a data asset and a cell "
