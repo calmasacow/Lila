@@ -162,9 +162,10 @@ glm::dvec3 draped(const Ground& g, Vec2 p) { return {p.x, g.heightAt(p) + 30.0, 
 
 struct LayerDraw
 {
+    /** A run of cells along x, draped at every cell corner so neighbouring runs share their edges' points (no seams). */
     struct Quad
     {
-        std::array<glm::dvec3, 4> c;
+        std::vector<glm::dvec3> top, bottom;
         glm::vec4 color;
     };
     struct Line
@@ -226,7 +227,14 @@ LayerDraw buildLayer(const Layer& l, const Ground& g, int resolution)
             const glm::vec3 c = zoneColor(l, l.zones[size_t(w)]);
             const float a = l.density ? std::clamp(float(lv + 1) / 8.0f, 0.1f, 1.0f) : 1.0f;
             const Vec2 p0 = r.origin + Vec2(x, z) * r.cell, p1 = r.origin + Vec2(x1 + 1, z + 1) * r.cell;
-            d.quads.push_back({{draped(g, p0), draped(g, {p1.x, p0.y}), draped(g, p1), draped(g, {p0.x, p1.y})}, glm::vec4(c, a)});
+            LayerDraw::Quad q{{}, {}, glm::vec4(c, a)};
+            for (int k = x; k <= x1 + 1; ++k)
+            {
+                const double px = r.origin.x + double(k) * r.cell;
+                q.top.push_back(draped(g, {px, p0.y}));
+                q.bottom.push_back(draped(g, {px, p1.y}));
+            }
+            d.quads.push_back(std::move(q));
             x = x1 + 1;
         }
     auto addRing = [&](const Polygon& ring, int zone) {
@@ -339,12 +347,19 @@ void drawZones(render::FrameState&, OverlayPainter& p, const ViewInfo& view)
             const float a = float(opacity) * (active || !isCurrent ? 1.0f : 0.7f);
             for (const LayerDraw::Quad& q : d.quads)
             {
-                std::vector<QPointF> pts;
-                for (const glm::dvec3& c : q.c)
-                    if (auto s = view.project(c))
-                        pts.push_back(*s);
-                if (pts.size() == 4)
-                    p.fill(pts, glm::vec4(glm::vec3(q.color), q.color.a * a));
+                const glm::vec4 color(glm::vec3(q.color), q.color.a * a);
+                std::optional<QPointF> t0 = view.project(q.top[0]), b0 = view.project(q.bottom[0]);
+                for (size_t k = 1; k < q.top.size(); ++k)
+                {
+                    const std::optional<QPointF> t1 = view.project(q.top[k]), b1 = view.project(q.bottom[k]);
+                    if (t0 && b0 && t1 && b1)
+                    {
+                        p.triangle(*t0, *t1, *b1, color);
+                        p.triangle(*t0, *b1, *b0, color);
+                    }
+                    t0 = t1;
+                    b0 = b1;
+                }
             }
             if (!active)
                 continue;
