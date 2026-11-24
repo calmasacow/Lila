@@ -260,6 +260,27 @@ TEST_CASE("zones: mask outlines and convex pieces")
     for (const Polygon& p : convexPieces(cw))
         sumCw += area(p);
     CHECK(sumCw == doctest::Approx(area(L)));
+
+    // A square with two holes, one of them an L: the pieces cover the square less the holes, and none lies in a hole.
+    const Polygon square = {{0, 0}, {1000, 0}, {1000, 1000}, {0, 1000}};
+    const std::vector<Polygon> squareHoles = {{{200, 200}, {400, 200}, {400, 400}, {200, 400}},
+                                              {{550, 550}, {900, 550}, {900, 650}, {650, 650}, {650, 900}, {550, 900}}};
+    double holed = 0.0;
+    for (const Polygon& p : convexPieces(square, squareHoles))
+    {
+        holed += area(p);
+        for (size_t i = 0; i < p.size(); ++i)
+        {
+            const Vec2 a = p[i], b = p[(i + 1) % p.size()], c = p[(i + 2) % p.size()];
+            CHECK((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x) >= -1e-6);
+        }
+        Vec2 mid(0.0);
+        for (Vec2 q : p)
+            mid += q / double(p.size());
+        CHECK(!(mid.x > 200 && mid.x < 400 && mid.y > 200 && mid.y < 400));
+    }
+    CHECK(holed == doctest::Approx(1000.0 * 1000.0 - 200.0 * 200.0 - std::abs(area(squareHoles[1]))));
+    CHECK(convexPieces(square, {}).size() == 1);
 }
 
 TEST_CASE("zones: engine JSON round trip keeps every answer")

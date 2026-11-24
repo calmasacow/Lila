@@ -608,7 +608,7 @@ json unrealZones(const ZoneSpec& s, const Ground& gr, double height, double dept
             for (const Polygon& ring : rings)
             {
                 outline.push_back(ring3(ring));
-                for (const Polygon& piece : convexPieces(ring))
+                for (const Polygon& piece : convexPieces(ring, holes))
                     pieces.push_back(ring3(piece));
             }
             for (const Polygon& h : holes)

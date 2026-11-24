@@ -210,8 +210,10 @@ json toJson(const Issue& i);
 /** Outlines of a mask's cells from threshold up, as rings simplified to tolerance (cm); holes come back separately. */
 void maskOutline(const Mask& m, uint8_t threshold, double tolerance, std::vector<Polygon>& rings, std::vector<Polygon>& holes);
 
-/** Convex pieces covering a polygon (less its holes is not handled: pieces of the outer ring). */
+/** Convex pieces covering a simple polygon. */
 std::vector<Polygon> convexPieces(const Polygon& poly);
+/** Convex pieces covering a ring less the holes inside it. */
+std::vector<Polygon> convexPieces(const Polygon& ring, const std::vector<Polygon>& holes);
 
 /** A stable colour for a zone from its id (region layers) or the layer's own (density layers). */
 glm::vec3 zoneColor(const Layer& l, const Zone& z);
