@@ -194,7 +194,9 @@ struct LILA_SCENE_API Override
 /** A frozen slot: where it was and what filled it when pinned. */
 struct PinnedSlot
 {
-    Slot slot; // payload resolved at pin time
+    Slot slot; // payload resolved at pin time, or as generated when swappable
+    /** Rules and overrides still apply over the generated payload; only regeneration is held off. */
+    bool swappable = false;
 };
 /** A pin on one slot (key = its id) or on every slot of an owner (key = "owner:" + owner id). */
 struct LILA_SCENE_API Pin
@@ -236,8 +238,11 @@ LILA_SCENE_API bool clearOverride(const std::string& id);
 /** Moves an override from one id to another (an orphan to the slot that replaced it). Undoable. */
 LILA_SCENE_API bool reassignOverride(const std::string& from, const std::string& to);
 
-/** Pins a slot (by id) or every slot of an owner ("owner:" + id) as they resolve now. Undoable. False when nothing matched. */
-LILA_SCENE_API bool pin(scene::Graph& g, const std::string& key);
+/**
+ * Pins a slot (by id) or every slot of an owner ("owner:" + id) as they resolve now; swappable keeps their frames and
+ * generated payloads but lets rules and overrides swap them. Undoable. False when nothing matched.
+ */
+LILA_SCENE_API bool pin(scene::Graph& g, const std::string& key, bool swappable = false);
 LILA_SCENE_API bool unpin(const std::string& key);
 /** Whether a slot id, or an owner, is pinned (directly or through its owner). */
 LILA_SCENE_API bool isPinned(std::string_view key);

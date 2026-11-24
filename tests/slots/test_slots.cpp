@@ -269,6 +269,29 @@ TEST_CASE("pins keep slots where they were and report what regeneration changed"
         CHECK(slots::resolve(s).payload.item == "After");
 }
 
+TEST_CASE("swappable pins keep slots where they were but rules and overrides still swap them")
+{
+    fresh();
+    const auto lamps = street(0x7, 2, 0.0);
+    writeTown(lamps);
+    run("slotPin", {{"owner", "town/street/7"}, {"swappable", true}});
+    run("slotRule", {{"args", {"add"}}, {"type", "lamp"}, {"item", "Rule"}});
+    run("slotSet", {{"id", lamps[1].id}, {"item", "Mine"}});
+
+    auto moved = street(0x7, 2, 50.0);
+    const json stats = slots::writeSet(scene::Graph::current(), "TownSlots", scene::kNoNode, moved, "test");
+    CHECK(stats["conflicts"].size() == 2);
+    std::map<std::string, std::string> items;
+    for (const slots::Slot& s : slots::collect(scene::Graph::current()))
+    {
+        CHECK(s.transform[3].z == doctest::Approx(0.0));
+        items[s.id] = slots::resolve(s).payload.item;
+    }
+    CHECK(items[lamps[0].id] == "Rule");
+    CHECK(items[lamps[1].id] == "Mine");
+    CHECK(run("slotPin")["pins"][0]["swappable"] == true);
+}
+
 TEST_CASE("visuals fall back to the type's placeholder and say why")
 {
     fresh();

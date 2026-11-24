@@ -696,7 +696,8 @@ void registerInterior(ext::Context& ctx)
                "and doors cut through the rooms' walls, floors, ceilings, skirting, ceiling lamp slots and furnishing slots from "
                "the room presets. Each room is a mesh of its own under Interior_<id> (model it freely; hand-edited rooms are kept "
                "when the interior regenerates), the slots go in Interior_<id>_Slots. The exterior doors that open into rooms are "
-               "tagged 'entry' (a slot rule on that tag gives them your door Blueprint). The building is pinned. When no door "
+               "tagged 'entry' (a slot rule on that tag gives them your door Blueprint). The building is pinned against regeneration; "
+               "rules and overrides still swap its slots. When no door "
                "opens into a room, entry=True paints one on the street. Returns per building: rooms, doors, stairs, slots, entries.",
         .positionalDoc = "building ids or building meshes (default the selection)",
         .flags = {{"building", "b", T::Any, nullptr, "Building id(s)."},
@@ -747,7 +748,7 @@ void registerInterior(ext::Context& ctx)
                 if (!added.is_null())
                     r["entryAdded"] = added;
                 if (a.get<bool>("pin", true) && !lila::slots::isPinned("owner:" + id))
-                    r["pinned"] = lila::slots::pin(IG(), "owner:" + id);
+                    r["pinned"] = lila::slots::pin(IG(), "owner:" + id, true);
                 results.push_back(r);
             }
             return {{"buildings", results}, {"count", results.size()}};

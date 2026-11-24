@@ -745,6 +745,7 @@ void registerCommands()
                "where they are with what they show, and differences are reported as conflicts. With no key, lists the pins.",
         .positionalDoc = "slot id, or owner:<owner id>",
         .flags = {{"owner", "o", T::String, nullptr, "Pin every slot of this owner (same as owner:<id>)."},
+                  {"swappable", "sw", T::Bool, false, "Hold off regeneration only: rules and overrides still swap what the slots show."},
                   {"remove", "rm", T::Bool, false, "Unpin."}},
         .run = [](const Args& a) -> json {
             Graph& g = Graph::current();
@@ -756,14 +757,14 @@ void registerCommands()
             json done = json::array();
             for (const std::string& k : keys)
             {
-                const bool ok = a.get<bool>("remove", false) ? unpin(k) : pin(g, k);
+                const bool ok = a.get<bool>("remove", false) ? unpin(k) : pin(g, k, a.get<bool>("swappable", false));
                 if (!ok)
                     throw CommandError("slotPin: " + std::string(a.get<bool>("remove", false) ? "no pin " : "no slot matches ") + k);
                 done.push_back(k);
             }
             json pins = json::array();
             for (const auto& [k, p] : state()->pins)
-                pins.push_back({{"key", k}, {"slots", p.slots.size()}});
+                pins.push_back({{"key", k}, {"slots", p.slots.size()}, {"swappable", !p.slots.empty() && p.slots.front().swappable}});
             return {{"changed", done}, {"pins", pins}};
         },
         .examples = {"slotPin('owner:settlement:Town/lot/1a2b')", "slotPin('b/12/f0/door0', remove=True)", "slotPin()"},

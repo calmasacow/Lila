@@ -526,15 +526,19 @@ json Pin::toJson() const
     json a = json::array();
     for (const PinnedSlot& p : slots)
         a.push_back(p.slot.toJson());
-    return {{"slots", a}};
+    json out = {{"slots", a}};
+    if (!slots.empty() && slots.front().swappable)
+        out["swappable"] = true;
+    return out;
 }
 
 Pin Pin::fromJson(const json& j)
 {
     Pin p;
+    const bool swappable = j.value("swappable", false);
     if (auto it = j.find("slots"); it != j.end() && it->is_array())
         for (const json& s : *it)
-            p.slots.push_back({Slot::fromJson(s)});
+            p.slots.push_back({Slot::fromJson(s), swappable});
     return p;
 }
 
@@ -681,7 +685,7 @@ bool reassignOverride(const std::string& from, const std::string& to)
     return true;
 }
 
-bool pin(scene::Graph& g, const std::string& key)
+bool pin(scene::Graph& g, const std::string& key, bool swappable)
 {
     std::map<std::string, Pin> m = state()->pins;
     Pin p;
@@ -692,8 +696,9 @@ bool pin(scene::Graph& g, const std::string& key)
     {
         if (ownerPin ? !(startsWithPath(s.owner, owner) || startsWithPath(s.id, owner)) : s.id != key)
             continue;
-        s.payload = resolve(s).payload;
-        p.slots.push_back({std::move(s)});
+        if (!swappable)
+            s.payload = resolve(s).payload;
+        p.slots.push_back({std::move(s), swappable});
     }
     if (p.slots.empty())
         return false;
@@ -816,13 +821,14 @@ Resolved resolveImpl(const Slot& s, const State& st, bool mainThread)
     Resolved r;
     r.payload = s.payload;
     r.sources.push_back("default");
-    if (const PinnedSlot* p = pinnedSlot(st, s.id, s.owner))
+    const PinnedSlot* p = pinnedSlot(st, s.id, s.owner);
+    if (p)
     {
         r.payload = p->slot.payload;
         r.sources = {"pin"};
         r.pinned = true;
     }
-    else
+    if (!p || p->swappable)
     {
         for (Level level : {Level::Global, Level::Region, Level::Owner})
             for (const Rule& rule : st.rules)

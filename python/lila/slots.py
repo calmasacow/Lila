@@ -127,9 +127,9 @@ def reassign(orphan: str, to: str) -> None:
     ops.slotSet(id=orphan, reassign=to)
 
 
-def pin(key: str) -> list:
-    """Pins a slot id, or every slot of an owner with "owner:<id>". Returns the pins."""
-    return ops.slotPin(key)["pins"]
+def pin(key: str, swappable: bool = False) -> list:
+    """Pins a slot id, or every slot of an owner with "owner:<id>"; swappable lets rules and overrides still swap them. Returns the pins."""
+    return ops.slotPin(key, swappable=swappable)["pins"]
 
 
 def unpin(key: str) -> list:

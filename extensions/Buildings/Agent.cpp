@@ -63,7 +63,7 @@ mesh's footprint. Units cm, Y up. Every command is undoable and echoed; Python: 
 - `buildingMakeEnterable(id)` (or a list): rooms from the building's own grammar, by program (shop, house, apartment,
   office, hotel, warehouse, police, mansion, bar, garage, church; `generic` rooms when the use is none of them, said in
   `warnings`), a stair core with a lift on taller buildings, doors, the facade's windows cut through, furnishing and
-  ceiling lamp slots. `program=` forces one. The building is pinned; its street doors that open into rooms get the slot
+  ceiling lamp slots. `program=` forces one. The building is pinned against regeneration (rules still swap its slots); its street doors that open into rooms get the slot
   tag `entry` (`slotRule('add', type='door', tag='entry', unrealClass='/Game/BP/BP_Door.BP_Door_C')`). When no door opens
   into a room one is painted on the street (`entryAdded`).
 - `buildingInterior(id)`: rooms (`l0/sales`, `l1/bedroom2`, `l3/u2-living`), doors (`l0/door/backroom+sales`), stairs,
