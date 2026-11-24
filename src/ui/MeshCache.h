@@ -74,6 +74,8 @@ LILA_UI_API ModifierWire modifierWireFor(const scene::MeshPtr& cage, const scene
 
 /** renderMeshFor(mesh) without its wire lines, for a surface whose edges are drawn by another draw. */
 LILA_UI_API std::shared_ptr<const render::RenderMesh> wirelessMeshFor(const scene::MeshPtr& mesh, bool tangents = false);
+/** wirelessMeshFor for many meshes at once, built in parallel; their render copies come first (prewarmRenderMeshes). */
+LILA_UI_API void prewarmWirelessMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes);
 
 /** renderMeshFor(smooth.mesh) with its wire cut down to the edges that run along the cage's. */
 LILA_UI_API std::shared_ptr<const render::RenderMesh> cageWireMeshFor(const SmoothCage& smooth, bool tangents = false);

@@ -680,7 +680,7 @@ TEST_CASE("terrain display commands: options and paint layers round trip, layers
     CHECK_THROWS(run("terrainDisplayLayers", {{"args", {t["mesh"]}}, {"layers", {{{"name", "bad"}, {"color", "green"}}}}}));
 }
 
-TEST_CASE("mesh cache: render copies built in parallel up front match the ones built on demand, and are reused")
+TEST_CASE("mesh cache: render and wireless copies built in parallel up front match the ones built on demand, and are reused")
 {
     std::vector<std::pair<scene::MeshPtr, bool>> wanted;
     for (int i = 0; i < 40; ++i)
@@ -705,5 +705,15 @@ TEST_CASE("mesh cache: render copies built in parallel up front match the ones b
         CHECK(cold->vertices.size() == warm->vertices.size());
         CHECK(cold->sections.size() == warm->sections.size());
         CHECK(cold->edgeIndices == warm->edgeIndices);
+    }
+    // Their wireless copies too: every triangle, no wire, the same copy when asked again.
+    ui::prewarmWirelessMeshes(wanted);
+    for (const auto& [mesh, tangents] : wanted)
+    {
+        const auto wireless = ui::wirelessMeshFor(mesh, tangents);
+        REQUIRE(wireless);
+        CHECK(ui::wirelessMeshFor(mesh, tangents) == wireless);
+        CHECK(wireless->indices == ui::renderMeshFor(mesh, tangents)->indices);
+        CHECK(wireless->edgePoints.empty());
     }
 }

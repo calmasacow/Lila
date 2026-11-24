@@ -5,6 +5,8 @@
 #include "ui/HeightfieldDisplay.h"
 #include "ui/VolumeDisplay.h"
 
+#include <thread>
+
 namespace lila::ui
 {
 using namespace viewportDetail;
@@ -278,7 +280,7 @@ void prewarmRebuilds(scene::Graph& g, Cache& cache, const std::vector<scene::Nod
 {
     if (!set.maskShown)
         return;
-    std::vector<std::pair<scene::MeshPtr, bool>> wanted;
+    std::vector<std::pair<scene::MeshPtr, bool>> wanted, wireless;
     auto want = [&](const scene::MeshPtr& mesh) {
         if (mesh)
             wanted.emplace_back(mesh, set.showMaterials && needsTangents(*mesh));
@@ -300,6 +302,15 @@ void prewarmRebuilds(scene::Graph& g, Cache& cache, const std::vector<scene::Nod
             continue;
         if (set.terrain.drawsHeightfields() && heightfieldDisplay::heightfieldOf(g, id))
             continue;
+        const scene::MeshPtr& outMesh = n.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        const scene::MeshPtr cage = set.render || n.type().isA("lattice") ? nullptr : scene::modifiers::cage(g, id);
+        if (modifiersAddEdges(cage, outMesh))
+        {
+            // Drawn whole, its surface without the modifier's wire.
+            want(outMesh);
+            wireless.push_back(wanted.back());
+            continue;
+        }
         // An instanced result draws the geometry beside its instances and each referenced mesh.
         if (gn::InstanceViewPtr view = gn::instanceViewFor(g, id))
         {
@@ -308,9 +319,10 @@ void prewarmRebuilds(scene::Graph& g, Cache& cache, const std::vector<scene::Nod
                 want(p.mesh);
         }
         else
-            want(n.as<scene::MeshPtr>(scene::MeshNode::kOutMesh));
+            want(outMesh);
     }
     prewarmRenderMeshes(wanted);
+    prewarmWirelessMeshes(wireless);
 }
 } // namespace
 
@@ -361,6 +373,9 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
                 cache.entries[i].id = meshes[i]->id();
             }
         cache.structure = g.structure();
+        // A replaced scene leaves thousands of entries holding its draws: freed off the frame.
+        if (constexpr size_t kOnItsOwn = 64; old.size() >= kOnItsOwn)
+            std::thread([d = std::move(old)] {}).detach();
     }
 
     std::unordered_set<scene::NodeId> hilite;
