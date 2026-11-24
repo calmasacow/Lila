@@ -24,13 +24,28 @@ json checkRemix(const RemixSpec& spec, const RemixResult& r)
         if (!s.drains && s.drainedBefore)
             add("riverNoDrain", std::to_string(s.way), s.end, (s.name.empty() ? std::string("a river") : s.name) + " ends in a basin the remix made");
 
+    // Ends off the output map (a source's leftovers outside a cropped map) or on its edge can't be joined on it and
+    // aren't on the map anyone builds; they are counted, not reported.
+    const double edge = 2.0 * std::max(r.after.cell, 1.0);
+    auto onMap = [&](Vec2 p) { return p.x > r.lo.x + edge && p.x < r.hi.x - edge && p.y > r.lo.y + edge && p.y < r.hi.y - edge; };
+    int offMap = 0;
     for (const CutEnd& e : r.roadEnds)
         if (!e.joined)
-            add("danglingRoad", std::to_string(e.node), e.at, (e.cls.empty() ? std::string("road") : e.cls) + " cut by a region and not joined again");
+        {
+            if (!onMap(e.at))
+                ++offMap;
+            else
+                add("danglingRoad", std::to_string(e.node), e.at, (e.cls.empty() ? std::string("road") : e.cls) + " cut by a region and not joined again");
+        }
 
     for (const CutEnd& e : r.coastEnds)
         if (!e.joined)
-            add("coastGap", std::to_string(e.node), e.at, "coastline cut by a region and not re-merged");
+        {
+            if (!onMap(e.at))
+                ++offMap;
+            else
+                add("coastGap", std::to_string(e.node), e.at, "coastline cut by a region and not re-merged");
+        }
 
     for (size_t i = 0; i < spec.regions.size(); ++i)
         for (size_t k = i + 1; k < spec.regions.size(); ++k)
@@ -61,6 +76,6 @@ json checkRemix(const RemixSpec& spec, const RemixResult& r)
     bool ok = true;
     for (const auto& [k, v] : counts.items())
         ok = ok && v.get<int>() == 0;
-    return {{"ok", ok}, {"counts", counts}, {"issues", issues}, {"warp", {{"foldedCells", folded}, {"minJacobian", minJacobian}}}};
+    return {{"ok", ok}, {"counts", counts}, {"issues", issues}, {"warp", {{"foldedCells", folded}, {"minJacobian", minJacobian}}}, {"offMapEnds", offMap}};
 }
 } // namespace openworld
