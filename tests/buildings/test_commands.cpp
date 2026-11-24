@@ -265,6 +265,15 @@ TEST_CASE("buildings commands: the OSM fixture town through Settlement's buildin
     // Change a style by district and paint a bay through the route's buildings.
     const json st = run("buildingStyle", {{"all", true}, {"style", "malecon"}});
     CHECK(st["count"] == envelopes);
+
+    // A settlement edit rebuilds its buildings as a step of their own: none stale after, one undo shows the old ones.
+    run("settlementAddExclusion", {{"args", {mesh}}, {"polygon", {{-15000, -15000}, {15000, -15000}, {15000, 15000}, {-15000, 15000}}}, {"name", "Park"}});
+    CHECK(run("buildingRefresh", {{"dryRun", true}})["stale"].empty());
+    const int fewer = run("settlementEnvelopes", {{"args", {mesh}}, {"limit", 0}})["count"];
+    CHECK(fewer < envelopes);
+    CHECK(run("undoInfo")["undo"] == "buildingRefresh");
+    run("undo");
+    CHECK(run("buildingRefresh", {{"dryRun", true}})["stale"].size() == 1);
 }
 
 TEST_CASE("buildings commands: site kit envelopes (no lot, a stable id each) make one building each")
@@ -311,4 +320,26 @@ TEST_CASE("buildings commands: performance budget")
     MESSAGE("one-building edit: " << editMs << " ms (evaluate " << edit["evaluateMs"] << " ms, node " << edit.value("nodeMs", 0.0) << " ms)");
     CHECK(edit.value("generated", 0) == 1);
     CHECK(editMs < 1000.0); // generous; the target is 100 ms, measured and logged
+}
+
+TEST_CASE("buildings commands: the trim sheet goes to the user's folder without a workspace, never beside the shipped one")
+{
+    loadBuildings();
+    run("newScene");
+    run("buildingCreate", {{"envelopes", json::array({envelope(1, 0, 0, 1200, 900, 2)})}, {"name", "Block"}});
+    const std::filesystem::path shipped = std::filesystem::path(LILA_TEST_BUILDINGS_STYLES).parent_path() / "trims";
+    auto count = [](const std::filesystem::path& d) {
+        int n = 0;
+        for (const auto& e : std::filesystem::directory_iterator(d))
+            n += e.is_regular_file();
+        return n;
+    };
+    const int before = count(shipped);
+    // Baking it (Trim Sheets) writes maps beside that copy; here only the copy is made.
+    const json r = run("buildingTrimSheet", {{"bake", false}});
+    CAPTURE(r.dump().substr(0, 1500));
+    CHECK(r["fileFrom"].get<std::string>().starts_with("user folder"));
+    CHECK(r["file"].get<std::string>().find("trim-sheets") != std::string::npos);
+    CHECK(std::filesystem::exists(r["file"].get<std::string>()));
+    CHECK(count(shipped) == before);
 }

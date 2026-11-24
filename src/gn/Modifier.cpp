@@ -516,6 +516,14 @@ private:
         return in;
     }
 
+public:
+    void dropStepCache()
+    {
+        mCache = StepCache{};
+        mCarry = StepCache{};
+    }
+
+private:
     std::shared_ptr<const TypeLayout> mLayout;
     std::string mCachedDef;
     PlanPtr mPlan;
@@ -1174,6 +1182,16 @@ std::vector<NodeId> instancesOf(Graph& g, NodeId groupNode)
 }
 
 bool isGnModifier(const Node& n) { return dynamic_cast<const GnModifierNode*>(&n) != nullptr; }
+
+bool rerunModifier(scene::Graph& g, scene::NodeId modifier)
+{
+    auto* m = dynamic_cast<GnModifierNode*>(g.node(modifier));
+    if (!m)
+        return false;
+    m->dropStepCache();
+    g.touch(modifier);
+    return true;
+}
 
 std::shared_ptr<const geo::Heightfield> modifierHeightfield(NodeId modifier)
 {

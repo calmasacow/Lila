@@ -130,6 +130,8 @@ void registerUnreal(ext::Context& ctx)
             const json plan = ops::execute("unrealPlaceInstances", {{"args", args},
                                                                     {"folder", a.get<std::string>("folder", "/Game/Lila/Buildings")},
                                                                     {"nanite", true},
+                                                                    // Clear glass is translucent, which Nanite can't draw.
+                                                                    {"naniteOffMaterials", {"bld_glassClear"}},
                                                                     // A module used more than once in a cell is one HISM there; the shells stay actors.
                                                                     {"threshold", 1},
                                                                     {"hlodLayer", shellHlod},

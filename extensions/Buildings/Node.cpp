@@ -36,6 +36,10 @@ uint64_t gTick = 0;
 constexpr size_t kCacheMax = 30000;
 
 std::mutex gPubMutex;
+/** The building Edit Rooms cuts away: its shell and modules are left out of its mesh. */
+std::string gCutaway;
+/** What modifiers set to lod auto show, by camera distance (the viewport sets it); near until it has. */
+std::unordered_map<uint64_t, std::string> gViewLod;
 std::map<uint64_t, std::shared_ptr<const Published>> gPub;
 
 std::mutex gGeoMutex;
@@ -132,7 +136,14 @@ void exec(ExecContext& c)
     LILA_ZONE();
     const auto t0 = std::chrono::steady_clock::now();
     const uint64_t owner = c.env.owner;
-    const std::string lod = c.s("lod").empty() ? "near" : c.s("lod");
+    const bool autoLod = c.s("lod") == "auto";
+    std::string lod = c.s("lod").empty() ? "near" : c.s("lod");
+    if (autoLod)
+    {
+        std::lock_guard lock(gPubMutex);
+        const auto it = gViewLod.find(owner);
+        lod = it == gViewLod.end() ? "near" : it->second;
+    }
     const std::string cell = c.s("cell");
     const bool withModules = c.b("modules");
     std::shared_ptr<const ParsedSpecs> parsed;
@@ -157,6 +168,13 @@ void exec(ExecContext& c)
     pub->modifier = owner;
     pub->cell = cell;
     pub->lod = lod;
+    pub->autoLod = autoLod;
+    for (const Spec& s : parsed->specs)
+        for (const Vec2& p : s.footprint)
+        {
+            pub->lo = glm::min(pub->lo, Vec3(p.x, s.ground, p.y));
+            pub->hi = glm::max(pub->hi, Vec3(p.x, s.ground, p.y));
+        }
     pub->specs = parsed->specs;
     const size_t n = parsed->specs.size();
     pub->results.resize(n);
@@ -247,6 +265,11 @@ void exec(ExecContext& c)
         if (r.enabled)
             rulePatterns.push_back(r.type);
 
+    std::string cutaway;
+    {
+        std::lock_guard lock(gPubMutex);
+        cutaway = gCutaway;
+    }
     Soup shell;
     std::vector<int32_t> faceBuilding;
     std::vector<std::string> materialNames;
@@ -276,6 +299,7 @@ void exec(ExecContext& c)
         {
             const Result& r = *pub->results[i];
             const Spec& sp = parsed->specs[i];
+            const bool cut = !cutaway.empty() && r.id == cutaway;
             std::vector<std::string> regions = sp.regions;
             regions.push_back("style:" + r.style);
             if (!cell.empty())
@@ -311,7 +335,7 @@ void exec(ExecContext& c)
                     if (check && setsVisual(slots::resolve(s, *st).payload))
                         dropped[k] = 1;
                 }
-                if (lod == "near" && withModules)
+                if (lod == "near" && withModules && !cut)
                 {
                     int ref = 0;
                     if (m.shell)
@@ -346,6 +370,8 @@ void exec(ExecContext& c)
                 slotList.push_back(std::move(s));
             }
 
+            if (cut)
+                continue;
             // Shell faces, materials by palette.
             const Soup& src = lod == "near" ? r.shell : lod == "hlod" ? r.hlod : r.far;
             int32_t mats[MatCount];
@@ -454,6 +480,25 @@ void forgetPublished(uint64_t modifier)
 {
     std::lock_guard lock(gPubMutex);
     gPub.erase(modifier);
+}
+
+bool setViewLod(uint64_t modifier, const std::string& lod)
+{
+    std::lock_guard lock(gPubMutex);
+    std::string& was = gViewLod[modifier];
+    if (was == lod)
+        return false;
+    was = lod;
+    return true;
+}
+
+bool setCutawayBuilding(const std::string& id)
+{
+    std::lock_guard lock(gPubMutex);
+    if (gCutaway == id)
+        return false;
+    gCutaway = id;
+    return true;
 }
 
 void clearGenerationCache()

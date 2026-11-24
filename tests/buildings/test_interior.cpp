@@ -678,3 +678,23 @@ TEST_CASE("interiors commands: three buildings of the OSM fixture town")
         CHECK(check["counts"][k] == 0);
 }
 
+
+TEST_CASE("interiors commands: clutter strewn on every room's floor through Set Dressing")
+{
+    loadPackages(false);
+    if (!lila::ops::find("scatterProps"))
+        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_STAGEHAND_PACKAGE) == "Stagehand");
+    run("newScene");
+    run("buildingCreate", {{"envelopes", town()}, {"name", "Town"}});
+    const std::string crate = pathOf(run("polyCube", {{"name", "Crate"}, {"width", 30.0}, {"height", 30.0}, {"depth", 30.0}}));
+    run("move", {{"args", {crate}}, {"by", {0, 0, -100000}}});
+    const json made = run("buildingMakeEnterable", {{"args", {"building:4a1"}}, {"clutter", {crate}}, {"clutterDensity", 1.0}, {"settle", false}});
+    const json c = made["buildings"][0]["clutter"];
+    CAPTURE(c.dump());
+    CHECK(c["rooms"].get<int>() >= 3);
+    CHECK(c["placed"].get<int>() > 0);
+    CHECK_FALSE(c.contains("errors"));
+    // Again: the earlier clutter is replaced, not added to.
+    const json again = run("buildingMakeEnterable", {{"args", {"building:4a1"}}, {"clutter", {crate}}, {"clutterDensity", 1.0}, {"settle", false}});
+    CHECK(again["buildings"][0]["clutter"]["placed"] == c["placed"]);
+}

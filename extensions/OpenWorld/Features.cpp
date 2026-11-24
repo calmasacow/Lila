@@ -101,6 +101,30 @@ void moveFeatures(Work& w, Features& f)
         if (pastes(w.spec.regions[r].op))
             pieces.push_back(int(r) + 1);
     const double probe = std::max(w.spec.seams.width * 0.5, w.out->after.cell);
+    // Every region outline on the base map: a segment can only enter or leave a hole or paste where it crosses one.
+    std::vector<Polygon> outlines;
+    for (const Region& reg : w.spec.regions)
+    {
+        outlines.push_back(reg.polygon);
+        outlines.push_back(reg.target());
+    }
+    auto crossings = [&](Vec2 a, Vec2 b) {
+        std::vector<double> ts;
+        const Vec2 d = b - a;
+        for (const Polygon& poly : outlines)
+            for (size_t e = 0; e < poly.size(); ++e)
+            {
+                const Vec2 p0 = poly[e], p1 = poly[(e + 1) % poly.size()], q = p1 - p0;
+                const double den = d.x * q.y - d.y * q.x;
+                if (std::abs(den) < 1e-12)
+                    continue;
+                const Vec2 ap = p0 - a;
+                const double t = (ap.x * q.y - ap.y * q.x) / den, u = (ap.x * d.y - ap.y * d.x) / den;
+                if (t > 0.0 && t < 1.0 && u >= 0.0 && u <= 1.0)
+                    ts.push_back(t);
+            }
+        return ts;
+    };
 
     for (size_t s = 0; s < w.data.size(); ++s)
     {
@@ -346,10 +370,18 @@ void moveFeatures(Work& w, Features& f)
                             const Vec2 nb = base.at(refs[i + 1]);
                             const double len = glm::length(nb - b);
                             const int samples = int(len / probe);
-                            double firstOut = -1.0, lastOut = -1.0;
+                            std::vector<double> ts = crossings(b, nb);
                             for (int k = 1; k < samples; ++k)
+                                ts.push_back(double(k) / samples);
+                            ts.push_back(0.0);
+                            ts.push_back(1.0);
+                            std::sort(ts.begin(), ts.end());
+                            double firstOut = -1.0, lastOut = -1.0;
+                            for (size_t k = 0; k + 1 < ts.size(); ++k)
                             {
-                                const double t = double(k) / samples;
+                                if (ts[k + 1] - ts[k] < 1e-9)
+                                    continue;
+                                const double t = 0.5 * (ts[k] + ts[k + 1]);
                                 if (!P.present(p, b + (nb - b) * t))
                                 {
                                     if (firstOut < 0.0)

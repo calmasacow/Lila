@@ -7,6 +7,7 @@
 
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <map>
 
 using namespace openworld;
@@ -337,4 +338,73 @@ TEST_CASE("remix: cut coastline is re-merged along sea level")
     CHECK(merged >= 1);
     const json c = checkRemix(s, *r);
     CHECK(countKind(c, "coastGap") == int(r->coastEnds.size() - joined));
+}
+
+TEST_CASE("remix: a tall region pasted onto low coast gets a seam wide enough to keep its slope")
+{
+    // A plateau 40 m up, as a source of its own, pasted onto the low coast.
+    const std::filesystem::path dem = std::filesystem::temp_directory_path() / "lila_remix_plateau.asc";
+    {
+        std::ofstream f(dem);
+        f << "ncols 81\nnrows 81\nxllcorner -107.400250\nyllcorner 24.999750\ncellsize 0.0005\nNODATA_value -9999\n";
+        for (int r = 0; r < 81; ++r)
+        {
+            for (int c = 0; c < 81; ++c)
+                f << "40 ";
+            f << "\n";
+        }
+    }
+    // Steepest ground in the seam around where the region lands.
+    auto steepest = [](const RemixResult& r) {
+        const auto& h = r.after;
+        const auto it = h.masks.find("remixSeam");
+        REQUIRE(it != h.masks.end());
+        double worst = 0.0;
+        for (int z = 1; z + 1 < h.nz; ++z)
+            for (int x = 1; x + 1 < h.nx; ++x)
+                if (const Vec2 p = h.samplePos(x, z); it->second[h.index(x, z)] > 0.0f && p.x > 55000 && p.x < 165000 && p.y > -55000 && p.y < 55000)
+                {
+                    const double gx = (h.heights[h.index(x + 1, z)] - h.heights[h.index(x - 1, z)]) / (2.0 * h.cell);
+                    const double gz = (h.heights[h.index(x, z + 1)] - h.heights[h.index(x, z - 1)]) / (2.0 * h.cell);
+                    worst = std::max(worst, std::hypot(gx, gz));
+                }
+        return worst;
+    };
+    json j = base();
+    j["sources"].push_back({{"id", "plateau"}, {"dem", dem.generic_string()}, {"at", {250000, -60000}}});
+    j["regions"] = json::array({{{"id", "city"}, {"op", "cut"}, {"polygon", box(200000, -110000, 300000, -10000)}, {"translate", {-140000, 60000}}}});
+    j["seams"]["maxSlope"] = 0.0;
+    const std::shared_ptr<RemixResult> fixed = runRemix(specFromJson(j));
+    j["seams"]["maxSlope"] = 0.35;
+    const std::shared_ptr<RemixResult> wide = runRemix(specFromJson(j));
+    CHECK(fixed->errors.empty());
+    CHECK(wide->errors.empty());
+    const double before = steepest(*fixed), after = steepest(*wide);
+    CAPTURE(before);
+    CAPTURE(after);
+    // The band is capped at a quarter of the region, so a big step still leaves a slope, but a gentler one.
+    CHECK(before > 0.6);
+    CHECK(after < before * 0.5);
+    bool noted = false;
+    for (const std::string& n : wide->notes)
+        noted = noted || n.find("region city: seam widened") != std::string::npos;
+    CHECK(noted);
+    // A region with a seam of its own keeps it.
+    j["regions"][0]["seam"] = 1500;
+    const std::shared_ptr<RemixResult> own = runRemix(specFromJson(j));
+    CHECK(steepest(*own) > 0.6);
+    std::filesystem::remove(dem);
+}
+
+TEST_CASE("remix: a road crossing a delete strip narrower than the probe step is still cut")
+{
+    json j = base();
+    // 4 m wide, far under half the 30 m seam the probe steps by.
+    j["regions"] = json::array({{{"id", "strip"}, {"op", "delete"}, {"polygon", box(39800, -200000, 40200, 200000)}}});
+    j["seams"]["width"] = 3000;
+    j["seams"]["roads"] = false;
+    const RemixSpec s = specFromJson(j);
+    const std::shared_ptr<RemixResult> r = runRemix(s);
+    CHECK(r->roadEnds.size() >= 2);
+    CHECK(countKind(checkRemix(s, *r), "danglingRoad") >= 2);
 }

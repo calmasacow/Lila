@@ -105,6 +105,23 @@ TEST_CASE("print commands: the validator checks only meshes a Print command has 
     CHECK_FALSE(other.empty());
 }
 
+TEST_CASE("print commands: meshes exported to STL are checked for printing")
+{
+    const std::string cube = freshCube();
+    run("selectComponents", {{"args", {cube}}, {"faces", {0}}});
+    run("deleteComponents");
+    const std::string other = run("polyCube", {{"width", 10.0}, {"name", "Other"}, {"generator", false}})[0];
+    const fs::path dir = scratch();
+    run("exportStl", {{"args", {(dir / "block.stl").generic_string(), cube}}});
+    const json issues = run("listIssues", {{"source", "print"}});
+    REQUIRE(issues.size() == 1);
+    CHECK(issues[0]["target"].get<std::string>().find(cube) != std::string::npos);
+    // An OBJ export is not taken as a print: the other cube stays unchecked.
+    run("exportObj", {{"args", {(dir / "other.obj").generic_string(), other}}});
+    CHECK(run("listIssues", {{"source", "print"}}).size() == 1);
+    fs::remove_all(dir);
+}
+
 TEST_CASE("print commands: info, scale to fit and printer presets")
 {
     const std::string cube = freshCube();

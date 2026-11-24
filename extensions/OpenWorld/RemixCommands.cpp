@@ -465,7 +465,7 @@ void registerRemix(ext::Context& ctx)
                   {"translate", "t", T::List, nullptr, "[x, z] move, cm."},
                   {"angle", "a", T::Float, nullptr, "Turn, degrees counter-clockwise seen from above."},
                   {"pivot", "pv", T::List, nullptr, "[x, z] turn centre; default the polygon's centroid."},
-                  {"seam", "sm", T::Float, nullptr, "Seam band width, cm; default the remix's.", {}, {}, 0.0},
+                  {"seam", "sm", T::Float, nullptr, "Seam band width, cm; default the remix's, widened when the height step at the edge would be steeper than seams.maxSlope.", {}, {}, 0.0},
                   {"id", "id", T::String, "", "Region id; the same id replaces; empty makes one."},
                   {"remove", "rm", T::String, nullptr, "Remove the region with this id instead."}},
         .run = [](const Args& a) -> json {

@@ -266,3 +266,96 @@ TEST_CASE("site commands: every kind on a coast terrain, slots published, envelo
     ops::execute("siteRemove", {{"args", {"clash"}}});
     CHECK(ops::execute("siteList", json::object()).size() == 11);
 }
+
+TEST_CASE("site commands: moving or turning the site mesh moves the site and its grading in one undo step")
+{
+    loadSitePackages();
+    ops::execute("newScene", json::object());
+    const std::string terrain = coastTerrain();
+    const json made = ops::execute("siteCreate", {{"kind", "compound"}, {"terrain", terrain}, {"at", {-40000, 100000}}, {"id", "yard"}});
+    const std::string mesh = made["mesh"].get<std::string>();
+    auto spec = [&] { return ops::execute("siteInfo", {{"args", {"yard"}}})["spec"]; };
+    auto translate = [&] { return ops::execute("getAttr", {{"args", {mesh + ".translate"}}}); };
+    auto stale = [&] { return issuesOf(ops::execute("siteCheck", {{"args", {"yard"}}}), "groundStale"); };
+
+    ops::execute("move", {{"args", {mesh}}, {"by", {10000, 0, 5000}}});
+    json s = spec();
+    CHECK(s["at"][0].get<double>() == doctest::Approx(-30000));
+    CHECK(s["at"][1].get<double>() == doctest::Approx(105000));
+    CHECK(translate()[0].get<double>() == doctest::Approx(0));
+    CHECK(stale() == 0);
+    CHECK(ops::execute("undoInfo", json::object())["undo"] == "Move Site");
+
+    ops::execute("rotate", {{"args", {mesh}}, {"by", {0, 30, 0}}});
+    s = spec();
+    CHECK(s["heading"].get<double>() == doctest::Approx(30));
+    CHECK(s["at"][0].get<double>() == doctest::Approx(-30000));
+
+    // One undo per drag: the turn, then the move.
+    ops::execute("undo", json::object());
+    CHECK(spec()["heading"].get<double>() == doctest::Approx(0));
+    ops::execute("undo", json::object());
+    s = spec();
+    CHECK(s["at"][0].get<double>() == doctest::Approx(-40000));
+    CHECK(translate()[0].get<double>() == doctest::Approx(0));
+    CHECK(stale() == 0);
+
+    // A transform set some other way is folded in on the next edit.
+    ops::execute("setAttr", {{"args", {mesh + ".translateX", 2000.0}}});
+    const json e = ops::execute("siteEdit", {{"args", {"yard"}}});
+    CHECK(e["fromTransform"] == true);
+    CHECK(e["spec"]["at"][0].get<double>() == doctest::Approx(-38000));
+}
+
+TEST_CASE("site commands: airstrips on a low flat coast clear their corridors")
+{
+    loadSitePackages();
+    ops::execute("newScene", json::object());
+    const std::string terrain = coastTerrain();
+    // Inland, at the shore with a corridor out over the sea, near the shore, and a twin on a long turned strip.
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {0, 100000}}, {"id", "inland"}});
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {-150000, -57000}}, {"id", "shore"}});
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {150000, -30000}}, {"id", "along"}});
+    ops::execute("siteCreate", {{"kind", "airstrip"}, {"terrain", terrain}, {"at", {150000, 150000}}, {"heading", 30}, {"id", "twin"},
+                                {"aircraft", "twin"}, {"runwayLength", 110000}});
+    const json c = ops::execute("siteCheck", json::object());
+    CAPTURE(c["issues"].dump(1));
+    CHECK(issuesOf(c, "airClearance") == 0);
+    const json w = ops::execute("waterCheck", {{"args", {terrain}}});
+    for (const json& i : w["issues"])
+        CHECK(i.value("kind", std::string()) != "airClearance");
+}
+
+TEST_CASE("site commands: an opened scene's imported real names reach its sites' layouts before any site command runs")
+{
+    loadSitePackages();
+    ops::execute("newScene", json::object());
+    const std::string terrain = coastTerrain();
+    const json port = ops::execute("siteCreate", {{"kind", "port"}, {"terrain", terrain}, {"at", {0, -61000}}, {"id", "port1"}});
+    const std::string mesh = port["mesh"].get<std::string>();
+    auto firstLine = [&] {
+        ops::execute("meshInfo", {{"args", {mesh}}});
+        const json ships = ops::execute("slotFind", {{"type", "ship.cargo"}, {"region", "site:port1"}, {"limit", 0}, {"full", true}});
+        REQUIRE(ships["count"].get<int>() > 0);
+        std::string line;
+        for (const json& sl : ships["slots"])
+            if (sl["payload"]["data"].value("berth", 0) == 1)
+                line = sl["payload"]["data"].value("line", std::string());
+        return line;
+    };
+    const std::string line = firstLine();
+    REQUIRE_FALSE(line.empty());
+    // An import that recorded that line's name as a real one.
+    const std::string imported = ops::execute("polyCube", {{"name", "Imported"}}).at(0).get<std::string>();
+    ops::execute("addAttr", {{"args", {imported}}, {"longName", "sourceNames"}, {"dataType", "string"}});
+    ops::execute("setAttr", {{"args", {imported + ".sourceNames", json{{"operator", line}}.dump()}}});
+    const auto file = std::filesystem::temp_directory_path() / "lila_sites_avoid.lila";
+    ops::execute("saveScene", {{"args", {file.generic_string()}}});
+
+    // Another scene's site command leaves the process with no real names to avoid.
+    ops::execute("newScene", json::object());
+    ops::execute("siteCreate", {{"kind", "farm"}, {"terrain", ""}, {"id", "elsewhere"}});
+    ops::execute("openScene", {{"args", {file.generic_string()}}});
+    CHECK(firstLine() != line);
+    std::filesystem::remove(file);
+}
