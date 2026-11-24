@@ -429,10 +429,17 @@ void exec(ExecContext& c)
         LILA_ZONE_N("buildings.slots");
         std::span<glm::vec4> colors = inst->attrs.getOrAdd<glm::vec4>(lila::gn::kInstanceColorAttr);
         std::copy(moduleColors.begin(), moduleColors.end(), colors.begin());
+        std::span<glm::vec4> colors2 = inst->attrs.getOrAdd<glm::vec4>(lila::gn::kInstanceColor2Attr);
+        std::copy(moduleColors2.begin(), moduleColors2.end(), colors2.begin());
         g.instances = inst;
         g.keepInstances = !c.b("realize");
-        spec.slots = std::move(slotList);
-        out = slots::applyToInstances(lila::gn::makeGeometry(std::move(g)), lila::scene::NodeId(owner), spec);
+        if (slotList.size() == inst->size())
+            out = slots::applySlots(lila::gn::makeGeometry(std::move(g)), lila::scene::NodeId(owner), std::move(slotList));
+        else
+        {
+            spec.slots = std::move(slotList);
+            out = slots::applyToInstances(lila::gn::makeGeometry(std::move(g)), lila::scene::NodeId(owner), spec);
+        }
     }
     else
     {

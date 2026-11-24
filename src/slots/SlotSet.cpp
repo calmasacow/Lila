@@ -139,13 +139,13 @@ std::string placeholderKey(const Resolved& r, const std::string& type)
 
 namespace detail
 {
-void touchPublishers()
+void touchPublishers(const std::set<NodeId>* only)
 {
     Graph& g = Graph::current();
     // A generator node that publishes its own slots (site kits, buildings) keeps its step result while its inputs stay the
     // same, so a rule or override would not reach its instances until the modifier runs again from scratch.
     for (NodeId n : publishedNodes())
-        if (g.node(n) && !gn::rerunModifier(g, n))
+        if ((!only || only->contains(n)) && g.node(n) && !gn::rerunModifier(g, n))
             g.touch(n);
     for (NodeId id : g.nodes())
         if (const Node* n = g.node(id); n && n->type().isA(kSetType))
@@ -167,21 +167,30 @@ std::vector<Slot> readSet(Graph& g, NodeId set)
     return out;
 }
 
-std::vector<Slot> collect(Graph& g)
+std::vector<Slot> collect(Graph& g) { return collect(g, nullptr); }
+
+std::vector<Slot> collect(Graph& g, const std::function<bool(const Slot&)>& keep)
 {
     StatePtr st = state();
     std::vector<Slot> out;
+    auto filtered = [&](std::vector<Slot> slots) {
+        if (keep)
+            std::erase_if(slots, [&](const Slot& s) { return !keep(s); });
+        return slots;
+    };
     for (NodeId id : g.nodes())
         if (const Node* n = g.node(id); n && n->type().isA(kSetType))
-            for (Slot& s : detail::withPins(readSet(g, id), *st, nullptr))
+            for (Slot& s : detail::withPins(filtered(readSet(g, id)), *st, nullptr))
                 out.push_back(std::move(s));
     for (NodeId pub : detail::publishedNodes())
     {
         const NodeId frame = frameNodeOf(g, pub);
         if (frame == scene::kNoNode)
             continue;
+        std::vector<Slot> slots = filtered(detail::publishedBy(pub));
+        if (slots.empty())
+            continue;
         const glm::dmat4 world = worldOf(g, frame);
-        std::vector<Slot> slots = detail::publishedBy(pub);
         for (Slot& s : slots)
             s.transform = world * s.transform;
         for (Slot& s : detail::withPins(std::move(slots), *st, nullptr))
@@ -193,7 +202,7 @@ std::vector<Slot> collect(Graph& g)
         for (const Slot& s : out)
             seen.insert(s.id);
         for (const PinnedSlot* p : detail::allPinned(*st))
-            if (seen.insert(p->slot.id).second)
+            if ((!keep || keep(p->slot)) && seen.insert(p->slot.id).second)
                 out.push_back(p->slot);
     }
     return out;

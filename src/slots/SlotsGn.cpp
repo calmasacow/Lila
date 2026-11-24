@@ -18,6 +18,10 @@ namespace detail
 {
 Resolved resolveImpl(const Slot& s, const State& st, bool mainThread);
 std::vector<Slot> withPins(std::vector<Slot> slots, const State& st, std::vector<std::string>* conflicts);
+/** How pins take one generated slot: 0 as it is, 1 pinned (its pinned slot in out, the generated payload kept), 2 dropped. */
+int pinOf(const State& st, const Slot& s, Slot* out);
+/** Whether any rule or an override reaches the slot. */
+bool ruledOrOverridden(const State& st, const Slot& s);
 std::vector<std::string> poolForTag(const std::string& tags, bool mainThread);
 } // namespace detail
 
@@ -162,14 +166,6 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
     slots.resize(src.size());
     for (size_t k = 0; k < src.size(); ++k)
         slots[k].transform = src.transforms[k];
-    if (publisher != 0)
-        publish(publisher, slots);
-
-    // Pins: a pinned instance keeps its frame; one new under a pinned owner goes.
-    std::map<std::string, size_t> byId;
-    for (size_t k = 0; k < slots.size(); ++k)
-        byId[slots[k].id] = k;
-    const std::vector<Slot> pinned = detail::withPins(slots, *st, nullptr);
 
     auto out = std::make_shared<gn::Instances>();
     out->references = src.references;
@@ -181,11 +177,42 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
     // own references: a swapped visual without a payload colour shows its own.
     std::vector<std::pair<size_t, glm::vec4>> payloadColors;
     std::vector<size_t> ownColorsDropped;
-    for (const Slot& s : pinned)
+    auto takeColors = [&](size_t row, const json& data) {
+        if (!data.is_object())
+            return false;
+        bool any = false;
+        if (data.contains("color"))
+            if (std::optional<glm::vec4> c = dataColor(data))
+                payloadColors.push_back({row, *c}), any = true;
+        return any;
+    };
+    out->transforms.reserve(src.size());
+    out->reference.reserve(src.size());
+    slotIndex.reserve(src.size());
+    const bool anyChange = !st->rules.empty() || !st->overrides.empty();
+    Slot pinnedSlot;
+    for (size_t k = 0; k < slots.size(); ++k)
     {
-        auto at = byId.find(s.id);
-        const bool generated = at != byId.end();
-        const Resolved r = detail::resolveImpl(s, *st, false);
+        // Pins: a pinned instance keeps its frame; one new under a pinned owner goes.
+        const int pin = detail::pinOf(*st, slots[k], &pinnedSlot);
+        if (pin == 2)
+            continue;
+        const Slot& s = pin == 1 ? pinnedSlot : slots[k];
+        const std::optional<size_t> at = k;
+        const bool generated = true;
+        // Most slots are as their generator made them: no rule, override or pin reaches them, and their payload draws nothing
+        // of its own, so their instance stays as it is without resolving.
+        Resolved r;
+        if (pin == 0 && !(anyChange && detail::ruledOrOverridden(*st, s)) && s.payload.pool.empty() && s.payload.poolTag.empty() &&
+            !setsVisual(s.payload))
+        {
+            const size_t row = out->size();
+            out->add(s.transform, src.reference[k]);
+            slotIndex.push_back(int32_t(k));
+            takeColors(row, s.payload.data);
+            continue;
+        }
+        r = detail::resolveImpl(s, *st, false);
         if (r.payload.hidden && *r.payload.hidden)
             continue;
         if (!r.payload.poolTag.empty() && r.payload.pool.empty() && r.payload.item.empty() && r.poolPick.empty())
@@ -195,7 +222,7 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
             pending().publishers.insert(publisher);
             missing = true;
         }
-        int ref = generated ? src.reference[at->second] : -1;
+        int ref = generated ? src.reference[*at] : -1;
         if (setsVisual(r.payload) || !generated)
         {
             const std::string key = visualKey(r, s.type);
@@ -220,31 +247,35 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
             continue;
         const size_t row = out->size();
         out->add(s.transform, ref);
-        out->attrs.resize(out->size());
-        if (generated)
-            out->attrs.copyFrom(src.attrs, row, at->second);
-        slotIndex.push_back(generated ? int32_t(at->second) : -1);
-        if (std::optional<glm::vec4> c = dataColor(r.payload.data))
-            payloadColors.push_back({row, *c});
-        else if (setsVisual(r.payload))
+        slotIndex.push_back(generated ? int32_t(*at) : -1);
+        if (!takeColors(row, r.payload.data) && setsVisual(r.payload))
             ownColorsDropped.push_back(row);
     }
+    // Every row's attributes from the instance it came from, in one pass.
+    out->attrs.resize(out->size());
+    for (size_t row = 0; row < slotIndex.size(); ++row)
+        if (slotIndex[row] >= 0)
+            out->attrs.copyFrom(src.attrs, row, size_t(slotIndex[row]));
     std::span<int32_t> idx = out->attrs.getOrAdd<int32_t>("slotIndex");
     std::copy(slotIndex.begin(), slotIndex.end(), idx.begin());
-    if (!payloadColors.empty() || (!ownColorsDropped.empty() && out->attrs.has(gn::kInstanceColorAttr)))
-    {
+    auto writeColors = [&](const char* attr, const std::vector<std::pair<size_t, glm::vec4>>& given) {
+        if (given.empty() && (ownColorsDropped.empty() || !out->attrs.has(attr)))
+            return;
         std::vector<glm::vec4> colors(out->size());
         for (size_t k = 0; k < colors.size(); ++k)
             colors[k] = gn::instanceColor(*out, k);
-        for (const auto& [row, c] : payloadColors)
+        for (const auto& [row, c] : given)
             colors[row] = c;
         for (size_t row : ownColorsDropped)
             colors[row] = glm::vec4(0.0f);
-        out->attrs.remove(gn::kInstanceColorAttr);
-        std::span<glm::vec4> dst = out->attrs.getOrAdd<glm::vec4>(gn::kInstanceColorAttr);
+        out->attrs.remove(attr);
+        std::span<glm::vec4> dst = out->attrs.getOrAdd<glm::vec4>(attr);
         std::copy(colors.begin(), colors.end(), dst.begin());
-    }
+    };
+    writeColors(gn::kInstanceColorAttr, payloadColors);
     (void)missing;
+    if (publisher != 0)
+        publish(publisher, std::move(slots));
     gn::Geometry g = *in;
     g.instances = std::move(out);
     return gn::makeGeometry(std::move(g));

@@ -6,6 +6,9 @@
 #include "scene/Graph.h"
 #include "scene/Node.h"
 #include "slots/Slots.h"
+#include "slots/SlotsGn.h"
+
+#include <chrono>
 
 using namespace lila;
 using json = nlohmann::json;
@@ -187,4 +190,73 @@ TEST_CASE("instance colours: a stored colour, a rule's data colour and an overri
     CHECK(slots::dataColor({{"color", "#808080"}})->r == doctest::Approx(0.2158f).epsilon(0.01));
     CHECK_FALSE(slots::dataColor({{"color", "red"}}));
     CHECK_FALSE(slots::dataColor({{"livery", "x"}}));
+}
+
+TEST_CASE("slots on a generator's own instances: a cell of 400 is quick, and an override reruns only its publisher")
+{
+    gnRun("newScene");
+    slots::refresh();
+    // A building cell's worth: 400 instances on 8 shared references, slots with regions, tags and a little data.
+    auto inst = std::make_shared<gn::Instances>();
+    for (int r = 0; r < 8; ++r)
+        inst->references.push_back(gn::meshGeometry(geo::Mesh()));
+    std::vector<slots::Slot> made;
+    for (int k = 0; k < 400; ++k)
+    {
+        inst->add(glm::translate(glm::dmat4(1.0), glm::dvec3(k * 10.0, 0.0, 0.0)), k % 8);
+        slots::Slot s;
+        s.id = slots::makeId("building:00ff", "t0/f" + std::to_string(k % 4) + "/l" + std::to_string(k % 3) + "/b" + std::to_string(k) + "/window");
+        s.type = k % 5 == 0 ? "door" : "window";
+        s.owner = "building:00ff";
+        s.regions = {"settlement:Puerto", "district:centro", "style:colonialCentro", "cell:3_4"};
+        s.tags = {"building", "shop"};
+        if (k % 20 == 0)
+            s.payload.data = {{"text", "Abarrotes Lupita"}};
+        made.push_back(std::move(s));
+    }
+    gn::Geometry g;
+    g.instances = inst;
+    const gn::GeometryPtr in = gn::makeGeometry(std::move(g));
+    const auto t0 = std::chrono::steady_clock::now();
+    size_t rows = 0;
+    for (int run = 0; run < 50; ++run)
+    {
+        gn::GeometryPtr out = slots::applySlots(in, scene::NodeId(0), made);
+        rows += out->instances->size();
+    }
+    const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() / 50.0;
+    MESSAGE("applySlots, 400 slots: " << ms << " ms");
+    CHECK(rows == 50 * 400);
+    CHECK(ms < 4.0);
+
+    // Two publishers: an override on a slot of one reruns that one only.
+    const Scatter a = scatter();
+    settle(a.mesh);
+    scene::Graph& graph = scene::Graph::current();
+    gnRun("polyPlane", {{"width", 100.0}, {"depth", 100.0}, {"name", "Field2"}});
+    gnRun("gnCreateGroup", gnArgs({"Props2"}));
+    {
+        const std::string grid = gnAdd("Props2", "MeshGrid"), iop = gnAdd("Props2", "InstanceOnPoints"), cube = gnAdd("Props2", "MeshCube"),
+                          sl = gnAdd("Props2", "Slots");
+        gnSet("Props2", sl + ".type", "container.20ft");
+        gnSet("Props2", sl + ".owner", "yard:Other");
+        gnLink("Props2", grid + ".mesh", iop + ".points");
+        gnLink("Props2", cube + ".mesh", iop + ".instance");
+        gnLink("Props2", iop + ".instances", sl + ".instances");
+        gnLink("Props2", sl + ".instances", "GroupOutput.geometry");
+    }
+    gnRun("gnApply", gnArgs({"Field2", "Props2"}));
+    settle("Field2");
+    const auto pass = [&](const std::string& mesh) { return graph.find(mesh)->evaluatedPass(); };
+    const auto p1 = pass(a.mesh), p2 = pass("Field2");
+    std::string onFirst;
+    for (const slots::Slot& s : slots::collect(graph))
+        if (s.owner == "yard:Port")
+            onFirst = s.id;
+    REQUIRE_FALSE(onFirst.empty());
+    gnRun("slotSet", {{"id", onFirst}, {"hidden", true}});
+    settle(a.mesh);
+    settle("Field2");
+    CHECK(pass(a.mesh) != p1);
+    CHECK(pass("Field2") == p2);
 }

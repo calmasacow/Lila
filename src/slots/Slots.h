@@ -271,6 +271,8 @@ LILA_SCENE_API Resolved resolve(const Slot& s);
 
 /** Every slot in the scene: slotSet nodes, geometry-node publishers, and pinned slots no generator makes any more. Main thread. */
 LILA_SCENE_API std::vector<Slot> collect(scene::Graph& g);
+/** Only the slots `keep` takes (asked of each slot as generated, before its node's transform), without copying the rest. */
+LILA_SCENE_API std::vector<Slot> collect(scene::Graph& g, const std::function<bool(const Slot&)>& keep);
 /** The slot by id, or nothing. Main thread. */
 LILA_SCENE_API std::optional<Slot> findSlot(scene::Graph& g, std::string_view id);
 /** The node publishing a slot: its slotSet or the modifier's mesh. kNoNode for pinned orphans. */
