@@ -497,6 +497,34 @@ std::string meshHash(const geo::Mesh& m)
     return std::format("{:016x}", h);
 }
 
+/**
+ * What a group's placement in Unreal depends on, hashed: the same signature as the level holds means nothing to send.
+ * Empty for a group whose asset content Lila can't name from the plan (a plain source's mesh), which always goes.
+ */
+std::string placementSignature(const json& grp, const std::vector<scene::MeshPtr>& meshes, const std::string& hlod, const std::string& linkedHlod)
+{
+    json sig = {{"contentPath", grp.value("contentPath", "")},
+                {"mode", grp["mode"]},
+                {"collision", grp.value("collision", json())},
+                {"nanite", grp.value("nanite", false)},
+                {"customData", grp.value("customData", json::array())},
+                {"components", grp.value("components", json::array())},
+                {"materials", grp.value("materials", json::array())},
+                {"label", grp.value("label", grp.value("source", ""))},
+                {"hlod", hlod},
+                {"linkedHlod", linkedHlod},
+                {"placements", grp["placements"]}};
+    if (grp.contains("actorClass"))
+        sig["actorClass"] = grp["actorClass"];
+    else if (grp.contains("unrealMesh"))
+        sig["unrealMesh"] = grp["unrealMesh"];
+    else if (grp.contains("gnMesh") && grp["gnMesh"].get<size_t>() < meshes.size() && meshes[grp["gnMesh"].get<size_t>()])
+        sig["mesh"] = meshHash(*meshes[grp["gnMesh"].get<size_t>()]);
+    else
+        return {};
+    return slots::hex(slots::idHash(sig.dump()));
+}
+
 scene::MeshPtr cleanedMesh(const std::shared_ptr<const geo::Mesh>& m)
 {
     geo::Mesh copy = *m;
@@ -1219,7 +1247,8 @@ void registerPlacementCommands()
                 for (scene::NodeId r : roots)
                     slotRoots().push_back(g.fullPath(r));
             }
-            auto job = [plan, meshes, alone, withChildren, hlod, linkedHlod, slotTablePath, dir = cacheDir()]() mutable {
+            const bool hashes = hasFeature("placementHashes");
+            auto job = [plan, meshes, alone, withChildren, hlod, linkedHlod, slotTablePath, hashes, dir = cacheDir()]() mutable {
                 LILA_ZONE_N("Unreal placements");
                 std::shared_ptr<RpcClient> client = Link::get().client();
                 if (!client)
@@ -1237,6 +1266,13 @@ void registerPlacementCommands()
                 std::error_code ec;
                 fs::create_directories(dir, ec);
                 std::map<std::string, std::string> importedThisSend;
+                // What the level already holds per group (signature, actor count): unchanged groups are skipped, so a
+                // rule swap or a one-building edit sends only what changed.
+                json inLevel = json::object();
+                if (hashes)
+                    if (RpcResult h = client->call("placementHashes", json::object(), placementTimeoutMs(0)); h.ok && h.result.is_object())
+                        inLevel = h.result.value("groups", json::object());
+                int unchanged = 0;
                 for (json& grp : plan["groups"])
                 {
                     const std::string source = grp["source"].get<std::string>();
@@ -1246,6 +1282,19 @@ void registerPlacementCommands()
                         RpcResult removed = client->call("removePlacements", {{"groups", {grp["key"]}}}, placementTimeoutMs(0));
                         grp["placed"] = removed.ok ? removed.result : json{{"error", removed.error}};
                         continue;
+                    }
+                    const std::string signature = hashes ? placementSignature(grp, meshes, hlod, linkedHlod) : std::string();
+                    if (!signature.empty())
+                    {
+                        const json& was = inLevel.value(grp["key"].get<std::string>(), json::object());
+                        const bool oneHolder = grp["mode"] == "ism" || grp["mode"] == "hism";
+                        const size_t want = oneHolder && !grp.contains("actorClass") ? 1 : grp["placements"].size();
+                        if (was.value("hash", "") == signature && was.value("actors", size_t(0)) == want)
+                        {
+                            grp["placed"] = {{"unchanged", true}};
+                            ++unchanged;
+                            continue;
+                        }
                     }
                     // Slots naming an Unreal class or mesh use what the project has: nothing to export.
                     std::string mesh = grp.value("unrealMesh", std::string());
@@ -1293,9 +1342,12 @@ void registerPlacementCommands()
                         params["linkedHlodLayer"] = linkedHlod;
                     if (grp.contains("actorClass"))
                         params["actorClass"] = grp["actorClass"];
+                    if (!signature.empty())
+                        params["hash"] = signature;
                     RpcResult placed = client->call("placeInstances", params, placementTimeoutMs(grp["placements"].size()));
                     grp["placed"] = placed.ok ? placed.result : json{{"error", placed.error}};
                 }
+                plan["unchanged"] = unchanged;
                 // Meshes a source's geometry nodes no longer instance leave the level.
                 for (json& src : plan["gnSources"])
                 {

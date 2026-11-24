@@ -57,6 +57,7 @@ const TCHAR* NodePrefix = TEXT("LilaNode:");
 const FName InstancedTag(TEXT("LilaInstanced"));
 const FName LightTag(TEXT("LilaLight"));
 const TCHAR* AssemblyPrefix = TEXT("LilaAssembly:");
+const TCHAR* HashPrefix = TEXT("LilaHash:");
 
 TSharedPtr<FJsonValue> Obj(const TSharedRef<FJsonObject>& O) { return MakeShared<FJsonValueObject>(O); }
 
@@ -718,6 +719,67 @@ void PlaceInstanced(UWorld* World, const TSharedPtr<FJsonObject>& Params, const 
 }
 
 /** placeInstances with an actorClass: an actor of that class per placement, no mesh. */
+/** Tags the group's actors with the signature Lila sent (params.hash), which placementHashes reads back. */
+void StampHash(UWorld* World, const FString& Group, const TSharedPtr<FJsonObject>& Params)
+{
+	FString Hash;
+	if (!Params->TryGetStringField(TEXT("hash"), Hash) || Hash.IsEmpty())
+	{
+		return;
+	}
+	const FName Tag(*(FString(HashPrefix) + Hash));
+	for (AActor* Actor : TaggedActors(World, GroupTag(Group)))
+	{
+		if (Actor->Tags.Contains(Tag))
+		{
+			continue;
+		}
+		Actor->Tags.RemoveAll([](const FName& T) { return T.ToString().StartsWith(HashPrefix); });
+		Actor->Tags.Add(Tag);
+	}
+}
+
+/**
+ * placementHashes {}: per Lila group in the open level, the signature its last placeInstances carried and how many
+ * actors carry the group: {groups: {group: {hash, actors}}}. Lila skips groups whose signature and count still match.
+ */
+TSharedPtr<FJsonValue> PlacementHashes(const TSharedPtr<FJsonObject>& Params, FString& OutError)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlacementHashes);
+
+	UWorld* World = EditorWorld();
+	if (!World)
+	{
+		OutError = TEXT("placementHashes: no level is open");
+		return nullptr;
+	}
+	TMap<FString, TPair<FString, int32>> ByGroup;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		const FString Group = TagValue(*It, GroupPrefix);
+		if (Group.IsEmpty())
+		{
+			continue;
+		}
+		TPair<FString, int32>& Entry = ByGroup.FindOrAdd(Group);
+		const FString Hash = TagValue(*It, HashPrefix);
+		// One actor without the signature (placed by an older send) makes the group's signature unknown.
+		Entry.Key = Entry.Value == 0 || Entry.Key == Hash ? Hash : FString();
+		++Entry.Value;
+	}
+	TSharedRef<FJsonObject> Groups = MakeShared<FJsonObject>();
+	for (const TPair<FString, TPair<FString, int32>>& G : ByGroup)
+	{
+		TSharedRef<FJsonObject> E = MakeShared<FJsonObject>();
+		E->SetStringField(TEXT("hash"), G.Value.Key);
+		E->SetNumberField(TEXT("actors"), G.Value.Value);
+		Groups->SetObjectField(G.Key, E);
+	}
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetObjectField(TEXT("groups"), Groups);
+	return Obj(Out);
+}
+
 /**
  * The Custom HLOD Actor layer at Path, made when missing (and turned into one when it is another type). Linked names the
  * layer whose unloading shows this one's actors (far proxies show once the near ones unload); empty leaves it unset.
@@ -872,6 +934,7 @@ TSharedPtr<FJsonValue> PlaceSlotClass(const TSharedPtr<FJsonObject>& Params, con
 	int32 Spawned = 0, Updated = 0, Removed = 0;
 	FComponentSink Sink;
 	PlaceClassActors(World, Group, Label, Class, Placements, TaggedActors(World, GroupTag(Group)), Spawned, Updated, Removed, Sink);
+	StampHash(World, Group, Params);
 	for (const FString& W : Sink.Warnings)
 	{
 		UE_LOG(LogLilaLink, Warning, TEXT("placeInstances %s: %s"), *Label, *W);
@@ -1059,6 +1122,7 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 	{
 		PlaceInstanced(World, Params, Group, Label, Mesh, Mode == TEXT("hism"), bCollide, *Placements, Existing, Spawned, Updated, Removed, Sink);
 	}
+	StampHash(World, Group, Params);
 	if (!HlodPath.IsEmpty())
 	{
 		const FString HlodObject = HlodPath.Contains(TEXT(".")) ? HlodPath : HlodPath + TEXT(".") + FPackageName::GetShortName(HlodPath);
@@ -1754,6 +1818,7 @@ void LilaLink::AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods)
 	Methods.Add(TEXT("listPlacements"), LilaLink::Sync(&ListPlacements));
 	Methods.Add(TEXT("makeLevelInstance"), LilaLink::Sync(&MakeLevelInstance));
 	Methods.Add(TEXT("writeSlotTable"), LilaLink::Sync(&WriteSlotTable));
+	Methods.Add(TEXT("placementHashes"), LilaLink::Sync(&PlacementHashes));
 }
 
 #undef LOCTEXT_NAMESPACE
