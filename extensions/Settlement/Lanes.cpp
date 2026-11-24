@@ -443,10 +443,15 @@ LaneGraph laneGraph(const Layout& l, const RoadNetwork& net)
     }
     for (const auto& [node, ends] : atNode)
     {
-        if (ends.size() == 1)
+        // A footpath or a path carrying on from a street's end leaves it a dead end for vehicles.
+        std::vector<EndRef> driven;
+        for (const EndRef& e : ends)
+            if (!per[size_t(e.line)].fwd.empty() || !per[size_t(e.line)].back.empty())
+                driven.push_back(e);
+        if (driven.size() == 1)
         {
             // A dead end: vehicles turn round, and leave or arrive there when it is on the settlement's edge.
-            const EndRef& e = ends[0];
+            const EndRef& e = driven[0];
             const std::vector<int> in = incoming(per[size_t(e.line)], e), out = outgoing(per[size_t(e.line)], e);
             if (!in.empty() && !out.empty())
                 link(in.front(), out.front(), -1, Movement::UTurn);
