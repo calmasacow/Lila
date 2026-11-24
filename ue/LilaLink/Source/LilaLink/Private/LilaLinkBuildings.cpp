@@ -1,5 +1,6 @@
 #include "LilaLinkBuildings.h"
 
+#include "LilaLinkInstanceColor.h"
 #include "LilaLinkInterior.h"
 #include "LilaLinkLog.h"
 #include "LilaLinkMaterialFunction.h"
@@ -36,7 +37,7 @@
 
 namespace
 {
-constexpr int32 Version = 2;
+constexpr int32 Version = 3;
 const TCHAR* VersionTag = TEXT("Lila Building v");
 const TCHAR* InstanceFolder = TEXT("/Game/LilaLink/Buildings");
 
@@ -92,10 +93,11 @@ void BuildVariation(UMaterialFunction* Function)
 		TEXT("The surface's own colour, grey where the palette should show (a trim sheet's albedo)."));
 	UMaterialExpression* BaseRough = G.ScalarInput(TEXT("BaseRoughness"), 0.85f, TEXT("Surface"), TEXT("The surface's own roughness."));
 	auto* VC = G.New<UMaterialExpressionVertexColor>(-1600);
-	UMaterialExpression* VCDefault = Custom(G, TEXT("vertex colour"), TEXT("return float4(VC, VA);"), CMOT_Float4,
-		{Wire(TEXT("VC"), VC), Wire(TEXT("VA"), VC, TEXT("A"))}, -1400);
+	// Modules are shared meshes across buildings: their instance colour (custom data 0-3) is the building's palette.
+	UMaterialExpression* VCDefault = Custom(G, TEXT("vertex colour"), TEXT("return float4(lerp(VC, I.rgb, saturate(I.a)), VA);"), CMOT_Float4,
+		{Wire(TEXT("VC"), VC), Wire(TEXT("VA"), VC, TEXT("A")), Wire(TEXT("I"), LilaLink::InstanceColorData(G, -1800))}, -1400);
 	UMaterialExpression* Palette = G.Input(TEXT("BuildingPalette"), FunctionInput_Vector4, VCDefault,
-		TEXT("Painted colour (RGB, linear) and dirt (A): vertex colour when unconnected."));
+		TEXT("Painted colour (RGB, linear) and dirt (A): the instance colour Lila sent, else vertex colour, when unconnected."));
 	UMaterialExpression* Strength = G.ScalarInput(TEXT("PaletteStrength"), 1.0f, TEXT("Palette"), TEXT("0 keeps the base colour, 1 paints it fully."));
 	UMaterialExpression* DirtColor = G.VectorInput(TEXT("DirtColor"), FLinearColor(0.12f, 0.1f, 0.08f), TEXT("Dirt"), TEXT("Colour of grime."));
 	UMaterialExpression* DirtAmount = G.ScalarInput(TEXT("DirtAmount"), 1.0f, TEXT("Dirt"), TEXT("Scales the dirt Lila wrote per building."));
