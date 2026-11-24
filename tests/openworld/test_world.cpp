@@ -389,8 +389,10 @@ TEST_CASE("world: the tiny Sinaloa world builds headless from one spec file, rem
     const std::string terrainName = g.find(r["terrain"].get<std::string>())->name();
     auto looks = [&](const char* when) {
         const json masks = run("terrainInfo", {{"args", {terrainName}}})["masks"];
-        for (const char* layer : {"layer_grass", "layer_sand", "layer_road"})
+        for (const char* layer : {"layer_grass", "layer_sand", "layer_road", "layer_forest", "layer_rock"})
             CHECK_MESSAGE(masks.dump().find(layer) != std::string::npos, when << " " << layer);
+        // A low tropical coast: no snow anywhere.
+        CHECK_MESSAGE(masks.value("layer_snow", json::object()).value("max", 1.0) < 0.01, when << " " << masks.value("layer_snow", json()).dump());
         const json wm = run("meshInfo", {{"args", {terrainName + "_water"}}});
         CHECK_MESSAGE(wm["materialSlots"].dump().find("TerrainWater") != std::string::npos, when << " " << wm["materialSlots"].dump());
     };

@@ -33,6 +33,7 @@ namespace detail
 {
 std::vector<NodeId> publishedNodes();
 std::vector<Slot> publishedBy(NodeId n);
+void evaluatePublishers(Graph& g);
 std::vector<Slot> withPins(std::vector<Slot> slots, const State& st, std::vector<std::string>* conflicts);
 std::vector<const PinnedSlot*> allPinned(const State& st);
 Resolved resolveImpl(const Slot& s, const State& st, bool mainThread);
@@ -139,13 +140,13 @@ std::string placeholderKey(const Resolved& r, const std::string& type)
 
 namespace detail
 {
-void touchPublishers()
+void touchPublishers(const std::set<NodeId>* only)
 {
     Graph& g = Graph::current();
     // A generator node that publishes its own slots (site kits, buildings) keeps its step result while its inputs stay the
     // same, so a rule or override would not reach its instances until the modifier runs again from scratch.
     for (NodeId n : publishedNodes())
-        if (g.node(n) && !gn::rerunModifier(g, n))
+        if ((!only || only->contains(n)) && g.node(n) && !gn::rerunModifier(g, n))
             g.touch(n);
     for (NodeId id : g.nodes())
         if (const Node* n = g.node(id); n && n->type().isA(kSetType))
@@ -153,6 +154,16 @@ void touchPublishers()
 }
 
 void forgetSet(NodeId id) { setCache().erase(id); }
+
+void evaluatePublishers(Graph& g)
+{
+    // Reading a frame's world evaluates it; all of them in one pass runs dirty publishers in parallel, not one by one.
+    std::vector<NodeId> frames;
+    for (NodeId pub : publishedNodes())
+        if (const NodeId frame = frameNodeOf(g, pub); frame != scene::kNoNode)
+            frames.push_back(frame);
+    g.evaluateUpstream(frames);
+}
 } // namespace detail
 
 std::vector<Slot> readSet(Graph& g, NodeId set)
@@ -167,21 +178,31 @@ std::vector<Slot> readSet(Graph& g, NodeId set)
     return out;
 }
 
-std::vector<Slot> collect(Graph& g)
+std::vector<Slot> collect(Graph& g) { return collect(g, nullptr); }
+
+std::vector<Slot> collect(Graph& g, const std::function<bool(const Slot&)>& keep)
 {
     StatePtr st = state();
     std::vector<Slot> out;
+    auto filtered = [&](std::vector<Slot> slots) {
+        if (keep)
+            std::erase_if(slots, [&](const Slot& s) { return !keep(s); });
+        return slots;
+    };
     for (NodeId id : g.nodes())
         if (const Node* n = g.node(id); n && n->type().isA(kSetType))
-            for (Slot& s : detail::withPins(readSet(g, id), *st, nullptr))
+            for (Slot& s : detail::withPins(filtered(readSet(g, id)), *st, nullptr))
                 out.push_back(std::move(s));
+    detail::evaluatePublishers(g);
     for (NodeId pub : detail::publishedNodes())
     {
         const NodeId frame = frameNodeOf(g, pub);
         if (frame == scene::kNoNode)
             continue;
+        std::vector<Slot> slots = filtered(detail::publishedBy(pub));
+        if (slots.empty())
+            continue;
         const glm::dmat4 world = worldOf(g, frame);
-        std::vector<Slot> slots = detail::publishedBy(pub);
         for (Slot& s : slots)
             s.transform = world * s.transform;
         for (Slot& s : detail::withPins(std::move(slots), *st, nullptr))
@@ -193,7 +214,7 @@ std::vector<Slot> collect(Graph& g)
         for (const Slot& s : out)
             seen.insert(s.id);
         for (const PinnedSlot* p : detail::allPinned(*st))
-            if (seen.insert(p->slot.id).second)
+            if ((!keep || keep(p->slot)) && seen.insert(p->slot.id).second)
                 out.push_back(p->slot);
     }
     return out;

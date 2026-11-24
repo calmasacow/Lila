@@ -9013,18 +9013,24 @@ void Renderer::resize(ViewportId id, int width, int height)
 
 void Renderer::submit(ViewportId id, FrameState state)
 {
+    LILA_ZONE();
+    FrameState previous;
     {
         std::scoped_lock lock(m->mutex);
+        LILA_ZONE_N("renderer.submit locked");
         auto it = m->viewports.find(id);
         if (it == m->viewports.end())
             return;
-        it->second->state = std::move(state);
+        previous = std::exchange(it->second->state, std::move(state));
         ++it->second->submitted;
         it->second->pending = true;
         it->second->hasState = true;
         it->second->retries = 0;
     }
     m->cv.notify_all();
+    // The frame before can hold the last references to a replaced scene's draws: gigabytes, freed off the main thread.
+    if (constexpr size_t kOnItsOwn = 1000; previous.meshes.size() >= kOnItsOwn)
+        std::thread([p = std::move(previous)] {}).detach();
 }
 
 Renderer::FrameStats Renderer::stats(ViewportId id) const

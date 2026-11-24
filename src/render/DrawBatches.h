@@ -16,8 +16,9 @@ struct GpuInstance
     glm::mat4 world{1.0f};
     glm::vec4 color{0.0f}; // resolved wire colour; in shaded batches the wire the mesh shader draws, alpha 0 for none
     glm::vec4 tint{0.0f};  // MeshDraw::instanceColors entry: linear rgb, a how much it shows
+    glm::vec4 tint2{0.0f}; // MeshDraw::instanceColors2 entry: the second tone, for materials with MatInstanceColor2
 };
-static_assert(sizeof(GpuInstance) == 96, "matches InstanceData in mesh.slang");
+static_assert(sizeof(GpuInstance) == 112, "matches InstanceData in mesh.slang");
 
 /** Placements of one GPU mesh that share everything else: one instanced draw call per material section. */
 struct DrawBatch

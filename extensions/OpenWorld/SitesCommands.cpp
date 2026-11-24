@@ -1656,6 +1656,7 @@ void registerSites(ext::Context& ctx)
     // An opened scene's imported real names reach the layouts before anything draws them.
     for (events::Event e : {events::Event::SceneOpened, events::Event::SceneImported})
         ctx.subscribe(e, [](const events::EventData&) {
+            LILA_ZONE_N("sites.sceneOpened");
             const uint64_t before = sites::avoidRevision();
             refreshAvoid();
             if (sites::avoidRevision() == before)

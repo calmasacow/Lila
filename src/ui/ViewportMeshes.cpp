@@ -5,6 +5,8 @@
 #include "ui/HeightfieldDisplay.h"
 #include "ui/VolumeDisplay.h"
 
+#include <thread>
+
 namespace lila::ui
 {
 using namespace viewportDetail;
@@ -41,6 +43,8 @@ struct MeshEntry
     std::vector<render::MeshDraw> draws; // empty when the node draws nothing
     /** Per draw: the edges a modifier added, drawn darker and without selection highlights. */
     std::vector<uint8_t> modifierWire;
+    /** A modified mesh built without its cage wire, which nothing showed: built once it is selected. */
+    bool wireDeferred = false;
     scene::MeshPtr shown;
     glm::dmat4 world{1.0};
     scene::NodeId arrayed = scene::kNoNode;
@@ -54,7 +58,7 @@ constexpr float kModifierWireShade = 0.5f;
 
 /** The node's draws under these settings, or none when it is hidden. */
 void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const scene::sceneIndex::Hierarchy& hierarchy,
-                const scene::isolation::Set* iso, bool hilite)
+                const scene::isolation::Set* iso, bool hilite, bool selected)
 {
     const scene::Node& n = *e.node;
     const scene::NodeId id = n.id();
@@ -62,6 +66,7 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     e.hilite = hilite;
     e.draws.clear();
     e.modifierWire.clear();
+    e.wireDeferred = false;
     e.shown.reset();
     e.heightfield.reset();
     if (!hierarchy.visible(id) || (iso && !iso->shows(id)) || !set.maskShown)
@@ -170,6 +175,13 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     }
     else if (!modified)
         e.draws.push_back(std::move(d));
+    else if (!(showsWire || set.modifierEdges || selected))
+    {
+        // Laying the cage onto the result costs seconds on a big generated mesh: wait until something shows the wire.
+        e.draws.push_back(std::move(d));
+        e.modifierWire.push_back(0);
+        e.wireDeferred = true;
+    }
     else
     {
         // The cage's edges laid onto the result carry the mesh's wire (component editing draws the cage itself); the
@@ -255,6 +267,65 @@ struct ViewportWidget::MeshDrawCache
 
 void ViewportWidget::MeshDrawCacheDelete::operator()(MeshDrawCache* c) const { delete c; }
 
+namespace
+{
+/**
+ * The meshes this frame rebuilds, their render copies built in parallel up front: after a load or a world build
+ * thousands of entries rebuild at once, and building each in the frame's loop takes seconds.
+ */
+template <class Cache, class Hidden>
+void prewarmRebuilds(scene::Graph& g, Cache& cache, const std::vector<scene::Node*>& meshes, const MeshSettings& set,
+                     const scene::sceneIndex::Hierarchy& hierarchy, const scene::isolation::Set* iso, const Hidden& lodHidden,
+                     const std::unordered_set<scene::NodeId>& hilite)
+{
+    if (!set.maskShown)
+        return;
+    std::vector<std::pair<scene::MeshPtr, bool>> wanted, wireless;
+    auto want = [&](const scene::MeshPtr& mesh) {
+        if (mesh)
+            wanted.emplace_back(mesh, set.showMaterials && needsTangents(*mesh));
+    };
+    for (size_t i = 0; i < meshes.size(); ++i)
+    {
+        const MeshEntry& e = cache.entries[i];
+        const scene::Node& n = *meshes[i];
+        const scene::NodeId id = n.id();
+        if (e.pass == n.evaluatedPass() && e.settings == cache.settingsId)
+            continue;
+        auto [over, added] = cache.overridden.try_emplace(&n.type());
+        if (added)
+            over->second = overridden(n);
+        if (over->second)
+            continue;
+        if (hilite.contains(id) || lodHidden.contains(id) || !hierarchy.visible(id) || (iso && !iso->shows(id)) ||
+            n.as<int64_t>(scene::MeshNode::kSmoothPreview) != 0)
+            continue;
+        if (set.terrain.drawsHeightfields() && heightfieldDisplay::heightfieldOf(g, id))
+            continue;
+        const scene::MeshPtr& outMesh = n.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
+        const scene::MeshPtr cage = set.render || n.type().isA("lattice") ? nullptr : scene::modifiers::cage(g, id);
+        if (modifiersAddEdges(cage, outMesh))
+        {
+            // Drawn whole, its surface without the modifier's wire.
+            want(outMesh);
+            wireless.push_back(wanted.back());
+            continue;
+        }
+        // An instanced result draws the geometry beside its instances and each referenced mesh.
+        if (gn::InstanceViewPtr view = gn::instanceViewFor(g, id))
+        {
+            want(view->base);
+            for (const gn::InstancePart& p : view->parts)
+                want(p.mesh);
+        }
+        else
+            want(outMesh);
+    }
+    prewarmRenderMeshes(wanted);
+    prewarmWirelessMeshes(wireless);
+}
+} // namespace
+
 void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, const std::unordered_set<scene::NodeId>& lodHidden,
                                    const std::unordered_set<scene::NodeId>& underSelection, bool highlight,
                                    std::vector<displayAids::MeshEntry>* aids)
@@ -264,9 +335,16 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
     if (!mMeshDraws)
         mMeshDraws.reset(new MeshDrawCache());
     MeshDrawCache& c = *mMeshDraws;
-    const std::vector<scene::Node*>& meshes = scene::sceneIndex::ofType(g, "mesh");
+    const std::vector<scene::Node*>* meshList = nullptr;
+    const scene::sceneIndex::Hierarchy* hierarchyOf = nullptr;
     const MeshSettings set = meshSettings(g, rv, mIsolation, mDisplayEpoch, devicePixelRatioF());
-    const scene::sceneIndex::Hierarchy& hierarchy = scene::sceneIndex::hierarchy(g, set.inherit);
+    {
+        LILA_ZONE_N("drawMeshNodes index");
+        meshList = &scene::sceneIndex::ofType(g, "mesh");
+        hierarchyOf = &scene::sceneIndex::hierarchy(g, set.inherit);
+    }
+    const std::vector<scene::Node*>& meshes = *meshList;
+    const scene::sceneIndex::Hierarchy& hierarchy = *hierarchyOf;
     const scene::isolation::Set* iso = rv ? nullptr : &mIsolation;
 
     // A render view draws its own way and keeps nothing.
@@ -280,6 +358,7 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
     }
     if (cache.structure != g.structure())
     {
+        LILA_ZONE_N("drawMeshNodes entries");
         // Keep the entries of nodes that are still there; new nodes start empty.
         std::unordered_map<scene::NodeId, MeshEntry> old;
         for (MeshEntry& e : cache.entries)
@@ -294,6 +373,9 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
                 cache.entries[i].id = meshes[i]->id();
             }
         cache.structure = g.structure();
+        // A replaced scene leaves thousands of entries holding its draws: freed off the frame.
+        if (constexpr size_t kOnItsOwn = 64; old.size() >= kOnItsOwn)
+            std::thread([d = std::move(old)] {}).detach();
     }
 
     std::unordered_set<scene::NodeId> hilite;
@@ -314,6 +396,7 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
     const scene::NodeId pickHover = rv ? scene::kNoNode : viewportTools::hoverHighlight();
     const bool preselecting = !rv &&mPreselect.mode == scene::ComponentMode::Object && !componentMode && mPreselect.node != scene::kNoNode;
 
+    prewarmRebuilds(g, cache, meshes, set, hierarchy, iso, lodHidden, hilite);
     for (size_t i = 0; i < meshes.size(); ++i)
     {
         MeshEntry& e = cache.entries[i];
@@ -326,10 +409,10 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
             continue;
         const bool hot = hilite.contains(id);
         if (e.pass != n.evaluatedPass() || e.settings != cache.settingsId || e.hilite != hot || rv ||
-            (e.heightfield && e.layers != heightfieldDisplay::layersSource(n)))
+            (e.heightfield && e.layers != heightfieldDisplay::layersSource(n)) || (e.wireDeferred && selected.contains(id)))
         {
             LILA_ZONE_N("buildFrame rebuild mesh node");
-            buildEntry(e, g, set, hierarchy, iso, hot);
+            buildEntry(e, g, set, hierarchy, iso, hot, selected.contains(id));
             e.settings = cache.settingsId;
             rebuilt = true;
         }

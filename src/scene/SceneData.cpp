@@ -31,6 +31,12 @@ struct SwapAction final : UndoAction
     void redo() override { undo(); }
     size_t bytes() const override { return sizeof(*this) + key.capacity() + other.dump().size(); }
 };
+
+std::vector<std::function<void()>>& loadedCallbacks()
+{
+    static std::vector<std::function<void()>> c;
+    return c;
+}
 } // namespace
 
 const json& all()
@@ -69,6 +75,13 @@ json toJson()
 void fromJson(const json& j)
 {
     store() = j.is_object() ? j : json::object();
+    for (const auto& fn : loadedCallbacks())
+        fn();
+}
+
+void onLoaded(std::function<void()> fn)
+{
+    loadedCallbacks().push_back(std::move(fn));
 }
 
 void registerCommands()

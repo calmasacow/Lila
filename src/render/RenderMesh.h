@@ -221,6 +221,7 @@ enum MaterialFlags : uint32_t
     MatTwoSided = 1 << 9,
     MatUv1 = 1 << 10,
     MatNoInstanceColor = 1 << 21, // keeps its own base colour under a placement's instance colour
+    MatInstanceColor2 = 1 << 22,  // takes a placement's second instance colour (the other tone of a two-tone piece)
 };
 
 enum class ShadingModel : uint32_t
@@ -540,6 +541,8 @@ struct MeshDraw
      * with MatNoInstanceColor ignore it. Null for none.
      */
     std::shared_ptr<const std::vector<glm::vec4>> instanceColors;
+    /** The second tone, parallel to instanceColors: what sections with MatInstanceColor2 take instead. Null for none. */
+    std::shared_ptr<const std::vector<glm::vec4>> instanceColors2;
     /** Used for every section whose slot has no entry in materials. */
     glm::vec3 baseColor{0.5f};
     float roughness = 0.55f;

@@ -7,6 +7,7 @@
 #include "scene/Diagnostics.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
+#include "scene/SceneData.h"
 #include "slots/Slots.h"
 
 #include <glm/gtc/matrix_transform.hpp>
@@ -230,8 +231,21 @@ TEST_CASE("rules, overrides, pins and slot sets are saved with the scene")
     io::save(file);
     fresh();
     CHECK(slots::state()->rules.empty());
+    // The rules apply as soon as the scene's data is read, before the rest of the load evaluates anything.
+    static size_t rulesWhileLoading = 0;
+    static bool loadingSeen = false;
+    static const bool hooked = [] {
+        scene::data::onLoaded([] {
+            rulesWhileLoading = slots::state()->rules.size();
+            loadingSeen = io::loading();
+        });
+        return true;
+    }();
+    CHECK(hooked);
     io::load(file);
-    slots::refresh();
+    CHECK(rulesWhileLoading == 1);
+    CHECK(loadingSeen);
+    CHECK_FALSE(io::loading());
     REQUIRE(slots::state()->rules.size() == 1);
     CHECK(slots::state()->rules[0].name == "Fictional lamps");
     CHECK(slots::state()->overrides.at(lamps[0].id).payload.unrealClass == "/Game/BP/Lamp");

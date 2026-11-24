@@ -354,6 +354,8 @@ private:
     /** The last two components clicked, newest first: Shift+double-click selects the path between them. */
     scene::componentPick::Hover mClicked[2];
     bool mFrameQueued = false;
+    /** A frame asked for while a scene loads, drawn once the load is done. */
+    bool mLoadWaitQueued = false;
     bool mFramePickArmed = false; // the next click frames the surface under it
     int mGraphListener = 0;
     int mPrefListener = 0;

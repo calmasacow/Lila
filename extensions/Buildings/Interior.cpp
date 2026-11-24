@@ -585,6 +585,7 @@ namespace
 constexpr int kNone = -1, kCoreCell = -2;
 constexpr double kSlab = 25.0;  // floor build-up between a ceiling and the floor above
 constexpr double kWall = 12.0;  // interior partition thickness
+constexpr double kDoorRiser = 18.0, kDoorGoing = 28.0; // steps at a door between rooms at different levels
 constexpr double kSkirt = 10.0; // skirting height
 const Vec3 kIntUp{0.0, 1.0, 0.0};
 const glm::vec4 kTint{1.0f, 1.0f, 1.0f, 0.0f};
@@ -1021,12 +1022,24 @@ struct PlateW
     std::vector<int> entryOpenings;
 };
 
+/** U: two flights and a mid landing, a floor landing inside the core. Dog-leg: the same with its floor landings in the rooms.
+ *  Straight: one flight a floor, stacked; it starts at the near end (a = 0) and arrives at the far end (a = L). */
+enum class CoreKind
+{
+    U,
+    DogLeg,
+    Straight
+};
+
+const char* coreKindName(CoreKind k) { return k == CoreKind::U ? "u" : k == CoreKind::DogLeg ? "dogleg" : "straight"; }
+
 struct CoreW
 {
     std::string id;
+    CoreKind kind = CoreKind::U;
     int i0 = 0, j0 = 0, ni = 0, nj = 0;
     Vec2 ol{0.0}, eL{1.0, 0.0}, eW{0.0, 1.0}; // grid-local origin and axes
-    double L = 0.0, W = 0.0, coreW = 0.0, Wf = 0.0, Ld = 0.0, run = 0.0;
+    double L = 0.0, W = 0.0, coreW = 0.0, Wf = 0.0, Ld = 0.0, Lm = 0.0, run = 0.0; // Ld floor landing, Lm mid landing
     bool lift = false;
     std::vector<int> plates; // served, by floor
 };
@@ -1049,6 +1062,8 @@ struct DoorW
     double at = 0.0;   // along the run, grid-local
     double width = 0.0, height = 0.0;
     bool user = false;
+    bool open = false; // an opening with no door leaf: a compact stair's landing face
+    bool up = false;   // the foot of a straight flight on a floor it also arrives at
 };
 
 struct Gen
@@ -1067,6 +1082,20 @@ struct Gen
     std::vector<int> stamp;
     int stampValue = 0;
     double doorW = 90.0, doorH = 210.0;
+    /** Per plate, the floor level of each cell on a stepped ground floor; empty where the floor is flat at the plate's level. */
+    std::vector<std::vector<double>> level;
+
+    /** The floor level of a cell (the plate's, or a stepped ground floor's terrace); cells off the grid take the plate's. */
+    double levelAt(int plate, int i, int j) const
+    {
+        if (size_t(plate) >= level.size())
+            return plates[size_t(plate)].y;
+        const std::vector<double>& l = level[size_t(plate)];
+        if (l.empty() || i < 0 || j < 0 || i >= g.nx || j >= g.nz || plates[size_t(plate)].room[size_t(g.id(i, j))] == -2)
+            return plates[size_t(plate)].y;
+        return l[size_t(g.id(i, j))];
+    }
+    double levelAt(int plate, int cell) const { return levelAt(plate, cell % g.nx, cell / g.nx); }
 
     int newStamp()
     {
@@ -1766,25 +1795,42 @@ void layoutCorridor(Gen& x, int pi, const Layout& L, std::vector<int> cells, con
 
 struct CoreDims
 {
-    double Wf, Ld, run, L, W, coreW;
+    CoreKind kind;
+    double Wf, Ld, Lm, run, L, W, coreW;
     bool lift;
 };
 
-CoreDims coreDims(const Gen& x, double hMax, bool lift, bool narrow)
+/** attempt 0 the normal U, 1 a narrow U, 2 a dog-leg, 3 a straight flight: each smaller than the one before. */
+CoreDims coreDims(const Gen& x, double hMax, bool lift, int attempt)
 {
     CoreDims d{};
     const double c = x.g.c;
+    const bool narrow = attempt >= 1;
+    d.kind = attempt <= 1 ? CoreKind::U : attempt == 2 ? CoreKind::DogLeg : CoreKind::Straight;
     d.Wf = narrow ? std::max(80.0, 2.0 * x.prof.radius + 10.0) : std::max(100.0, 2.0 * x.prof.radius + 30.0);
-    d.Ld = narrow ? std::max(100.0, d.Wf) : std::max(120.0, d.Wf + 10.0);
     const double riserMax = std::min(18.0, x.prof.maxStep);
     const double tanMax = std::tan(x.prof.maxSlope * std::numbers::pi / 180.0);
-    const double going = std::max(28.0, riserMax / std::max(tanMax, 0.05));
-    const int n = std::max(1, int(std::ceil(hMax * 0.5 / riserMax)));
+    // Compact stairs take a shorter going, still within the character's slope.
+    const double going = std::max(d.kind == CoreKind::U ? 28.0 : 25.0, riserMax / std::max(tanMax, 0.05));
+    const int n = std::max(1, int(std::ceil(hMax * (d.kind == CoreKind::Straight ? 1.0 : 0.5) / riserMax)));
     d.run = n * going;
-    d.L = std::ceil((2.0 * d.Ld + d.run) / c) * c;
-    d.W = std::ceil((2.0 * d.Wf + 10.0) / c) * c;
-    d.lift = lift;
-    d.coreW = lift ? std::ceil((d.W + 222.0) / c) * c : d.W;
+    d.lift = lift && d.kind == CoreKind::U;
+    switch (d.kind)
+    {
+    case CoreKind::U:
+        d.Ld = d.Lm = narrow ? std::max(100.0, d.Wf) : std::max(120.0, d.Wf + 10.0);
+        d.W = std::ceil((2.0 * d.Wf + 10.0) / c) * c;
+        break;
+    case CoreKind::DogLeg:
+        d.Lm = d.Wf;
+        d.W = std::ceil((2.0 * d.Wf + 10.0) / c) * c;
+        break;
+    case CoreKind::Straight:
+        d.W = std::ceil(d.Wf / c) * c;
+        break;
+    }
+    d.L = std::ceil((d.Ld + d.Lm + d.run) / c) * c;
+    d.coreW = d.lift ? std::ceil((d.W + 222.0) / c) * c : d.W;
     return d;
 }
 
@@ -1826,9 +1872,11 @@ void placeCore(Gen& x, const std::vector<int>& served, Vec2 preferW, bool houseL
         }
     std::sort(windows.begin(), windows.end());
     windows.erase(std::unique(windows.begin(), windows.end()), windows.end());
-    for (int attempt = 0; attempt < 2; ++attempt)
+    // Every kind with room to step off its landing first; only then compact stairs whose landing is a shallow strip.
+    constexpr std::pair<int, bool> kTries[] = {{0, false}, {1, false}, {2, false}, {3, false}, {2, true}, {3, true}};
+    for (const auto& [attempt, shallow] : kTries)
     {
-        const CoreDims d = coreDims(x, hMax, lift, attempt == 1);
+        const CoreDims d = coreDims(x, hMax, lift, attempt);
         const int nL = int(std::lround(d.L / x.g.c)), nW = int(std::lround(d.coreW / x.g.c));
         double bestScore = 1e300;
         CoreW best;
@@ -1842,21 +1890,28 @@ void placeCore(Gen& x, const std::vector<int>& served, Vec2 preferW, bool houseL
                 {
                     if (!full(i0, j0, ni, nj))
                         continue;
-                    // The landing's open side must face cells of the plate.
-                    int open = 0, total = 0;
-                    if (alongU)
-                    {
-                        const int ia = dir == 0 ? i0 - 1 : i0 + ni;
-                        for (int j = j0; j < j0 + nj; ++j, ++total)
-                            open += ia >= 0 && ia < x.g.nx && fit[size_t(x.g.id(ia, j))] ? 1 : 0;
-                    }
-                    else
-                    {
-                        const int ja = dir == 2 ? j0 - 1 : j0 + nj;
-                        for (int i = i0; i < i0 + ni; ++i, ++total)
-                            open += ja >= 0 && ja < x.g.nz && fit[size_t(x.g.id(i, ja))] ? 1 : 0;
-                    }
-                    if (open * 10 < total * 7)
+                    // The landing's open side must face cells of the plate; a straight flight's far end too, where it arrives.
+                    // A compact stair lands in the room: two cells clear in front of it, so a character can step off.
+                    const int rows = d.kind == CoreKind::U || shallow ? 1 : 2;
+                    auto openAt = [&](bool farEnd) {
+                        int open = 0, total = 0;
+                        const bool low = (dir == 0 || dir == 2) != farEnd;
+                        for (int k = 1; k <= rows; ++k)
+                            if (alongU)
+                            {
+                                const int ia = low ? i0 - k : i0 + ni - 1 + k;
+                                for (int j = j0; j < j0 + nj; ++j, ++total)
+                                    open += ia >= 0 && ia < x.g.nx && fit[size_t(x.g.id(ia, j))] ? 1 : 0;
+                            }
+                            else
+                            {
+                                const int ja = low ? j0 - k : j0 + nj - 1 + k;
+                                for (int i = i0; i < i0 + ni; ++i, ++total)
+                                    open += ja >= 0 && ja < x.g.nz && fit[size_t(x.g.id(i, ja))] ? 1 : 0;
+                            }
+                        return open * 10 >= total * 7;
+                    };
+                    if (!openAt(false) || (d.kind == CoreKind::Straight && !openAt(true)))
                         continue;
                     const Vec2 centre{x.g.u0 + (i0 + ni * 0.5) * x.g.c, x.g.v0 + (j0 + nj * 0.5) * x.g.c};
                     double score = glm::length(centre - pref);
@@ -1902,17 +1957,27 @@ void placeCore(Gen& x, const std::vector<int>& served, Vec2 preferW, bool houseL
         }
         if (!found)
             continue;
+        best.kind = d.kind;
         best.L = nL * x.g.c;
         best.coreW = nW * x.g.c;
         best.W = d.W;
         best.Wf = d.Wf;
         best.Ld = d.Ld;
-        best.run = best.L - 2.0 * d.Ld;
+        best.Lm = d.Lm;
+        best.run = best.L - d.Ld - d.Lm;
         best.lift = d.lift;
         best.id = "core" + std::to_string(x.cores.size());
         best.plates = served;
         if (attempt == 1)
             x.out.notes.push_back("the stair core is the narrow kind: the floors are tight");
+        else if (attempt == 2)
+            x.out.notes.push_back("the stair is a dog-leg landing in the rooms: the floors are too tight for a stair core");
+        else if (attempt == 3)
+            x.out.notes.push_back("the stair is a straight flight on each floor: the floors are too narrow for a dog-leg");
+        if (lift && !d.lift)
+            x.out.notes.push_back("no lift: the floors only fit a compact stair");
+        if (shallow)
+            x.out.notes.push_back("the stair's landing is a shallow strip: the floors are too small for room in front of it");
         for (int pi : served)
         {
             x.plates[size_t(pi)].core = int(x.cores.size());
@@ -1926,10 +1991,31 @@ void placeCore(Gen& x, const std::vector<int>& served, Vec2 preferW, bool houseL
     x.out.warnings.push_back("no room for a stair core through the floors: the floors above the ground floor can't be reached");
 }
 
-/** The cell just outside the middle of a core's landing side. */
-int coreAccessCell(const Gen& x, const CoreW& k)
+/** Whether a plate is the lowest a core serves. */
+bool coreBottom(const Gen& x, const CoreW& k, const PlateW& p)
 {
-    const Vec2 p = k.ol + k.eW * (k.coreW * 0.5) - k.eL * (x.g.c * 0.5);
+    for (int pi : k.plates)
+        if (x.plates[size_t(pi)].floor < p.floor)
+            return false;
+    return true;
+}
+
+/** Whether a plate is the highest a core serves. */
+bool coreTop(const Gen& x, const CoreW& k, const PlateW& p)
+{
+    for (int pi : k.plates)
+        if (x.plates[size_t(pi)].floor > p.floor)
+            return false;
+    return true;
+}
+
+bool coreOpen(const CoreW& k) { return k.kind != CoreKind::U; }
+
+/** The cell just outside the middle of a core's landing side (a straight flight arrives at its far end above the lowest floor). */
+int coreAccessCell(const Gen& x, const CoreW& k, const PlateW& pl)
+{
+    const bool far = k.kind == CoreKind::Straight && !coreBottom(x, k, pl);
+    const Vec2 p = k.ol + k.eW * (k.coreW * 0.5) + (far ? k.eL * (k.L + x.g.c * 0.5) : -k.eL * (x.g.c * 0.5));
     int i = 0, j = 0;
     return x.g.cellOf(p, i, j) ? x.g.id(i, j) : -1;
 }
@@ -1989,11 +2075,16 @@ Vec2 runPoint(const Gen& x, const Run& r, double along)
 double runStart(const Gen& x, const Run& r) { return (r.axis == 0 ? x.g.v0 : x.g.u0) + r.k0 * x.g.c; }
 double runEnd(const Gen& x, const Run& r) { return (r.axis == 0 ? x.g.v0 : x.g.u0) + r.k1 * x.g.c; }
 
-/** The part of a core run on the core's landing, where its door can go; empty run when none. */
-Run landingPart(const Gen& x, const CoreW& k, const Run& r)
+/** The part of a core run on the core's landing, where its door can go; empty run when none. Compact cores have their landings
+ *  outside: their near face, and for a straight flight above the lowest floor the far face it arrives at. */
+Run landingPart(const Gen& x, const CoreW& k, const Run& r, const PlateW& p, bool departure = false)
 {
     // The landing in grid-local coordinates.
-    const Vec2 a = k.ol, b = k.ol + k.eL * k.Ld + k.eW * k.coreW;
+    const bool bottom = coreBottom(x, k, p);
+    const double a0 = k.kind == CoreKind::Straight && !bottom && !departure ? k.L : 0.0;
+    // A dog-leg's top floor opens only where its last flight arrives: beside it is the drop to the flight below.
+    const double b0 = k.kind == CoreKind::DogLeg && coreTop(x, k, p) ? std::floor(k.W * 0.5 / x.g.c) * x.g.c : 0.0;
+    const Vec2 a = k.ol + k.eL * a0 + k.eW * b0, b = k.ol + k.eL * (a0 + k.Ld) + k.eW * k.coreW;
     const double lo0 = std::min(a.x, b.x), hi0 = std::max(a.x, b.x), lo1 = std::min(a.y, b.y), hi1 = std::max(a.y, b.y);
     const double line = r.axis == 0 ? x.g.u0 + r.line * x.g.c : x.g.v0 + r.line * x.g.c;
     const double lineLo = r.axis == 0 ? lo0 : lo1, lineHi = r.axis == 0 ? hi0 : hi1;
@@ -2117,6 +2208,57 @@ std::string doorIdFor(const Gen& x, const PlateW& p, int a, int b)
     return p.prefix + "/door/" + na + "+" + nb;
 }
 
+/** The floor levels either side of a door's middle: run.a's side, then run.b's. */
+std::pair<double, double> doorLevels(const Gen& x, const DoorW& d)
+{
+    const int k = int(std::floor((d.at - (d.run.axis == 0 ? x.g.v0 : x.g.u0)) / x.g.c));
+    return d.run.axis == 0 ? std::pair{x.levelAt(d.plate, d.run.line - 1, k), x.levelAt(d.plate, d.run.line, k)}
+                           : std::pair{x.levelAt(d.plate, k, d.run.line - 1), x.levelAt(d.plate, k, d.run.line)};
+}
+
+/** A straight flight between floors in the middle starts at the core's near face: open it to the room in front. */
+void addDeparture(Gen& x, int pi)
+{
+    const PlateW& p = x.plates[size_t(pi)];
+    if (p.core < 0)
+        return;
+    const CoreW& k = x.cores[size_t(p.core)];
+    if (k.kind != CoreKind::Straight || coreBottom(x, k, p) || coreTop(x, k, p))
+        return;
+    Run best;
+    double bestLen = 0.0;
+    for (const Run& r : runsOf(x, p))
+    {
+        if ((r.a == kCoreCell) == (r.b == kCoreCell))
+            continue;
+        Run use = landingPart(x, k, r, p, true);
+        if (use.k1 <= use.k0)
+            continue;
+        use = clipped(x, p, use);
+        if (runLen(x, use) > bestLen)
+        {
+            bestLen = runLen(x, use);
+            best = use;
+        }
+    }
+    if (bestLen < 2.0 * x.prof.radius + 10.0)
+    {
+        x.out.warnings.push_back("the straight flight up from " + p.prefix + " has no room in front of its foot: the floors above can't be reached");
+        return;
+    }
+    DoorW d;
+    d.plate = pi;
+    d.a = best.a;
+    d.b = best.b;
+    d.run = best;
+    d.at = (best.e0 + best.e1) * 0.5;
+    d.width = bestLen - 4.0;
+    d.height = x.doorH;
+    d.open = d.up = true;
+    d.id = doorIdFor(x, p, best.a, best.b) + "/up";
+    x.doors.push_back(d);
+}
+
 /** Doors of a plate: a cheapest spanning tree from its roots; rooms no door can reach merge into a neighbour. */
 void solveDoors(Gen& x, int pi)
 {
@@ -2132,19 +2274,21 @@ void solveDoors(Gen& x, int pi)
             const std::pair<int, int> key{std::min(r.a, r.b), std::max(r.a, r.b)};
             shared[key] += runLen(x, r);
             Run use = r;
-            if (r.a == kCoreCell || r.b == kCoreCell)
-                use = landingPart(x, x.cores[size_t(p.core)], r);
+            const bool toCore = r.a == kCoreCell || r.b == kCoreCell;
+            if (toCore)
+                use = landingPart(x, x.cores[size_t(p.core)], r, p);
             if (use.k1 <= use.k0)
                 continue;
             use = clipped(x, p, use);
-            if (runLen(x, use) < x.doorW + 30.0)
+            if (runLen(x, use) < (toCore && coreOpen(x.cores[size_t(p.core)]) ? 2.0 * x.prof.radius + 10.0 : x.doorW + 30.0))
                 continue;
             auto it = best.find(key);
             if (it == best.end() || runLen(x, use) > runLen(x, it->second))
                 best[key] = use;
         }
         // A core whose landing meets no wall long enough opens off the side of its flight instead.
-        if (p.core >= 0 && std::none_of(best.begin(), best.end(), [](const auto& kv) { return kv.first.first == kCoreCell || kv.first.second == kCoreCell; }))
+        if (p.core >= 0 && !coreOpen(x.cores[size_t(p.core)]) &&
+            std::none_of(best.begin(), best.end(), [](const auto& kv) { return kv.first.first == kCoreCell || kv.first.second == kCoreCell; }))
         {
             for (const Run& r : runs)
             {
@@ -2243,8 +2387,15 @@ void solveDoors(Gen& x, int pi)
             d.height = x.doorH;
             d.at = (run.e0 + run.e1) * 0.5;
             d.id = doorIdFor(x, p, key.first, key.second);
+            if ((key.first == kCoreCell || key.second == kCoreCell) && coreOpen(x.cores[size_t(p.core)]))
+            {
+                // Compact stairs land in the room: the core's face is open over its whole width.
+                d.open = true;
+                d.width = runLen(x, run) - 4.0;
+            }
             x.doors.push_back(d);
         }
+        addDeparture(x, pi);
         return;
     }
 }
@@ -2384,7 +2535,7 @@ bool runBetween(Gen& x, const PlateW& p, int a, int b, std::optional<Vec2> at, R
             continue;
         Run use = r;
         if (r.a == kCoreCell || r.b == kCoreCell)
-            use = landingPart(x, x.cores[size_t(p.core)], r);
+            use = landingPart(x, x.cores[size_t(p.core)], r, p);
         if (use.k1 <= use.k0)
             continue;
         use = clipped(x, p, use);
@@ -2410,6 +2561,55 @@ bool runBetween(Gen& x, const PlateW& p, int a, int b, std::optional<Vec2> at, R
     return found;
 }
 } // namespace
+
+/**
+ * A ground floor on a slope steps as W3 stepped its bays: each cell stands at the stepped level of the ground under it (30
+ * cm terraces), and the cells behind a street door or shopfront at its sill, so it opens level; behind a window never above
+ * its sill. The core keeps the plate's level; doors between levels get steps, and terraces within a room a riser.
+ */
+void stepGroundFloor(Gen& x)
+{
+    x.level.assign(x.plates.size(), {});
+    const double lo = x.spec.groundRange().first + 5.0;
+    for (size_t pi = 0; pi < x.plates.size(); ++pi)
+    {
+        const PlateW& p = x.plates[pi];
+        if (p.floor != 0)
+            continue;
+        std::vector<double>& l = x.level[pi];
+        l.assign(p.room.size(), p.y);
+        for (int j = 0; j < x.g.nz; ++j)
+            for (int i = 0; i < x.g.nx; ++i)
+                if (p.mask[size_t(x.g.id(i, j))])
+                {
+                    const Vec2 c = x.g.centreL(i, j);
+                    l[size_t(x.g.id(i, j))] = std::clamp(x.spec.steppedLevel(x.g.world(c.x, c.y), x.st.plinth, p.y), lo, p.y);
+                }
+        // The cells behind each ground-floor opening: as wide as it, a metre and a half deep.
+        const double wall = x.r.plates[size_t(p.index)].wall;
+        for (int pass = 0; pass < 2; ++pass)
+            for (int o : p.openings)
+            {
+                const Opening& op = x.r.openings[size_t(o)];
+                const bool window = op.kind == "window";
+                // Windows first, so a door's level wins where the two meet.
+                if (op.bay.find("/l0/") == std::string::npos || window != (pass == 0))
+                    continue;
+                const Vec2 nrm = glm::normalize(Vec2(op.normal.x, op.normal.z) + Vec2(1e-12));
+                const Vec2 along{-nrm.y, nrm.x}, at = Vec2(op.origin.x, op.origin.z) - nrm * wall;
+                const double y = std::clamp(op.origin.y, lo, p.y);
+                for (double s = -op.width * 0.5; s <= op.width * 0.5 + 0.1; s += x.g.c * 0.5)
+                    for (double d = x.g.c * 0.5; d <= 150.0; d += x.g.c * 0.5)
+                    {
+                        int i = 0, j = 0;
+                        if (!x.g.cellOf(x.g.local(at + along * s - nrm * d), i, j) || !p.mask[size_t(x.g.id(i, j))])
+                            continue;
+                        double& cell = l[size_t(x.g.id(i, j))];
+                        cell = window ? std::min(cell, y) : y;
+                    }
+            }
+    }
+}
 
 // Generation -----------------------------------------------------------------------------------------------------------------
 
@@ -2676,7 +2876,7 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
             p.hubCell = p.entryCells[best];
         }
         else if (p.core >= 0)
-            p.hubCell = coreAccessCell(x, x.cores[size_t(p.core)]);
+            p.hubCell = coreAccessCell(x, x.cores[size_t(p.core)], p);
         if (p.hubCell < 0 || !p.mask[size_t(p.hubCell)] || p.room[size_t(p.hubCell)] == kCoreCell)
         {
             std::vector<int> cells;
@@ -2808,6 +3008,12 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
         x.doors.push_back(d);
     }
 
+    // Stepped ground floors: W3 steps the ground-floor bays down a slope, and the floor behind them steps with them.
+    if (spec.sloped())
+        stepGroundFloor(x);
+    else
+        x.level.assign(x.plates.size(), {});
+
     // Final rooms, compacted.
     std::vector<int> remap(x.rooms.size(), -1);
     for (size_t k = 0; k < x.rooms.size(); ++k)
@@ -2825,8 +3031,11 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
         room.unit = rw.unit;
         room.tier = p.tier;
         room.floor = p.floor;
+        const int pi = rw.plate;
         room.y = p.y;
-        room.height = p.h;
+        for (int c : cells)
+            room.y = std::min(room.y, x.levelAt(pi, c));
+        room.height = p.y + p.h - room.y;
         room.area = areaOf(x, cells.size());
         room.user = rw.user;
         // Rectangles, greedy.
@@ -2837,15 +3046,20 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
             if (used[size_t(c)])
                 continue;
             const int i0 = c % x.g.nx, j0 = c / x.g.nx;
+            const double here = x.levelAt(pi, i0, j0);
+            auto same = [&](int i, int j) {
+                const size_t id = size_t(x.g.id(i, j));
+                return p.room[id] == int(k) && !used[id] && x.levelAt(pi, i, j) == here;
+            };
             int i1 = i0 + 1;
-            while (i1 < x.g.nx && p.room[size_t(x.g.id(i1, j0))] == int(k) && !used[size_t(x.g.id(i1, j0))])
+            while (i1 < x.g.nx && same(i1, j0))
                 ++i1;
             int j1 = j0 + 1;
             for (; j1 < x.g.nz; ++j1)
             {
                 bool rowOk = true;
                 for (int i = i0; i < i1 && rowOk; ++i)
-                    rowOk = p.room[size_t(x.g.id(i, j1))] == int(k) && !used[size_t(x.g.id(i, j1))];
+                    rowOk = same(i, j1);
                 if (!rowOk)
                     break;
             }
@@ -2854,6 +3068,7 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                     used[size_t(x.g.id(i, j))] = 1;
             const double U0 = x.g.u0 + i0 * x.g.c, V0 = x.g.v0 + j0 * x.g.c, U1 = x.g.u0 + i1 * x.g.c, V1 = x.g.v0 + j1 * x.g.c;
             room.rects.push_back({x.g.world(U0, V0), x.g.world(U1, V0), x.g.world(U1, V1), x.g.world(U0, V1)});
+            room.rectY.push_back(here);
             const double a = (U1 - U0) * (V1 - V0);
             if (a > bestA)
             {
@@ -2889,13 +3104,32 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
         const PlateW& p = x.plates[size_t(d.plate)];
         const Vec2 l = runPoint(x, d.run, d.at);
         const Vec2 w = x.g.world(l.x, l.y);
-        o.origin = {w.x, p.y, w.y};
+        const auto [la, lb] = doorLevels(x, d);
+        o.origin = {w.x, std::max(la, lb), w.y};
+        if (const double rise = std::abs(la - lb); rise > 0.5)
+        {
+            Stair steps;
+            steps.id = d.id + "/steps";
+            steps.kind = "steps";
+            steps.floor = p.floor;
+            steps.y0 = std::min(la, lb);
+            steps.y1 = std::max(la, lb);
+            steps.risers = std::max(1, int(std::ceil(rise / kDoorRiser)));
+            steps.riser = rise / steps.risers;
+            steps.going = kDoorGoing;
+            steps.slope = std::atan2(steps.riser, steps.going) * 180.0 / std::numbers::pi;
+            steps.width = d.width;
+            steps.headroom = d.height;
+            out.stairs.push_back(steps);
+        }
         o.normal = d.run.axis == 0 ? x.g.dirU() : x.g.dirV();
         o.width = d.width;
         o.height = d.height;
         o.thickness = kWall;
         o.floor = p.floor;
         o.user = d.user;
+        o.open = d.open;
+        o.up = d.up;
         for (Room& rm : out.rooms)
             if (rm.id == o.a || rm.id == o.b)
                 rm.doors.push_back(o.id);
@@ -2906,17 +3140,30 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
     {
         std::map<std::string, std::vector<std::string>> adj;
         for (const InteriorDoor& d : out.doors)
-        {
-            adj[d.a].push_back(d.b);
-            adj[d.b].push_back(d.a);
-        }
+            if (!d.up)
+            {
+                adj[d.a].push_back(d.b);
+                adj[d.b].push_back(d.a);
+            }
         for (const CoreW& k : x.cores)
         {
             std::vector<int> ps = k.plates;
             std::sort(ps.begin(), ps.end(), [&](int a, int b) { return x.plates[size_t(a)].floor < x.plates[size_t(b)].floor; });
             for (size_t q = 0; q + 1 < ps.size(); ++q)
             {
-                const std::string a = k.id + "@" + x.plates[size_t(ps[q])].prefix, b = k.id + "@" + x.plates[size_t(ps[q + 1])].prefix;
+                const std::string here = k.id + "@" + x.plates[size_t(ps[q])].prefix;
+                const std::string b = k.id + "@" + x.plates[size_t(ps[q + 1])].prefix;
+                std::string a = here;
+                // A straight flight above the lowest floor starts in the room before its foot, not where the one below arrived.
+                if (k.kind == CoreKind::Straight && q > 0)
+                {
+                    a.clear();
+                    for (const InteriorDoor& d : out.doors)
+                        if (d.up && (d.a == here || d.b == here))
+                            a = d.a == here ? d.b : d.a;
+                    if (a.empty())
+                        continue;
+                }
                 adj[a].push_back(b);
                 adj[b].push_back(a);
             }
@@ -2948,7 +3195,16 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
         fg.tier = p.tier;
         fg.floor = p.floor;
         fg.y = p.y;
-        fg.height = p.h;
+        if (const std::vector<double>& l = x.level[size_t(&p - x.plates.data())]; !l.empty())
+        {
+            fg.level.assign(l.begin(), l.end());
+            for (size_t c = 0; c < l.size(); ++c)
+                if (p.room[c] == kCoreCell)
+                    fg.level[c] = p.y;
+                else if (p.mask[c])
+                    fg.y = std::min(fg.y, l[c]);
+        }
+        fg.height = p.y + p.h - fg.y;
         fg.origin = x.g.o;
         fg.ax = x.g.ax;
         fg.az = x.g.az;
@@ -2999,7 +3255,8 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
     for (const PlateW& p : x.plates)
     {
         const FloorPlate& fp = r.plates[size_t(p.index)];
-        const double y0 = p.y, yc = p.y + p.h - kSlab;
+        const int pIndex = int(&p - x.plates.data());
+        const double yc = p.y + p.h - kSlab;
         // Floors and ceilings.
         for (size_t k = 0; k < x.rooms.size(); ++k)
         {
@@ -3008,17 +3265,40 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
             Soup& s = out.parts[partOf[int(k)]].soup;
             const Room& rm = out.rooms[size_t(remap[k])];
             const int fm = floorMat(rm.kind);
-            for (const auto& q : rm.rects)
+            for (size_t qi = 0; qi < rm.rects.size(); ++qi)
             {
+                const auto& q = rm.rects[qi];
+                const double fy = qi < rm.rectY.size() ? rm.rectY[qi] : rm.y;
                 std::vector<Vec3> f, c;
                 for (const Vec2& v : q)
                 {
-                    f.push_back({v.x, y0, v.y});
+                    f.push_back({v.x, fy, v.y});
                     c.push_back({v.x, yc, v.y});
                 }
                 face(s, f, kIntUp, fm);
                 face(out.parts[ceilingPart[size_t(&p - x.plates.data())]].soup, c, -kIntUp, IntCeiling);
             }
+            // A riser where the room's floor steps between terraces, facing the lower one.
+            if (!x.level[size_t(pIndex)].empty())
+                for (int c : cellsOf(p, int(k)))
+                {
+                    const int i = c % x.g.nx, j = c / x.g.nx;
+                    for (int axis = 0; axis < 2; ++axis)
+                    {
+                        const int ni = i + (axis == 0 ? 1 : 0), nj = j + (axis == 1 ? 1 : 0);
+                        if (ni >= x.g.nx || nj >= x.g.nz || p.room[size_t(x.g.id(ni, nj))] != int(k))
+                            continue;
+                        const double l0 = x.levelAt(pIndex, i, j), l1 = x.levelAt(pIndex, ni, nj);
+                        if (std::abs(l0 - l1) < 0.5)
+                            continue;
+                        // The shared edge in grid-local space, and which way the lower side lies.
+                        const double eu = x.g.u0 + (axis == 0 ? ni : i) * x.g.c, ev = x.g.v0 + (axis == 1 ? nj : j) * x.g.c;
+                        const Vec2 la = Vec2(eu, ev), lb = axis == 0 ? Vec2(eu, ev + x.g.c) : Vec2(eu + x.g.c, ev);
+                        const Vec3 toward = (axis == 0 ? x.g.dirU() : x.g.dirV()) * (l1 < l0 ? 1.0 : -1.0);
+                        const double lo = std::min(l0, l1), hi = std::max(l0, l1);
+                        quadF(s, x.g.w3(la.x, la.y, lo), x.g.w3(lb.x, lb.y, lo), x.g.w3(lb.x, lb.y, hi), x.g.w3(la.x, la.y, hi), toward, fm);
+                    }
+                }
         }
         // The rooms' side of the outside walls, openings cut through.
         for (size_t li = 0; li < p.loops.size(); ++li)
@@ -3037,20 +3317,23 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                 const Vec3 P{a.x, 0.0, a.y}, U{dir.x, 0.0, dir.y}, N{into.x, 0.0, into.y};
                 // Who owns the wall along the edge.
                 std::vector<std::pair<double, int>> marks;
+                std::vector<double> markLevel; // the floor's level there (a stepped ground floor's terrace)
                 const double step = x.g.c * 0.5;
                 for (double s = step * 0.5; s < L; s += step)
                 {
                     const Vec2 q = a + dir * s + into * (x.g.c * 0.75);
                     int i = 0, j = 0, ent = kNone;
+                    double lvl = p.y;
                     if (x.g.cellOf(x.g.local(q), i, j))
-                        ent = p.room[size_t(x.g.id(i, j))];
+                        ent = p.room[size_t(x.g.id(i, j))], lvl = x.levelAt(pIndex, i, j);
                     if (ent == kNone)
                     {
                         const Vec2 q2 = a + dir * s + into * (x.g.c * 1.6);
                         if (x.g.cellOf(x.g.local(q2), i, j))
-                            ent = p.room[size_t(x.g.id(i, j))];
+                            ent = p.room[size_t(x.g.id(i, j))], lvl = x.levelAt(pIndex, i, j);
                     }
                     marks.push_back({s, ent});
+                    markLevel.push_back(lvl);
                 }
                 for (size_t m = 0; m < marks.size(); ++m)
                     if (marks[m].second == kNone)
@@ -3061,17 +3344,19 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                             if (m >= d && marks[m - d].second != kNone)
                             {
                                 marks[m].second = marks[m - d].second;
+                                markLevel[m] = markLevel[m - d];
                                 break;
                             }
                             if (m + d < marks.size() && marks[m + d].second != kNone)
                             {
                                 marks[m].second = marks[m + d].second;
+                                markLevel[m] = markLevel[m + d];
                                 break;
                             }
                         }
                     }
                 // Openings on this face.
-                std::vector<Hole> holes;
+                std::vector<Hole> facadeHoles;
                 std::vector<int> holeOpening;
                 for (int o : p.openings)
                 {
@@ -3086,14 +3371,14 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                     const double s = glm::dot(rel, dir);
                     if (s < -op.width * 0.5 || s > L + op.width * 0.5)
                         continue;
-                    holes.push_back({s - op.width * 0.5, s + op.width * 0.5, std::max(op.origin.y, y0), std::min(op.origin.y + op.height, yc)});
+                    facadeHoles.push_back({s - op.width * 0.5, s + op.width * 0.5, op.origin.y, std::min(op.origin.y + op.height, yc)});
                     holeOpening.push_back(o);
                 }
                 size_t m0 = 0;
                 while (m0 < marks.size())
                 {
                     size_t m1 = m0;
-                    while (m1 + 1 < marks.size() && marks[m1 + 1].second == marks[m0].second)
+                    while (m1 + 1 < marks.size() && marks[m1 + 1].second == marks[m0].second && markLevel[m1 + 1] == markLevel[m0])
                         ++m1;
                     const int ent = marks[m0].second;
                     const double s0 = m0 == 0 ? 0.0 : (marks[m0 - 1].first + marks[m0].first) * 0.5;
@@ -3102,6 +3387,10 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                     if (s)
                     {
                         const int wm = kindOfE(ent) == "bathroom" || kindOfE(ent) == "toilet" ? IntWallTile : (ent == kCoreCell ? IntShaft : IntWall);
+                        const double y0 = markLevel[m0];
+                        std::vector<Hole> holes = facadeHoles;
+                        for (Hole& hh : holes)
+                            hh.t0 = std::max(hh.t0, y0);
                         wallFace(*s, P, U, N, s0, s1, y0, yc, holes, wm);
                         skirting(*s, P, U, N, s0, s1, y0, holes);
                         // Reveals through the rest of the wall, sills under windows.
@@ -3139,7 +3428,6 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
         }
         // Partitions: both faces, doors cut through, jambs and heads.
         const std::vector<Run> runs = runsOf(x, p);
-        const int pIndex = int(&p - x.plates.data());
         for (const Run& run : runs)
         {
             const double line = run.axis == 0 ? x.g.u0 + run.line * x.g.c : x.g.v0 + run.line * x.g.c;
@@ -3148,14 +3436,18 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
             double e0 = runStart(x, run), e1 = runEnd(x, run);
             // Cells beyond each end, on each side.
             auto beyond = [&](bool end, bool high) { return beyondRun(x, p, run, end, high); };
-            std::vector<Hole> holes;
             std::vector<const DoorW*> here;
             for (const DoorW& d : x.doors)
                 if (d.plate == pIndex && d.run.axis == run.axis && d.run.line == run.line && d.at > e0 && d.at < e1 &&
                     ((d.a == run.a && d.b == run.b) || (d.a == run.b && d.b == run.a)))
-                {
-                    holes.push_back({d.at - d.width * 0.5, d.at + d.width * 0.5, y0, y0 + d.height});
                     here.push_back(&d);
+            // Each side's face reaches down to its lowest floor along the run; any higher terrace hides the rest under it.
+            double sideLevel[2] = {p.y, p.y};
+            for (int k = run.k0; k < run.k1; ++k)
+                for (int side = 0; side < 2; ++side)
+                {
+                    const int l = run.line - (side == 0 ? 1 : 0);
+                    sideLevel[side] = std::min(sideLevel[side], run.axis == 0 ? x.levelAt(pIndex, l, k) : x.levelAt(pIndex, k, l));
                 }
             for (int side = 0; side < 2; ++side)
             {
@@ -3163,6 +3455,14 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                 Soup* s = soupFor(p, ent);
                 if (!s)
                     continue;
+                // A door's opening reaches this side's floor; the higher side's floor is its threshold.
+                const double y0 = sideLevel[side];
+                std::vector<Hole> holes;
+                for (const DoorW* d : here)
+                {
+                    const auto [da, db] = doorLevels(x, *d);
+                    holes.push_back({d->at - d->width * 0.5, d->at + d->width * 0.5, side == 0 ? da : db, std::max(da, db) + d->height});
+                }
                 const double off = (side == 0 ? -1.0 : 1.0) * kWall * 0.5;
                 double s0 = e0, s1 = e1;
                 for (int end = 0; end < 2; ++end)
@@ -3198,11 +3498,32 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                         return x.g.w3(lp.x, lp.y, yy);
                     };
                     const Vec3 along3 = run.axis == 0 ? x.g.dirV() : x.g.dirU();
-                    const double a0 = d->at - d->width * 0.5, a1 = d->at + d->width * 0.5, top = y0 + d->height;
-                    quadF(*s, at(a0, h0, y0), at(a0, h1, y0), at(a0, h1, top), at(a0, h0, top), along3, IntTrim);
-                    quadF(*s, at(a1, h0, y0), at(a1, h1, y0), at(a1, h1, top), at(a1, h0, top), -along3, IntTrim);
+                    const auto [la, lb] = doorLevels(x, *d);
+                    const double hiL = std::max(la, lb);
+                    const double lo = std::min(la, lb), a0 = d->at - d->width * 0.5, a1 = d->at + d->width * 0.5, top = hiL + d->height;
+                    quadF(*s, at(a0, h0, lo), at(a0, h1, lo), at(a0, h1, top), at(a0, h0, top), along3, IntTrim);
+                    quadF(*s, at(a1, h0, lo), at(a1, h1, lo), at(a1, h1, top), at(a1, h0, top), -along3, IntTrim);
                     quadF(*s, at(a0, h0, top), at(a1, h0, top), at(a1, h1, top), at(a0, h1, top), -kIntUp, IntTrim);
                     (void)acrossL;
+                    if (hiL - lo > 0.5)
+                        if (Soup* down = soupFor(p, la < lb ? run.a : run.b))
+                        {
+                            // Steps down into the lower room: the threshold in the wall, then treads out from its face.
+                            const double sgn = la < lb ? -1.0 : 1.0, face0 = sgn * kWall * 0.5;
+                            const Vec3 into = (run.axis == 0 ? x.g.dirU() : x.g.dirV()) * sgn;
+                            const int n = std::max(1, int(std::ceil((hiL - lo) / kDoorRiser)));
+                            const double rr = (hiL - lo) / n;
+                            quadF(*down, at(a0, h0, hiL), at(a1, h0, hiL), at(a1, h1, hiL), at(a0, h1, hiL), kIntUp, IntStair);
+                            quadF(*down, at(a0, face0, lo), at(a1, face0, lo), at(a1, face0, hiL), at(a0, face0, hiL), into, IntStair);
+                            for (int i = 0; i + 1 < n; ++i)
+                            {
+                                const double t = hiL - (i + 1) * rr, d0 = face0 + sgn * i * kDoorGoing, d1 = face0 + sgn * (i + 1) * kDoorGoing;
+                                quadF(*down, at(a0, d0, t), at(a1, d0, t), at(a1, d1, t), at(a0, d1, t), kIntUp, IntStair);
+                                quadF(*down, at(a0, d1, lo), at(a1, d1, lo), at(a1, d1, t), at(a0, d1, t), into, IntStair);
+                                quadF(*down, at(a0, d0, lo), at(a0, d1, lo), at(a0, d1, t), at(a0, d0, t), -along3, IntStair);
+                                quadF(*down, at(a1, d0, lo), at(a1, d1, lo), at(a1, d1, t), at(a1, d0, t), along3, IntStair);
+                            }
+                        }
                 }
         }
     }
@@ -3224,11 +3545,12 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
         quadF(s, P(0, 0, bottom.y), P(k.L, 0, bottom.y), P(k.L, k.coreW, bottom.y), P(0, k.coreW, bottom.y), kIntUp, IntFloorStone);
         const double ceil = top.y + top.h - kSlab;
         quadF(s, P(0, 0, ceil), P(k.L, 0, ceil), P(k.L, k.coreW, ceil), P(0, k.coreW, ceil), -kIntUp, IntCeiling);
-        const double Wf = k.Wf, W = k.W, Ld = k.Ld;
+        const double Wf = k.Wf, W = k.W, Ld = k.Ld, Lm = k.Lm;
+        const bool straight = k.kind == CoreKind::Straight;
         for (size_t q = 0; q < ps.size(); ++q)
         {
             const PlateW& pl = x.plates[size_t(ps[q])];
-            if (q > 0)
+            if (q > 0 && Ld > 0.0)
             {
                 // The floor landing.
                 quadF(s, P(0, 0, pl.y), P(Ld, 0, pl.y), P(Ld, k.coreW, pl.y), P(0, k.coreW, pl.y), kIntUp, IntFloorStone);
@@ -3240,31 +3562,37 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
             const PlateW& up = x.plates[size_t(ps[q + 1])];
             const double H = up.y - pl.y, ym = pl.y + H * 0.5;
             const double riserMax = std::min(18.0, profile.maxStep);
-            const int n = std::max(1, int(std::ceil(H * 0.5 / riserMax)));
-            const double rr = H * 0.5 / n, gg = k.run / n;
+            const double flightH = straight ? H : H * 0.5;
+            const int n = std::max(1, int(std::ceil(flightH / riserMax)));
+            const double rr = flightH / n, gg = k.run / n;
             Stair stair;
             stair.id = k.id + "/" + pl.prefix;
             stair.core = k.id;
+            stair.kind = coreKindName(k.kind);
             stair.floor = pl.floor;
             stair.y0 = pl.y;
             stair.y1 = up.y;
-            stair.risers = 2 * n;
+            stair.risers = straight ? n : 2 * n;
             stair.riser = rr;
             stair.going = gg;
             stair.slope = std::atan2(rr, gg) * 180.0 / std::numbers::pi;
-            stair.width = Wf;
+            stair.width = straight ? W : Wf;
             stair.headroom = std::min(H, up.h) - kSlab - rr;
+            stair.straight = straight;
             out.stairs.push_back(stair);
-            // The mid landing.
-            quadF(s, P(k.L - Ld, 0, ym), P(k.L, 0, ym), P(k.L, W, ym), P(k.L - Ld, W, ym), kIntUp, IntFloorStone);
-            quadF(s, P(k.L - Ld, 0, ym - 18.0), P(k.L, 0, ym - 18.0), P(k.L, W, ym - 18.0), P(k.L - Ld, W, ym - 18.0), -kIntUp, IntCeiling);
-            quadF(s, P(k.L - Ld, Wf, ym - 18.0), P(k.L - Ld, W - Wf, ym - 18.0), P(k.L - Ld, W - Wf, ym), P(k.L - Ld, Wf, ym), -eL3, IntStair);
-            for (int flight = 0; flight < 2; ++flight)
+            if (!straight)
             {
-                const double b0 = flight == 0 ? 0.0 : W - Wf, b1 = flight == 0 ? Wf : W;
+                // The mid landing.
+                quadF(s, P(k.L - Lm, 0, ym), P(k.L, 0, ym), P(k.L, W, ym), P(k.L - Lm, W, ym), kIntUp, IntFloorStone);
+                quadF(s, P(k.L - Lm, 0, ym - 18.0), P(k.L, 0, ym - 18.0), P(k.L, W, ym - 18.0), P(k.L - Lm, W, ym - 18.0), -kIntUp, IntCeiling);
+                quadF(s, P(k.L - Lm, Wf, ym - 18.0), P(k.L - Lm, W - Wf, ym - 18.0), P(k.L - Lm, W - Wf, ym), P(k.L - Lm, Wf, ym), -eL3, IntStair);
+            }
+            for (int flight = 0; flight < (straight ? 1 : 2); ++flight)
+            {
+                const double b0 = flight == 0 ? 0.0 : W - Wf, b1 = straight ? W : flight == 0 ? Wf : W;
                 const double yBase = flight == 0 ? pl.y : ym;
                 const double dirA = flight == 0 ? 1.0 : -1.0;
-                const double aStart = flight == 0 ? Ld : k.L - Ld;
+                const double aStart = flight == 0 ? Ld : k.L - Lm;
                 const Vec3 fwd = eL3 * dirA;
                 for (int i = 0; i < n; ++i)
                 {
@@ -3277,7 +3605,7 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                     face(s, {P(a0, b1, std::max(s0, yBase - 18.0)), P(a1, b1, s1), P(a1, b1, yHi), P(a0, b1, yHi)}, eW3, IntStair);
                 }
                 const double aEnd = aStart + dirA * n * gg;
-                face(s, {P(aStart, b0, yBase - 18.0), P(aEnd, b0, yBase + H * 0.5 - 18.0), P(aEnd, b1, yBase + H * 0.5 - 18.0), P(aStart, b1, yBase - 18.0)},
+                face(s, {P(aStart, b0, yBase - 18.0), P(aEnd, b0, yBase + flightH - 18.0), P(aEnd, b1, yBase + flightH - 18.0), P(aStart, b1, yBase - 18.0)},
                      -kIntUp + fwd * 0.3, IntStair);
             }
         }
@@ -3312,6 +3640,8 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
     // Slots: doors, then the rooms' furnishing and lamps.
     for (const InteriorDoor& d : out.doors)
     {
+        if (d.open)
+            continue;
         Module m;
         m.type = d.width >= 150.0 ? "door.interior.double" : "door.interior";
         m.kind = "door";
@@ -3330,7 +3660,14 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
             std::vector<Vec3> keep;
             for (const InteriorDoor& d : out.doors)
                 if (d.a == rm.id || d.b == rm.id)
+                {
                     keep.push_back(d.origin);
+                    // Steps down into this room run out from the door.
+                    const double rise = d.origin.y - rm.y;
+                    const Vec3 into = d.b == rm.id ? d.normal : -d.normal;
+                    for (double along = 60.0; rise > 0.5 && along < (std::ceil(rise / kDoorRiser) - 1.0) * kDoorGoing + 60.0; along += 60.0)
+                        keep.push_back(d.origin + into * along);
+                }
             for (const PlateW& p : x.plates)
                 for (int c : p.entryCells)
                     if (p.room[size_t(c)] >= 0 && remap[size_t(p.room[size_t(c)])] >= 0 && out.rooms[size_t(remap[size_t(p.room[size_t(c)])])].id == rm.id)
@@ -3339,8 +3676,15 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                         keep.push_back(x.g.w3(l.x, l.y, rm.y));
                     }
             std::vector<Module> f = furnishArea(rm.kind, rm.rects, rm.y, rm.y + rm.height - kSlab, keep, rm.id, fnv(rm.id));
+            const bool terraced = std::any_of(rm.rectY.begin(), rm.rectY.end(), [&](double y) { return y != rm.y; });
             for (Module& m : f)
+            {
+                // On a terraced floor a piece stands on the terrace under it.
+                if (terraced && std::abs(m.origin.y - rm.y) < 0.5)
+                    if (const std::optional<double> y = out.floorAt({m.origin.x, rm.y + 1.0, m.origin.z}))
+                        m.origin.y = *y;
                 out.slots.push_back(std::move(m));
+            }
         }
     return outPtr;
 }
@@ -3361,6 +3705,23 @@ int Interior::roomAt(Vec3 p) const
             return r;
     }
     return -1;
+}
+
+std::optional<double> Interior::floorAt(Vec3 p) const
+{
+    for (const FloorGrid& g : grids)
+    {
+        if (p.y < g.y - 5.0 || p.y > g.y + g.height)
+            continue;
+        const Vec2 d = Vec2(p.x, p.z) - g.origin;
+        const double u = glm::dot(d, g.ax), v = glm::dot(d, g.az);
+        const int i = int(std::floor((u - g.u0) / g.cell)), j = int(std::floor((v - g.v0) / g.cell));
+        if (i < 0 || j < 0 || i >= g.nx || j >= g.nz || g.room[size_t(j * g.nx + i)] == -1)
+            continue;
+        const size_t c = size_t(j * g.nx + i);
+        return g.level.empty() ? g.y : g.level[c];
+    }
+    return std::nullopt;
 }
 
 const Room* Interior::room(const std::string& id) const

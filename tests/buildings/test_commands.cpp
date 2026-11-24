@@ -119,6 +119,19 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
         CHECK(colored > 10);
         CHECK(run("getAttr", {{"args", {"bld_glass.instanceColor"}}}) == false);
         CHECK(run("getAttr", {{"args", {"Bld_colonialCentro_render0.instanceColor"}}}) == true);
+        // Two tones: trim and frames take the second; colonialCentro paints its windows' and doors' frames in its trim.
+        CHECK(run("getAttr", {{"args", {"bld_trim.instanceColor2"}}}) == true);
+        CHECK(run("getAttr", {{"args", {"bld_frame.instanceColor2"}}}) == true);
+        CHECK(run("getAttr", {{"args", {"bld_frame.instanceColor"}}}) == true);
+        CHECK(run("getAttr", {{"args", {"Bld_colonialCentro_render0.instanceColor2"}}}) == false);
+        size_t toned = 0;
+        for (scene::NodeId id : g.nodes())
+            if (gn::InstanceViewPtr v = gn::instanceViewFor(g, id))
+                for (const gn::InstancePart& p : v->parts)
+                    if (p.colors2)
+                        for (const glm::vec4& c : *p.colors2)
+                            toned += c.a == 1.0f ? 1 : 0;
+        CHECK(toned > 10);
     }
     const uint64_t before = hashIds(slotIds(B));
     const std::vector<std::string> aBefore = slotIds(A);

@@ -327,6 +327,23 @@ TEST_CASE("Instanced draws: each placement shows its instance colour")
     const glm::dvec3 halfLeft = litMean(renderInstanced(half), 0, third), plainLeft = litMean(plain, 0, third);
     CHECK(halfLeft.g < plainLeft.g - 5.0);
     CHECK(halfLeft.g > left.g + 5.0);
+
+    // Two tones: a material with MatInstanceColor2 takes the second colour, the others the first.
+    FrameState toned = threeBoxes(true);
+    auto second = std::make_shared<std::vector<glm::vec4>>(toned.meshes[0].instanceColors->size(), glm::vec4(0, 1, 0, 1));
+    toned.meshes.edit()[0].instanceColors2 = second;
+    Material first;
+    first.baseColor = glm::vec3(0.5f);
+    toned.meshes.edit()[0].materials = {first};
+    const glm::dvec3 firstLeft = litMean(renderInstanced(toned), 0, third);
+    CHECK(firstLeft.r > 2.0 * firstLeft.g);
+    Material trim = first;
+    trim.flags |= MatInstanceColor2;
+    toned.meshes.edit()[0].materials = {trim};
+    const glm::dvec3 secondLeft = litMean(renderInstanced(toned), 0, third);
+    MESSAGE("second tone left " << secondLeft.r << " " << secondLeft.g << " " << secondLeft.b);
+    CHECK(secondLeft.g > 2.0 * secondLeft.r);
+    CHECK(secondLeft.g > 2.0 * secondLeft.b);
 }
 
 TEST_CASE("Instanced draws: selection still outlines coloured placements")

@@ -1375,6 +1375,8 @@ void MaterialEditor::rebuild()
     check("Instance Color", kInstanceColor)
         ->setToolTip("Colours instances carry (liveries, building palettes) replace the base colour or tint the base colour map. "
                      "Off keeps this material's own colour.");
+    check("Second Tone", kInstanceColor2)
+        ->setToolTip("Takes the instances' second colour instead: the other tone of a two-tone piece, such as trim against walls.");
     slider("Metallic", kMetallic, 0.0, 1.0);
     texture("Metallic Map", "metallic", kMetallicMap);
     slider("Specular", kSpecular, 0.0, 1.0);

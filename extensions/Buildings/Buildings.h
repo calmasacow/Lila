@@ -223,11 +223,24 @@ struct Style
     // Palette
     std::vector<glm::vec3> renders, trims, roofs, bases;
     glm::vec2 dirt{0.05f, 0.3f};
+    /**
+     * Two-tone modules, by module kind: the palette entries (render, trim, roof, base, frame, door, awning, or none) its
+     * main parts and its second-tone parts (its trim and frames: an arcade's columns against its beams, a window's frame)
+     * take. An empty entry keeps the default (moduleTones()).
+     */
+    std::map<std::string, std::array<std::string, 2>> moduleTones;
     json raw;
 
     static Style fromJson(const json& j, std::string* error = nullptr);
     json toJson() const;
 };
+
+/**
+ * The two colours a module instance carries (linear rgb, alpha 1, or zero for none): its main parts' and its second
+ * tone's. By default the main parts take render (wall-like blocks, domes), roof (roofs) or trim (the rest), and the second
+ * tone the same, except on framed pieces (windows, doors, shopfronts, balconies) whose frames keep their own colour.
+ */
+std::array<glm::vec4, 2> moduleTones(const Style& st, const Palette& p, const std::string& kind);
 
 /** A style id from a Settlement style guess or a program ("mansion" -> narcoMansion, "police" -> policeStation). */
 std::string styleFor(std::string_view settlementStyle, std::string_view program, std::string_view use);
@@ -283,6 +296,13 @@ struct Spec
     /** From Settlement's published envelope (settlementEnvelopes). */
     static Spec fromEnvelope(const json& env, const std::string& settlement);
     double groundAt(Vec2 p) const;
+    /** Lowest and highest ground under the building: its sampled corners, else ground and highGround. */
+    std::pair<double, double> groundRange() const;
+    /** Whether the ground floor steps with the ground: sampled corners more than 60 cm apart. */
+    bool sloped() const;
+    /** A stepped ground floor's level over a point: the ground there plus the plinth, in 30 cm steps, between the lowest
+     *  ground (plus 5 cm) and the level of the ground floor (`floor0`, the highest ground plus the plinth). */
+    double steppedLevel(Vec2 p, double plinth, double floor0) const;
 };
 
 /** Whether the building has shops on its ground floor: businesses, or a commercial program or use. */

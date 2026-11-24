@@ -190,9 +190,10 @@ RulesResult applyBiomes(Heightfield& h, const BiomeSpec& s);
 /** Snow, alpine, forest, meadow, scrub and wetland over a temperate climate. */
 BiomeSpec defaultBiomes();
 /**
- * Layers for a terrain as it is: grass at the base, dirt on worn ground, gravel on scree, rock on steep slopes, riverbed
- * in the channels, sand at the shore when a sea level is given, snow up high (by temperature when the terrain has
- * biomes, else the top of its height range) and road wherever a road mask exists.
+ * Layers for a terrain as it is: grass at the base, forest on hillsides (or in the forest biome), dirt on worn ground,
+ * gravel on scree, rock on steep slopes, riverbed in the channels, sand at the shore when a sea level is given, snow up
+ * high (by temperature when the terrain has biomes; with a sea level, the top of the land above it and never below 3 km;
+ * else the top of its height range) and road wherever a road mask exists.
  */
 MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> seaLevel = std::nullopt);
 /** The Meadowlight material and colour a layer of this name gets when its rule names none. */

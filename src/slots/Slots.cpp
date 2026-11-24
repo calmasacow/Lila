@@ -2,6 +2,7 @@
 
 #include "core/ExtensionContext.h"
 #include "core/Log.h"
+#include "core/Profile.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
@@ -12,6 +13,8 @@
 #include <cstdio>
 #include <map>
 #include <mutex>
+#include <optional>
+#include <set>
 
 namespace lila::slots
 {
@@ -554,13 +557,66 @@ uint64_t revision() { return gRevision.load(); }
 
 namespace detail
 {
-/** Touches every publisher so geometry-node results and slotSet draws pick up a change. Defined in SlotSet.cpp. */
-void touchPublishers();
+/** Touches the publishers (all, or only these) and every slotSet so results and draws pick up a change. Defined in SlotSet.cpp. */
+void touchPublishers(const std::set<NodeId>* only);
 void notifyListeners();
 } // namespace detail
 
+namespace
+{
+/** Keys whose entry differs between two maps (added, removed or changed). */
+template <class M>
+std::set<std::string> changedKeys(const M& a, const M& b)
+{
+    std::set<std::string> out;
+    for (const auto& [k, v] : a)
+        if (auto it = b.find(k); it == b.end() || it->second.toJson() != v.toJson())
+            out.insert(k);
+    for (const auto& [k, v] : b)
+        if (!a.contains(k))
+            out.insert(k);
+    return out;
+}
+
+/**
+ * The publishers a change from one state to the next reaches: those holding a slot whose override or pin changed. None
+ * (rerun them all) when the rules changed or too much did to look up.
+ */
+std::optional<std::set<NodeId>> affectedPublishers(const State& before, const State& after)
+{
+    if (rulesJson(before.rules) != rulesJson(after.rules))
+        return std::nullopt;
+    const std::set<std::string> overrides = changedKeys(before.overrides, after.overrides);
+    const std::set<std::string> pins = changedKeys(before.pins, after.pins);
+    if (overrides.size() + pins.size() > 256)
+        return std::nullopt;
+    std::set<NodeId> out;
+    if (overrides.empty() && pins.empty())
+        return out;
+    std::vector<std::string> owners;
+    std::set<std::string> ids = overrides;
+    for (const std::string& k : pins)
+        if (k.starts_with("owner:"))
+            owners.push_back(k.substr(6));
+        else
+            ids.insert(k);
+    std::lock_guard lock(tableMutex());
+    for (const auto& [node, pub] : table())
+        for (const Slot& s : pub.slots)
+            if (ids.contains(s.id) ||
+                std::any_of(owners.begin(), owners.end(), [&](const std::string& o) { return startsWithPath(s.owner, o) || startsWithPath(s.id, o); }))
+            {
+                out.insert(node);
+                break;
+            }
+    return out;
+}
+} // namespace
+
 void refresh()
 {
+    LILA_ZONE();
+    const StatePtr before = state();
     auto next = std::make_shared<State>();
     const json rules = scene::data::get(kRulesKey, json::array());
     if (rules.is_array())
@@ -579,11 +635,12 @@ void refresh()
             next->pins[it.key()] = std::move(p);
         }
     next->revision = ++gRevision;
+    const std::optional<std::set<NodeId>> only = affectedPublishers(*before, *next);
     {
         std::lock_guard lock(stateMutex());
         currentState() = std::move(next);
     }
-    detail::touchPublishers();
+    detail::touchPublishers(only ? &*only : nullptr);
     detail::notifyListeners();
 }
 
@@ -692,10 +749,9 @@ bool pin(scene::Graph& g, const std::string& key, bool swappable)
     p.key = key;
     const bool ownerPin = key.starts_with("owner:");
     const std::string owner = ownerPin ? key.substr(6) : std::string();
-    for (Slot& s : collect(g))
+    auto covered = [&](const Slot& s) { return ownerPin ? startsWithPath(s.owner, owner) || startsWithPath(s.id, owner) : s.id == key; };
+    for (Slot& s : collect(g, covered))
     {
-        if (ownerPin ? !(startsWithPath(s.owner, owner) || startsWithPath(s.id, owner)) : s.id != key)
-            continue;
         if (!swappable)
             s.payload = resolve(s).payload;
         p.slots.push_back({std::move(s), swappable});
@@ -926,6 +982,14 @@ std::vector<NodeId> publishedNodes()
     return out;
 }
 
+void forEachPublishedPayload(const std::function<void(const Payload&)>& fn)
+{
+    std::lock_guard lock(tableMutex());
+    for (const auto& [n, p] : table())
+        for (const Slot& s : p.slots)
+            fn(s.payload);
+}
+
 std::vector<Slot> publishedBy(NodeId n)
 {
     std::lock_guard lock(tableMutex());
@@ -961,6 +1025,29 @@ std::vector<Slot> withPins(std::vector<Slot> slots, const State& st, std::vector
         out.push_back(std::move(s));
     }
     return out;
+}
+
+int pinOf(const State& st, const Slot& s, Slot* out)
+{
+    if (st.pins.empty())
+        return 0;
+    if (const PinnedSlot* p = pinnedSlot(st, s.id, s.owner))
+    {
+        if (out)
+        {
+            *out = p->slot;
+            out->payload = s.payload;
+        }
+        return 1;
+    }
+    return ownerPinCovering(st, s.id, s.owner) ? 2 : 0;
+}
+
+bool ruledOrOverridden(const State& st, const Slot& s)
+{
+    if (st.overrides.contains(s.id))
+        return true;
+    return std::any_of(st.rules.begin(), st.rules.end(), [&](const Rule& r) { return r.covers(s); });
 }
 
 /** Slots (by id) of every pin, for the ones no publisher makes any more. */

@@ -82,5 +82,9 @@
   },
   "massing": {
     "wallThickness": 50
+  },
+  "moduleTones": {
+    "window": [null, "trim"],
+    "door": [null, "trim"]
   }
 }

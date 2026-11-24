@@ -1,9 +1,11 @@
 #include "slots/Slots.h"
 
 #include "core/Events.h"
+#include "core/Profile.h"
 #include "scene/AttrBuilders.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
+#include "scene/SceneData.h"
 
 namespace lila::slots
 {
@@ -158,12 +160,19 @@ void registerAll()
     });
     for (events::Event e : {events::Event::SceneOpened, events::Event::SceneNew})
         events::subscribe(e, [](const events::EventData&) {
+            LILA_ZONE_N("slots.sceneOpened");
             clearVisuals();
             detail::clearTagCache();
             refresh();
         });
+    // The rules, overrides and pins as soon as the scene's data is read, so publishers evaluated during the rest of the load
+    // see them and need no rerun when the scene has opened.
+    scene::data::onLoaded([] { refresh(); });
     // After the visuals are dropped: library items the opened scene names come in, so its slots draw them straight away.
-    events::subscribe(events::Event::SceneOpened, [](const events::EventData&) { detail::scheduleItemLoad(); });
+    events::subscribe(events::Event::SceneOpened, [](const events::EventData&) {
+        LILA_ZONE_N("slots.itemLoad");
+        detail::scheduleItemLoad();
+    });
     events::subscribe(events::Event::NodeDeleted, [](const events::EventData& d) {
         detail::forgetSet(NodeId(d.node));
         unpublish(NodeId(d.node));

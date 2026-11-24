@@ -57,6 +57,8 @@ using json = nlohmann::json;
 
 constexpr int kDefaultSeconds = 10;
 constexpr int kMaxSeconds = 120;
+// Commands may record a whole long operation (a world build runs for many minutes).
+constexpr int kMaxCommandSeconds = 3 * 3600;
 // Waiting longer than this for tracy-capture to connect means it never will.
 constexpr qint64 kConnectTimeoutMs = 15000;
 
@@ -159,7 +161,7 @@ public:
         return *r;
     }
 
-    fs::path start(int seconds)
+    fs::path start(int seconds, int maxSeconds = kMaxSeconds)
     {
         if (busy())
             throw std::runtime_error("A recording is already running.");
@@ -177,7 +179,7 @@ public:
         const std::string stem = "lila-perf-" + QDateTime::currentDateTime().toString("yyyy-MM-dd-HHmmss").toStdString();
         mTrace = folder() / (stem + ".tracy");
         mZip = folder() / (stem + ".zip");
-        mSeconds = std::clamp(seconds, 1, kMaxSeconds);
+        mSeconds = std::clamp(seconds, 1, maxSeconds);
         mError.clear();
         mSystemTracing = false;
         mOutput.clear();
@@ -208,6 +210,12 @@ public:
 
     bool busy() const { return mState == State::Connecting || mState == State::Recording || mState == State::Saving; }
     State state() const { return mState; }
+    /** Catches up with the recorder when the main thread was too busy for the tick to see it connect. */
+    void poll()
+    {
+        if (mState == State::Connecting || mState == State::Recording)
+            tick();
+    }
     int secondsLeft() const
     {
         if (mState == State::Connecting)
@@ -240,7 +248,8 @@ private:
                 mClock.start();
                 mSystemTracing = profiler::beginSystemTracing();
             }
-            else if (mClock.elapsed() > kConnectTimeoutMs)
+            // A recorder that already exited has connected and finished while the main thread was busy; finished() reads its file.
+            else if (mClock.elapsed() > kConnectTimeoutMs && mProcess && mProcess->state() == QProcess::Running)
             {
                 fail("The recorder couldn't connect to Lila.");
                 return;
@@ -518,11 +527,12 @@ QPointer<TraceDialog> gDialog;
 
 fs::path folder() { return paths::userConfigDir() / "perf-traces"; }
 
-fs::path record(int seconds) { return Recorder::get().start(seconds); }
+fs::path record(int seconds) { return Recorder::get().start(seconds, kMaxCommandSeconds); }
 
 json status()
 {
-    const Recorder& r = Recorder::get();
+    Recorder& r = Recorder::get();
+    r.poll();
     return {{"state", stateName(r.state())},
             {"secondsLeft", r.secondsLeft()},
             {"path", r.zip().empty() ? std::string() : paths::toUtf8(r.zip())},
@@ -550,7 +560,7 @@ void registerAll(QWidget* mainWindow)
         .doc = "Start recording a performance trace (Help > Record Performance Trace) for `seconds` once the recorder connects. "
                "Returns the zip it will write; perfTraceStatus says when it is done.",
         .flags = {{.name = "seconds", .shortName = "s", .type = ArgType::Int, .defaultValue = kDefaultSeconds, .doc = "How long to record.",
-                   .min = 1, .max = kMaxSeconds}},
+                   .min = 1, .max = kMaxCommandSeconds}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             try

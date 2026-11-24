@@ -131,6 +131,8 @@ LILA_SCENE_API const std::filesystem::path& currentPath();
 LILA_SCENE_API void setCurrentPath(const std::filesystem::path& path);
 /** True when the scene changed since the last save/open/new. */
 LILA_SCENE_API bool modified();
+/** True while a scene file is read into the graph, including the opened-scene notifications after it. */
+LILA_SCENE_API bool loading();
 /** True when saving to path would write what is already there: it is the current file, it exists and nothing changed. */
 LILA_SCENE_API bool upToDate(const std::filesystem::path& path);
 LILA_SCENE_API void markClean();

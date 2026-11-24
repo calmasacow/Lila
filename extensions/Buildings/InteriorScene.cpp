@@ -195,13 +195,18 @@ json roomJson(const Room& r)
 
 json doorJson(const InteriorDoor& d)
 {
-    return {{"id", d.id}, {"a", d.a}, {"b", d.b}, {"width", d.width}, {"height", d.height}, {"floor", d.floor}, {"user", d.user},
-            {"origin", {d.origin.x, d.origin.y, d.origin.z}}, {"normal", {d.normal.x, d.normal.y, d.normal.z}}};
+    json j = {{"id", d.id}, {"a", d.a}, {"b", d.b}, {"width", d.width}, {"height", d.height}, {"floor", d.floor}, {"user", d.user},
+              {"origin", {d.origin.x, d.origin.y, d.origin.z}}, {"normal", {d.normal.x, d.normal.y, d.normal.z}}};
+    if (d.open)
+        j["open"] = true;
+    if (d.up)
+        j["up"] = true;
+    return j;
 }
 
 json stairJson(const Stair& s)
 {
-    return {{"id", s.id}, {"floor", s.floor}, {"risers", s.risers}, {"riser", std::round(s.riser * 10.0) / 10.0}, {"going", std::round(s.going * 10.0) / 10.0},
+    return {{"id", s.id}, {"kind", s.kind}, {"floor", s.floor}, {"risers", s.risers}, {"riser", std::round(s.riser * 10.0) / 10.0}, {"going", std::round(s.going * 10.0) / 10.0},
             {"slope", std::round(s.slope * 10.0) / 10.0}, {"width", s.width}, {"headroom", std::round(s.headroom)}};
 }
 
@@ -728,20 +733,31 @@ json interiorIssues(const std::vector<std::string>& ids, const CharacterProfile&
         std::vector<geo::MeshBvh> bvhs(keep.size());
         for (size_t k = 0; k < keep.size(); ++k)
             bvhs[k].build(*keep[k]);
-        for (const InteriorDoor& d : in->doors)
-        {
-            const Vec3 mid = d.origin + Vec3(0.0, std::min(100.0, d.height * 0.5), 0.0);
-            const Vec3 from = mid - d.normal * 40.0;
-            bool blocked = false;
+        auto blockedAt = [&](const Vec3& mid, const Vec3& normal) {
+            const Vec3 from = mid - normal * 40.0;
             for (const geo::MeshBvh& b : bvhs)
             {
                 geo::BvhHit hit;
-                if (b.raycast(from, d.normal, hit) && hit.t < 80.0)
+                if (b.raycast(from, normal, hit) && hit.t < 80.0)
+                    return true;
+            }
+            return false;
+        };
+        for (const InteriorDoor& d : in->doors)
+        {
+            const Vec3 mid = d.origin + Vec3(0.0, std::min(100.0, d.height * 0.5), 0.0);
+            // An open archway onto a compact stair has the flights' spine behind its middle: any clear lane through it will do.
+            std::vector<double> lanes = {0.0};
+            if (d.open)
+                lanes = {0.0, -0.3, 0.3, -0.15, 0.15};
+            const Vec3 across = glm::normalize(glm::cross(Vec3(0.0, 1.0, 0.0), d.normal));
+            bool blocked = true;
+            for (double f : lanes)
+                if (!blockedAt(mid + across * (f * d.width), d.normal))
                 {
-                    blocked = true;
+                    blocked = false;
                     break;
                 }
-            }
             if (blocked)
             {
                 issues.push_back({{"kind", "doorNoOpening"}, {"building", id}, {"id", d.id}, {"what", d.id + ": the wall has no opening for this door"},

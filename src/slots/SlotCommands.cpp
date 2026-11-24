@@ -21,6 +21,8 @@ namespace detail
 {
 std::vector<NodeId> publishedNodes();
 std::vector<Slot> publishedBy(NodeId n);
+void evaluatePublishers(Graph& g);
+void forEachPublishedPayload(const std::function<void(const Payload&)>& fn);
 std::vector<Slot> withPins(std::vector<Slot> slots, const State& st, std::vector<std::string>* conflicts);
 Resolved resolveImpl(const Slot& s, const State& st, bool mainThread);
 std::vector<std::string> poolForTag(const std::string& tags, bool mainThread);
@@ -451,8 +453,13 @@ std::set<std::string> namedItems(Graph& g)
     for (const auto& [key, pin] : st->pins)
         for (const PinnedSlot& ps : pin.slots)
             take(ps.slot.payload);
-    for (const Slot& s : collect(g))
-        take(s.payload);
+    // Payloads only: placing every slot in the world (a city holds millions) is not needed to name its items.
+    for (NodeId id : g.nodes())
+        if (const Node* n = g.node(id); n && n->type().isA(kSetType))
+            for (const Slot& s : readSet(g, id))
+                take(s.payload);
+    detail::evaluatePublishers(g);
+    detail::forEachPublishedPayload(take);
     return out;
 }
 
