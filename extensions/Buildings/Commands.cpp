@@ -889,54 +889,14 @@ json infoJson(const Spec& s, const Result& r, const json& edit, bool bays, bool 
     return out;
 }
 
-/** Ray against every bay quad of every building: the nearest hit's building, bay and point. */
 json pick(Vec3 origin, Vec3 dir)
 {
     G().evaluate();
-    double best = 1e300;
-    json hit;
-    for (auto& [mesh, mod] : buildingMeshes())
-    {
-        std::shared_ptr<const Published> p = publishedFor(mod);
-        if (!p)
-            continue;
-        for (size_t i = 0; i < p->results.size(); ++i)
-        {
-            const Result& r = *p->results[i];
-            // Bounds first.
-            const Vec3 inv = 1.0 / glm::max(glm::abs(dir), Vec3(1e-12)) * glm::sign(dir + Vec3(1e-30));
-            double t0 = 0.0, t1 = 1e300;
-            for (int k = 0; k < 3; ++k)
-            {
-                double a = (r.lo[k] - 50.0 - origin[k]) * inv[k], b = (r.hi[k] + 50.0 - origin[k]) * inv[k];
-                if (a > b)
-                    std::swap(a, b);
-                t0 = std::max(t0, a);
-                t1 = std::min(t1, b);
-            }
-            if (t0 > t1 || t0 > best)
-                continue;
-            for (const Bay& b : r.bays)
-            {
-                const double denom = glm::dot(dir, b.normal);
-                if (std::abs(denom) < 1e-9)
-                    continue;
-                const double t = glm::dot(b.corners[0] - origin, b.normal) / denom;
-                if (t <= 0.0 || t >= best)
-                    continue;
-                const Vec3 q = origin + dir * t;
-                const Vec3 ex = b.corners[1] - b.corners[0], ey = b.corners[3] - b.corners[0];
-                const double u = glm::dot(q - b.corners[0], ex) / std::max(glm::dot(ex, ex), 1e-9);
-                const double v = glm::dot(q - b.corners[0], ey) / std::max(glm::dot(ey, ey), 1e-9);
-                if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
-                    continue;
-                best = t;
-                hit = {{"building", r.id}, {"bay", b.path}, {"kind", b.kind}, {"balcony", b.balcony}, {"mesh", mesh},
-                       {"point", {q.x, q.y, q.z}}, {"facade", b.path.substr(0, b.path.find("/l"))}};
-            }
-        }
-    }
-    return hit;
+    const std::optional<BayHit> h = pickBay(origin, dir);
+    if (!h)
+        return json();
+    return {{"building", h->building}, {"bay", h->bay}, {"kind", h->kind}, {"balcony", h->balcony}, {"mesh", h->mesh},
+            {"point", {h->point.x, h->point.y, h->point.z}}, {"facade", h->bay.substr(0, h->bay.find("/l"))}};
 }
 
 json styleSummary(const Style& s)
@@ -962,6 +922,70 @@ json deepMerge(json base, const json& over)
     return base;
 }
 } // namespace
+
+std::optional<BayHit> pickBay(Vec3 origin, Vec3 dir)
+{
+    double best = 1e300;
+    std::optional<BayHit> hit;
+    scene::Graph& g = G();
+    for (const auto& p : allPublished())
+    {
+        scene::Node* mod = g.node(scene::NodeId(p->modifier));
+        if (!mod)
+            continue;
+        const scene::NodeId meshId = scene::modifiers::meshOf(g, mod->id());
+        scene::Node* mesh = meshId != scene::kNoNode ? g.node(meshId) : nullptr;
+        if (!mesh)
+            continue;
+        for (size_t i = 0; i < p->results.size(); ++i)
+        {
+            const Result& r = *p->results[i];
+            const Vec3 inv = 1.0 / glm::max(glm::abs(dir), Vec3(1e-12)) * glm::sign(dir + Vec3(1e-30));
+            double t0 = 0.0, t1 = 1e300;
+            for (int k = 0; k < 3; ++k)
+            {
+                double a = (r.lo[k] - 50.0 - origin[k]) * inv[k], b = (r.hi[k] + 50.0 - origin[k]) * inv[k];
+                if (a > b)
+                    std::swap(a, b);
+                t0 = std::max(t0, a);
+                t1 = std::min(t1, b);
+            }
+            if (t0 > t1 || t0 > best)
+                continue;
+            for (const Bay& b : r.bays)
+            {
+                const double denom = glm::dot(dir, b.normal);
+                if (denom > -1e-9)
+                    continue; // only bays facing the ray
+                const double t = glm::dot(b.corners[0] - origin, b.normal) / denom;
+                if (t <= 0.0 || t >= best)
+                    continue;
+                const Vec3 q = origin + dir * t;
+                const Vec3 ex = b.corners[1] - b.corners[0], ey = b.corners[3] - b.corners[0];
+                const double u = glm::dot(q - b.corners[0], ex) / std::max(glm::dot(ex, ex), 1e-9);
+                const double v = glm::dot(q - b.corners[0], ey) / std::max(glm::dot(ey, ey), 1e-9);
+                if (u < 0.0 || u > 1.0 || v < 0.0 || v > 1.0)
+                    continue;
+                best = t;
+                BayHit h;
+                h.building = r.id;
+                h.name = p->specs[i].name;
+                h.bay = b.path;
+                h.kind = b.kind;
+                h.balcony = b.balcony;
+                h.mesh = mesh->path();
+                h.point = q;
+                for (int c = 0; c < 4; ++c)
+                    h.corners[c] = b.corners[c];
+                for (const Module& m : r.modules)
+                    if (m.path.rfind(b.path + "/", 0) == 0)
+                        h.parts.push_back(m.path.substr(b.path.size() + 1));
+                hit = h;
+            }
+        }
+    }
+    return hit;
+}
 
 void setShippedTrimSheet(const fs::path& p) { shippedTrimSheet() = p; }
 

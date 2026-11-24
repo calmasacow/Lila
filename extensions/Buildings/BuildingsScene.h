@@ -68,8 +68,25 @@ std::vector<std::pair<std::string, glm::vec3>> styleMaterials(const Style& s);
 void registerCommands(lila::ext::Context& ctx);
 void registerCheck(lila::ext::Context& ctx);
 void registerUi(lila::ext::Context& ctx);
+void registerPaintTool(lila::ext::Context& ctx);
+/** The building the Attribute Editor section and the paint tool work on (set by picking one). */
+std::string& currentBuilding();
+/** Rebuilds open Attribute Editor building sections. */
+void refreshSections();
 void registerAgent(lila::ext::Context& ctx);
 void registerUnreal(lila::ext::Context& ctx);
+
+/** A bay under a ray: its building, path, kind, corners and the parts in it (window, balcony, awning, ac...). */
+struct BayHit
+{
+    std::string building, name, bay, kind, mesh;
+    bool balcony = false;
+    Vec3 point{0.0};
+    Vec3 corners[4];
+    std::vector<std::string> parts;
+};
+/** The nearest bay facing a ray, from what the nodes last published (no evaluation). Main thread. */
+std::optional<BayHit> pickBay(Vec3 origin, Vec3 dir);
 
 /** The shipped LilaBuilding.lilatrim the shell's uv0 follows. */
 void setShippedTrimSheet(const std::filesystem::path& p);
