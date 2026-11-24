@@ -7,6 +7,7 @@
 #include <lila/Profile.h>
 
 #include <algorithm>
+#include <limits>
 #include <cmath>
 #include <format>
 #include <map>
@@ -435,6 +436,41 @@ void buildRoutes(const Heightfield& h, const CoastSpec& spec, const WaterResult*
                     r.lanes.push_back(boatLane("link_" + l.id + (end ? "_end" : "_start"), "link", l.craft, path, l.id));
             }
         }
+        // A closed lane (round an island) has no loose end: link it from its point nearest another lane.
+        for (size_t i = 0; i < count; ++i)
+        {
+            const Lane l = r.lanes[i];
+            if (l.air || l.points.size() < 3 || glm::length(xz(l.points.front()) - xz(l.points.back())) > rs.snap)
+                continue;
+            const CraftClass* c = craftClass(l.craft);
+            bool touches = false;
+            for (size_t j = 0; j < r.lanes.size() && !touches; ++j)
+                if (j != i && !r.lanes[j].air)
+                    for (const glm::dvec3& p : l.points)
+                        if (distToLane(xz(p), r.lanes[j]) <= rs.snap)
+                        {
+                            touches = true;
+                            break;
+                        }
+            if (touches || !c)
+                continue;
+            std::vector<glm::dvec2> goals;
+            for (size_t j = 0; j < r.lanes.size(); ++j)
+                if (j != i && !r.lanes[j].air)
+                    for (const glm::dvec3& p : r.lanes[j].points)
+                        goals.push_back(xz(p));
+            if (goals.empty())
+                continue;
+            glm::dvec2 from = xz(l.points.front());
+            double best = std::numeric_limits<double>::max();
+            for (const glm::dvec3& p : l.points)
+                for (const glm::dvec2& g : goals)
+                    if (const double d = glm::length(xz(p) - g); d < best)
+                        best = d, from = xz(p);
+            const std::vector<glm::dvec2> path = routeOverWater(h, sea, c->minDepth, c->minWidth, from, goals, rs.linkReach);
+            if (path.size() >= 2)
+                r.lanes.push_back(boatLane("link_" + l.id, "link", l.craft, path, l.id));
+        }
     }
 
     // Air lanes: approach and departure corridors off each runway end.
@@ -589,16 +625,26 @@ json routeIssues(const Heightfield& h, const CoastResult& r)
             size_t worst = 0;
             // The point on the runway itself is at ground level by design.
             const size_t onRunway = l.kind == "approach" ? l.points.size() - 1 : 0;
-            double low = 1e300;
+            // Near the runway the slope is lower than the full clearance: there the ground must keep half the slope's height
+            // above the runway clear, and the full clearance applies once the slope is twice that high.
+            const double runwayAlt = l.points[onRunway].y;
+            double low = 1e300, need = craft->clearance, worstShort = 0.0;
             for (size_t k = 0; k < l.clearance.size(); ++k)
-                if (k != onRunway && l.clearance[k] < low)
+            {
+                if (k == onRunway)
+                    continue;
+                const double required = std::min(craft->clearance, std::max(0.0, l.points[k].y - runwayAlt) * 0.5);
+                if (required - l.clearance[k] > worstShort)
                 {
+                    worstShort = required - l.clearance[k];
                     low = l.clearance[k];
+                    need = required;
                     worst = k;
                 }
-            if (low < craft->clearance)
+            }
+            if (worstShort > 1.0)
                 issue("airClearance", l.id, l.points[worst],
-                      std::format("clears the ground by {:.0f} cm; a {} needs {:.0f}", low, craft->label, craft->clearance));
+                      std::format("clears the ground by {:.0f} cm; a {} needs {:.0f} there", low, craft->label, need));
             continue;
         }
         size_t dry = 0, firstDry = 0;
