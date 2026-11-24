@@ -40,7 +40,9 @@
  * with the asset as its SettlementData parameter. Replies {asset, lots, envelopes, roads, actor, spawned, generated,
  * warnings}.
  *
- * removeSettlementCells {id, cells?: ["x_z", ...]} deletes those cell actors, or every cell of id. Replies {removed}.
+ * removeSettlementCells {id, cells?: ["x_z", ...], folder?} deletes those cell actors, or every cell of id, with their data
+ * assets unless another level's cells name them; with every cell going, folder's PCG data assets no cell names go too.
+ * Replies {removed, assetsDeleted, assets, assetsKept?}.
  */
 namespace LilaLinkSettlement
 {

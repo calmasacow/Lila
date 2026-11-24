@@ -1236,7 +1236,7 @@ public:
         connect(check, &QToolButton::clicked, this, [] { actions::run(nlohmann::json("openworld.zoneCheck")); });
         foot->addWidget(check);
         foot->addWidget(panelkit::overflow({"openworld.zoneFromDistricts", "openworld.zoneFromTerrain", "openworld.zoneFromWater", "openworld.zoneFromCurve",
-                                            "openworld.zonePlayArea", "openworld.zoneExport", "openworld.zoneImport", "openworld.zoneSendToUnreal"},
+                                            "openworld.zonePlayArea", "openworld.zoneExport", "openworld.zoneImport", "openworld.zoneSendToUnreal", "openworld.zoneRemoveFromUnreal"},
                                            this));
         v->addLayout(foot);
         mStatus = panelkit::dim({}, this);
@@ -1558,11 +1558,18 @@ void registerZoneUi(ext::Context& ctx)
          .doc = "Zone volumes, a zone data asset and a data layer per layer in the open Unreal level.",
          .python = "zoneSendToUnreal()",
          .icon = "brand-unreal-engine"});
+    add({.id = "openworld.zoneRemoveFromUnreal",
+         .label = "Remove Zones from Unreal",
+         .category = "Open World",
+         .run = [] { warnOnThrow([] { ops::execute("zoneRemoveFromUnreal", withSet(), CallSource::UI); }); },
+         .doc = "Take the zone set's volumes, zone data asset and unused data layers out of the open Unreal level.",
+         .python = "zoneRemoveFromUnreal()",
+         .icon = "brand-unreal-engine"});
 
     addTools(ctx,
              {"", "openworld.zoneTool", "openworld.zonesPanel", "openworld.zoneLayer", "openworld.zoneFromCurve", "openworld.zoneFromDistricts",
               "openworld.zoneFromTerrain", "openworld.zoneFromWater", "openworld.zonePlayArea", "openworld.zoneOverlay", "openworld.zoneCheck",
-              "openworld.zoneExport", "openworld.zoneImport", "openworld.zoneSendToUnreal"},
+              "openworld.zoneExport", "openworld.zoneImport", "openworld.zoneSendToUnreal", "openworld.zoneRemoveFromUnreal"},
              {{.action = "openworld.zoneTool", .icon = "brush", .text = "Paint", .shelf = "Zones", .group = "Zones"},
               {.action = "openworld.zonesPanel", .icon = "map-2", .text = "Panel", .group = "Zones"},
               {.action = "openworld.zoneFromDistricts", .icon = "building-community", .text = "Districts", .group = "Zones"},
@@ -1575,7 +1582,8 @@ void registerZoneUi(ext::Context& ctx)
               {.action = "openworld.zoneOverlay", .text = "Zone Overlay", .rare = true},
               {.action = "openworld.zoneExport", .text = "Export Zones", .rare = true},
               {.action = "openworld.zoneImport", .text = "Import Zones", .rare = true},
-              {.action = "openworld.zoneSendToUnreal", .text = "Send to Unreal", .rare = true}});
+              {.action = "openworld.zoneSendToUnreal", .text = "Send to Unreal", .rare = true},
+              {.action = "openworld.zoneRemoveFromUnreal", .text = "Remove from Unreal", .rare = true}});
 
     viewportHooks::addDrawer(ctx, "openworld.zones", drawZones);
 

@@ -772,6 +772,7 @@ json buildWorld(json spec, const BuildOptions& o)
         if (skipped("settlements") || terrain.empty())
             break;
         const std::string sname = s["name"].get<std::string>();
+        built["settlementNames"].push_back(sname);
         json made1;
         const bool ok = st.run("settlement." + sname, [&] {
             if (Node* old = g.find(sname); old && o.replace)

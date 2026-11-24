@@ -15,10 +15,13 @@
 #include <lila/UnrealLink.h>
 
 #include <algorithm>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <set>
 
 using namespace lila;
+namespace fs = std::filesystem;
 
 namespace openworld::world
 {
@@ -130,6 +133,39 @@ json placementReport(const json& plan, std::set<std::string>& keys)
     return out;
 }
 
+std::string fileSafe(const std::string& s)
+{
+    std::string out;
+    for (char c : s)
+        out += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+    return out;
+}
+
+/**
+ * What the world sent to one Unreal project and level that no placement group names: its settlements (by their Unreal
+ * key) and zone sets. A rebuild that no longer makes one removes it from that level.
+ */
+fs::path sentRecordPath(const std::string& project, const std::string& level, const std::string& prefix)
+{
+    return link::cacheDir() / "openworld" / ("sent_" + fileSafe(project) + "_" + fileSafe(level.substr(level.rfind('/') + 1)) + "_" + prefix + ".json");
+}
+
+json readRecord(const fs::path& path)
+{
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return json::object();
+    try
+    {
+        json j = json::parse(f);
+        return j.is_object() ? j : json::object();
+    }
+    catch (const std::exception&)
+    {
+        return json::object();
+    }
+}
+
 /** Counts of a report's failures, for the step's own failure list. */
 void collectFailures(const json& report, const std::string& step, json& failures)
 {
@@ -186,6 +222,13 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
     json report = json::object();
     json features = json::array();
     bool partitioned = false;
+    std::string project, level;
+    // What this build sent that no placement group names, for the record the next build removes from.
+    json sentSettlements = json::array(), sentZones = json::array();
+    std::set<std::string> settlementNames;
+    for (const json& n : built.value("settlementNames", json::array()))
+        if (n.is_string())
+            settlementNames.insert(n.get<std::string>());
 
     const bool linked = step("export.unreal.link", [&]() -> json {
         try
@@ -198,12 +241,14 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
         }
         const json status = link::Link::get().status();
         features = status.value("features", json::array());
-        json out = {{"project", status.value("project", std::string())}};
+        project = status.value("project", std::string());
+        json out = {{"project", project}};
         if (hasFeature(features, "levelInfo"))
             if (auto c = link::Link::get().client())
                 if (link::RpcResult r = c->call("levelInfo", json::object(), 30000); r.ok)
                 {
-                    out["level"] = r.result.value("level", std::string());
+                    level = r.result.value("level", std::string());
+                    out["level"] = level;
                     partitioned = r.result.value("partitioned", false);
                     out["partitioned"] = partitioned;
                 }
@@ -249,6 +294,7 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             continue;
         const std::string mesh = sm.get<std::string>();
         const std::string name = g.find(mesh)->name();
+        settlementNames.insert(name);
         const bool buildings = std::any_of(withBuildings.begin(), withBuildings.end(), [&](const std::string& p) { return p.ends_with(name + "_Buildings"); });
         step("export.unreal.settlement." + name, [&]() -> json {
             json flags = {{"args", {mesh}}, {"massing", !buildings}};
@@ -256,6 +302,7 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
                 if (ue.contains(k))
                     flags[k] = ue[k];
             const json r = runCmd("settlementSendToUnreal", flags);
+            sentSettlements.push_back({{"key", r.value("key", name)}, {"name", name}});
             const json d = r.value("diff", json::object());
             json out = {{"added", d.value("added", json::array()).size()},
                         {"changed", d.value("changed", json::array()).size()},
@@ -372,6 +419,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
     if (built.contains("zones") && built["zones"].is_string() && g.find(built["zones"].get<std::string>()))
         step("export.unreal.zones", [&]() -> json {
             const json r = runCmd("zoneSendToUnreal", {{"set", built["zones"]}});
+            if (r.contains("id"))
+                sentZones.push_back({{"id", r["id"]}, {"label", r.value("label", std::string())}, {"asset", r.value("asset", std::string())}});
             json out = brief(r.value("unreal", json::object()));
             if (r.contains("notes"))
                 out["notes"] = r["notes"];
@@ -420,6 +469,84 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             }
         }
         return out;
+    });
+
+    // Settlements and zone sets an earlier build sent to this level that this one no longer makes (taken out of the spec,
+    // or renamed): they go whole, with their assets, data layers and lanes.
+    step("export.unreal.dropped", [&]() -> json {
+        const fs::path recordPath = sentRecordPath(project, level, worldLinkPrefix(world));
+        const json before = readRecord(recordPath);
+        std::set<std::string> keysNow;
+        for (const json& s : sentSettlements)
+            keysNow.insert(s["key"].get<std::string>());
+        std::set<std::string> zonesNow;
+        for (const json& z : sentZones)
+            zonesNow.insert(z["id"].get<std::string>());
+        json kept = json::array(), keptZones = json::array();
+        json settlements = json::array(), zoneSets = json::array();
+        for (const json& s : before.value("settlements", json::array()))
+        {
+            const std::string key = s.value("key", std::string());
+            // A settlement still in the spec whose send failed this time stays: the level may hold it still.
+            if (key.empty() || keysNow.contains(key) || settlementNames.contains(s.value("name", std::string())))
+            {
+                if (!key.empty() && !keysNow.contains(key))
+                    kept.push_back(s);
+                continue;
+            }
+            json e = {{"key", key}};
+            try
+            {
+                const json r = runCmd("settlementRemoveFromUnreal", {{"key", key}});
+                e["removed"] = brief(r);
+                if (r.contains("errors"))
+                {
+                    kept.push_back(s);
+                    failures.push_back({{"step", "dropped"}, {"settlement", key}, {"error", r["errors"]}});
+                }
+            }
+            catch (const std::exception& ex)
+            {
+                e["error"] = ex.what();
+                kept.push_back(s);
+                failures.push_back({{"step", "dropped"}, {"settlement", key}, {"error", ex.what()}});
+            }
+            settlements.push_back(e);
+        }
+        const bool zoneSetBuilt = built.contains("zones") && built["zones"].is_string();
+        for (const json& z : before.value("zones", json::array()))
+        {
+            const std::string id = z.value("id", std::string());
+            if (id.empty() || zonesNow.contains(id))
+                continue;
+            if (zoneSetBuilt && zonesNow.empty())
+            {
+                // The set was built but its send failed: it stays until a send says otherwise.
+                keptZones.push_back(z);
+                continue;
+            }
+            json e = {{"id", id}, {"label", z.value("label", std::string())}};
+            try
+            {
+                e["removed"] = brief(runCmd("zoneRemoveFromUnreal", {{"id", id}, {"label", z.value("label", std::string())}, {"asset", z.value("asset", std::string("/Game/Lila/Zones"))}})["unreal"]);
+            }
+            catch (const std::exception& ex)
+            {
+                e["error"] = ex.what();
+                keptZones.push_back(z);
+                failures.push_back({{"step", "dropped"}, {"zones", id}, {"error", ex.what()}});
+            }
+            zoneSets.push_back(e);
+        }
+        json record = {{"format", "lila.world.sent"}, {"version", 1}, {"world", world}, {"settlements", sentSettlements}, {"zones", sentZones}};
+        for (const json& s : kept)
+            record["settlements"].push_back(s);
+        for (const json& z : keptZones)
+            record["zones"].push_back(z);
+        std::error_code ec;
+        fs::create_directories(recordPath.parent_path(), ec);
+        std::ofstream(recordPath, std::ios::binary) << record.dump(1);
+        return {{"settlements", settlements}, {"zoneSets", zoneSets}, {"record", recordPath.generic_string()}};
     });
 
     report["groupsSent"] = keys.size();

@@ -15,6 +15,7 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -49,6 +50,11 @@ struct FakeLevel
     std::map<std::string, std::string> slotTypes; // slot id -> type
     std::string landscapeHash;
     int imports = 0;
+    std::set<std::string> cells;      // "<settlement key>/<cell>"
+    std::set<std::string> zoneGraphs; // settlement keys holding lanes
+    std::set<std::string> splines;    // spline ids
+    std::map<std::string, std::string> zoneSets; // id -> label
+    std::set<std::string> zoneDataDeleted;      // labels whose ZD_ asset went
 
     std::optional<json> handle(const json& req)
     {
@@ -58,7 +64,7 @@ struct FakeLevel
         if (method == "hello")
             return FakeServer::reply(req, {{"project", "TestGame"},
                                            {"features", {"progress", "placements", "placementHashes", "levelInfo", "landscape", "zones", "buildings",
-                                                         "buildingInteriors", "slots"}}});
+                                                         "buildingInteriors", "slots", "splines", "settlement", "settlementCells"}}});
         if (method == "levelInfo")
             return FakeServer::reply(req, {{"level", "/Game/Test/World"}, {"partitioned", false}});
         if (method == "setLandscape")
@@ -115,7 +121,54 @@ struct FakeLevel
             return FakeServer::reply(req, {{"rows", slotRows.size()}});
         }
         if (method == "setZones")
+        {
+            zoneSets[p["id"].get<std::string>()] = p.value("label", std::string());
             return FakeServer::reply(req, {{"volumes", 1}, {"created", 0}, {"updated", 0}, {"unchanged", 1}, {"removed", 0}});
+        }
+        if (method == "removeZones")
+        {
+            const bool had = zoneSets.erase(p["id"].get<std::string>()) > 0;
+            if (had && !p.value("label", std::string()).empty())
+                zoneDataDeleted.insert(p["label"].get<std::string>());
+            return FakeServer::reply(req, {{"removed", had ? 1 : 0}, {"dataLayers", 0}, {"zoneData", had}});
+        }
+        if (method == "setSettlementCell")
+        {
+            cells.insert(p["id"].get<std::string>() + "/" + p["cell"].get<std::string>());
+            return FakeServer::reply(req, {{"asset", p["asset"]}, {"spawned", true}});
+        }
+        if (method == "removeSettlementCells")
+        {
+            const std::string pre = p["id"].get<std::string>() + "/";
+            int removed = 0;
+            for (auto it = cells.begin(); it != cells.end();)
+            {
+                bool gone = it->starts_with(pre);
+                if (gone && p.contains("cells"))
+                    gone = std::find(p["cells"].begin(), p["cells"].end(), json(it->substr(pre.size()))) != p["cells"].end();
+                if (gone)
+                    ++removed, it = cells.erase(it);
+                else
+                    ++it;
+            }
+            return FakeServer::reply(req, {{"removed", removed}});
+        }
+        if (method == "setZoneGraph")
+        {
+            zoneGraphs.insert(p["id"].get<std::string>());
+            return FakeServer::reply(req, {{"actor", "Lanes"}, {"shapes", 1}, {"profiles", 1}, {"warnings", json::array()}});
+        }
+        if (method == "removeSettlement")
+            return FakeServer::reply(req, {{"removed", zoneGraphs.erase(p["id"].get<std::string>()) > 0}});
+        if (method == "setSpline")
+        {
+            splines.insert(p["id"].get<std::string>());
+            return FakeServer::reply(req, {{"actor", p.value("label", std::string())}});
+        }
+        if (method == "removeSpline")
+            return FakeServer::reply(req, {{"removed", splines.erase(p["id"].get<std::string>()) > 0}});
+        if (method == "deleteAssets")
+            return FakeServer::reply(req, {{"deleted", 0}, {"missing", p["paths"]}});
         return FakeServer::reply(req, json::object());
     }
 };
@@ -268,6 +321,81 @@ TEST_CASE("world: Unreal export sends a rebuild's changes only and removes what 
         for (const auto& [k, v] : level.groups)
             CHECK_MESSAGE(k.starts_with(prefix), k);
     }
+
+    lila::link::unregisterExporter("fbx:instanceSource");
+    lila::link::Link::get().disconnect();
+    fs::remove_all(cache);
+}
+
+TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the Unreal level whole")
+{
+    loadPackages();
+    if (!lila::ops::find("unrealPlaceInstances"))
+        lila::link::registerCommands();
+    lila::link::registerExporter("fbx:instanceSource", [](const std::vector<lila::scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    run("newScene");
+    const fs::path cache = fs::temp_directory_path() / "lila_world_unreal_drop";
+    fs::remove_all(cache);
+    lila::PrefStore::get().set("unreal", "/cacheDir", cache.generic_string());
+    FakeLevel level;
+    FakeServer server([&](const json& req) { return level.handle(req); });
+    lila::link::Link::ConnectOptions o;
+    o.port = server.port();
+    lila::link::Link::get().connect(o);
+
+    json s = spec(false, "");
+    s["settlements"] = json::parse(R"([{"name": "Pueblo", "create": {"profile": "usTown", "seed": 2,
+        "outline": [[-30000, -30000], [10000, -30000], [10000, 10000], [-30000, 10000]]}}])");
+    const json r1 = run("worldBuild", {{"spec", s}, {"folder", (cache / "w1").generic_string()}});
+    INFO(failedSteps(r1));
+    REQUIRE(r1.value("failed", json()).is_null());
+    std::string key;
+    {
+        std::scoped_lock lock(level.m);
+        REQUIRE(level.zoneGraphs.size() == 1);
+        key = *level.zoneGraphs.begin();
+        CHECK_FALSE(level.cells.empty());
+        CHECK(level.zoneSets.size() == 1);
+        CHECK(std::any_of(level.splines.begin(), level.splines.end(), [&](const std::string& id) { return id.starts_with(key + "/"); }));
+    }
+    // Rebuilt unchanged: nothing dropped.
+    const json r2 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w2").generic_string()}});
+    INFO(failedSteps(r2));
+    REQUIRE(r2.value("failed", json()).is_null());
+    const json kept = stepResult(r2, "export.unreal.dropped")["result"];
+    CHECK(kept["settlements"].empty());
+    CHECK(kept["zoneSets"].empty());
+
+    // Rebuilt without the settlement and without zones: every cell, lane, spline and placement of the settlement goes,
+    // and the zone set with its zone data.
+    s.erase("settlements");
+    s.erase("zones");
+    const json r3 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w3").generic_string()}});
+    INFO(failedSteps(r3));
+    REQUIRE(r3.value("failed", json()).is_null());
+    const json dropped = stepResult(r3, "export.unreal.dropped")["result"];
+    INFO(dropped.dump());
+    REQUIRE(dropped["settlements"].size() == 1);
+    CHECK(dropped["settlements"][0]["key"] == key);
+    CHECK_FALSE(dropped["settlements"][0].contains("error"));
+    REQUIRE(dropped["zoneSets"].size() == 1);
+    {
+        std::scoped_lock lock(level.m);
+        CHECK(level.zoneGraphs.empty());
+        CHECK(level.cells.empty());
+        CHECK(std::none_of(level.splines.begin(), level.splines.end(), [&](const std::string& id) { return id.starts_with(key + "/"); }));
+        CHECK(std::none_of(level.groups.begin(), level.groups.end(), [&](const auto& g) { return g.first.starts_with(key + "/"); }));
+        CHECK(level.zoneSets.empty());
+        CHECK(level.zoneDataDeleted.size() == 1);
+    }
+    // The record no longer lists them, so the next rebuild has nothing to drop.
+    const json r4 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w4").generic_string()}});
+    REQUIRE(r4.value("failed", json()).is_null());
+    CHECK(stepResult(r4, "export.unreal.dropped")["result"]["settlements"].empty());
+    CHECK(stepResult(r4, "export.unreal.dropped")["result"]["zoneSets"].empty());
 
     lila::link::unregisterExporter("fbx:instanceSource");
     lila::link::Link::get().disconnect();

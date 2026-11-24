@@ -1,9 +1,12 @@
 #include "LilaLinkZones.h"
 
 #include "LilaLinkLog.h"
+#include "LilaLinkPlacements.h"
 #include "LilaZone.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
+#include "Engine/Level.h"
 #include "AssetToolsModule.h"
 #include "BSPOps.h"
 #include "Components/BrushComponent.h"
@@ -307,6 +310,24 @@ UDataLayerInstance* ZoneDataLayer(UWorld* World, const FString& Folder, const FS
 	return Instance;
 }
 
+/** The data layers made under Folder/DataLayers (Lila's own) that these volumes are on. */
+TArray<const UDataLayerAsset*> LilaDataLayersOf(const TArray<AActor*>& Actors, const FString& Folder)
+{
+	const FString Prefix = Folder / TEXT("DataLayers/");
+	TArray<const UDataLayerAsset*> Out;
+	for (const AActor* Actor : Actors)
+	{
+		for (const UDataLayerAsset* Asset : Actor->GetDataLayerAssets())
+		{
+			if (Asset && Asset->GetPathName().StartsWith(Prefix))
+			{
+				Out.AddUnique(Asset);
+			}
+		}
+	}
+	return Out;
+}
+
 TSharedPtr<FJsonValue> SetZones(const TSharedPtr<FJsonObject>& Params, FString& OutError)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkZones::SetZones);
@@ -500,13 +521,22 @@ TSharedPtr<FJsonValue> SetZones(const TSharedPtr<FJsonObject>& Params, FString& 
 	Asset->MarkPackageDirty();
 
 	int32 Removed = 0;
+	TArray<AActor*> Gone;
 	for (const auto& [Key, Volume] : Existing)
 	{
 		if (!Sent.Contains(Key) && IsValid(Volume))
 		{
-			Removed += World->EditorDestroyActor(Volume, true) ? 1 : 0;
+			Gone.Add(Volume);
 		}
 	}
+	const TArray<const UDataLayerAsset*> GoneLayers = LilaDataLayersOf(Gone, AssetFolder);
+	for (AActor* Volume : Gone)
+	{
+		Removed += World->EditorDestroyActor(Volume, true) ? 1 : 0;
+	}
+	// A layer whose last zone went takes its data layer with it.
+	TArray<FString> Errors;
+	const int32 LayersRemoved = GoneLayers.IsEmpty() ? 0 : LilaLink::DeleteUnusedDataLayers(World, GoneLayers, Errors);
 
 	TSharedRef<FJsonObject> DataLayers = MakeShared<FJsonObject>();
 	if (bDataLayers)
@@ -537,6 +567,11 @@ TSharedPtr<FJsonValue> SetZones(const TSharedPtr<FJsonObject>& Params, FString& 
 	Out->SetNumberField(TEXT("removed"), Removed);
 	Out->SetStringField(TEXT("asset"), Asset->GetPathName());
 	Out->SetObjectField(TEXT("dataLayers"), DataLayers);
+	Out->SetNumberField(TEXT("dataLayersRemoved"), LayersRemoved);
+	if (!Errors.IsEmpty())
+	{
+		Out->SetStringField(TEXT("warning"), Errors[0]);
+	}
 	return MakeShared<FJsonValueObject>(Out);
 }
 
@@ -556,6 +591,9 @@ TSharedPtr<FJsonValue> RemoveZones(const TSharedPtr<FJsonObject>& Params, FStrin
 		OutError = TEXT("removeZones: no editor world");
 		return nullptr;
 	}
+	FString Label, AssetFolder = TEXT("/Game/Lila/Zones");
+	Params->TryGetStringField(TEXT("label"), Label);
+	Params->TryGetStringField(TEXT("asset"), AssetFolder);
 	FScopedTransaction Transaction(NSLOCTEXT("LilaLink", "RemoveZones", "Lila: Remove Zones"));
 	const FName Set = SetTag(Id);
 	TArray<AActor*> Ours;
@@ -566,13 +604,64 @@ TSharedPtr<FJsonValue> RemoveZones(const TSharedPtr<FJsonObject>& Params, FStrin
 			Ours.Add(*It);
 		}
 	}
+	const TArray<const UDataLayerAsset*> Layers = LilaDataLayersOf(Ours, AssetFolder);
 	int32 Removed = 0;
 	for (AActor* Actor : Ours)
 	{
 		Removed += World->EditorDestroyActor(Actor, true) ? 1 : 0;
 	}
+	TArray<FString> Errors;
+	const int32 LayersRemoved = Layers.IsEmpty() ? 0 : LilaLink::DeleteUnusedDataLayers(World, Layers, Errors);
+	// The set's zone data asset, which game code queries, goes with its volumes, unless another level holds zone
+	// volumes: sends to several levels share it.
+	bool bAssetDeleted = false;
+	FString OtherLevel;
+	{
+		FARFilter Filter;
+		Filter.ClassPaths.Add(ALilaZoneVolume::StaticClass()->GetClassPathName());
+		Filter.bRecursiveClasses = true;
+		TArray<FAssetData> Volumes;
+		IAssetRegistry::GetChecked().GetAssets(Filter, Volumes);
+		const TArray<FString> Own = ULevel::GetExternalActorsPaths(World->GetPackage()->GetName());
+		for (const FAssetData& Data : Volumes)
+		{
+			const FString Package = Data.PackageName.ToString();
+			if (!Own.ContainsByPredicate([&Package](const FString& P) { return Package.StartsWith(P + TEXT("/")); }) && Package != World->GetPackage()->GetName())
+			{
+				OtherLevel = Package;
+				break;
+			}
+		}
+	}
+	if (!OtherLevel.IsEmpty())
+	{
+		Errors.Add(TEXT("zone data kept: another level holds zone volumes (") + OtherLevel + TEXT(")"));
+	}
+	else if (!Label.IsEmpty())
+	{
+		const FString AssetName = ObjectTools::SanitizeObjectName(TEXT("ZD_") + Label);
+		const FString PackageName = AssetFolder / AssetName;
+		if (FPackageName::DoesPackageExist(PackageName) || FindPackage(nullptr, *PackageName))
+		{
+			if (UObject* Asset = LoadObject<UObject>(nullptr, *(PackageName + TEXT(".") + AssetName), nullptr, LOAD_NoWarn | LOAD_Quiet))
+			{
+				bAssetDeleted = ObjectTools::ForceDeleteObjects({Asset}, /*ShowConfirmation=*/false) > 0;
+				if (!bAssetDeleted)
+				{
+					Errors.Add(PackageName + TEXT(" could not be deleted"));
+				}
+			}
+		}
+	}
+	UE_LOG(LogLilaLink, Log, TEXT("removeZones: %d volumes, %d data layers, zone data %s"), Removed, LayersRemoved, bAssetDeleted ? TEXT("deleted") : TEXT("kept"));
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), Removed);
+	Out->SetNumberField(TEXT("dataLayers"), LayersRemoved);
+	Out->SetBoolField(TEXT("zoneData"), bAssetDeleted);
+	if (!Errors.IsEmpty())
+	{
+		Out->SetStringField(TEXT("warning"), FString::Join(Errors, TEXT("; ")));
+	}
 	return MakeShared<FJsonValueObject>(Out);
 }
 } // namespace

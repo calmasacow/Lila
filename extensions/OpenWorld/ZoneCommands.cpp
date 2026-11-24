@@ -1794,12 +1794,54 @@ void registerZoneCommands(ext::Context& ctx)
             link::RpcResult res = client->call("setZones", params, int(std::clamp(a.get<double>("timeout", 120.0), 1.0, 3600.0) * 1000.0));
             if (!res.ok)
                 throw CommandError(std::string(cmd) + ": " + res.error);
-            json out = {{"set", r.path}, {"unreal", res.result}};
+            json out = {{"set", r.path}, {"id", params["id"]}, {"label", params["label"]}, {"asset", params["asset"]}, {"unreal", res.result}};
             if (!gr.valid())
                 out["notes"] = {"the zone set has no ground; volumes span heights around 0"};
             return out;
         },
         .examples = {"zoneSendToUnreal(height=80000)"},
+    });
+
+    ctx.registerCommand({
+        .name = "zoneRemoveFromUnreal",
+        .doc = "Removes a zone set's send from the open Unreal level: its volumes, its zone data asset, and the data layers "
+               "(with their assets) no other actor uses. Give the set, or id= and label= for one no longer in the scene "
+               "(zoneSendToUnreal returns both). Returns what Unreal removed.",
+        .positionalDoc = "zone set",
+        .flags = {setFlag(),
+                  {"id", "id", T::String, nullptr, "Unreal id of a zone set no longer in the scene (zoneSendToUnreal's id)."},
+                  {"label", "lb", T::String, nullptr, "With id: the set's label (names its ZD_ asset)."},
+                  {"asset", "as", T::String, "/Game/Lila/Zones", "Content folder its sends used."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+            const char* cmd = "zoneRemoveFromUnreal";
+            std::string id = a.get<std::string>("id", ""), label = a.get<std::string>("label", "");
+            if (id.empty())
+            {
+                const SetRef r = findSet(setName(a), cmd, false);
+                id = linkKey(*Graph::current().node(r.id));
+                label = leafName(r.path);
+            }
+            else if (label.empty())
+                throw CommandError(std::string(cmd) + ": id= needs label= (the set's name), which names its zone data asset");
+            try
+            {
+                link::Link::get().ensureConnected();
+            }
+            catch (const std::exception& e)
+            {
+                throw CommandError(std::string(cmd) + ": " + e.what());
+            }
+            std::shared_ptr<link::RpcClient> client = link::Link::get().client();
+            if (!client)
+                throw CommandError(std::string(cmd) + ": not connected");
+            link::RpcResult res = client->call("removeZones", {{"id", id}, {"label", label}, {"asset", a.get<std::string>("asset", "/Game/Lila/Zones")}}, 120000);
+            if (!res.ok)
+                throw CommandError(std::string(cmd) + ": " + res.error);
+            return {{"id", id}, {"label", label}, {"unreal", res.result}};
+        },
+        .examples = {"zoneRemoveFromUnreal('Zones')", "zoneRemoveFromUnreal(id='w1a2b3c4d5e6f708192a3', label='Zones')"},
     });
 
     mcp::Server& server = mcp::Server::get();

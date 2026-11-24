@@ -790,6 +790,101 @@ json readJsonFile(const fs::path& path)
 /** The cell named at the end of an item key ("<key>/pcg/<x>_<z>"). */
 std::string cellNameOf(const std::string& itemKey) { return itemKey.substr(itemKey.find_last_of('/') + 1); }
 
+/** One manifest per settlement, Unreal project and level: what was last sent there, for the diff. */
+fs::path manifestPathFor(const std::string& key)
+{
+    std::string project = link::Link::get().connected() ? link::Link::get().status().value("project", std::string()) : std::string();
+    if (const std::string level = openLevel(); !level.empty())
+        project += "_" + level.substr(level.rfind('/') + 1);
+    return link::cacheDir() / "settlement" / ("sync_" + assetName(project) + "_" + assetName(key) + ".json");
+}
+
+/** The label a settlement's Unreal actors and assets are named by: the key's last path part. */
+std::string labelOf(const std::string& key)
+{
+    const size_t slash = key.find_last_of("|/");
+    return slash == std::string::npos ? key : key.substr(slash + 1);
+}
+
+/**
+ * Everything a settlement sent to the open level goes: placements and mesh cells (their meshes too), road, path and
+ * level splines, PCG cells with their data assets, and its ZoneGraph lanes. Works from the Unreal key alone, so a
+ * settlement already deleted in Lila can be removed; the manifest of that key is deleted after.
+ */
+json removeFromUnreal(const Args& a)
+{
+    LILA_ZONE();
+
+    const char* cmd = "settlementRemoveFromUnreal";
+    std::string key = a.get<std::string>("key", "");
+    if (key.empty())
+    {
+        const std::vector<std::string> names = a.objects();
+        if (names.size() != 1)
+            throw CommandError(std::string(cmd) + ": give one settlement, or key= (the Unreal key of one no longer in the scene)");
+        const Rebuilt r = rebuildSettlement(scene::Graph::current(), names[0], cmd);
+        key = r.mesh.empty() ? r.modifier : r.mesh;
+    }
+    const std::string label = labelOf(key);
+    const std::string folder = a.get<std::string>("folder", "/Game/Lila/Settlement");
+    const std::string cellFolder = folder + "/" + assetName(label);
+    std::shared_ptr<link::RpcClient> c = client(cmd, {});
+    const json have = link::Link::get().status().value("features", json::array());
+    auto has = [&](const char* f) { return have.is_array() && std::ranges::find(have, json(f)) != have.end(); };
+    const fs::path manifestPath = manifestPathFor(key);
+    const json previous = readJsonFile(manifestPath);
+    const json before = previous.is_object() ? previous.value("items", json::object()) : json::object();
+
+    json out = {{"key", key}, {"manifest", previous.is_object() ? "found" : "none: removed by the key's tags only"}};
+    json errors = json::array();
+    auto attempt = [&](const char* what, const std::function<json()>& f) {
+        try
+        {
+            out[what] = f();
+        }
+        catch (const std::exception& e)
+        {
+            errors.push_back(std::string(what) + ": " + e.what());
+        }
+    };
+    // Mesh cells first, so their meshes go with them; then every other group of the key by prefix.
+    json meshGroups = json::array();
+    for (const auto& [k, v] : before.items())
+        if (const std::string kind = v.value("kind", std::string()); kind == "massing" || (kind == "roads" && k.find("/roads/") != std::string::npos))
+            meshGroups.push_back(k);
+    if (!meshGroups.empty())
+        attempt("meshCells", [&] { return call(*c, "removePlacements", {{"groups", meshGroups}, {"deleteMeshes", true}, {"meshFolder", cellFolder}}, cmd); });
+    attempt("placements", [&] { return call(*c, "removePlacements", {{"prefixes", {key + "/"}}}, cmd); });
+    attempt("splines", [&] {
+        json r = json::object();
+        for (const char* s : {"/roads", "/paths", "/levels"})
+            r[s + 1] = call(*c, "removeSpline", {{"id", key + s}}, cmd).value("removed", false);
+        return r;
+    });
+    if (has("settlementCells"))
+        attempt("pcgCells", [&] { return call(*c, "removeSettlementCells", {{"id", key}, {"folder", cellFolder}}, cmd); });
+    if (has("settlement"))
+        attempt("zoneGraph", [&] { return call(*c, "removeSettlement", {{"id", key}}, cmd); });
+    // Settlement-wide assets: the unpartitioned PCG data and Mass traffic's data assets (named after the lanes actor).
+    const std::string lanes = assetName(label + "_Lanes");
+    json assets = json::array({folder + "/PCG_" + assetName(label)});
+    for (const char* t : {"_TrafficLightTypes", "_TrafficLights", "_ParkingSpaces"})
+        assets.push_back(folder + "/DA_" + lanes + t);
+    attempt("assets", [&] {
+        json r = call(*c, "deleteAssets", {{"paths", assets}}, cmd);
+        r.erase("missing");
+        return r;
+    });
+    if (errors.empty())
+    {
+        std::error_code ec;
+        fs::remove(manifestPath, ec);
+    }
+    else
+        out["errors"] = errors;
+    return out;
+}
+
 json sendToUnreal(const Args& a)
 {
     LILA_ZONE();
@@ -843,17 +938,13 @@ json sendToUnreal(const Args& a)
     const std::vector<SyncItem> items = syncItems(r.layout, net, cells, o, roadHashes);
     const std::map<std::string, uint64_t> elements = elementHashes(r.layout, net);
 
-    // One manifest per settlement, Unreal project and level: what was last sent there, for the diff.
-    std::string project = link::Link::get().connected() ? link::Link::get().status().value("project", std::string()) : std::string();
-    if (const std::string level = openLevel(); !level.empty())
-        project += "_" + level.substr(level.rfind('/') + 1);
-    const fs::path manifestPath = link::cacheDir() / "settlement" / ("sync_" + assetName(project) + "_" + assetName(key) + ".json");
+    const fs::path manifestPath = manifestPathFor(key);
     const json previous = a.get<bool>("resend", false) ? json() : readJsonFile(manifestPath);
     const SyncDiff d = diffSync(previous, items, elements);
     json kinds = json::object();
     for (const SyncItem& i : items)
         kinds[i.kind] = kinds.value(i.kind, 0) + 1;
-    json out = {{"cells", cells.size()}, {"cellSize", cellSize}, {"items", items.size()}, {"kinds", kinds}, {"diff", toJson(d)}};
+    json out = {{"key", key}, {"cells", cells.size()}, {"cellSize", cellSize}, {"items", items.size()}, {"kinds", kinds}, {"diff", toJson(d)}};
     if (a.get<bool>("dryRun", false))
     {
         out["dryRun"] = true;
@@ -1099,6 +1190,21 @@ void registerUnrealCommands(ext::Context& ctx)
         .examples = {"settlementSendToUnreal('Settlement', roads='landscape', pcg=True, zoneGraph=True)",
                      "settlementSendToUnreal('Settlement', roads='meshes', cell=12800, pcgGraph='/Game/PCG/PCG_Buildings')",
                      "settlementSendToUnreal('Settlement', dryRun=True)['diff']"},
+    });
+
+    ctx.registerCommand({
+        .name = "settlementRemoveFromUnreal",
+        .doc = "Removes everything a settlement sent to the open Unreal level: its placements and mesh cells (with their "
+               "meshes), road, path and level splines, PCG cells with their data assets, its ZoneGraph lanes and Mass traffic "
+               "data. Give the settlement, or key= for one already deleted in Lila (the Unreal key its sends used, the "
+               "settlement mesh's name). Its sync manifest is deleted, so a later send sends everything again. Returns what "
+               "Unreal removed per kind and any errors.",
+        .positionalDoc = "settlement mesh or its modifier (or key=)",
+        .flags = {{"key", "k", Arg::String, nullptr, "Unreal key of a settlement no longer in the scene (its mesh's name)."},
+                  {"folder", "f", Arg::String, "/Game/Lila/Settlement", "Content folder its sends used."}},
+        .undoable = false,
+        .run = [](const Args& a) -> json { return removeFromUnreal(a); },
+        .examples = {"settlementRemoveFromUnreal('Settlement')", "settlementRemoveFromUnreal(key='Puerto')"},
     });
 
     ctx.registerCommand({
