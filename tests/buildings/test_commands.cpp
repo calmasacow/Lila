@@ -265,6 +265,15 @@ TEST_CASE("buildings commands: the OSM fixture town through Settlement's buildin
     // Change a style by district and paint a bay through the route's buildings.
     const json st = run("buildingStyle", {{"all", true}, {"style", "malecon"}});
     CHECK(st["count"] == envelopes);
+
+    // A settlement edit rebuilds its buildings as a step of their own: none stale after, one undo shows the old ones.
+    run("settlementAddExclusion", {{"args", {mesh}}, {"polygon", {{-15000, -15000}, {15000, -15000}, {15000, 15000}, {-15000, 15000}}}, {"name", "Park"}});
+    CHECK(run("buildingRefresh", {{"dryRun", true}})["stale"].empty());
+    const int fewer = run("settlementEnvelopes", {{"args", {mesh}}, {"limit", 0}})["count"];
+    CHECK(fewer < envelopes);
+    CHECK(run("undoInfo")["undo"] == "buildingRefresh");
+    run("undo");
+    CHECK(run("buildingRefresh", {{"dryRun", true}})["stale"].size() == 1);
 }
 
 TEST_CASE("buildings commands: site kit envelopes (no lot, a stable id each) make one building each")

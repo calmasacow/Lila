@@ -83,6 +83,9 @@ std::string& currentBuilding();
 void refreshSections();
 void registerAgent(lila::ext::Context& ctx);
 void registerUnreal(lila::ext::Context& ctx);
+/** Rebuilds a settlement's stale buildings after commands that edit it. */
+void registerLiveRefresh(lila::ext::Context& ctx);
+void unregisterLiveRefresh();
 
 /** A bay under a ray: its building, path, kind, corners and the parts in it (window, balcony, awning, ac...). */
 struct BayHit

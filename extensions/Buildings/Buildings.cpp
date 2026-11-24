@@ -45,5 +45,8 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     buildings::registerUi(ctx);
     buildings::registerAgent(ctx);
     buildings::registerUnreal(ctx);
+    buildings::registerLiveRefresh(ctx);
     return 0;
 }
+
+LILA_EXTENSION_EXPORT void lilaExtensionUninit(lila::ext::Context&) { buildings::unregisterLiveRefresh(); }
