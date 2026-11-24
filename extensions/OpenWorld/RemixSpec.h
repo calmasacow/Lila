@@ -146,10 +146,10 @@ struct RemixSpec
     {
         double width = 1500.0;
         /**
-         * Steepest slope (rise over run) a pasted region's seam may have: a region without a seam of its own whose
-         * height step across its edge needs more than width at this slope gets a wider band. 0 keeps width.
+         * Steepest slope (rise over run) left where a pasted region, after levelling, meets the ground round it; its
+         * seam widens to keep under it, up to a quarter of the region. 0 uses kSeamGrade.
          */
-        double maxSlope = 0.35;
+        double maxSlope = kSeamGrade;
         /** Erosion steps re-run in seam bands; 0 off. */
         int erosion = 20;
         /** Detail added in seam bands before erosion, 0 to 1. */

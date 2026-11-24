@@ -455,8 +455,8 @@ json remixSpecSchema()
              {{"width", {{"type", "number"}, {"description", "Blend band cm. Default 1500."}}},
               {"maxSlope",
                {{"type", "number"},
-                {"description", "Steepest seam slope (rise over run) before a pasted region without its own seam gets a wider band. "
-                                "Default 0.35; 0 keeps width."}}},
+                {"description", "Steepest seam slope (rise over run) left where a pasted region meets the ground round it. "
+                                "Default 0.08; 0 uses the default."}}},
               {"erosion", {{"type", "integer"}, {"description", "Erosion steps re-run in seam bands."}}},
               {"detail", {{"type", "number"}}},
               {"roads", {{"type", "boolean"}, {"description", "Reconnect cut roads with terrainRoute, keeping their class."}}},

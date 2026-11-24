@@ -8,9 +8,9 @@
 #include "ops/Command.h"
 #include "scene/Graph.h"
 
+#include <array>
 #include <doctest/doctest.h>
 
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -361,6 +361,7 @@ TEST_CASE("buildings commands: the trim sheet goes to the user's folder without 
     CHECK(r["file"].get<std::string>().find("trim-sheets") != std::string::npos);
     CHECK(std::filesystem::exists(r["file"].get<std::string>()));
     CHECK(count(shipped) == before);
+}
 TEST_CASE("buildings commands: near detail keeps the modules as instances, realize flattens them into the cell mesh")
 {
     loadBuildings();

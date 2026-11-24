@@ -365,6 +365,7 @@ TEST_CASE("site commands: an opened scene's imported real names reach its sites'
     ops::execute("openScene", {{"args", {file.generic_string()}}});
     CHECK(firstLine() != line);
     std::filesystem::remove(file);
+}
 TEST_CASE("site kits: villages find every house a spot along their streets")
 {
     for (const auto& [id, houses, radius] : {std::tuple{"habal", 10, 12000.0}, std::tuple{"noria", 12, 14000.0}, std::tuple{"quelite", 12, 14000.0},
