@@ -518,6 +518,7 @@ TEST_CASE("world: a level deleted and made again under the same path gets everyt
     CHECK_FALSE(same.contains("resentAll"));
     CHECK(same["added"] == 0);
     CHECK(same["changed"] == 0);
+    CHECK_FALSE(stepResult(r2, "export.unreal.dropped")["result"].contains("recordIgnored"));
 
     // Deleted and made again under the same path: every group, cell, spline, lane and zone set arrives again.
     level.recreate();
@@ -529,6 +530,7 @@ TEST_CASE("world: a level deleted and made again under the same path gets everyt
     CHECK(again.value("resentAll", std::string()).find("deleted and made again") != std::string::npos);
     CHECK(again["unchanged"] == 0);
     CHECK(again["removed"] == 0);
+    CHECK(stepResult(r3, "export.unreal.dropped")["result"].contains("recordIgnored"));
     CHECK(stepResult(r3, "export.unreal.terrain")["result"]["unchanged"] == false);
     {
         std::scoped_lock lock(level.m);

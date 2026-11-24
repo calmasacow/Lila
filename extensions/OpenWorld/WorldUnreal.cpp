@@ -179,7 +179,7 @@ std::string fileSafe(const std::string& s)
  */
 fs::path sentRecordPath(const std::string& project, const std::string& level, const std::string& prefix)
 {
-    return link::cacheDir() / "openworld" / ("sent_" + fileSafe(project) + "_" + fileSafe(level.substr(level.rfind('/') + 1)) + "_" + prefix + ".json");
+    return link::cacheDir() / "openworld" / ("sent_" + fileSafe(project) + "_" + link::levelFileKey(level) + "_" + prefix + ".json");
 }
 
 json readRecord(const fs::path& path)
@@ -282,6 +282,9 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             out["level"] = level.level;
             partitioned = level.partitioned;
             out["partitioned"] = partitioned;
+            if (level.guid.empty())
+                out["levelNote"] = "this LilaLink doesn't report level GUIDs, so a level made again under the same path is taken to hold the last build's "
+                                   "settlements and zones; rebuild the plugin";
         }
         if (!hasFeature(features, "placementHashes"))
             out["note"] = "this LilaLink predates placementHashes: every group is sent again and the world's stale groups can't be found; rebuild the plugin";
@@ -527,7 +530,11 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
     // or renamed): they go whole, with their assets, data layers and lanes.
     step("export.unreal.dropped", [&]() -> json {
         const fs::path recordPath = sentRecordPath(project, level.level, worldLinkPrefix(world));
-        const json before = readRecord(recordPath);
+        json before = readRecord(recordPath);
+        // A record of another level (this one deleted and made again under its path) names nothing this level holds.
+        const std::string ignored = link::levelRecordMismatch(before, level);
+        if (!ignored.empty())
+            before = json::object();
         std::set<std::string> keysNow;
         for (const json& s : sentSettlements)
             keysNow.insert(s["key"].get<std::string>());
@@ -607,10 +614,13 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             record["settlements"].push_back(s);
         for (const json& z : keptZones)
             record["zones"].push_back(z);
+        link::stampLevelRecord(record, level);
         std::error_code ec;
         fs::create_directories(recordPath.parent_path(), ec);
         std::ofstream(recordPath, std::ios::binary) << record.dump(1);
         json out = {{"settlements", settlements}, {"zoneSets", zoneSets}, {"record", recordPath.generic_string()}};
+        if (!ignored.empty())
+            out["recordIgnored"] = "the last build's record was set aside: " + ignored + "; nothing of it is in this level to remove";
         if (!profilesRemoved.empty())
             out["laneProfilesRemoved"] = profilesRemoved;
         if (!configBackups.empty())
