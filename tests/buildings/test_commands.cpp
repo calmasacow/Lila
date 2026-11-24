@@ -314,6 +314,25 @@ TEST_CASE("buildings commands: performance budget")
     CHECK(editMs < 1000.0); // generous; the target is 100 ms, measured and logged
 }
 
+TEST_CASE("buildings commands: near detail keeps the modules as instances, realize flattens them into the cell mesh")
+{
+    loadBuildings();
+    run("newScene");
+    json envs = json::array();
+    for (int k = 0; k < 12; ++k)
+        envs.push_back(envelope(0xa0000 + uint64_t(k), (k % 4) * 1600.0, (k / 4) * 1600.0, 1200, 1100, 3, {"street", "party", "open", "party"},
+                                "colonialCentro", k % 2 ? "shop" : ""));
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Inst"}});
+    REQUIRE(!made["meshes"].empty());
+    const std::string mesh = made["meshes"][0].get<std::string>();
+    const json info = run("buildingInfo", {{"args", {mesh}}});
+    REQUIRE(info["slots"].get<int>() > 0);
+    // The mesh holds the shell only; the modules are drawn and sent as instances.
+    CHECK(run("meshInfo", {{"args", {mesh}}})["faces"].get<int>() == info["faces"].get<int>());
+    run("setAttr", {{"args", {info["modifier"].get<std::string>() + ".realize", true}}});
+    CHECK(run("meshInfo", {{"args", {mesh}}})["faces"].get<int>() > info["faces"].get<int>());
+}
+
 TEST_CASE("buildings commands: acute corners, a tiny edge between two walls and mansion porticos pass buildingCheck")
 {
     loadBuildings();

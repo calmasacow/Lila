@@ -526,6 +526,7 @@ Geometry join(std::span<const GeometryPtr> parts)
             continue;
         if (out.name.empty())
             out.name = g->name;
+        out.keepInstances = out.keepInstances || g->keepInstances;
         if (g->volume)
         {
             if (!out.volume)
