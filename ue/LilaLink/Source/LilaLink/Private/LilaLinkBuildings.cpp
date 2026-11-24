@@ -161,6 +161,19 @@ void Master(UMaterial* Material,UMaterialFunction* Function, TArray<FString>& Ou
 	Material->MarkPackageDirty();
 }
 
+/** A Buildings module slot that takes its building's palette colour: bld_render, bld_trim, bld_roof (Interchange may number them). */
+bool IsModulePaletteSlot(const FString& Slot)
+{
+	for (const TCHAR* Name : {TEXT("bld_render"), TEXT("bld_trim"), TEXT("bld_roof")})
+	{
+		if (Slot.Equals(Name, ESearchCase::IgnoreCase) || (Slot.StartsWith(Name, ESearchCase::IgnoreCase) && Slot.Mid(FCString::Strlen(Name)).StartsWith(TEXT("_"))))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 UMaterialInstanceConstant* InstanceFor(const FString& Name, UMaterialInterface* Parent, TArray<FString>& OutCreated, TArray<FString>& OutWarnings)
 {
 	const FString Path = FString(InstanceFolder) + TEXT("/") + Name + TEXT(".") + Name;
@@ -255,6 +268,9 @@ TSharedPtr<FJsonValue> BuildingMaterials(const TSharedPtr<FJsonObject>& Params, 
 		}
 	}
 	// Shell assets: slots named Bld_<style>_<part><k> take their style's instance, Bld_c<hex> (a given colour) the material.
+	// Module slots bld_render, bld_trim and bld_roof take MI_Bld_Modules: modules are shared across styles and get their
+	// building's palette colour per instance (custom data), which the variation function reads.
+	UMaterialInterface* ModuleInstance = nullptr;
 	const TArray<TSharedPtr<FJsonValue>>* Assets = nullptr;
 	if (Params->TryGetArrayField(TEXT("assets"), Assets))
 	{
@@ -271,6 +287,19 @@ TSharedPtr<FJsonValue> BuildingMaterials(const TSharedPtr<FJsonObject>& Params, 
 			for (int32 K = 0; K < Slots.Num(); ++K)
 			{
 				const FString Slot = Slots[K].MaterialSlotName.ToString();
+				if (IsModulePaletteSlot(Slot))
+				{
+					if (!ModuleInstance)
+					{
+						ModuleInstance = InstanceFor(TEXT("MI_Bld_Modules"), Pair.Material, Created, Warnings);
+					}
+					if (ModuleInstance && Slots[K].MaterialInterface != ModuleInstance)
+					{
+						Slots[K].MaterialInterface = ModuleInstance;
+						bChanged = true;
+					}
+					continue;
+				}
 				if (!Slot.StartsWith(TEXT("Bld_"), ESearchCase::CaseSensitive))
 				{
 					continue;
