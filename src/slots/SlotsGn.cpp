@@ -88,7 +88,6 @@ gn::GeometryPtr applyToInstances(const gn::GeometryPtr& in, NodeId publisher, co
     if (!in || !in->instances)
         return in;
     const gn::Instances& src = *in->instances;
-    StatePtr st = state();
     const std::string owner = spec.owner.empty() ? "unowned/" + std::to_string(publisher) : spec.owner;
     std::span<const int32_t> typeIdx = spec.typeAttribute.empty() ? std::span<const int32_t>{} : src.attrs.get<int32_t>(spec.typeAttribute);
 
@@ -109,6 +108,18 @@ gn::GeometryPtr applyToInstances(const gn::GeometryPtr& in, NodeId publisher, co
         s.payload = spec.defaults;
         slots.push_back(std::move(s));
     }
+    return applySlots(in, publisher, std::move(slots));
+}
+
+gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vector<Slot> slots)
+{
+    if (!in || !in->instances)
+        return in;
+    const gn::Instances& src = *in->instances;
+    StatePtr st = state();
+    slots.resize(src.size());
+    for (size_t k = 0; k < src.size(); ++k)
+        slots[k].transform = src.transforms[k];
     if (publisher != 0)
         publish(publisher, slots);
 
