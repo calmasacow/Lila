@@ -10,8 +10,9 @@ lila_add_extension(lila_openworld_extension ID OpenWorld MANIFEST extension.json
     SOURCES OpenWorld.cpp OpenWorld.h RemixNode.h OsmDoc.cpp OsmDoc.h RemixSpec.cpp RemixSpec.h Warp.cpp Warp.h Remix.cpp Remix.h RemixWork.h
             Features.cpp Repair.cpp Check.cpp RemixNode.cpp RemixCommands.cpp RemixUi.cpp Sites.h SitesKit.h SitesLayout.cpp SitesCoast.cpp SitesLand.cpp SitesCompound.cpp SitesNode.h SitesNode.cpp SitesCommands.cpp SitesUi.cpp
             Zones.cpp Zones.h ZoneScene.h ZoneCommands.cpp ZoneUi.cpp
+            World.h WorldScene.h WorldSpec.cpp WorldCommands.cpp WorldCheck.cpp WorldMemory.cpp WorldUi.cpp
             ${_terrain_sources} ${_clipper}/clipper.engine.cpp)
-set_source_files_properties(${_terrain_sources} ${_clipper}/clipper.engine.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+set_source_files_properties(${_terrain_sources} ${_clipper}/clipper.engine.cpp WorldMemory.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(lila_openworld_extension PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${_terrain} ${_clipper}/include)
 find_package(miniz CONFIG REQUIRED)
 target_link_libraries(lila_openworld_extension PRIVATE miniz::miniz)

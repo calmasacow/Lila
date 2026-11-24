@@ -1,0 +1,297 @@
+// The world spec's schema and checks, file paths made absolute against the spec's folder, and OSM clipped to one
+// settlement's area. Pure: no scene access, so tests drive it directly.
+
+#include "World.h"
+
+#include <algorithm>
+#include <filesystem>
+#include <set>
+#include <stdexcept>
+#include <unordered_set>
+
+namespace openworld::world
+{
+namespace
+{
+namespace fs = std::filesystem;
+
+json obj(const char* description, json properties = json::object())
+{
+    json o = {{"type", "object"}, {"description", description}};
+    if (!properties.empty())
+        o["properties"] = std::move(properties);
+    return o;
+}
+json str(const char* description) { return {{"type", "string"}, {"description", description}}; }
+json num(const char* description) { return {{"type", "number"}, {"description", description}}; }
+json boolean(const char* description, bool def) { return {{"type", "boolean"}, {"description", description}, {"default", def}}; }
+json pt2(const char* description) { return {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 2}, {"maxItems", 2}, {"description", description}}; }
+
+const std::set<std::string>& topKeys()
+{
+    static const std::set<std::string> k = {"name", "culture", "seed", "description", "remix", "terrain", "settlements",
+                                            "buildings", "slots", "sites", "zones", "export", "check", "version"};
+    return k;
+}
+
+void need(bool ok, const std::string& what)
+{
+    if (!ok)
+        throw std::runtime_error("world spec: " + what);
+}
+
+void checkArea(const json& a, const std::string& where)
+{
+    need(a.is_array() && a.size() == 4 && std::all_of(a.begin(), a.end(), [](const json& v) { return v.is_number(); }),
+         where + ".area is [x0, z0, x1, z1], cm");
+    need(a[0].get<double>() < a[2].get<double>() && a[1].get<double>() < a[3].get<double>(), where + ".area has x0 < x1 and z0 < z1");
+}
+
+fs::path utf8Path(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
+
+std::string resolved(const std::string& p, const fs::path& dir)
+{
+    if (p.empty() || p == "remix")
+        return p;
+    const fs::path path = utf8Path(p);
+    if (path.is_absolute())
+        return p;
+    std::error_code ec;
+    const fs::path there = dir / path;
+    if (!fs::exists(there, ec))
+        return p;
+    const std::u8string u = there.lexically_normal().generic_u8string();
+    return std::string(u.begin(), u.end());
+}
+} // namespace
+
+const json& worldSpecSchema()
+{
+    static const json s = [] {
+        json settlement = obj(
+            "One settlement: from OSM (osm: 'remix' for the remix's output, or a file) on the world's terrain, else settlementCreate flags (create).",
+            {{"name", str("Name of the settlement's mesh (required, unique).")},
+             {"osm", str("'remix' (the remix's remixed OSM, needs remix) or an OSM file (.osm, Overpass .json, .osm.pbf).")},
+             {"area", {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 4}, {"maxItems", 4},
+                       {"description", "[x0, z0, x1, z1] world cm: only the OSM inside goes to this settlement."}}},
+             {"profile", str("settlementFromOsm profile (usTown, ...); settlementProfiles lists them.")},
+             {"fill", {{"type", "string"}, {"enum", {"sparse", "all", "none"}}, {"description", "Settlement's own lots beside imported buildings."}}},
+             {"coverage", num("Share of a block imported buildings must cover to count as dense.")},
+             {"margin", num("Room round the imported streets, cm.")},
+             {"culture", str("Naming culture; default the world's.")},
+             {"create", obj("settlementCreate flags, for a settlement laid out by Settlement alone (outline, profile, seed, ...).")},
+             {"buildings", {{"description", "true, or {style, cell, culture, districts: {district name: style}}: build it with the Buildings generator."}}},
+             {"furniture", {{"description", "true or settlementFurniture flags: street furniture as slots."}}}});
+        json site = obj("A site kit: siteCreate's spec (siteInfo()['spec']) plus buildings.",
+                        {{"kind", str("port, cruise, lighthouse, cemetery, airstrip, farm, village, compound, island (siteKinds).")},
+                         {"id", str("Stable site id (slot ids live under site:<id>).")},
+                         {"name", str("Fictional name; default generated.")},
+                         {"culture", str("Naming culture; default the world's.")},
+                         {"seed", {{"type", "integer"}}},
+                         {"at", pt2("[x, z] world cm.")},
+                         {"heading", num("Degrees.")},
+                         {"waterLevel", num("cm; default the terrain's sea level.")},
+                         {"params", obj("The kind's settings (siteKinds).")},
+                         {"buildings", boolean("Build its envelopes with the Buildings generator (siteBuildings) instead of greybox massing.", true)}});
+        json out = {
+            {"$schema", "https://json-schema.org/draft/2020-12/schema"},
+            {"title", "Lila world spec"},
+            {"description", "One JSON that builds a whole open-world map: worldBuild(spec=) runs the sections in order (remix, terrain, "
+                            "settlements with their buildings, sites, slots, zones, check, export); worldSpec() reads a built world back. "
+                            "Lengths cm, Y up, positions [x, z]."},
+            {"type", "object"},
+            {"properties",
+             {{"name", str("World name: the world node and default output folder (openworld/world/<name>).")},
+              {"description", str("Free text.")},
+              {"version", {{"type", "integer"}, {"default", 1}}},
+              {"culture", str("Default naming culture (namingCultures) for settlements, sites and zones; default mexican.")},
+              {"seed", {{"type", "integer"}, {"description", "Default seed for sections that take one."}}},
+              {"remix", obj("A World Remix spec (lila://schema/remix-spec). Its terrain is the world's; its remixed OSM feeds settlements with osm: 'remix'.")},
+              {"terrain", obj("A terrain spec (lila://schema/terrain-spec). With a remix, its steps (water, coast, biomes, groundCover, roads, stamps, ...) "
+                              "run on the remix terrain and source is ignored; without one it makes the terrain. Coast and water live here: "
+                              "water {sea, rivers, lakes} and coast {bathymetry, masks, mangroves, reservoirs, channels, routes, lanes, airstrips, stash}.")},
+              {"settlements", {{"type", "array"}, {"items", settlement}}},
+              {"buildings", obj("Buildings across the world.",
+                                {{"edits", obj("{group name: {building id: edit}}: Buildings edits (style, floors, bays, palette, enterable, ...) by "
+                                               "building id, seeded into each group before it builds, so they survive a rebuild.")},
+                                 {"styles", {{"type", "array"},
+                                             {"description", "buildingStyle calls run after everything is built: {style, polygon} or {style, building}."},
+                                             {"items", {{"type", "object"}}}}}})},
+              {"slots", obj("Slot swap rules, per-slot overrides and pins (lila.slots).",
+                            {{"rules", {{"type", "array"}, {"description", "Rules as slotRule(rule=) takes them, applied in order."}, {"items", {{"type", "object"}}}}},
+                             {"overrides", obj("{slot id: payload}.")},
+                             {"pins", {{"type", "array"}, {"description", "Slot ids or 'owner:<id>' keys pinned after the build."}, {"items", {{"type", "string"}}}}}})},
+              {"sites", {{"type", "array"}, {"items", site}}},
+              {"zones", obj("Zones: a zone set's spec (lila://schema/zones) and generators run after it.",
+                            {{"name", str("Zone set name; default Zones.")},
+                             {"spec", obj("zoneSpec(spec=): layers and zones.")},
+                             {"fromDistricts", {{"description", "true (every settlement) or a list of settlement names: one district zone per Settlement district."}}},
+                             {"fromWater", {{"description", "true or zoneFromWater flags (or a list of them): boat and air spawn zones along water routes."}}},
+                             {"fromTerrain", {{"type", "array"}, {"description", "zoneFromTerrain flags per call."}, {"items", {{"type", "object"}}}}},
+                             {"playArea", {{"type", "array"}, {"description", "[[x, z], ...] play area for gap checks."}}}})},
+              {"check", {{"description", "true (default), false, or worldCheck flags."}}},
+              {"export", obj("Where the built world goes.",
+                             {{"target", {{"type", "string"}, {"enum", {"none", "files", "unreal"}}, {"default", "none"},
+                                          {"description", "files: terrain, zones and the overview map as files; unreal: also sends terrain, buildings and zones over LilaLink."}}},
+                              {"folder", str("Output folder; default the workspace's openworld/world/<name>.")},
+                              {"map", {{"description", "true or worldMap flags (resolution): the overview map PNG + JSON."}}}})}}}};
+        return out;
+    }();
+    return s;
+}
+
+void validateSpec(const json& spec)
+{
+    need(spec.is_object(), "the spec is a dict (see lila://schema/world-spec)");
+    for (const auto& [k, v] : spec.items())
+        need(topKeys().count(k) > 0, "unknown key " + k + " (see lila://schema/world-spec)");
+    if (spec.contains("name"))
+        need(spec["name"].is_string() && !spec["name"].get<std::string>().empty(), "name is a non-empty string");
+    for (const char* k : {"remix", "terrain", "buildings", "slots", "zones", "export"})
+        if (spec.contains(k) && !spec[k].is_null())
+            need(spec[k].is_object(), std::string(k) + " is a dict");
+    need(spec.contains("remix") || spec.contains("terrain"), "give remix or terrain: the world needs a terrain");
+    std::set<std::string> names;
+    if (spec.contains("settlements"))
+    {
+        need(spec["settlements"].is_array(), "settlements is a list");
+        for (size_t i = 0; i < spec["settlements"].size(); ++i)
+        {
+            const json& s = spec["settlements"][i];
+            const std::string where = "settlements[" + std::to_string(i) + "]";
+            need(s.is_object(), where + " is a dict");
+            need(s.contains("name") && s["name"].is_string() && !s["name"].get<std::string>().empty(), where + " needs a name");
+            need(names.insert(s["name"].get<std::string>()).second, where + ": the name " + s["name"].get<std::string>() + " is used twice");
+            need(s.contains("osm") != s.contains("create"), where + " takes osm (a file or 'remix') or create (settlementCreate flags), one of them");
+            if (s.contains("osm"))
+            {
+                need(s["osm"].is_string(), where + ".osm is 'remix' or a file path");
+                if (s["osm"] == "remix")
+                    need(spec.contains("remix"), where + ".osm is 'remix' but the spec has no remix");
+            }
+            if (s.contains("create"))
+                need(s["create"].is_object(), where + ".create is a dict of settlementCreate flags");
+            if (s.contains("area"))
+                checkArea(s["area"], where);
+            if (s.contains("buildings"))
+                need(s["buildings"].is_boolean() || s["buildings"].is_object(), where + ".buildings is true/false or a dict");
+        }
+    }
+    if (spec.contains("sites"))
+    {
+        need(spec["sites"].is_array(), "sites is a list");
+        std::set<std::string> ids;
+        for (size_t i = 0; i < spec["sites"].size(); ++i)
+        {
+            const json& s = spec["sites"][i];
+            const std::string where = "sites[" + std::to_string(i) + "]";
+            need(s.is_object(), where + " is a dict");
+            need(s.contains("kind") && s["kind"].is_string(), where + " needs a kind (siteKinds lists them)");
+            if (s.contains("id"))
+            {
+                need(s["id"].is_string(), where + ".id is a string");
+                need(ids.insert(s["id"].get<std::string>()).second, where + ": the id " + s["id"].get<std::string>() + " is used twice");
+            }
+            if (s.contains("at"))
+                need(s["at"].is_array() && s["at"].size() == 2, where + ".at is [x, z]");
+            if (s.contains("params"))
+                need(s["params"].is_object(), where + ".params is a dict");
+        }
+    }
+    if (spec.contains("slots"))
+    {
+        const json& sl = spec["slots"];
+        if (sl.contains("rules"))
+            need(sl["rules"].is_array(), "slots.rules is a list");
+        if (sl.contains("overrides"))
+            need(sl["overrides"].is_object(), "slots.overrides is a dict {slot id: payload}");
+        if (sl.contains("pins"))
+            need(sl["pins"].is_array(), "slots.pins is a list of keys");
+    }
+    if (spec.contains("buildings"))
+    {
+        const json& b = spec["buildings"];
+        if (b.contains("edits"))
+        {
+            need(b["edits"].is_object(), "buildings.edits is {group name: {building id: edit}}");
+            for (const auto& [g, e] : b["edits"].items())
+                need(e.is_object(), "buildings.edits." + g + " is {building id: edit}");
+        }
+        if (b.contains("styles"))
+            need(b["styles"].is_array(), "buildings.styles is a list of buildingStyle calls");
+    }
+    if (spec.contains("export"))
+    {
+        const std::string t = spec["export"].value("target", std::string("none"));
+        need(t == "none" || t == "files" || t == "unreal", "export.target is none, files or unreal");
+    }
+}
+
+json resolvePaths(json spec, const std::string& dir)
+{
+    const fs::path d = utf8Path(dir);
+    if (spec.contains("remix") && spec["remix"].is_object() && spec["remix"].contains("sources") && spec["remix"]["sources"].is_array())
+        for (json& src : spec["remix"]["sources"])
+            for (const char* k : {"dem", "osm", "landcover", "bathymetry"})
+                if (src.contains(k) && src[k].is_string())
+                    src[k] = resolved(src[k].get<std::string>(), d);
+    if (spec.contains("terrain") && spec["terrain"].is_object() && spec["terrain"].contains("source") && spec["terrain"]["source"].is_object() &&
+        spec["terrain"]["source"].contains("file") && spec["terrain"]["source"]["file"].is_string())
+        spec["terrain"]["source"]["file"] = resolved(spec["terrain"]["source"]["file"].get<std::string>(), d);
+    if (spec.contains("settlements") && spec["settlements"].is_array())
+        for (json& s : spec["settlements"])
+            if (s.is_object() && s.contains("osm") && s["osm"].is_string())
+                s["osm"] = resolved(s["osm"].get<std::string>(), d);
+    return spec;
+}
+
+OsmDoc clipOsm(const OsmDoc& d, const std::function<bool(const terrain::LatLon&)>& inside)
+{
+    std::unordered_map<int64_t, size_t> at;
+    for (size_t i = 0; i < d.nodes.size(); ++i)
+        at[d.nodes[i].id] = i;
+    std::vector<char> in(d.nodes.size(), 0);
+    for (size_t i = 0; i < d.nodes.size(); ++i)
+        in[i] = inside(d.nodes[i].at) ? 1 : 0;
+
+    OsmDoc out;
+    std::unordered_set<int64_t> keepNodes, keepWays;
+    for (const OsmDoc::Way& w : d.ways)
+    {
+        bool any = false;
+        for (int64_t n : w.nodes)
+            if (auto it = at.find(n); it != at.end() && in[it->second])
+            {
+                any = true;
+                break;
+            }
+        if (!any)
+            continue;
+        keepWays.insert(w.id);
+        for (int64_t n : w.nodes)
+            keepNodes.insert(n);
+        out.ways.push_back(w);
+    }
+    std::unordered_set<int64_t> keepRelations;
+    for (const OsmDoc::Relation& r : d.relations)
+    {
+        OsmDoc::Relation kept = r;
+        kept.members.clear();
+        for (const OsmDoc::Member& m : r.members)
+            if ((m.type == 'w' && keepWays.count(m.ref)) || (m.type == 'n' && (keepNodes.count(m.ref) || (at.count(m.ref) && in[at[m.ref]]))))
+                kept.members.push_back(m);
+        if (kept.members.empty())
+            continue;
+        for (const OsmDoc::Member& m : kept.members)
+            if (m.type == 'n')
+                keepNodes.insert(m.ref);
+        keepRelations.insert(r.id);
+        out.relations.push_back(std::move(kept));
+    }
+    for (size_t i = 0; i < d.nodes.size(); ++i)
+        if (keepNodes.count(d.nodes[i].id) || (in[i] && !d.nodes[i].tags.empty()))
+            out.nodes.push_back(d.nodes[i]);
+    out.index();
+    return out;
+}
+} // namespace openworld::world
