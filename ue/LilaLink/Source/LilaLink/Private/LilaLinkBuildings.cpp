@@ -114,8 +114,8 @@ void Master(UMaterial* Material, UMaterialFunction* Function, TArray<FString>& O
 	{
 		OutWarnings.Add(FString::Printf(TEXT("Could not wire the outputs of %s into %s"), *Function->GetName(), *Material->GetName()));
 	}
-	Material->bUsedWithNanite = true;
-	Material->bUsedWithInstancedStaticMeshes = true;
+	Material->SetUsageByFlag(MATUSAGE_Nanite, true);
+	Material->SetUsageByFlag(MATUSAGE_InstancedStaticMeshes, true);
 	Material->PostEditChange();
 	Material->MarkPackageDirty();
 }

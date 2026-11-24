@@ -929,10 +929,10 @@ void ApplyStaticSettings(const FImportRequest& Request, FImportOutcome& Outcome)
 		return;
 	}
 	bool bChanged = false;
-	if (Request.bNaniteGiven && Mesh->NaniteSettings.bEnabled != Request.bNanite)
+	if (Request.bNaniteGiven && Mesh->GetNaniteSettings().bEnabled != Request.bNanite)
 	{
 		Mesh->Modify();
-		Mesh->NaniteSettings.bEnabled = Request.bNanite;
+		Mesh->GetNaniteSettings().bEnabled = Request.bNanite;
 		bChanged = true;
 	}
 	if (Request.LodForCollision >= 0)
