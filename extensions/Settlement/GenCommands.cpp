@@ -28,6 +28,84 @@ using scene::Graph;
 using scene::Node;
 using GenArg = ArgType;
 
+/**
+ * The terrain's water inside a box as exclusions for settlementCreate: the box sampled on a grid (about 200 cells
+ * across, 20 to 100 m), water cells (the water mask, or below sea level) joined into strips per row and strips of equal
+ * span stacked, so a straight shore makes few polygons.
+ */
+json waterExclusions(const std::string& terrain, Vec2 lo, Vec2 hi)
+{
+    if (!ops::find("terrainSample"))
+        return json::array();
+    const Vec2 ext = hi - lo;
+    const double cell = std::clamp(std::max(ext.x, ext.y) / 200.0, 2000.0, 10000.0);
+    const int nx = std::max(1, int(std::ceil(ext.x / cell))), nz = std::max(1, int(std::ceil(ext.y / cell)));
+    json pts = json::array();
+    for (int z = 0; z < nz; ++z)
+        for (int x = 0; x < nx; ++x)
+            pts.push_back({lo.x + (x + 0.5) * cell, lo.y + (z + 0.5) * cell});
+    double sea = -std::numeric_limits<double>::max();
+    json samples;
+    try
+    {
+        const json w = ops::execute("terrainWater", {{"args", {terrain}}});
+        if (w.contains("features") && w["features"].contains("settings"))
+            sea = w["features"]["settings"].value("seaLevel", sea);
+        samples = ops::execute("terrainSample", {{"args", {terrain}}, {"points", pts}, {"masks", {"water"}}});
+    }
+    catch (const std::exception&)
+    {
+        return json::array();
+    }
+    std::vector<char> wet(size_t(nx) * nz, 0);
+    for (size_t i = 0; i < samples.size() && i < wet.size(); ++i)
+        wet[i] = samples[i].value("water", 0.0) > 0.5 || samples[i].value("height", 0.0) < sea;
+    // Runs per row, then runs with the same span on consecutive rows merged into one rectangle.
+    struct Run
+    {
+        int x0, x1, z0, z1;
+    };
+    std::vector<Run> open, done;
+    for (int z = 0; z < nz; ++z)
+    {
+        std::vector<Run> row;
+        for (int x = 0; x < nx;)
+        {
+            if (!wet[size_t(z) * nx + x])
+            {
+                ++x;
+                continue;
+            }
+            int e = x;
+            while (e + 1 < nx && wet[size_t(z) * nx + e + 1])
+                ++e;
+            row.push_back({x, e, z, z});
+            x = e + 1;
+        }
+        std::vector<Run> next;
+        for (Run r : row)
+        {
+            auto it = std::find_if(open.begin(), open.end(), [&](const Run& o) { return o.x0 == r.x0 && o.x1 == r.x1; });
+            if (it != open.end())
+            {
+                r.z0 = it->z0;
+                open.erase(it);
+            }
+            next.push_back(r);
+        }
+        done.insert(done.end(), open.begin(), open.end());
+        open = std::move(next);
+    }
+    done.insert(done.end(), open.begin(), open.end());
+    json out = json::array();
+    for (const Run& r : done)
+    {
+        const double x0 = lo.x + r.x0 * cell, x1 = lo.x + (r.x1 + 1) * cell, z0 = lo.y + r.z0 * cell, z1 = lo.y + (r.z1 + 1) * cell;
+        out.push_back({{x0, z0}, {x1, z0}, {x1, z1}, {x0, z1}});
+    }
+    return out;
+}
+
 /** A flag's value as JSON: text that parses as a JSON object or list is read as one. */
 json jsonFlag(const Args& a, const char* name)
 {
@@ -757,7 +835,9 @@ void registerGeneratorCommands(ext::Context& ctx)
                   {"name", "n", GenArg::String, "Town", "Name of the settlement's mesh."},
                   {"buildingRoute", "br", GenArg::String, "outline", "How buildings are made once laid out; buildings makes procedural ones.",
                    {"outline", "massing", "library", "masonry", "unreal", "buildings"}},
-                  {"buildingStyle", "bs", GenArg::String, nullptr, "buildings route: one Buildings style for every building; empty picks per envelope."}},
+                  {"buildingStyle", "bs", GenArg::String, nullptr, "buildings route: one Buildings style for every building; empty picks per envelope."},
+                  {"water", "wa", GenArg::Bool, true, "Keep Settlement's own streets and lots off the terrain's sea, lakes and rivers."},
+                  {"exclusions", "ex", GenArg::List, nullptr, "More regions kept clear: closed polygons [[x, z], ...] (other generators' sites)."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const char* cmd = "settlementFromOsm";
@@ -794,7 +874,13 @@ void registerGeneratorCommands(ext::Context& ctx)
             const double m = std::max(0.0, a.get<double>("margin", 2000.0));
             lo -= Vec2(m), hi += Vec2(m);
             const json outline = {{lo.x, lo.y}, {hi.x, lo.y}, {hi.x, hi.y}, {lo.x, hi.y}};
+            json exclusions = a.get<bool>("water", true) ? waterExclusions(ground, lo, hi) : json::array();
+            const size_t waterCount = exclusions.size();
+            if (a.has("exclusions"))
+                for (const json& poly : a.flags["exclusions"])
+                    exclusions.push_back(poly);
             json out = ops::execute("settlementCreate", {{"profile", a.get<std::string>("profile", "usTown")},
+                                                         {"exclusions", exclusions},
                                                          {"ground", ground},
                                                          {"outline", outline},
                                                          {"osm", osm},
@@ -805,6 +891,8 @@ void registerGeneratorCommands(ext::Context& ctx)
                                                          {"buildingRoute", a.get<std::string>("buildingRoute", "outline")},
                                                          {"buildingStyle", a.get<std::string>("buildingStyle", "")},
                                                          {"name", a.get<std::string>("name", "Town")}});
+            if (waterCount > 0)
+                out["waterExclusions"] = waterCount;
             out["import"] = {{"features", made.value("features", json::object())},
                              {"culture", made.value("culture", std::string())},
                              {"cultureFrom", made.value("cultureFrom", json())},
