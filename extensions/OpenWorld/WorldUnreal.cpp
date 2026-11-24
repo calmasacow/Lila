@@ -254,7 +254,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
     json report = json::object();
     json features = json::array();
     bool partitioned = false;
-    std::string project, level;
+    std::string project;
+    link::LevelIdentity level;
     // What this build sent that no placement group names, for the record the next build removes from.
     json sentSettlements = json::array(), sentZones = json::array();
     std::set<std::string> settlementNames;
@@ -275,15 +276,13 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
         features = status.value("features", json::array());
         project = status.value("project", std::string());
         json out = {{"project", project}};
-        if (hasFeature(features, "levelInfo"))
-            if (auto c = link::Link::get().client())
-                if (link::RpcResult r = c->call("levelInfo", json::object(), 30000); r.ok)
-                {
-                    level = r.result.value("level", std::string());
-                    out["level"] = level;
-                    partitioned = r.result.value("partitioned", false);
-                    out["partitioned"] = partitioned;
-                }
+        level = link::openLevelIdentity();
+        if (!level.level.empty())
+        {
+            out["level"] = level.level;
+            partitioned = level.partitioned;
+            out["partitioned"] = partitioned;
+        }
         if (!hasFeature(features, "placementHashes"))
             out["note"] = "this LilaLink predates placementHashes: every group is sent again and the world's stale groups can't be found; rebuild the plugin";
         return out;
@@ -360,6 +359,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             }
             if (r.contains("warnings"))
                 out["warnings"] = r["warnings"];
+            if (r.contains("resentAll"))
+                out["resentAll"] = r["resentAll"];
             if (r.contains("seconds"))
                 out["seconds"] = r["seconds"];
             if (r.contains("missingAssets") && r["missingAssets"].is_object())
@@ -525,7 +526,7 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
     // Settlements and zone sets an earlier build sent to this level that this one no longer makes (taken out of the spec,
     // or renamed): they go whole, with their assets, data layers and lanes.
     step("export.unreal.dropped", [&]() -> json {
-        const fs::path recordPath = sentRecordPath(project, level, worldLinkPrefix(world));
+        const fs::path recordPath = sentRecordPath(project, level.level, worldLinkPrefix(world));
         const json before = readRecord(recordPath);
         std::set<std::string> keysNow;
         for (const json& s : sentSettlements)

@@ -119,21 +119,6 @@ json call(link::RpcClient& c, const char* method, const json& params, const char
     return r.result;
 }
 
-/** The open Unreal level's package, or empty (not connected, or a plugin without levelInfo). */
-std::string openLevel()
-{
-    if (!link::Link::get().connected())
-        return {};
-    const json have = link::Link::get().status().value("features", json::array());
-    if (!have.is_array() || std::ranges::find(have, json("levelInfo")) == have.end())
-        return {};
-    std::shared_ptr<link::RpcClient> c = link::Link::get().client();
-    if (!c)
-        return {};
-    link::RpcResult r = c->call("levelInfo", json::object(), 10000);
-    return r.ok && r.result.is_object() ? r.result.value("level", std::string()) : std::string();
-}
-
 /**
  * ZoneGraph lanes of a cross-section: sidewalks, driving lanes, median, listed right to left looking along the road as
  * ZoneGraph lays them out. Driving lanes of an access direction are tagged Access instead of Vehicle, so Mass traffic
@@ -917,12 +902,27 @@ json readJsonFile(const fs::path& path)
 std::string cellNameOf(const std::string& itemKey) { return itemKey.substr(itemKey.find_last_of('/') + 1); }
 
 /** One manifest per settlement, Unreal project and level: what was last sent there, for the diff. */
-fs::path manifestPathFor(const std::string& key)
+fs::path manifestPathFor(const std::string& key, const link::LevelIdentity& level)
 {
     std::string project = link::Link::get().connected() ? link::Link::get().status().value("project", std::string()) : std::string();
-    if (const std::string level = openLevel(); !level.empty())
-        project += "_" + level.substr(level.rfind('/') + 1);
+    if (!level.level.empty())
+        project += "_" + link::levelFileKey(level.level);
     return link::cacheDir() / "settlement" / ("sync_" + assetName(project) + "_" + assetName(key) + ".json");
+}
+
+/**
+ * The manifest at path, or null when there is none or it describes another level than the open one (one deleted and
+ * made again under the same path holds none of it); why it was set aside goes in *ignored.
+ */
+json readManifest(const fs::path& path, const link::LevelIdentity& level, std::string* ignored)
+{
+    json m = readJsonFile(path);
+    if (const std::string why = link::levelRecordMismatch(m, level); !why.empty())
+    {
+        *ignored = "the last send's record was set aside: " + why;
+        return json();
+    }
+    return m;
 }
 
 /** The label a settlement's Unreal actors and assets are named by: the key's last path part. */
@@ -968,11 +968,14 @@ json removeFromUnreal(const Args& a)
     std::shared_ptr<link::RpcClient> c = client(cmd, {});
     const json have = link::Link::get().status().value("features", json::array());
     auto has = [&](const char* f) { return have.is_array() && std::ranges::find(have, json(f)) != have.end(); };
-    const fs::path manifestPath = manifestPathFor(key);
-    const json previous = readJsonFile(manifestPath);
+    const link::LevelIdentity level = link::openLevelIdentity();
+    const fs::path manifestPath = manifestPathFor(key, level);
+    std::string ignored;
+    const json previous = readManifest(manifestPath, level, &ignored);
     const json before = previous.is_object() ? previous.value("items", json::object()) : json::object();
 
-    json out = {{"key", key}, {"manifest", previous.is_object() ? "found" : "none: removed by the key's tags only"}};
+    json out = {{"key", key},
+                {"manifest", previous.is_object() ? "found" : !ignored.empty() ? ignored + "; removed by the key's tags only" : "none: removed by the key's tags only"}};
     json errors = json::array();
     auto attempt = [&](const char* what, const std::function<json()>& f) {
         try
@@ -1095,13 +1098,20 @@ json sendToUnreal(const Args& a)
     const std::vector<SyncItem> items = syncItems(r.layout, net, cells, o, roadHashes);
     const std::map<std::string, uint64_t> elements = elementHashes(r.layout, net);
 
-    const fs::path manifestPath = manifestPathFor(key);
-    const json previous = a.get<bool>("resend", false) ? json() : readJsonFile(manifestPath);
+    const link::LevelIdentity level = link::openLevelIdentity();
+    const fs::path manifestPath = manifestPathFor(key, level);
+    std::string ignored;
+    const json previous = a.get<bool>("resend", false) ? json() : readManifest(manifestPath, level, &ignored);
     const SyncDiff d = diffSync(previous, items, elements);
     json kinds = json::object();
     for (const SyncItem& i : items)
         kinds[i.kind] = kinds.value(i.kind, 0) + 1;
     json out = {{"key", key}, {"cells", cells.size()}, {"cellSize", cellSize}, {"items", items.size()}, {"kinds", kinds}, {"diff", toJson(d)}};
+    if (!ignored.empty())
+        out["resentAll"] = ignored + "; everything sent again";
+    else if (!level.level.empty() && level.guid.empty())
+        out["levelUnchecked"] = "this LilaLink doesn't report level GUIDs, so a level made again under the same path is taken to hold the last send; "
+                                "rebuild the plugin, or send with resend=True";
     if (a.get<bool>("dryRun", false))
     {
         out["dryRun"] = true;
@@ -1354,6 +1364,7 @@ json sendToUnreal(const Args& a)
             manifest["items"][k] = before[k];
     for (const std::string& k : keptRemoved)
         manifest["items"][k] = before[k];
+    link::stampLevelRecord(manifest, level);
     fs::create_directories(manifestPath.parent_path(), ec);
     std::ofstream(manifestPath, std::ios::binary) << manifest.dump(1);
 
@@ -1384,6 +1395,8 @@ void registerUnrealCommands(ext::Context& ctx)
         .doc = "Sends a settlement to the connected Unreal editor and keeps it in sync: each send compares what it would make "
                "with what the last send to that project made (a manifest keyed by stable ids: streets, lots, envelopes, "
                "junctions, placements) and sends only the objects whose contents changed, removing those that are gone. "
+               "The manifest names the level it was written for by its GUID: a level deleted and made again under the same "
+               "path gets everything again (resentAll says why). "
                "Everything spatial is cut into World Partition cells of side cell, one actor per cell, so the level streams "
                "it. Roads go as landscape splines (roads='landscape', joined at junctions, shaping the landscape and painting "
                "roadLayer over the carriageways and shoulderLayer over sidewalks and verges, layers added when the landscape "

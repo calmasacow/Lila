@@ -57,6 +57,23 @@ struct FakeLevel
     std::vector<json> massingImports;         // importAsset params of massing cells
     std::map<std::string, std::string> zoneSets; // id -> label
     std::set<std::string> zoneDataDeleted;      // labels whose ZD_ asset went
+    std::string guid = "11111111-1111-1111-1111-111111111111"; // the level package's persistent GUID
+
+    /** The level deleted and made again under the same path: empty, with a new GUID. */
+    void recreate()
+    {
+        std::scoped_lock lock(m);
+        groups.clear();
+        slotRows.clear();
+        slotTypes.clear();
+        landscapeHash.clear();
+        cells.clear();
+        zoneGraphs.clear();
+        splines.clear();
+        splineParams.clear();
+        zoneSets.clear();
+        guid = "22222222-2222-2222-2222-222222222222";
+    }
 
     std::optional<json> handle(const json& req)
     {
@@ -68,7 +85,7 @@ struct FakeLevel
                                            {"features", {"progress", "placements", "placementHashes", "levelInfo", "landscape", "zones", "buildings",
                                                          "buildingInteriors", "slots", "splines", "settlement", "settlementCells"}}});
         if (method == "levelInfo")
-            return FakeServer::reply(req, {{"level", "/Game/Test/World"}, {"partitioned", false}});
+            return FakeServer::reply(req, {{"level", "/Game/Test/World"}, {"guid", guid}, {"partitioned", false}});
         if (method == "setLandscape")
         {
             const bool same = !landscapeHash.empty() && p.value("hash", std::string()) == landscapeHash;
@@ -448,6 +465,85 @@ TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the 
     REQUIRE(r4.value("failed", json()).is_null());
     CHECK(stepResult(r4, "export.unreal.dropped")["result"]["settlements"].empty());
     CHECK(stepResult(r4, "export.unreal.dropped")["result"]["zoneSets"].empty());
+
+    lila::link::unregisterExporter("fbx:instanceSource");
+    lila::link::Link::get().disconnect();
+    fs::remove_all(cache);
+}
+
+TEST_CASE("world: a level deleted and made again under the same path gets everything again")
+{
+    loadPackages();
+    if (!lila::ops::find("unrealPlaceInstances"))
+        lila::link::registerCommands();
+    lila::link::registerExporter("fbx:instanceSource", [](const std::vector<lila::scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    run("newScene");
+    const fs::path cache = fs::temp_directory_path() / "lila_world_unreal_recreate";
+    fs::remove_all(cache);
+    lila::PrefStore::get().set("unreal", "/cacheDir", cache.generic_string());
+    FakeLevel level;
+    FakeServer server([&](const json& req) { return level.handle(req); });
+    lila::link::Link::ConnectOptions o;
+    o.port = server.port();
+    lila::link::Link::get().connect(o);
+
+    json s = spec(false, "");
+    s["settlements"] = json::parse(R"([{"name": "Pueblo", "create": {"profile": "usTown", "seed": 2,
+        "outline": [[-30000, -30000], [10000, -30000], [10000, 10000], [-30000, 10000]]}}])");
+    const json r1 = run("worldBuild", {{"spec", s}, {"folder", (cache / "w1").generic_string()}});
+    INFO(failedSteps(r1));
+    REQUIRE(r1.value("failed", json()).is_null());
+    size_t groups, cells, splines;
+    std::string key;
+    {
+        std::scoped_lock lock(level.m);
+        groups = level.groups.size();
+        cells = level.cells.size();
+        splines = level.splines.size();
+        REQUIRE(level.zoneGraphs.size() == 1);
+        key = *level.zoneGraphs.begin();
+    }
+    REQUIRE(groups > 0);
+    REQUIRE(cells > 0);
+    REQUIRE(splines > 0);
+
+    // The same level again: the settlement's record holds, nothing of it is sent.
+    const json r2 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w2").generic_string()}});
+    INFO(failedSteps(r2));
+    REQUIRE(r2.value("failed", json()).is_null());
+    const json same = stepResult(r2, "export.unreal.settlement.Pueblo")["result"];
+    CHECK_FALSE(same.contains("resentAll"));
+    CHECK(same["added"] == 0);
+    CHECK(same["changed"] == 0);
+
+    // Deleted and made again under the same path: every group, cell, spline, lane and zone set arrives again.
+    level.recreate();
+    const json r3 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w3").generic_string()}});
+    INFO(failedSteps(r3));
+    REQUIRE(r3.value("failed", json()).is_null());
+    const json again = stepResult(r3, "export.unreal.settlement.Pueblo")["result"];
+    INFO(again.dump());
+    CHECK(again.value("resentAll", std::string()).find("deleted and made again") != std::string::npos);
+    CHECK(again["unchanged"] == 0);
+    CHECK(again["removed"] == 0);
+    CHECK(stepResult(r3, "export.unreal.terrain")["result"]["unchanged"] == false);
+    {
+        std::scoped_lock lock(level.m);
+        CHECK(level.groups.size() == groups);
+        CHECK(level.cells.size() == cells);
+        CHECK(level.splines.size() == splines);
+        CHECK(level.zoneGraphs.count(key) == 1);
+        CHECK(level.zoneSets.size() == 1);
+    }
+
+    // The record now names the new level, so the next build trusts it again.
+    const json r4 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w4").generic_string()}});
+    REQUIRE(r4.value("failed", json()).is_null());
+    CHECK_FALSE(stepResult(r4, "export.unreal.settlement.Pueblo")["result"].contains("resentAll"));
+    CHECK(stepResult(r4, "export.unreal.settlement.Pueblo")["result"]["added"] == 0);
 
     lila::link::unregisterExporter("fbx:instanceSource");
     lila::link::Link::get().disconnect();

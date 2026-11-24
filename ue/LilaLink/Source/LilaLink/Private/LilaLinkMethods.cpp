@@ -107,9 +107,14 @@ FAssetData FindAsset(const FString& Path)
 	return IAssetRegistry::GetChecked().GetAssetByObjectPath(FSoftObjectPath(ToObjectPath(Path)));
 }
 
-/** levelInfo {}: the open level's package ({level, partitioned}), so Lila keys what it sent per level. */
+/**
+ * levelInfo {}: the open level's package ({level, guid, partitioned}), so Lila keys what it sent per level. guid is the
+ * package's persistent GUID: kept across saves, new for a level deleted and made again under the same path.
+ */
 TSharedPtr<FJsonValue> LevelInfo(const TSharedPtr<FJsonObject>&, FString& OutError)
 {
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkMethods::LevelInfo);
+
 	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
 	if (!World)
 	{
@@ -118,6 +123,9 @@ TSharedPtr<FJsonValue> LevelInfo(const TSharedPtr<FJsonObject>&, FString& OutErr
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetStringField(TEXT("level"), World->GetOutermost()->GetName());
+#if WITH_EDITORONLY_DATA
+	Out->SetStringField(TEXT("guid"), World->GetOutermost()->GetPersistentGuid().ToString(EGuidFormats::DigitsWithHyphens));
+#endif
 	Out->SetBoolField(TEXT("partitioned"), World->IsPartitionedWorld());
 	return MakeShared<FJsonValueObject>(Out);
 }
