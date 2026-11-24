@@ -33,6 +33,7 @@ namespace detail
 {
 std::vector<NodeId> publishedNodes();
 std::vector<Slot> publishedBy(NodeId n);
+void evaluatePublishers(Graph& g);
 std::vector<Slot> withPins(std::vector<Slot> slots, const State& st, std::vector<std::string>* conflicts);
 std::vector<const PinnedSlot*> allPinned(const State& st);
 Resolved resolveImpl(const Slot& s, const State& st, bool mainThread);
@@ -153,6 +154,16 @@ void touchPublishers(const std::set<NodeId>* only)
 }
 
 void forgetSet(NodeId id) { setCache().erase(id); }
+
+void evaluatePublishers(Graph& g)
+{
+    // Reading a frame's world evaluates it; all of them in one pass runs dirty publishers in parallel, not one by one.
+    std::vector<NodeId> frames;
+    for (NodeId pub : publishedNodes())
+        if (const NodeId frame = frameNodeOf(g, pub); frame != scene::kNoNode)
+            frames.push_back(frame);
+    g.evaluateUpstream(frames);
+}
 } // namespace detail
 
 std::vector<Slot> readSet(Graph& g, NodeId set)
@@ -182,6 +193,7 @@ std::vector<Slot> collect(Graph& g, const std::function<bool(const Slot&)>& keep
         if (const Node* n = g.node(id); n && n->type().isA(kSetType))
             for (Slot& s : detail::withPins(filtered(readSet(g, id)), *st, nullptr))
                 out.push_back(std::move(s));
+    detail::evaluatePublishers(g);
     for (NodeId pub : detail::publishedNodes())
     {
         const NodeId frame = frameNodeOf(g, pub);

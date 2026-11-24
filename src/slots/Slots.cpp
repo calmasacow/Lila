@@ -982,6 +982,14 @@ std::vector<NodeId> publishedNodes()
     return out;
 }
 
+void forEachPublishedPayload(const std::function<void(const Payload&)>& fn)
+{
+    std::lock_guard lock(tableMutex());
+    for (const auto& [n, p] : table())
+        for (const Slot& s : p.slots)
+            fn(s.payload);
+}
+
 std::vector<Slot> publishedBy(NodeId n)
 {
     std::lock_guard lock(tableMutex());
