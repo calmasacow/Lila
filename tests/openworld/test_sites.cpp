@@ -122,6 +122,13 @@ TEST_CASE("site kits: every kind lays out the same way twice, typed slots, style
     CHECK(reefers > 0);
     CHECK(port.liveries.size() == 6);
     CHECK(liveryTypes.size() > 1);
+    // Every container carries its line's colour for the viewport and Unreal.
+    for (const s::SlotOut& sl : port.slots)
+        if (sl.type.starts_with("container."))
+        {
+            REQUIRE(sl.data.contains("liveryId"));
+            CHECK(sl.data["color"] == port.liveries[size_t(sl.data["liveryId"].get<int>() - 1)]["colour"]);
+        }
     const s::Layout cem = s::build(specOf("cemetery"));
     CHECK(cem.stats["mausoleums"].get<int>() > 0);
     CHECK(cem.stats["graves"].get<int>() > 0);

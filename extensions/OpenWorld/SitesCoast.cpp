@@ -83,6 +83,7 @@ void buildPort(Kit& k)
     // Liveries: fictional shipping lines, one container subtype each.
     const int nLiveries = s.i("liveries");
     std::vector<std::pair<std::string, std::string>> liveries; // (name, slug)
+    std::vector<std::string> liveryColours;
     for (int li = 1; li <= nLiveries; ++li)
     {
         const std::string n = k.name("livery:" + std::to_string(li), NK::Business, "shipping");
@@ -91,7 +92,8 @@ void buildPort(Kit& k)
             if (other == slug)
                 slug += std::to_string(li);
         liveries.push_back({n, slug});
-        k.L.liveries.push_back({{"id", li}, {"name", n}, {"slug", slug}, {"colour", hexColour(k.rnd(77, li), 0.75, 0.8)},
+        liveryColours.push_back(hexColour(k.rnd(77, li), 0.75, 0.8));
+        k.L.liveries.push_back({{"id", li}, {"name", n}, {"slug", slug}, {"colour", liveryColours.back()},
                                 {"types", {"container.20ft." + slug, "container.40ft." + slug, "container.reefer." + slug}}});
     }
     auto livery = [&](uint64_t a, uint64_t b, uint64_t c) { return size_t(k.rnd(a, b, c) * double(liveries.size())) % liveries.size(); };
@@ -163,7 +165,8 @@ void buildPort(Kit& k)
                             const size_t li = livery(uint64_t(bi * 1000 + bj) * 64 + uint64_t(i), uint64_t(r * 16 + t), salt);
                             SlotOut& c = k.slot(path, base + "." + liveries[li].second, {cx, z}, kPi * 0.5, t * 259.0);
                             c.tags = {"livery"};
-                            c.data = {{"livery", liveries[li].first}, {"liveryId", int(li) + 1}};
+                            // "color" is what the viewport and Unreal tint each container with.
+                            c.data = {{"livery", liveries[li].first}, {"liveryId", int(li) + 1}, {"color", liveryColours[li]}};
                             ++containers;
                         };
                         if (twenty)
