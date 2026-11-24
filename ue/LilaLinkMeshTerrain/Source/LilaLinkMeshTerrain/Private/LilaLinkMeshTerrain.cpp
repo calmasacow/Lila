@@ -35,7 +35,10 @@
 #include "Components/SplineComponent.h"
 #include "Misc/PackageName.h"
 #include "Modifiers/MeshPartitionMeshProvider.h"
+// The spline modifier's inline helper calls an experimental USplineComponent API.
+PRAGMA_DISABLE_EXPERIMENTAL_WARNINGS
 #include "Modifiers/MeshPartitionSplineModifier.h"
+PRAGMA_ENABLE_EXPERIMENTAL_WARNINGS
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
 
