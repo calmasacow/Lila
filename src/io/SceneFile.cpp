@@ -67,6 +67,7 @@ struct State
     bool autosaveDirty = false;
     bool loading = false;
     int opening = 0; // load() calls running
+    std::filesystem::path loadingPath;
     uint64_t cleanStateId = 0;
     bool untracked = false; // changed outside the undo stack, so no undo can return to the saved state
     std::optional<uint64_t> autosavedStateId; // undo state the last autosave wrote, while no untracked edit followed
@@ -696,9 +697,14 @@ void load(const fs::path& path)
 
     struct Opening
     {
-        Opening() { ++state().opening; }
-        ~Opening() { --state().opening; }
-    } opening;
+        explicit Opening(const fs::path& p) : was(std::exchange(state().loadingPath, p)) { ++state().opening; }
+        ~Opening()
+        {
+            --state().opening;
+            state().loadingPath = was;
+        }
+        fs::path was;
+    } opening(path);
     const std::string name = path.filename().string();
     progress::Scope scope(loadingVerb() + "...", 10.0, progress::Cancellable);
     scope.setStatus(name);
@@ -757,6 +763,11 @@ void setCurrentPath(const fs::path& path)
 bool loading()
 {
     return state().loading || state().opening > 0;
+}
+
+const fs::path& loadingPath()
+{
+    return state().loadingPath;
 }
 
 bool modified()

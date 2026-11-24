@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <set>
 
 using namespace lila;
@@ -429,4 +430,87 @@ TEST_CASE("buildings commands: acute corners, a tiny edge between two walls and 
     CAPTURE(check["issues"].size() > 0 ? check["issues"][0].dump() : std::string());
     CHECK(check["counts"]["modulesIntersecting"] == 0);
     CHECK(check["counts"]["slotFloating"] == 0);
+}
+
+TEST_CASE("buildings commands: a reopened scene reads its buildings from the cache; changed or damaged ones regenerate")
+{
+    loadBuildings();
+    run("newScene");
+    const json envs = json::array({envelope(0xc001, 0, 0, 1500, 1200, 3), envelope(0xc002, 1500, 0, 1500, 1200, 2, {"street", "open", "open", "party"})});
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Cached"}, {"style", "colonialCentro"}, {"cell", 0}});
+    REQUIRE(made["meshes"].size() == 1);
+    const std::string mesh = made["meshes"][0];
+    const std::string A = "building:c001", B = "building:c002";
+    const std::vector<std::string> idsA = slotIds(A), idsB = slotIds(B);
+    const json infoA = run("buildingInfo", {{"args", {A}}});
+
+    const std::filesystem::path dir = std::filesystem::temp_directory_path() / "lila_buildings_cache_test";
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const std::string scene = (dir / "town.lila").generic_string();
+    run("saveScene", {{"args", {scene}}});
+    run("buildingCache", {{"write", true}});
+    const json cache = run("buildingCache");
+    REQUIRE(cache["exists"] == true);
+    CHECK(cache["file"] == (dir / "town_cache" / "buildings.bin").generic_string());
+    // Saving again with the same buildings leaves the file as it is.
+    run("saveScene", {{"args", {scene}}});
+    CHECK(run("buildingCache", {{"write", true}})["written"] == -1);
+
+    auto reopen = [&] {
+        run("buildingCache", {{"clearMemory", true}});
+        run("openScene", {{"args", {scene}}});
+        return run("buildingInfo", {{"args", {mesh}}});
+    };
+    // Unchanged: nothing generated, the same buildings and slots.
+    json info = reopen();
+    CHECK(info["count"] == 2);
+    CHECK(info["generated"] == 0);
+    CHECK(slotIds(A) == idsA);
+    CHECK(slotIds(B) == idsB);
+    const json againA = run("buildingInfo", {{"args", {A}}});
+    CHECK(againA["floors"] == infoA["floors"]);
+    CHECK(againA["palette"] == infoA["palette"]);
+    CHECK(againA["modules"] == infoA["modules"]);
+
+    // A changed building regenerates; its neighbour still comes from the cache.
+    run("buildingEdit", {{"args", {B}}, {"floors", 4}});
+    run("saveScene", {{"args", {scene}}});
+    CHECK(run("buildingCache", {{"write", true}})["written"].get<int>() >= -1);
+    info = reopen();
+    CHECK(info["generated"] == 0);
+    CHECK(run("buildingInfo", {{"args", {B}}})["floors"] == 4);
+    run("buildingEdit", {{"args", {B}}, {"floors", 2}});
+    CHECK(run("buildingInfo", {{"args", {mesh}}})["generated"] == 1);
+    CHECK(slotIds(B) == idsB);
+
+    // A cache from another build of Buildings is not used: both regenerate, as they were.
+    run("saveScene", {{"args", {scene}}});
+    run("buildingCache", {{"write", true}});
+    const std::filesystem::path file = dir / "town_cache" / "buildings.bin";
+    {
+        std::fstream f(file, std::ios::in | std::ios::out | std::ios::binary);
+        f.seekp(8);
+        const char other[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+        f.write(other, 8);
+    }
+    info = reopen();
+    CHECK(info["generated"] == 2);
+    CHECK(slotIds(A) == idsA);
+    CHECK(slotIds(B) == idsB);
+
+    // A damaged entry regenerates that building alone.
+    run("buildingCache", {{"clearMemory", true}});
+    run("buildingEdit", {{"args", {B}}, {"floors", 3}});
+    run("buildingEdit", {{"args", {B}}, {"floors", 2}});
+    run("saveScene", {{"args", {scene}}});
+    std::filesystem::remove(file);
+    run("buildingCache", {{"write", true}});
+    REQUIRE(std::filesystem::exists(file));
+    std::filesystem::resize_file(file, std::filesystem::file_size(file) - 16);
+    info = reopen();
+    CHECK(info["generated"] == 1);
+    CHECK(slotIds(A) == idsA);
+    CHECK(slotIds(B) == idsB);
+    std::filesystem::remove_all(dir);
 }

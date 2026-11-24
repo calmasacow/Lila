@@ -54,6 +54,8 @@ struct Published
     std::vector<std::shared_ptr<const Result>> results;
     std::map<std::string, int> byId;
     std::vector<std::string> warnings;
+    /** Each building's generation cache key (spec, style and edits), as results. */
+    std::vector<uint64_t> keys;
     double ms = 0.0;      // last evaluation, milliseconds
     int generated = 0;    // buildings generated (cache misses) in it
     size_t slots = 0, faces = 0;
@@ -70,6 +72,18 @@ void allPublished(std::vector<std::shared_ptr<const Published>>& out);
 void forgetPublished(uint64_t modifier);
 
 void registerNode(lila::ext::Context& ctx);
+/**
+ * The building cache beside a saved scene (<stem>_cache/buildings.bin): every generated building, written after a save
+ * that changed buildings and read when the scene opens, so reopening skips the grammar for buildings whose spec, style
+ * and edits are unchanged. A cache from another build of Buildings, or a damaged entry, is ignored (logged) and those
+ * buildings regenerate.
+ */
+void registerCache(lila::ext::Context& ctx);
+std::filesystem::path cacheFile(const std::filesystem::path& scene);
+/** Writes the cache for scene now (the save hook writes it on a background thread). Returns buildings written, -1 when unchanged. */
+long long writeCache(const std::filesystem::path& scene);
+/** Reads the cache for scene into the generation cache. Returns buildings read. */
+size_t readCache(const std::filesystem::path& scene);
 /** What a modifier with lod auto shows (near, hlod or far); true when it changed, so the caller reruns it. */
 bool setViewLod(uint64_t modifier, const std::string& lod);
 /** Leaves one building's shell and modules out of its mesh (Edit Rooms' cutaway); empty for none. True when it changed. */

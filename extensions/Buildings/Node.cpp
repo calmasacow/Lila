@@ -10,14 +10,35 @@
 #include <lila/Log.h>
 #include <lila/Mesh.h>
 #include <lila/Profile.h>
+#include <lila/Command.h>
+#include <lila/Events.h>
+#include <lila/FileBytes.h>
+#include <lila/SceneData.h>
 #include <lila/Release.h>
+#include <lila/SceneFile.h>
 #include <lila/Slots.h>
 #include <lila/Tasks.h>
 
+#include <atomic>
 #include <chrono>
+#include <cstring>
+#include <fstream>
 #include <mutex>
 #include <set>
 #include <unordered_map>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+// Result has members named near and far.
+#undef near
+#undef far
+#endif
 
 namespace buildings
 {
@@ -36,6 +57,8 @@ std::mutex gGenMutex;
 std::unordered_map<uint64_t, Cached> gGen;
 uint64_t gTick = 0;
 constexpr size_t kCacheMax = 30000;
+/** Buildings the last cache read brought in, and half as many again: a big world read whole stays until its cells use it. */
+size_t gCacheFloor = 0;
 
 std::mutex gPubMutex;
 /** The building Edit Rooms cuts away: its shell and modules are left out of its mesh. */
@@ -210,6 +233,7 @@ void exec(ExecContext& c)
         keys[i] = parsed->hashes[i] ^ (it->second.second * 31) ^ (fnv(e.dump()) * 1099511628211ull);
         pub->byId[s.id] = int(i);
     }
+    pub->keys = keys;
     for (const std::string& m : missingStyles)
         pub->warnings.push_back("style '" + m + "' is not in the library; residential stands in");
 
@@ -245,7 +269,7 @@ void exec(ExecContext& c)
         std::lock_guard lock(gGenMutex);
         for (size_t i : todo)
             gGen[keys[i]] = {pub->results[i], gTick};
-        if (gGen.size() > kCacheMax)
+        if (gGen.size() > std::max(kCacheMax, gCacheFloor))
         {
             std::vector<std::pair<uint64_t, uint64_t>> ages;
             for (auto& [k, v] : gGen)
@@ -540,6 +564,308 @@ void clearGenerationCache()
 {
     std::lock_guard lock(gGenMutex);
     gGen.clear();
+}
+
+namespace
+{
+constexpr char kCacheMagic[8] = {'L', 'I', 'L', 'A', 'B', 'L', 'D', '1'};
+
+/** The Buildings module on disk (file, size, time): a cache from any other build of the grammar is not trusted. */
+uint64_t generatorId()
+{
+    static const uint64_t id = [] {
+        std::string who = "buildings";
+#ifdef _WIN32
+        HMODULE self = nullptr;
+        wchar_t file[MAX_PATH] = {};
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCWSTR>(&generatorId), &self) &&
+            GetModuleFileNameW(self, file, MAX_PATH))
+        {
+            std::error_code ec;
+            const std::filesystem::path p(file);
+            who += "|" + p.filename().string() + "|" + std::to_string(std::filesystem::file_size(p, ec)) + "|" +
+                   std::to_string(std::filesystem::last_write_time(p, ec).time_since_epoch().count());
+        }
+#endif
+        return fnv(who);
+    }();
+    return id;
+}
+
+std::mutex gDiskMutex;
+/** By cache file: the hash of the keys it holds, so a save that changed no building writes nothing. */
+std::map<std::filesystem::path, uint64_t> gDiskHash;
+
+void put(std::string& out, uint64_t v) { out.append(reinterpret_cast<const char*>(&v), sizeof v); }
+uint64_t get(std::string_view in, size_t at)
+{
+    uint64_t v = 0;
+    std::memcpy(&v, in.data() + at, sizeof v);
+    return v;
+}
+
+using Buildings = std::map<uint64_t, std::shared_ptr<const Result>>;
+
+/** Every building the scene's cells show, by key. */
+Buildings sceneBuildings()
+{
+    Buildings all;
+    for (const std::shared_ptr<const Published>& p : allPublished())
+        for (size_t i = 0; i < p->keys.size() && i < p->results.size(); ++i)
+            if (p->results[i])
+                all.emplace(p->keys[i], p->results[i]);
+    return all;
+}
+
+uint64_t keysHash(const std::vector<uint64_t>& keys)
+{
+    uint64_t h = generatorId();
+    for (uint64_t k : keys)
+        h = (h ^ k) * 1099511628211ull;
+    return h;
+}
+
+uint64_t keysHash(const Buildings& all)
+{
+    std::vector<uint64_t> keys;
+    keys.reserve(all.size());
+    for (const auto& [k, r] : all)
+        keys.push_back(k);
+    return keysHash(keys);
+}
+
+/** True when the cache file already holds exactly these buildings. */
+bool unchanged(const std::filesystem::path& file, uint64_t hash)
+{
+    std::lock_guard lock(gDiskMutex);
+    std::error_code ec;
+    const auto it = gDiskHash.find(file);
+    return it != gDiskHash.end() && it->second == hash && std::filesystem::exists(file, ec);
+}
+
+/** One write at a time: the save hook's background write and buildingCache write= go through it in turn. */
+std::mutex gWriteMutex;
+
+long long writeBuildings(const std::filesystem::path& file, const Buildings& all, uint64_t hash)
+{
+    LILA_ZONE();
+    std::lock_guard writing(gWriteMutex);
+    if (all.empty() || unchanged(file, hash))
+        return -1;
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<std::pair<uint64_t, std::shared_ptr<const Result>>> list(all.begin(), all.end());
+    std::vector<std::string> blobs(list.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, list.size()), [&](const tbb::blocked_range<size_t>& r) {
+        for (size_t i = r.begin(); i < r.end(); ++i)
+            blobs[i] = encodeResult(*list[i].second);
+    });
+    std::string head(kCacheMagic, sizeof kCacheMagic);
+    put(head, generatorId());
+    put(head, list.size());
+    uint64_t offset = head.size() + list.size() * 24;
+    for (size_t i = 0; i < list.size(); ++i)
+    {
+        put(head, list[i].first);
+        put(head, offset);
+        put(head, blobs[i].size());
+        offset += blobs[i].size();
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(file.parent_path(), ec);
+    const std::filesystem::path tmp = file.generic_string() + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out.write(head.data(), std::streamsize(head.size()));
+        for (const std::string& b : blobs)
+            out.write(b.data(), std::streamsize(b.size()));
+        if (!out)
+        {
+            lila::log::warn("Buildings: the building cache {} could not be written", file.generic_string());
+            return 0;
+        }
+    }
+    if (const std::error_code renamed = lila::renameRetrying(tmp, file))
+    {
+        lila::log::warn("Buildings: the building cache {} could not be written: {}", file.generic_string(), renamed.message());
+        return 0;
+    }
+    {
+        std::lock_guard lock(gDiskMutex);
+        gDiskHash[file] = hash;
+    }
+    lila::release::laterEach(std::move(blobs));
+    lila::log::info("Buildings: {} buildings cached in {} ({:.0f} MB, {:.1f} s)", list.size(), file.generic_string(), double(offset) / 1048576.0,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    return (long long)list.size();
+}
+} // namespace
+
+std::filesystem::path cacheFile(const std::filesystem::path& scene)
+{
+    return scene.parent_path() / (scene.stem().string() + "_cache") / "buildings.bin";
+}
+
+long long writeCache(const std::filesystem::path& scene)
+{
+    const std::filesystem::path file = cacheFile(scene);
+    const Buildings all = sceneBuildings();
+    return writeBuildings(file, all, keysHash(all));
+}
+
+size_t readCache(const std::filesystem::path& scene)
+{
+    LILA_ZONE();
+    const std::filesystem::path file = cacheFile(scene);
+    std::error_code ec;
+    if (!std::filesystem::exists(file, ec))
+        return 0;
+    const auto t0 = std::chrono::steady_clock::now();
+    // The header and index first: a scene reopened in the same session has every building in memory already.
+    std::ifstream stream(file, std::ios::binary);
+    const uint64_t fileSize = std::filesystem::file_size(file, ec);
+    std::string bytes(24, '\0');
+    stream.read(bytes.data(), 24);
+    if (!stream || ec || std::memcmp(bytes.data(), kCacheMagic, sizeof kCacheMagic) != 0)
+    {
+        lila::log::info("Buildings: {} is not a building cache; the buildings regenerate", file.generic_string());
+        return 0;
+    }
+    if (get(bytes, 8) != generatorId())
+    {
+        lila::log::info("Buildings: the building cache {} was made by another build of Buildings; the buildings regenerate", file.generic_string());
+        return 0;
+    }
+    const uint64_t n = get(bytes, 16);
+    if (n > (fileSize - 24) / 24)
+    {
+        lila::log::info("Buildings: the building cache {} is damaged; the buildings regenerate", file.generic_string());
+        return 0;
+    }
+    bytes.resize(size_t(24 + n * 24));
+    stream.read(bytes.data() + 24, std::streamsize(n * 24));
+    std::vector<uint64_t> keys(n);
+    std::vector<std::shared_ptr<const Result>> results(n);
+    std::vector<char> have(n, 0);
+    size_t missing = 0;
+    {
+        std::lock_guard lock(gGenMutex);
+        for (size_t i = 0; i < n; ++i)
+        {
+            keys[i] = get(bytes, 24 + i * 24);
+            have[i] = gGen.count(keys[i]) ? 1 : 0;
+            missing += !have[i];
+        }
+    }
+    if (missing > 0)
+    {
+        bytes.resize(size_t(fileSize));
+        stream.read(bytes.data() + 24 + n * 24, std::streamsize(fileSize - 24 - n * 24));
+    }
+    if (!stream)
+    {
+        lila::log::info("Buildings: the building cache {} could not be read; the buildings regenerate", file.generic_string());
+        return 0;
+    }
+    const std::string_view in(bytes);
+    std::atomic<size_t> damaged{0};
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, n), [&](const tbb::blocked_range<size_t>& r) {
+        for (size_t i = r.begin(); i < r.end(); ++i)
+        {
+            if (have[i])
+                continue;
+            const uint64_t at = get(in, 24 + i * 24 + 8), size = get(in, 24 + i * 24 + 16);
+            if (at > in.size() || size > in.size() - at || !(results[i] = decodeResult(in.substr(size_t(at), size_t(size)))))
+                ++damaged;
+        }
+    });
+    size_t read = 0;
+    {
+        std::lock_guard lock(gGenMutex);
+        ++gTick;
+        for (size_t i = 0; i < n; ++i)
+            if (results[i])
+            {
+                gGen[keys[i]] = {std::move(results[i]), gTick};
+                ++read;
+            }
+        gCacheFloor = std::max(gCacheFloor, size_t(n) + size_t(n) / 2);
+    }
+    if (damaged > 0)
+        lila::log::info("Buildings: {} damaged entries in the building cache {}; those buildings regenerate", damaged.load(), file.generic_string());
+    std::sort(keys.begin(), keys.end());
+    {
+        std::lock_guard lock(gDiskMutex);
+        gDiskHash[file] = damaged > 0 ? 0 : keysHash(keys);
+    }
+    lila::release::later(std::move(bytes));
+    lila::log::info("Buildings: {} buildings read from the building cache, {} already in memory ({:.1f} s)", read, n - missing,
+                    std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
+    return read;
+}
+
+void registerCache(lila::ext::Context& ctx)
+{
+    using T = lila::ArgType;
+    ctx.registerCommand({
+        .name = "buildingCache",
+        .doc = "The building cache beside the saved scene (<scene>_cache/buildings.bin): every generated building, written after a "
+               "save that changed buildings and read when the scene opens, so reopening skips generating buildings whose spec, "
+               "style and edits are unchanged; the rest regenerate. With no flags, reports the file. write= writes it now for the "
+               "current scene (waits for a write in progress). clearMemory= forgets the generated buildings held in memory, so "
+               "the next evaluation reads them from the cache or generates them again.",
+        .flags = {{"write", "w", T::Bool, false, "Write the cache for the current scene now."},
+                  {"clearMemory", "cm", T::Bool, false, "Forget the generated buildings held in memory."}},
+        .undoable = false,
+        .run = [](const lila::Args& a) -> json {
+            const std::filesystem::path scene = lila::io::currentPath();
+            json out = json::object();
+            if (a.get<bool>("clearMemory", false))
+            {
+                std::vector<std::shared_ptr<const Result>> dropped;
+                {
+                    std::lock_guard lock(gGenMutex);
+                    out["cleared"] = gGen.size();
+                    for (auto& [k, v] : gGen)
+                        dropped.push_back(std::move(v.result));
+                    gGen.clear();
+                    gCacheFloor = 0;
+                }
+                lila::release::laterEach(std::move(dropped));
+            }
+            if (scene.empty())
+            {
+                if (a.get<bool>("write", false))
+                    throw lila::CommandError("buildingCache: the scene is not saved yet, so it has no cache");
+                return out;
+            }
+            if (a.get<bool>("write", false))
+                out["written"] = writeCache(scene);
+            const std::filesystem::path file = cacheFile(scene);
+            std::error_code ec;
+            out["file"] = file.generic_string();
+            out["exists"] = std::filesystem::exists(file, ec);
+            out["bytes"] = out["exists"].get<bool>() ? uint64_t(std::filesystem::file_size(file, ec)) : 0;
+            return out;
+        },
+    });
+
+    lila::scene::data::onLoaded([] {
+        if (const std::filesystem::path& p = lila::io::loadingPath(); !p.empty())
+            readCache(p);
+    });
+    lila::events::subscribe(
+        lila::events::Event::SceneSaved,
+        [](const lila::events::EventData& e) {
+            const std::filesystem::path file = cacheFile(e.path);
+            Buildings all = sceneBuildings();
+            const uint64_t hash = keysHash(all);
+            if (all.empty() || unchanged(file, hash))
+                return;
+            // The results are immutable and shared, so encoding them can run while the user carries on.
+            std::thread([file, all = std::move(all), hash] { writeBuildings(file, all, hash); }).detach();
+        },
+        "Buildings");
 }
 
 void registerNode(lila::ext::Context& ctx)

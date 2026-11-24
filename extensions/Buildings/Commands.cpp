@@ -1580,6 +1580,7 @@ void registerCommands(ext::Context& ctx)
                 out["slots"] = p->slots;
                 out["faces"] = p->faces;
                 out["lastEvaluateMs"] = p->ms;
+                out["generated"] = p->generated;
                 out["warnings"] = p->warnings;
             }
             return out;

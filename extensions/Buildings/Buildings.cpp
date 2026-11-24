@@ -39,6 +39,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
         lila::log::warn("Buildings: no styles found in {}", (ctx.resources() / "styles").generic_string());
     buildings::setShippedTrimSheet(ctx.resources() / "trims" / "LilaBuilding.lilatrim");
     buildings::registerNode(ctx);
+    buildings::registerCache(ctx);
     buildings::registerCommands(ctx);
     buildings::registerCheck(ctx);
     buildings::registerInterior(ctx);

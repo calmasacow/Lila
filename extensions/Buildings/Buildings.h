@@ -423,6 +423,11 @@ struct Options
 /** Runs the grammar. Throws nothing; problems go in warnings. */
 std::shared_ptr<const Result> generate(const Spec& spec, const Style& style, const Edits& edits, const Options& o = {});
 
+/** A generated building as bytes for the building cache (ResultCache.cpp). */
+std::string encodeResult(const Result& r);
+/** The building encodeResult wrote; null when the bytes are not a whole Result of this format. */
+std::shared_ptr<const Result> decodeResult(std::string_view bytes);
+
 /** The placeholder mesh soup for a module kind at a size (front +Z, bottom centre at the origin), with uv0. */
 const Soup& placeholderSoup(const std::string& kind, const Vec3& size, int variant);
 /** Placeholder kinds, for the docs and the check. */
