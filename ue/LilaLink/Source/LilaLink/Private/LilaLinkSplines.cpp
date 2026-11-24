@@ -9,8 +9,12 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "ILandscapeSplineInterface.h"
 #include "Landscape.h"
+#include "LandscapeComponent.h"
+#include "LandscapeEdit.h"
 #include "LandscapeEditLayer.h"
+#include "LandscapeHeightfieldCollisionComponent.h"
 #include "LandscapeInfo.h"
 #include "LandscapeLayerInfoObject.h"
 #include "LandscapeSplineActor.h"
@@ -161,27 +165,187 @@ ALandscape* FindLandscape(UWorld* World, const FString& Label)
 	return Label.IsEmpty() ? First : nullptr;
 }
 
-/**
- * Has the landscape redraw its splines into the edit layer reserved for them, the only place splines deform and paint a
- * landscape. With bAddLayer the layer is added when missing.
- */
-void UpdateSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings)
-{
-	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::UpdateSplineLayer);
+/** The ALandscape tag that records a paint layer as one Lila added for its splines. */
+const FString PaintLayerTagPrefix(TEXT("LilaLink.PaintLayer:"));
 
-	if (bAddLayer && !Landscape->FindEditLayerOfTypeConst(ULandscapeEditLayerSplines::StaticClass()) &&
-		Landscape->CreateLayer(FName(TEXT("Splines")), ULandscapeEditLayerSplines::StaticClass()) == INDEX_NONE)
+FName PaintLayerTag(FName Layer)
+{
+	return FName(*(PaintLayerTagPrefix + Layer.ToString()));
+}
+
+/** When the landscape draws with Lila's generated M_<label>, rebuilds it to sample the landscape's target layers. */
+void RebuildGeneratedMaterial(ALandscape* Landscape, TArray<FString>& Warnings)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::RebuildGeneratedMaterial);
+
+	const FString Label = Landscape->GetActorLabel();
+	const FString Generated = FString::Printf(TEXT("/Game/LilaLink/Landscapes/%s/M_%s"), *Label, *Label);
+	UMaterialInterface* Current = Landscape->GetLandscapeMaterial();
+	if (!Current || Current->GetOutermost()->GetName() != Generated)
 	{
-		Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the splines do not deform it"));
+		return;
 	}
-	Landscape->RequestSplineLayerUpdate();
-	// Redrawn now rather than on a later tick, so the regions it changed can be marked dirty: the editor only records
-	// automatic landscape changes as modified, and Save All would leave them out.
-	Landscape->ForceUpdateLayersContent();
-	if (ULandscapeInfo* Info = Landscape->GetLandscapeInfo())
+	TArray<FString> Ignored;
+	TArray<FName> Layers;
+	Landscape->GetTargetLayers().GetKeys(Layers);
+	// The visibility (holes) layer is drawn by the engine, not sampled as paint.
+	Layers.RemoveAll([](const FName& L) { return ALandscapeProxy::VisibilityLayer && L == ALandscapeProxy::VisibilityLayer->GetLayerName(); });
+	UMaterial* Material = LilaLink::Landscape::GeneratedMaterial(Label, Layers, Ignored, Warnings);
+	if (Material && Material != Current)
 	{
-		Info->MarkModifiedPackagesAsDirty();
+		Landscape->LandscapeMaterial = Material;
 	}
+	// Also when it is the same asset rebuilt in place: the landscape's material instances follow its layers.
+	FPropertyChangedEvent Changed(FindFProperty<FProperty>(ALandscapeProxy::StaticClass(), GET_MEMBER_NAME_CHECKED(ALandscapeProxy, LandscapeMaterial)));
+	Landscape->PostEditChangeProperty(Changed);
+}
+
+/** Every paint layer a spline of the landscape (its own splines and every loaded spline actor) paints. */
+TSet<FName> PaintedBySplines(ULandscapeInfo* Info)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::PaintedBySplines);
+
+	TSet<FName> Painted;
+	auto Collect = [&Painted](const ULandscapeSplinesComponent* Splines) {
+		if (!IsValid(Splines) || !IsValid(Splines->GetOwner()) || Splines->GetOwner()->IsActorBeingDestroyed())
+		{
+			return;
+		}
+		for (const ULandscapeSplineControlPoint* Point : Splines->GetControlPoints())
+		{
+			if (Point && Point->LayerName != NAME_None)
+			{
+				Painted.Add(Point->LayerName);
+			}
+		}
+		for (const ULandscapeSplineSegment* Segment : Splines->GetSegments())
+		{
+			if (Segment && Segment->LayerName != NAME_None)
+			{
+				Painted.Add(Segment->LayerName);
+			}
+		}
+	};
+	Info->ForAllSplineActors([&Collect](TScriptInterface<ILandscapeSplineInterface> Owner) {
+		if (Owner)
+		{
+			Collect(Owner->GetSplinesComponent());
+		}
+	});
+	Info->ForEachLandscapeProxy([&Collect](ALandscapeProxy* Proxy) {
+		Collect(Proxy->GetSplinesComponent());
+		return true;
+	});
+	return Painted;
+}
+
+/** Whether a loaded region holds paint of LayerInfo in an edit layer other than the splines one: paint a user made. */
+bool PaintedOutsideSplines(ULandscapeInfo* Info, const ULandscapeLayerInfoObject* LayerInfo, const FGuid& SplinesLayer)
+{
+	bool bFound = false;
+	Info->ForEachLandscapeProxy([&](ALandscapeProxy* Proxy) {
+		for (ULandscapeComponent* Component : Proxy->LandscapeComponents)
+		{
+			if (!Component)
+			{
+				continue;
+			}
+			Component->ForEachLayer([&](const FGuid& Guid, FLandscapeLayerComponentData& Data) {
+				bFound |= Guid != SplinesLayer && Data.WeightmapData.LayerAllocations.ContainsByPredicate(
+					[LayerInfo](const FWeightmapLayerAllocationInfo& A) { return A.LayerInfo == LayerInfo; });
+			});
+		}
+		return !bFound;
+	});
+	return bFound;
+}
+
+/**
+ * Takes Lila's paint layers (tagged on the landscape) that no spline paints any more out of the landscape and its generated
+ * material. A layer with paint outside the splines edit layer is the user's from then on: kept, its tag dropped, with a warning.
+ */
+void DropUnusedPaintLayers(ALandscape* Landscape, TArray<FString>& Removed, TArray<ULandscapeLayerInfoObject*>& RemovedInfos, TArray<FString>& Warnings)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::DropUnusedPaintLayers);
+
+	ULandscapeInfo* Info = Landscape->GetLandscapeInfo();
+	TArray<FName> Owned;
+	for (const FName& Tag : Landscape->Tags)
+	{
+		const FString Text = Tag.ToString();
+		if (Text.StartsWith(PaintLayerTagPrefix))
+		{
+			Owned.Add(FName(*Text.RightChop(PaintLayerTagPrefix.Len())));
+		}
+	}
+	if (!Info || Owned.IsEmpty())
+	{
+		return;
+	}
+	LilaLink::LoadSplineActors(Landscape->GetWorld());
+	const TSet<FName> Painted = PaintedBySplines(Info);
+	const ULandscapeEditLayerBase* SplinesLayer = Landscape->FindEditLayerOfTypeConst(ULandscapeEditLayerSplines::StaticClass());
+	const FGuid SplinesGuid = SplinesLayer ? SplinesLayer->GetGuid() : FGuid();
+	bool bChanged = false;
+	for (const FName& Layer : Owned)
+	{
+		if (Painted.Contains(Layer))
+		{
+			continue;
+		}
+		Landscape->Modify();
+		Landscape->Tags.Remove(PaintLayerTag(Layer));
+		ULandscapeLayerInfoObject* LayerInfo = Info->GetLayerInfoByName(Layer);
+		if (LayerInfo && PaintedOutsideSplines(Info, LayerInfo, SplinesGuid))
+		{
+			Warnings.Add(FString::Printf(TEXT("paint layer %s, added for Lila's roads, has paint of its own, so it stays on the landscape"), *Layer.ToString()));
+			continue;
+		}
+		if (LayerInfo)
+		{
+			if (SplinesGuid.IsValid())
+			{
+				FLandscapeEditDataInterface(Info, SplinesGuid).DeleteLayer(LayerInfo);
+			}
+			FLandscapeEditDataInterface(Info, FGuid()).DeleteLayer(LayerInfo);
+			Info->DeleteLayer(LayerInfo, Layer);
+			RemovedInfos.Add(LayerInfo);
+		}
+		else
+		{
+			Landscape->RemoveTargetLayer(Layer);
+			Info->UpdateLayerInfoMap();
+		}
+		Removed.Add(Layer.ToString());
+		bChanged = true;
+	}
+	if (bChanged)
+	{
+		RebuildGeneratedMaterial(Landscape, Warnings);
+	}
+}
+
+/**
+ * Rebuilds the collision layer data of loaded regions whose collision still lists a removed layer. The engine keeps a stale
+ * trailing entry when a component loses its last allocated layer, which would keep the layer info referenced.
+ */
+void RefreshCollisionLayers(ULandscapeInfo* Info, const TArray<ULandscapeLayerInfoObject*>& RemovedInfos)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::RefreshCollisionLayers);
+
+	Info->ForEachLandscapeProxy([&RemovedInfos](ALandscapeProxy* Proxy) {
+		for (ULandscapeComponent* Component : Proxy->LandscapeComponents)
+		{
+			ULandscapeHeightfieldCollisionComponent* Collision = Component ? Component->GetCollisionComponent() : nullptr;
+			if (Collision && Collision->ComponentLayerInfos.ContainsByPredicate([&RemovedInfos](const ULandscapeLayerInfoObject* L) { return RemovedInfos.Contains(L); }))
+			{
+				Collision->Modify();
+				Collision->ComponentLayerInfos.Reset();
+				Component->UpdateCollisionLayerData();
+			}
+		}
+		return true;
+	});
 }
 
 /**
@@ -210,59 +374,22 @@ bool EnsurePaintLayer(ALandscape* Landscape, FName Layer, TArray<FString>& Added
 		}
 		else
 		{
+			// Only a layer Lila adds outright is Lila's to take away again; a target layer the user named stays theirs.
 			Landscape->AddTargetLayer(Layer, FLandscapeTargetLayerSettings(LayerInfo));
+			Landscape->Tags.AddUnique(PaintLayerTag(Layer));
 		}
 		if (Info)
 		{
 			Info->UpdateLayerInfoMap(Landscape);
 		}
 		Added.Add(Layer.ToString());
-
-		const FString Generated = FString::Printf(TEXT("/Game/LilaLink/Landscapes/%s/M_%s"), *Label, *Label);
-		UMaterialInterface* Current = Landscape->GetLandscapeMaterial();
-		if (Current && Current->GetOutermost()->GetName() == Generated)
-		{
-			TArray<FString> Ignored;
-			TArray<FName> Layers;
-			Landscape->GetTargetLayers().GetKeys(Layers);
-			UMaterial* Material = LilaLink::Landscape::GeneratedMaterial(Label, Layers, Ignored, Warnings);
-			if (Material && Material != Current)
-			{
-				Landscape->LandscapeMaterial = Material;
-				FPropertyChangedEvent Changed(FindFProperty<FProperty>(ALandscapeProxy::StaticClass(), GET_MEMBER_NAME_CHECKED(ALandscapeProxy, LandscapeMaterial)));
-				Landscape->PostEditChangeProperty(Changed);
-			}
-		}
+		RebuildGeneratedMaterial(Landscape, Warnings);
 	}
 	if (!Landscape->RetrieveTargetLayerNamesFromMaterials(/*bIncludeVisibilityLayer=*/false).Contains(Layer))
 	{
 		Warnings.Add(FString::Printf(TEXT("the landscape's material does not sample paint layer %s: the roads' paint is there but not drawn"), *Layer.ToString()));
 	}
 	return true;
-}
-
-/**
- * World bounds of what a landscape splines component's points named with Prefix (all with an empty Prefix) shape and paint:
- * each control point grown by its half width and falloffs. Built from the saved point settings, since the computed spline
- * bounds are empty until the points are updated.
- */
-FBox SplineBounds(const ULandscapeSplinesComponent* Component, const FString& Prefix)
-{
-	FBox Box(ForceInit);
-	if (!Component)
-	{
-		return Box;
-	}
-	const FTransform ToWorld = Component->GetComponentTransform();
-	for (const ULandscapeSplineControlPoint* Point : Component->GetControlPoints())
-	{
-		if (Point && (Prefix.IsEmpty() || Point->GetName().StartsWith(Prefix)))
-		{
-			const double Reach = (Point->Width + Point->SideFalloff + Point->EndFalloff) * ToWorld.GetMaximumAxisScale();
-			Box += FBox::BuildAABB(ToWorld.TransformPosition(Point->Location), FVector(Reach));
-		}
-	}
-	return Box;
 }
 
 ESplineMeshAxis::Type AxisFrom(const FString& Name)
@@ -494,6 +621,7 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 		return nullptr;
 	}
 	const FName Tag = TagFor(Id);
+	LilaLink::LoadSplineActors(World);
 	AActor* Tagged = FindTagged(World, Tag);
 	ULandscapeSplinesComponent* Component = nullptr;
 	FString Prefix = LandscapePrefix(Id);
@@ -505,7 +633,7 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 		ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged);
 		// Only loaded landscape takes a redraw: load what the earlier and the new splines cover, before the Splines layer is
 		// added, so every region gets that layer too.
-		FBox Covered = SplineActor ? SplineBounds(SplineActor->GetSplinesComponent(), FString()) : FBox(ForceInit);
+		FBox Covered = SplineActor ? LilaLink::SplineBounds(SplineActor->GetSplinesComponent(), FString()) : FBox(ForceInit);
 		for (const FLilaSpline& Spline : Splines)
 		{
 			for (const FLilaSplinePoint& In : Spline.Points)
@@ -557,7 +685,7 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	}
 	ClearLandscapeSplines(Component, Prefix);
 
-	TArray<FString> LayersAdded;
+	TArray<FString> LayersAdded, LayersRemoved;
 	TSet<FName> Paintable;
 	for (const FLilaSpline& Spline : Splines)
 	{
@@ -658,13 +786,13 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	Component->MarkRenderStateDirty();
 	Component->MarkPackageDirty();
 	// Also when nothing shapes: a re-send that turns it off takes the earlier shape and paint out of the landscape.
-	UpdateSplineLayer(Landscape, bShapes, Warnings);
+	LilaLink::RedrawSplineLayer(Landscape, bShapes, Warnings, &LayersRemoved);
 	if (!bShapes)
 	{
 		Warnings.Add(TEXT("deformTerrain is off and no paint layer is given: the splines do not shape the landscape"));
 	}
 
-	TArray<TSharedPtr<FJsonValue>> PaintValues, AddedValues;
+	TArray<TSharedPtr<FJsonValue>> PaintValues, AddedValues, RemovedValues;
 	for (const FName& L : Paintable)
 	{
 		PaintValues.Add(MakeShared<FJsonValueString>(L.ToString()));
@@ -673,12 +801,17 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	{
 		AddedValues.Add(MakeShared<FJsonValueString>(L));
 	}
+	for (const FString& L : LayersRemoved)
+	{
+		RemovedValues.Add(MakeShared<FJsonValueString>(L));
+	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetStringField(TEXT("actor"), OwnerPath);
 	Out->SetNumberField(TEXT("components"), Splines.Num());
 	Out->SetNumberField(TEXT("segments"), SegmentCount);
 	Out->SetArrayField(TEXT("paintLayers"), PaintValues);
 	Out->SetArrayField(TEXT("paintLayersAdded"), AddedValues);
+	Out->SetArrayField(TEXT("paintLayersRemoved"), RemovedValues);
 	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
 	return MakeShared<FJsonValueObject>(Out);
 }
@@ -787,13 +920,14 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 	bool bRemoved = false;
 	int32 RegionsLoaded = 0;
 	TArray<ALandscape*> Reshaped;
+	LilaLink::LoadSplineActors(World);
 	if (AActor* Tagged = FindTagged(World, TagFor(Id)))
 	{
 		const ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged);
 		if (SplineActor)
 		{
 			// The redraw that takes the splines out reaches loaded landscape only.
-			RegionsLoaded = LilaLink::LoadLandscapeUnder(World, SplineBounds(SplineActor->GetSplinesComponent(), FString()));
+			RegionsLoaded = LilaLink::LoadLandscapeUnder(World, LilaLink::SplineBounds(SplineActor->GetSplinesComponent(), FString()));
 		}
 		const ULandscapeInfo* Info = SplineActor ? SplineActor->GetLandscapeInfo() : nullptr;
 		if (ALandscape* Landscape = Info ? Info->LandscapeActor.Get() : nullptr)
@@ -818,14 +952,25 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 		}
 	}
 	// The removed splines' shape and paint leave the landscape when it redraws its splines layer.
-	TArray<FString> Ignored;
+	TArray<FString> Warnings, LayersRemoved;
 	for (ALandscape* Landscape : Reshaped)
 	{
-		UpdateSplineLayer(Landscape, /*bAddLayer=*/false, Ignored);
+		LilaLink::RedrawSplineLayer(Landscape, /*bAddLayer=*/false, Warnings, &LayersRemoved);
+	}
+	TArray<TSharedPtr<FJsonValue>> RemovedValues, WarningValues;
+	for (const FString& L : LayersRemoved)
+	{
+		RemovedValues.Add(MakeShared<FJsonValueString>(L));
+	}
+	for (const FString& W : Warnings)
+	{
+		WarningValues.Add(MakeShared<FJsonValueString>(W));
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetBoolField(TEXT("removed"), bRemoved);
 	Out->SetNumberField(TEXT("regionsLoaded"), RegionsLoaded);
+	Out->SetArrayField(TEXT("paintLayersRemoved"), RemovedValues);
+	Out->SetArrayField(TEXT("warnings"), WarningValues);
 	return MakeShared<FJsonValueObject>(Out);
 }
 } // namespace
@@ -835,6 +980,31 @@ void LilaLink::AddSplineMethods(TMap<FString, FLilaLinkMethod>& Methods)
 	Methods.Add(TEXT("setSpline"), LilaLink::Sync(&SetSpline));
 	Methods.Add(TEXT("removeSpline"), LilaLink::Sync(&RemoveSpline));
 }
+
+namespace
+{
+/** Loads actors of a World Partition level by guid; they stay loaded until its World Partition shuts down. */
+void LoadActorGuids(UWorld* World, UWorldPartition* Partition, const TArray<FGuid>& Guids)
+{
+	// Released when its level's World Partition shuts down, before the world goes (as LoadLilaActors' loader).
+	static TWeakObjectPtr<UWorldPartition> Owner;
+	static TUniquePtr<FLoaderAdapterActorList> Loader;
+	if (!Loader || Owner.Get() != Partition)
+	{
+		Loader = MakeUnique<FLoaderAdapterActorList>(World);
+		Owner = Partition;
+		TWeakObjectPtr<UWorldPartition> Bound = Partition;
+		World->OnWorldPartitionUninitialized().AddLambda([Bound](UWorldPartition* Gone) {
+			if (Gone == Bound.Get() && Owner.Get() == Gone)
+			{
+				Loader.Reset();
+				Owner.Reset();
+			}
+		});
+	}
+	Loader->AddActors(Guids);
+}
+} // namespace
 
 int32 LilaLink::LoadLandscapeUnder(UWorld* World, const FBox& Box)
 {
@@ -858,23 +1028,84 @@ int32 LilaLink::LoadLandscapeUnder(UWorld* World, const FBox& Box)
 	{
 		return 0;
 	}
-	// Released when its level's World Partition shuts down, before the world goes (as LoadLilaActors' loader).
-	static TWeakObjectPtr<UWorldPartition> Owner;
-	static TUniquePtr<FLoaderAdapterActorList> Loader;
-	if (!Loader || Owner.Get() != Partition)
-	{
-		Loader = MakeUnique<FLoaderAdapterActorList>(World);
-		Owner = Partition;
-		TWeakObjectPtr<UWorldPartition> Bound = Partition;
-		World->OnWorldPartitionUninitialized().AddLambda([Bound](UWorldPartition* Gone) {
-			if (Gone == Bound.Get() && Owner.Get() == Gone)
-			{
-				Loader.Reset();
-				Owner.Reset();
-			}
-		});
-	}
-	Loader->AddActors(Guids);
+	LoadActorGuids(World, Partition, Guids);
 	UE_LOG(LogLilaLink, Log, TEXT("Loaded %d landscape region(s) under splines so their redraw reaches them"), Guids.Num());
 	return Guids.Num();
+}
+
+int32 LilaLink::LoadSplineActors(UWorld* World)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::LoadSplineActors);
+
+	UWorldPartition* Partition = World ? World->GetWorldPartition() : nullptr;
+	if (!Partition)
+	{
+		return 0;
+	}
+	TArray<FGuid> Guids;
+	FWorldPartitionHelpers::ForEachActorDescInstance(Partition, ALandscapeSplineActor::StaticClass(), [&](const FWorldPartitionActorDescInstance* Desc) {
+		if (!Desc->IsLoaded())
+		{
+			Guids.Add(Desc->GetGuid());
+		}
+		return true;
+	});
+	if (!Guids.IsEmpty())
+	{
+		LoadActorGuids(World, Partition, Guids);
+		UE_LOG(LogLilaLink, Log, TEXT("Loaded %d landscape spline actor(s)"), Guids.Num());
+	}
+	return Guids.Num();
+}
+
+FBox LilaLink::SplineBounds(const ULandscapeSplinesComponent* Component, const FString& Prefix)
+{
+	// Built from the saved point settings, since the computed spline bounds are empty until the points are updated.
+	FBox Box(ForceInit);
+	if (!Component)
+	{
+		return Box;
+	}
+	const FTransform ToWorld = Component->GetComponentTransform();
+	for (const ULandscapeSplineControlPoint* Point : Component->GetControlPoints())
+	{
+		if (Point && (Prefix.IsEmpty() || Point->GetName().StartsWith(Prefix)))
+		{
+			const double Reach = (Point->Width + Point->SideFalloff + Point->EndFalloff) * ToWorld.GetMaximumAxisScale();
+			Box += FBox::BuildAABB(ToWorld.TransformPosition(Point->Location), FVector(Reach));
+		}
+	}
+	return Box;
+}
+
+void LilaLink::RedrawSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings, TArray<FString>* LayersRemoved)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::RedrawSplineLayer);
+
+	TArray<FString> Removed;
+	TArray<ULandscapeLayerInfoObject*> RemovedInfos;
+	DropUnusedPaintLayers(Landscape, Removed, RemovedInfos, Warnings);
+	if (LayersRemoved)
+	{
+		LayersRemoved->Append(Removed);
+	}
+	if (bAddLayer && !Landscape->FindEditLayerOfTypeConst(ULandscapeEditLayerSplines::StaticClass()) &&
+		Landscape->CreateLayer(FName(TEXT("Splines")), ULandscapeEditLayerSplines::StaticClass()) == INDEX_NONE)
+	{
+		Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the splines neither paint nor deform it"));
+	}
+	Landscape->RequestSplineLayerUpdate();
+	// Redrawn now rather than on a later tick, so the regions it changed can be marked dirty: the editor only records
+	// automatic landscape changes as modified, and Save All would leave them out.
+	Landscape->ForceUpdateLayersContent();
+	if (ULandscapeInfo* Info = Landscape->GetLandscapeInfo())
+	{
+		if (!RemovedInfos.IsEmpty())
+		{
+			// Regions that painted a removed layer keep material instances built for it until they are made again.
+			Info->UpdateAllComponentMaterialInstances(/*bInInvalidateCombinationMaterials=*/true);
+			RefreshCollisionLayers(Info, RemovedInfos);
+		}
+		Info->MarkModifiedPackagesAsDirty();
+	}
 }

@@ -1063,9 +1063,13 @@ json sendToUnreal(const Args& a)
                        {"placeMode", placeMode},
                        {"pcgGraph", graph},
                        {"landscape", a.get<std::string>("landscape", "")},
-                       {"roadMesh", a.get<std::string>("roadMesh", "")},
-                       {"deformTerrain", a.get<bool>("deformTerrain", true)}})
+                       {"roadMesh", a.get<std::string>("roadMesh", "")}})
                      .dump();
+    if (mode == "landscape")
+        o.roadSettings = json({{"deformTerrain", a.get<bool>("deformTerrain", true)},
+                               {"roadLayer", a.get<std::string>("roadLayer", "roadSurface")},
+                               {"shoulderLayer", a.get<std::string>("shoulderLayer", "roadVerge")}})
+                             .dump();
     const std::vector<SyncItem> items = syncItems(r.layout, net, cells, o, roadHashes);
     const std::map<std::string, uint64_t> elements = elementHashes(r.layout, net);
 
@@ -1288,7 +1292,9 @@ void registerUnrealCommands(ext::Context& ctx)
                "Everything spatial is cut into World Partition cells of side cell, one actor per cell, so the level streams "
                "it. Roads go as landscape splines (roads='landscape', joined at junctions, shaping the landscape and painting "
                "roadLayer over the carriageways and shoulderLayer over sidewalks and verges, layers added when the landscape "
-               "lacks them; landscape regions World Partition had unloaded are loaded for the redraw), as spline "
+               "lacks them and taken off it again once no spline paints them; changing roadLayer, shoulderLayer or "
+               "deformTerrain resends the roads alone; landscape regions World Partition had unloaded are loaded for the "
+               "redraw), as spline "
                "actors (roads='splines', with spline meshes of roadMesh along them), as ribbon meshes per cell "
                "(roads='meshes') or not at all; paths on the walkable mesh go as a spline actor. massing=True sends each "
                "cell's envelopes as a static mesh. pcg=True writes PCG data: per cell (partition=True) a data asset and a cell "
