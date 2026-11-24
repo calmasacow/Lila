@@ -72,6 +72,22 @@ LandShape landShape(const std::string& terrain, Vec2 lo, Vec2 hi)
         any = (wet[i] = samples[i].value("water", 0.0) > 0.5 || samples[i].value("height", 0.0) < sea) || any;
     if (!any)
         return out;
+    // A cell beside water counts as water: the shore cell is half wet and the shore itself too steep for streets.
+    {
+        const std::vector<char> was = wet;
+        for (int z = 0; z < nz; ++z)
+            for (int x = 0; x < nx; ++x)
+                for (int dz = -1; dz <= 1 && !wet[size_t(z) * nx + x]; ++dz)
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        const int xx = x + dx, zz = z + dz;
+                        if (xx >= 0 && zz >= 0 && xx < nx && zz < nz && was[size_t(zz) * nx + xx])
+                        {
+                            wet[size_t(z) * nx + x] = 1;
+                            break;
+                        }
+                    }
+    }
     // Each row's land span; rows with no land are left out of the outline.
     std::vector<std::pair<int, int>> span(size_t(nz), {-1, -1});
     for (int z = 0; z < nz; ++z)
