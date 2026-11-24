@@ -1,0 +1,94 @@
+{
+  "id": "colonialCentro",
+  "label": "Colonial Centro",
+  "description": "One and two storey houses and shops of the old centre: tall doors, barred windows, iron balconettes, saturated painted render, flat roofs behind parapets.",
+  "tags": [
+    "centro",
+    "colonial",
+    "historic"
+  ],
+  "floors": {
+    "min": 1,
+    "max": 2,
+    "groundHeight": 480,
+    "height": 420,
+    "plinth": 25
+  },
+  "bays": {
+    "width": 330,
+    "min": 220,
+    "cornerWidth": 50
+  },
+  "openings": {
+    "window": {
+      "width": 0.4,
+      "height": 0.6,
+      "sill": 0.22,
+      "kind": "window.residential"
+    },
+    "door": {
+      "width": 0.5,
+      "height": 0.8,
+      "kind": "door.house"
+    },
+    "shopfront": {
+      "width": 0.62,
+      "height": 0.8
+    },
+    "reveal": 30
+  },
+  "groundFloor": {
+    "street": "window",
+    "arcade": 0.12,
+    "arcadeDepth": 320,
+    "shopfronts": true,
+    "shutters": 0.25,
+    "awnings": 0.15
+  },
+  "modules": {
+    "balconies": 0.45,
+    "balconyKind": "iron",
+    "grilles": 0.9,
+    "acUnits": 0.15,
+    "pilasters": true,
+    "cornice": "heavy",
+    "bands": true,
+    "corner": "quoin",
+    "drainpipes": true
+  },
+  "roof": {
+    "kind": "flat",
+    "parapet": 70,
+    "waterTanks": 0.7,
+    "clutter": 0.4,
+    "rebar": 0.04
+  },
+  "palette": {
+    "render": [
+      "#c8553d",
+      "#e0a458",
+      "#2a5d8f",
+      "#b83b5e",
+      "#3aa6a0",
+      "#a7c957",
+      "#f2c14e",
+      "#f28f6b"
+    ],
+    "trim": [
+      "#f4f1de",
+      "#efe6d2",
+      "#ffffff"
+    ],
+    "roof": [
+      "#7a6a5c"
+    ],
+    "base": [
+      "#6b5e55",
+      "#5a5048"
+    ],
+    "dirt": [
+      0.15,
+      0.45
+    ]
+  }
+}

@@ -94,8 +94,16 @@ gn::GeometryPtr applyToInstances(const gn::GeometryPtr& in, NodeId publisher, co
 
     std::vector<Slot> slots;
     slots.reserve(src.size());
+    const bool given = !spec.slots.empty() && spec.slots.size() == src.size();
     for (size_t k = 0; k < src.size(); ++k)
     {
+        if (given)
+        {
+            Slot s = spec.slots[k];
+            s.transform = src.transforms[k];
+            slots.push_back(std::move(s));
+            continue;
+        }
         Slot s;
         std::string type = spec.types.empty() ? std::string("prop") : spec.types.front();
         if (!typeIdx.empty() && k < typeIdx.size() && !spec.types.empty())

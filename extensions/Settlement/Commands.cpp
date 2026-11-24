@@ -609,6 +609,9 @@ void registerCommands(ext::Context& ctx)
         {"exclusionMargin", "xm", T::Float, 0.0, "Clearance around exclusions, cm.", {}, {}, 0.0},
         {"name", "n", T::String, "Settlement", "Name of the mesh made to hold the site."},
         {"terrainWater", "tw", T::Bool, true, "On a Terrain ground with no water of its own: the terrain's rivers crossing the outline become the settlement's water."},
+        {"buildingRoute", "br", T::String, "outline", "How buildings are made once laid out (settlementBuildings route=); buildings makes procedural ones.",
+         {"outline", "massing", "library", "masonry", "unreal", "buildings"}},
+        {"buildingStyle", "bs", T::String, nullptr, "buildings route: one Buildings style for every building; empty picks per envelope."},
     };
     for (FlagDef& f : layoutFlags())
         flags.push_back(std::move(f));
@@ -721,6 +724,13 @@ void registerCommands(ext::Context& ctx)
             out["mesh"] = host;
             out["modifier"] = mod;
             out["group"] = group;
+            if (const std::string route = a.get<std::string>("buildingRoute", "outline"); route != "outline")
+            {
+                json call = {{"args", {host}}, {"route", route}};
+                if (a.has("buildingStyle") && !a.get<std::string>("buildingStyle").empty())
+                    call["style"] = a.get<std::string>("buildingStyle");
+                out["buildingRoute"] = ops::execute("settlementBuildings", call);
+            }
             return out;
         },
         .examples = {"settlementCreate(profile='medievalTown', size=60000)",

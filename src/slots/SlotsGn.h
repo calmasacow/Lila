@@ -23,6 +23,12 @@ struct InstanceSlots
     std::vector<std::string> tags;
     /** The generator's payload for every slot (its own references are what draws until a rule or override says otherwise). */
     Payload defaults;
+    /**
+     * Per instance, in instance order: slots made by the generator itself (id, type, owner, regions, tags, payload), for
+     * generators whose ids are paths rather than int attributes. Their transforms come from the instances. When set, the
+     * fields above are ignored.
+     */
+    std::vector<Slot> slots;
 };
 
 /**
