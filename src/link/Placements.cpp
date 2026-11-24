@@ -520,9 +520,28 @@ std::string contentHash(const geo::Mesh& m)
     return std::format("{:016x}", h);
 }
 
+/** contentHash of a plain source's mesh and of its UCX_ children, which travel in its FBX; empty when it has no mesh. */
+std::string sourceHash(scene::Graph& g, scene::NodeId src)
+{
+    auto meshOf = [&g](scene::NodeId id) -> scene::MeshPtr {
+        const scene::Node* n = g.node(id);
+        const int out = n ? n->type().attrIndex("outMesh") : -1;
+        return out >= 0 ? n->as<scene::MeshPtr>(out) : nullptr;
+    };
+    const scene::MeshPtr own = meshOf(src);
+    if (!own)
+        return {};
+    std::string all = contentHash(*own);
+    for (scene::NodeId c : g.children(src))
+        if (const scene::Node* n = g.node(c); n && n->type().isA("mesh") && collisionProxy(n->name()))
+            if (const scene::MeshPtr hull = meshOf(c))
+                all += n->name() + meshHash(*hull);
+    return slots::hex(slots::idHash(all));
+}
+
 /**
  * What a group's placement in Unreal depends on, hashed: the same signature as the level holds means nothing to send.
- * Empty for a group whose asset content Lila can't name from the plan (a plain source's mesh), which always goes.
+ * Empty for a group whose asset content Lila can't name from the plan, which always goes.
  */
 std::string placementSignature(const json& grp, const std::vector<scene::MeshPtr>& meshes, const std::string& hlod, const std::string& linkedHlod)
 {
@@ -543,6 +562,8 @@ std::string placementSignature(const json& grp, const std::vector<scene::MeshPtr
         sig["unrealMesh"] = grp["unrealMesh"];
     else if (grp.contains("gnMesh") && grp["gnMesh"].get<size_t>() < meshes.size() && meshes[grp["gnMesh"].get<size_t>()])
         sig["mesh"] = contentHash(*meshes[grp["gnMesh"].get<size_t>()]);
+    else if (!grp.value("sourceHash", std::string()).empty())
+        sig["mesh"] = grp["sourceHash"];
     else
         return {};
     return slots::hex(slots::idHash(sig.dump()));
@@ -939,6 +960,8 @@ json buildPlan(scene::Graph& g, const std::vector<scene::NodeId>& roots, const P
         }
         else if (gnr)
             own["remove"] = true;
+        else
+            own["sourceHash"] = sourceHash(g, src);
         groups.push_back(std::move(own));
         if (!gnr)
             continue;

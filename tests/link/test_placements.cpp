@@ -835,6 +835,65 @@ TEST_CASE("placement signatures: a second send of the same geometry nodes result
     fs::remove_all(dir);
 }
 
+TEST_CASE("placement signatures: a plain mesh sent again unchanged is skipped, an edited one goes")
+{
+    setupPlacementTest();
+    buildKit();
+    fs::path dir = fs::temp_directory_path() / "lila_link_plain_signatures";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    auto level = std::make_shared<json>(json::object());
+    auto mx = std::make_shared<std::mutex>();
+    FakeServer server([level, mx](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "placementHashes"}}});
+        if (m == "placementHashes")
+        {
+            std::scoped_lock lock(*mx);
+            return FakeServer::reply(req, {{"groups", *level}});
+        }
+        if (m == "importAsset")
+            return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+        if (m == "placeInstances")
+        {
+            const json& p = req["params"];
+            std::scoped_lock lock(*mx);
+            (*level)[p["group"].get<std::string>()] = {{"hash", p.value("hash", "")}, {"actors", p["mode"] == "hism" ? size_t(1) : p["placements"].size()}};
+            return FakeServer::reply(req, {{"spawned", p["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        }
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    auto count = [&server](const char* method) {
+        return std::ranges::count_if(server.requests(), [method](const json& r) { return r["method"] == method; });
+    };
+
+    json first = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    CHECK(first["unchanged"] == 0);
+    CHECK(count("importAsset") == 1);
+    json second = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    CHECK(second["unchanged"] == 1);
+    CHECK(count("importAsset") == 1);
+    CHECK(count("placeInstances") == 1);
+
+    run("selectComponents", {{"args", {"Crate"}}, {"faces", {0}}});
+    run("deleteComponents");
+    json third = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    CHECK(third["unchanged"] == 0);
+    CHECK(count("importAsset") == 2);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
 TEST_CASE("custom primitive data: names declared on the source map member attrs to slots, saved and undoable")
 {
     setupPlacementTest();
