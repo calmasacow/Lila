@@ -63,6 +63,8 @@ std::vector<std::shared_ptr<const Published>> allPublished();
 void forgetPublished(uint64_t modifier);
 
 void registerNode(lila::ext::Context& ctx);
+/** Leaves one building's shell and modules out of its mesh (Edit Rooms' cutaway); empty for none. True when it changed. */
+bool setCutawayBuilding(const std::string& id);
 /** Drops cached generation results (after a style edit). */
 void clearGenerationCache();
 

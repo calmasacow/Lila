@@ -176,8 +176,9 @@ QDockWidget* roomPaletteDock()
     return nullptr;
 }
 
-// Cutaway: visibility set straight on the nodes with undo off, put back when the tool ends.
+// Cutaway: the building is left out of its mesh and interior parts are hidden with undo off, put back when the tool ends.
 std::vector<scene::NodeId> gHidden;
+scene::NodeId gCutModifier = scene::kNoNode;
 std::string gToolBuilding;
 bool gToolActive = false;
 
@@ -199,6 +200,9 @@ void restoreCutaway()
     for (scene::NodeId id : gHidden)
         setVisible(id, true);
     gHidden.clear();
+    if (setCutawayBuilding("") && gCutModifier != scene::kNoNode && scene::Graph::current().node(gCutModifier))
+        scene::Graph::current().touch(gCutModifier);
+    gCutModifier = scene::kNoNode;
 }
 
 void syncCutaway()
@@ -215,7 +219,12 @@ void syncCutaway()
         }
     };
     if (auto loc = locateBuilding(gToolBuilding))
-        hide(g.find(loc->mesh));
+        if (scene::Node* mod = g.find(loc->modifier))
+        {
+            setCutawayBuilding(gToolBuilding);
+            gCutModifier = mod->id();
+            g.touch(mod->id());
+        }
     if (scene::Node* grp = g.find(interiorGroupOf(gToolBuilding)))
         for (scene::NodeId c : g.children(grp->id()))
             if (scene::Node* n = g.node(c); n && n->type().attrIndex(kPartMark) >= 0)

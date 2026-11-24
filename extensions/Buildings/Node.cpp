@@ -36,6 +36,8 @@ uint64_t gTick = 0;
 constexpr size_t kCacheMax = 30000;
 
 std::mutex gPubMutex;
+/** The building Edit Rooms cuts away: its shell and modules are left out of its mesh. */
+std::string gCutaway;
 std::map<uint64_t, std::shared_ptr<const Published>> gPub;
 
 std::mutex gGeoMutex;
@@ -247,6 +249,11 @@ void exec(ExecContext& c)
         if (r.enabled)
             rulePatterns.push_back(r.type);
 
+    std::string cutaway;
+    {
+        std::lock_guard lock(gPubMutex);
+        cutaway = gCutaway;
+    }
     Soup shell;
     std::vector<int32_t> faceBuilding;
     std::vector<std::string> materialNames;
@@ -276,6 +283,7 @@ void exec(ExecContext& c)
         {
             const Result& r = *pub->results[i];
             const Spec& sp = parsed->specs[i];
+            const bool cut = !cutaway.empty() && r.id == cutaway;
             std::vector<std::string> regions = sp.regions;
             regions.push_back("style:" + r.style);
             if (!cell.empty())
@@ -311,7 +319,7 @@ void exec(ExecContext& c)
                     if (check && setsVisual(slots::resolve(s, *st).payload))
                         dropped[k] = 1;
                 }
-                if (lod == "near" && withModules)
+                if (lod == "near" && withModules && !cut)
                 {
                     int ref = 0;
                     if (m.shell)
@@ -346,6 +354,8 @@ void exec(ExecContext& c)
                 slotList.push_back(std::move(s));
             }
 
+            if (cut)
+                continue;
             // Shell faces, materials by palette.
             const Soup& src = lod == "near" ? r.shell : lod == "hlod" ? r.hlod : r.far;
             int32_t mats[MatCount];
@@ -454,6 +464,15 @@ void forgetPublished(uint64_t modifier)
 {
     std::lock_guard lock(gPubMutex);
     gPub.erase(modifier);
+}
+
+bool setCutawayBuilding(const std::string& id)
+{
+    std::lock_guard lock(gPubMutex);
+    if (gCutaway == id)
+        return false;
+    gCutaway = id;
+    return true;
 }
 
 void clearGenerationCache()
