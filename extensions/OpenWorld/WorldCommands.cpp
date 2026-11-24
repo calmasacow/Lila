@@ -624,6 +624,9 @@ json buildWorld(json spec, const BuildOptions& o)
                 built["origin"] = origin;
                 if (applied.contains("features") && applied["features"].contains("group"))
                     built["remixFeatures"] = applied["features"]["group"];
+                // The remix overlay is an editing aid that projects every remixed line each frame: a built world
+                // starts with it off (Remix Overlay turns it back on).
+                run("remixView", {{"args", {terrain}}, {"overlay", false}});
             }
         }
         if (!terrain.empty() && spec.contains("terrain") && spec["terrain"].is_object() && !skipped("terrain"))
