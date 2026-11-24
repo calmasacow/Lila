@@ -753,11 +753,20 @@ Ground groundOf(const std::string& mesh)
 
 std::vector<scene::NodeId> zoneSets()
 {
-    std::vector<scene::NodeId> out;
+    // The overlay asks every frame; the sets change only when nodes come or go.
+    static const Graph* cachedGraph = nullptr;
+    static uint64_t cachedStructure = 0;
+    static std::vector<scene::NodeId> cached;
     Graph& g = Graph::current();
+    if (cachedGraph == &g && cachedStructure == g.structure())
+        return cached;
+    std::vector<scene::NodeId> out;
     for (scene::NodeId id : g.nodes())
         if (Node* n = g.node(id); n && isSet(*n))
             out.push_back(id);
+    cachedGraph = &g;
+    cachedStructure = g.structure();
+    cached = out;
     return out;
 }
 
@@ -765,7 +774,10 @@ std::shared_ptr<const ZoneSpec> specOf(const Node& set, std::string* error)
 {
     static std::mutex m;
     static std::map<uint64_t, std::pair<std::string, std::shared_ptr<const ZoneSpec>>> cache;
-    const std::string text = textAttr(set, kSpecAttr);
+    static const std::string none;
+    const int ai = set.type().attrIndex(kSpecAttr);
+    const std::string* held = ai < 0 ? nullptr : std::get_if<std::string>(&set.value(ai));
+    const std::string& text = held ? *held : none;
     std::lock_guard lock(m);
     auto it = cache.find(set.id());
     if (it != cache.end() && it->second.first == text)
