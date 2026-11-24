@@ -2981,6 +2981,13 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
         corePart.push_back(out.parts.size());
         out.parts.push_back({k.id, -1, {}});
     }
+    // Ceilings are a part per floor, so a cutaway can lift them off the floor being worked on.
+    std::vector<size_t> ceilingPart;
+    for (const PlateW& p : x.plates)
+    {
+        ceilingPart.push_back(out.parts.size());
+        out.parts.push_back({p.prefix + "/ceiling", p.floor, {}});
+    }
     auto soupFor = [&](const PlateW& p, int e) -> Soup* {
         if (e == kCoreCell)
             return p.core >= 0 ? &out.parts[corePart[size_t(p.core)]].soup : nullptr;
@@ -3010,7 +3017,7 @@ std::shared_ptr<const Interior> generateInterior(const Spec& spec, const Result&
                     c.push_back({v.x, yc, v.y});
                 }
                 face(s, f, kIntUp, fm);
-                face(s, c, -kIntUp, IntCeiling);
+                face(out.parts[ceilingPart[size_t(&p - x.plates.data())]].soup, c, -kIntUp, IntCeiling);
             }
         }
         // The rooms' side of the outside walls, openings cut through.

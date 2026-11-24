@@ -51,15 +51,44 @@ mesh's footprint. Units cm, Y up. Every command is undoable and echoed; Python: 
 
 ## Check and ship
 
-- `buildingCheck()`: modulesIntersecting, doorNotReachingGround, overlappingNeighbours, slotFloating, realName.
+- `buildingCheck()`: modulesIntersecting, doorNotReachingGround, overlappingNeighbours, slotFloating, realName, and the
+  interior issues below.
 - LOD: `buildingLod(lod='far')` per mesh; `buildingProxies()` makes `<mesh>_HLOD` and `<mesh>_Far` for export.
-- Unreal: `buildingSend()` sends shells (Nanite), proxies, slots and per-building colours (MF_LilaBuildingVariation).
+- Unreal: `buildingSend()` sends shells (Nanite), proxies, slots and per-building colours (MF_LilaBuildingVariation),
+  interiors as Level Instances, and window glass (fake rooms where there is no interior).
 - Trim sheet: `buildingTrimSheet()` copies and bakes LilaBuilding.lilatrim.
 
-## Interiors (W4) and site kits (W5)
+## Interiors
 
-- `buildingInfo` gives `plates` (floor outlines per floor), `core` (stair and lift position and size), `openings` per
-  facade (bay, kind, slot, origin, normal, size) and `enterable`; `buildingEdit(id, enterable=True)` marks one.
+- `buildingMakeEnterable(id)` (or a list): rooms from the building's own grammar, by program (shop, house, apartment,
+  office, hotel, warehouse, police, mansion, bar, garage, church; `generic` rooms when the use is none of them, said in
+  `warnings`), a stair core with a lift on taller buildings, doors, the facade's windows cut through, furnishing and
+  ceiling lamp slots. `program=` forces one. The building is pinned; its street doors that open into rooms get the slot
+  tag `entry` (`slotRule('add', type='door', tag='entry', unrealClass='/Game/BP/BP_Door.BP_Door_C')`). When no door opens
+  into a room one is painted on the street (`entryAdded`).
+- `buildingInterior(id)`: rooms (`l0/sales`, `l1/bedroom2`, `l3/u2-living`), doors (`l0/door/backroom+sales`), stairs,
+  entries, room meshes and whether each is hand-edited; `check=True` adds the issues; `programs=True` lists programs,
+  room kinds and presets.
+- Layout: `buildingRoom(id, room='l0/backroom', kind='kitchen')`, `split='auto'|'u'|'v', at=0.5, newKind='office'`,
+  `merge='l0/toilet'`, `grow='l0/backroom', by=80` (moves the shared wall), `swap='l0/x'`, `program='bar'`,
+  `reset=True`. Doors: `buildingDoor(id, add=['l0/sales', 'l0/toilet'], at=[x, y, z])`, `remove='l0/door/a+b'`.
+  Kept by room id in the building's edits; stale ones come back in `orphanEdits`.
+- Room meshes live in `Interior_<hex>` beside the building mesh; model them freely: a hand-edited room is kept when the
+  interior regenerates (`keptEdited`), `buildingMakeEnterable(id, reset=True)` regenerates it.
+- Slots: owner `interior:<hex>`, types `door.interior(.double)`, `lamp.ceiling`, `lift`, `furnishing.*` (swap with rules
+  or the library). Room presets: `buildingRoomPresets()`, `save={kind: {pieces: [{type, place}]}}`; `roomFurnish(mesh,
+  kind=)` furnishes any floor (Set Dressing presets "Room: <Kind>" run it).
+- Character: `buildingCharacterProfile(height=, radius=, maxStep=, maxSlope=)` (Unreal's default character unless set);
+  stairs and doors are built to it. `buildingCheck(maxStep=30)` checks against another without rebuilding.
+- `buildingCheck()` adds roomUnreachable, doorNoOpening, stairSteep, stairLow, doorNarrow, doorLow, noEntry,
+  interiorMissing.
+- Back: `buildingMakeExterior(id)` (undoable; layout edits stay unless clear=True). Windows of buildings without rooms
+  carry slot data `interior: card, room: <kind>` for fake interiors.
+- Unreal: `buildingSend(interiors='levelInstance'|'dataLayer'|'none')`.
+- `buildingInfo` still gives the raw hooks: `plates`, `core`, `openings`, `enterable`.
+
+## Site kits
+
 - Site kits use the styles (mausoleum, portShed, packingPlant, hangar) through `buildingCreate(envelopes=[...], style=...)`.
 )";
 } // namespace
@@ -69,7 +98,8 @@ void registerAgent(lila::ext::Context& ctx)
     lila::mcp::Server::get().addResource(ctx, {.uri = "lila://guide/buildings",
                                                .name = "Buildings guide",
                                                .description = "Procedural buildings: make them from settlements, curves or OSM, ids, edits, bay paint, "
-                                                              "styles, slots, checks, LOD and Unreal. Read before making or editing buildings.",
+                                                              "styles, slots, enterable interiors and room layout, checks, LOD and Unreal. Read before "
+                                                              "making or editing buildings.",
                                                .read = [] { return std::string(kGuide); }});
 }
 } // namespace buildings

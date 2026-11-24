@@ -1,5 +1,5 @@
 // Buildings in the UI: Level > Buildings, the Level Toolkit's Buildings section, and the Attribute Editor section on
-// building meshes (the building being edited, its style, floors, bays, seed, palette and LOD).
+// building meshes (the building being edited, its style, floors, bays, seed, palette, LOD and its interior).
 
 #include "BuildingsScene.h"
 
@@ -255,9 +255,45 @@ QWidget* buildingForm(scene::NodeId meshId)
 
     auto* enter = new QCheckBox(w);
     enter->setChecked(res.enterable);
-    enter->setToolTip("Marked for a generated interior");
-    QObject::connect(enter, &QCheckBox::clicked, w, [edit](bool on) { edit({{"enterable", on}}); });
+    enter->setToolTip("Rooms inside, generated from the building; off goes back to fake interiors behind the windows");
+    QObject::connect(enter, &QCheckBox::clicked, w, [id](bool on) {
+        runUi(on ? "buildingMakeEnterable" : "buildingMakeExterior", {{"args", {id}}});
+        refreshSections();
+    });
     f->addRow("Enterable", enter);
+    if (res.enterable)
+        if (std::shared_ptr<const Interior> in = interiorOf(id))
+        {
+            auto* program = new QComboBox(w);
+            for (const std::string& p : interiorPrograms())
+            {
+                QString label = qs(p);
+                label[0] = label[0].toUpper();
+                program->addItem(label, qs(p));
+            }
+            program->setCurrentIndex(std::max(0, program->findData(qs(in->program))));
+            program->setToolTip(qs("Interior program, from " + (in->programFrom == "given" ? std::string("an edit") : in->programFrom == "fallback"
+                                                                      ? std::string("nothing it knows: generic rooms")
+                                                                      : std::string("the building's use"))));
+            QObject::connect(program, &QComboBox::activated, w, [program, id](int i) {
+                runUi("buildingRoom", {{"args", {id}}, {"program", program->itemData(i).toString().toStdString()}});
+                refreshSections();
+            });
+            f->addRow("Program", program);
+            int floorCount = 0, unreachable = 0;
+            for (const Room& r : in->rooms)
+            {
+                floorCount = std::max(floorCount, r.floor + 1);
+                unreachable += r.reachable ? 0 : 1;
+            }
+            std::string summary = std::to_string(in->rooms.size()) + " rooms, " + std::to_string(in->doors.size()) + " doors, " + std::to_string(floorCount) +
+                                  (floorCount == 1 ? " floor" : " floors");
+            if (unreachable > 0)
+                summary += ", " + std::to_string(unreachable) + " unreachable";
+            auto* rooms = new QLabel(qs(summary), w);
+            rooms->setEnabled(unreachable > 0);
+            f->addRow("Rooms", rooms);
+        }
 
     auto* lod = new controls::Segmented(w);
     lod->add("Near", {}, "Shell and modules", 0);
@@ -281,6 +317,8 @@ QWidget* buildingForm(scene::NodeId meshId)
     h->setContentsMargins(0, 0, 0, 0);
     h->setSpacing(4);
     h->addWidget(controls::push("buildings.paint", row, "Paint Bays"));
+    if (res.enterable)
+        h->addWidget(controls::push("buildings.rooms", row, "Edit Rooms"));
     auto* reset = new QToolButton(row);
     reset->setText("Reset");
     reset->setToolTip("Drop every edit of this building: style, floors, bays, colours");
@@ -314,6 +352,7 @@ void warnOnThrow(const std::function<void()>& fn)
 void registerUi(ext::Context& ctx)
 {
     registerPaintTool(ctx);
+    registerRoomTool(ctx);
     auto add = [&](Action a) {
         a.keywords.insert(a.keywords.end(), kKeywords.begin(), kKeywords.end());
         a.category = "Buildings";
@@ -412,6 +451,29 @@ void registerUi(ext::Context& ctx)
          .python = "buildingStyleSave(id='pinkCentro', base='colonialCentro', spec={'palette': {'render': ['#e8a0b4']}})",
          .command = "buildingStyleSave",
          .icon = "device-floppy"});
+    add({.id = "buildings.enterable",
+         .label = "Make Enterable",
+         .run = [] { warnOnThrow([] { actions::runWithOptions("buildingMakeEnterable", {{"building", currentBuilding().empty() ? selectedBuildings() : json(currentBuilding())}}); }); },
+         .doc = "Give the building being edited (or the selection's) rooms inside: stairs, rooms by its use, doors, furnishing slots.",
+         .python = "buildingMakeEnterable('building:1a2b')",
+         .command = "buildingMakeEnterable",
+         .icon = "door-enter",
+         .keywords = {"interior", "rooms", "enter", "floor plan"}});
+    add({.id = "buildings.exterior",
+         .label = "Make Exterior",
+         .run = [] { warnOnThrow([] { actions::runWithOptions("buildingMakeExterior", {{"building", currentBuilding().empty() ? selectedBuildings() : json(currentBuilding())}}); }); },
+         .doc = "Take a building's interior away again; its windows go back to fake interiors.",
+         .python = "buildingMakeExterior('building:1a2b')",
+         .command = "buildingMakeExterior",
+         .icon = "door-exit",
+         .keywords = {"interior", "rooms"}});
+    add({.id = "buildings.profile",
+         .label = "Character Profile",
+         .doc = "The character interiors are built and checked for: height, radius, step and slope.",
+         .python = "buildingCharacterProfile(height=180, radius=35, maxStep=45, maxSlope=44)",
+         .command = "buildingCharacterProfile",
+         .icon = "walk",
+         .keywords = {"navigation", "capsule", "stairs", "nav mesh"}});
     add({.id = "buildings.reloadStyles",
          .label = "Reload Building Styles",
          .run = [] { runUi("buildingStyles", {{"reload", true}}); },
@@ -422,8 +484,9 @@ void registerUi(ext::Context& ctx)
     menus::addItem(ctx, {.id = "buildings.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Buildings",
                          .before = levelToolkit::kDressSection});
     int sep = 0;
-    for (const char* a : {"buildings.create", "buildings.paint", "buildings.style", "buildings.check", "", "buildings.age", "buildings.standalone",
-                          "buildings.lod", "buildings.proxies", "", "buildings.saveStyle", "buildings.reloadStyles", "buildings.trimSheet"})
+    for (const char* a : {"buildings.create", "buildings.paint", "buildings.style", "buildings.check", "", "buildings.enterable", "buildings.rooms",
+                          "buildings.exterior", "buildings.profile", "", "buildings.age", "buildings.standalone", "buildings.lod", "buildings.proxies", "",
+                          "buildings.saveStyle", "buildings.reloadStyles", "buildings.trimSheet"})
         if (!*a)
             menus::addItem(ctx, {.id = "buildings.menu.sep" + std::to_string(++sep), .menu = kMenu, .kind = menus::Kind::Separator});
         else
@@ -435,8 +498,12 @@ void registerUi(ext::Context& ctx)
                                       {.action = "buildings.paint", .icon = "brush", .text = "Paint Bays", .shelf = "Bays"},
                                       {.action = "buildings.style", .icon = "palette", .text = "Style"},
                                       {.action = "buildings.check", .icon = "list-check", .text = "Check"},
+                                      {.action = "buildings.enterable", .icon = "door-enter", .text = "Enterable"},
+                                      {.action = "buildings.rooms", .icon = "layout-board", .text = "Rooms", .shelf = "Rooms"},
                                       {.action = "buildings.age", .text = "Age"},
                                       {.action = "buildings.standalone", .text = "Standalone"},
+                                      {.action = "buildings.exterior", .text = "Exterior", .rare = true},
+                                      {.action = "buildings.profile", .text = "Character Profile", .rare = true},
                                       {.action = "buildings.lod", .text = "LOD", .rare = true},
                                       {.action = "buildings.proxies", .text = "Proxies", .rare = true},
                                       {.action = "buildings.saveStyle", .text = "Save Style", .rare = true},
@@ -461,6 +528,20 @@ void registerUi(ext::Context& ctx)
     ops::options::setOverride("buildingStyle", {.order = {"style", "all", "clear"}, .hidden = {"building", "polygon"}, .choices = {{"style", styleLabels}}});
     ops::options::setOverride("buildingEdit", {.hidden = {"building", "bays", "toggles", "facadeBays", "clearBays", "palette"}, .choices = {{"style", styleLabels}}});
     ops::options::setOverride("buildingAge", {.order = {"preset", "dirt", "seed"}, .hidden = {"building", "polygon", "meshes"}});
+    std::vector<std::pair<std::string, std::string>> programLabels;
+    for (const std::string& p : interiorPrograms())
+    {
+        std::string l = p;
+        l[0] = char(std::toupper(static_cast<unsigned char>(l[0])));
+        programLabels.push_back({p, l});
+    }
+    ops::options::setOverride("buildingMakeEnterable", {.order = {"program", "furnish", "entry", "pin", "reset"}, .hidden = {"building"},
+                                                        .labels = {{"entry", "Add Entry"}, {"reset", "Reset Hand Edits"}}, .choices = {{"program", programLabels}}});
+    ops::options::setOverride("buildingMakeExterior", {.hidden = {"building"}, .labels = {{"clear", "Clear Layout"}}});
+    ops::options::setOverride("buildingCharacterProfile", {.order = {"height", "radius", "maxStep", "maxSlope", "reset"},
+                                                           .labels = {{"maxStep", "Max Step"}, {"maxSlope", "Max Slope"}},
+                                                           .ranges = {{"height", {30.0, 400.0, 5.0, " cm"}}, {"radius", {5.0, 150.0, 1.0, " cm"}},
+                                                                      {"maxStep", {1.0, 100.0, 1.0, " cm"}}, {"maxSlope", {5.0, 85.0, 1.0, "\u00b0"}}}});
     ops::options::setOverride("buildingLod", {.choices = {{"lod", {{"near", "Near"}, {"hlod", "HLOD"}, {"far", "Far"}}}}});
     ops::options::setOverride("buildingStyleSave", {.order = {"id", "base", "label", "description", "scope"}, .hidden = {"spec"}, .labels = {{"id", "Name"}},
                                                     .choices = {{"base", styleLabels}, {"scope", {{"user", "User"}, {"workspace", "Workspace"}}}}});

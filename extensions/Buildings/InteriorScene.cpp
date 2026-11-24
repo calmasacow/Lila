@@ -14,6 +14,7 @@
 #include <lila/Mesh.h>
 #include <lila/MeshOps.h>
 #include <lila/Node.h>
+#include <lila/Paths.h>
 #include <lila/Prefs.h>
 #include <lila/Profile.h>
 #include <lila/Slots.h>
@@ -437,7 +438,16 @@ void ensureRoomArrangements()
                          {"args", {"$floor"}},
                          {"flags", {{"items", "$clutter"}, {"density", 0.4}, {"realize", true}, {"settle", true}, {"name", "Clutter"}}},
                          {"needs", {"clutter"}}});
+        // A thumbnail of its own, so the library never stages the preset in the open scene to draw one.
+        static const std::map<std::string, std::string> kIcons = {
+            {"bedroom", "bed"}, {"living", "sofa"}, {"salon", "armchair"}, {"kitchen", "tools-kitchen-2"}, {"bathroom", "bath"},
+            {"toilet", "toilet-paper"}, {"sales", "building-store"}, {"storage", "box"}, {"backroom", "box"}, {"office", "briefcase"},
+            {"openfloor", "building-warehouse"}, {"workshop", "tool"}, {"bar", "beer"}, {"nave", "building-church"}, {"cell", "lock"},
+            {"briefing", "users"}, {"armory", "shield"}, {"locker", "hanger"}, {"study", "notebook"}, {"dining", "table"}};
+        const auto ic = kIcons.find(kind);
+        const std::string thumb = (lila::paths::resourcesDir() / "icons" / "tabler" / ((ic == kIcons.end() ? std::string("layout-board") : ic->second) + ".svg")).generic_string();
         const json spec = {{"category", "Rooms"},
+                           {"thumbnail", thumb},
                            {"description", "Furnishing for a " + kind + ": the room preset's pieces as slots on the floor, clutter from the library if given."},
                            {"slots",
                             {{"floor", {{"kind", "mesh"}, {"doc", "The room's floor (or the room mesh)."}}},

@@ -1,7 +1,10 @@
 // buildingSend: building meshes to Unreal. Shells go as Nanite static meshes placed where they stand (each cell mesh lies
 // inside one of Settlement's World Partition cells), modules as slots keyed by slot id (W0's path in
 // unrealPlaceInstances), the HLOD and far proxies as meshes of their own, and MF_LilaBuildingVariation with M_LilaBuilding
-// and an instance per style, assigned to the shells' building material slots.
+// and an instance per style, assigned to the shells' building material slots. Interiors of enterable buildings go apart from
+// their shells: their room meshes as actors colliding as modelled, made into a Level Instance (or put on a runtime data
+// layer of their own), and the windows' glass gets the fake-room material where there is no interior, clear glass where
+// there is.
 
 #include "BuildingsScene.h"
 
@@ -43,6 +46,10 @@ void registerUnreal(ext::Context& ctx)
         .flags = {{"folder", "f", ArgType::String, "/Game/Lila/Buildings", "Content folder for the shells and module meshes."},
                   {"proxies", "px", ArgType::Bool, true, "Make and send the HLOD and far proxies too."},
                   {"hlodLayer", "hl", ArgType::String, "", "HLOD layer asset for the shells."},
+                  {"interiors", "in", ArgType::String, "levelInstance",
+                   "How interiors of enterable buildings stream apart from their shells: a Level Instance each (on a runtime data layer "
+                   "of its own in World Partition levels), their actors on a runtime data layer, or not sent.",
+                   {"levelInstance", "dataLayer", "none"}},
                   {"dryRun", "dr", ArgType::Bool, false, "Only return what would be sent."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -74,6 +81,13 @@ void registerUnreal(ext::Context& ctx)
                 if (std::shared_ptr<const Style> st = findStyle(s))
                     instances.push_back(styleInstance(*st));
             json out = {{"meshes", meshes}, {"instances", instances}};
+            const std::string interiorMode = a.get<std::string>("interiors", "levelInstance");
+            json interiorGroups = json::array();
+            if (interiorMode != "none")
+                for (const std::string& id : enterableBuildings())
+                    if (const std::string grp = interiorGroupOf(id); !grp.empty())
+                        interiorGroups.push_back({{"building", id}, {"group", grp}, {"name", "Interior_" + id.substr(id.find(':') + 1)}});
+            out["interiors"] = interiorGroups;
             if (a.get<bool>("dryRun", false))
                 return out;
             std::vector<std::string> send = meshes;
@@ -117,6 +131,44 @@ void registerUnreal(ext::Context& ctx)
             if (!r.ok)
                 throw CommandError("buildingSend: buildingMaterials: " + r.error);
             out["materials"] = r.result;
+
+            // Interiors, and the windows' glass on every module mesh sent.
+            json glass = json::array();
+            for (const json& grp : plan.value("groups", json::array()))
+                if (grp.contains("objectPath"))
+                    glass.push_back(grp["objectPath"]);
+            const bool canInteriors = std::find(features.begin(), features.end(), json("buildingInteriors")) != features.end();
+            if (!canInteriors)
+            {
+                out["interiorsNote"] = "this LilaLink has no buildingInteriors feature: interiors and window glass were not sent; update the plugin";
+                return out;
+            }
+            const std::string folder = a.get<std::string>("folder", "/Game/Lila/Buildings");
+            json entries = json::array();
+            for (const json& i : interiorGroups)
+            {
+                const json placed = ops::execute("unrealPlaceInstances", {{"args", {i["group"]}}, {"folder", folder + "/Interiors"}, {"mode", "actors"},
+                                                                          {"collision", "complexAsSimple"}, {"wait", true}});
+                json keys = json::array();
+                for (const json& grp : placed.value("groups", json::array()))
+                    keys.push_back(grp.at("key"));
+                const std::string key = "interior:" + i["building"].get<std::string>().substr(9);
+                json entry = {{"building", i["building"]}, {"name", i["name"]}, {"mode", interiorMode}, {"groups", keys}};
+                if (interiorMode == "levelInstance")
+                {
+                    const link::RpcResult li = client->call("makeLevelInstance", {{"key", key}, {"name", i["name"]}, {"kind", "levelInstance"},
+                                                                                  {"level", folder + "/Interiors/LI_" + i["name"].get<std::string>()}, {"groups", keys}},
+                                                            120000);
+                    entry["levelInstance"] = li.ok ? li.result : json{{"error", li.error}};
+                    entry["assembly"] = key;
+                }
+                entries.push_back(entry);
+            }
+            const link::RpcResult ir = client->call("buildingInteriors", {{"folder", folder}, {"interiors", entries}, {"glassAssets", glass}}, link::importCallOptions());
+            if (!ir.ok)
+                throw CommandError("buildingSend: buildingInteriors: " + ir.error);
+            out["interiorResult"] = ir.result;
+            out["interiorLevels"] = entries;
             return out;
         },
         .examples = {"buildingSend()", "buildingSend('Town_Buildings_0_0', dryRun=True)"},

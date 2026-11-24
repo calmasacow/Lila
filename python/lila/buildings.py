@@ -121,3 +121,33 @@ def age(buildings: Optional[Sequence[str]] = None, preset: Optional[str] = None,
 def send(*meshes: str, **flags: Any) -> dict:
     """Send building meshes to Unreal (buildingSend)."""
     return _call("buildingSend", *meshes, **flags)
+
+
+def make_enterable(*buildings: str, **flags: Any) -> dict:
+    """Give buildings rooms inside (buildingMakeEnterable): program=, furnish=, pin=, entry=, reset=."""
+    return _call("buildingMakeEnterable", *buildings, **flags)
+
+
+def make_exterior(*buildings: str, clear: bool = False) -> dict:
+    """Take buildings' interiors away again (buildingMakeExterior)."""
+    return _call("buildingMakeExterior", *buildings, clear=clear)
+
+
+def interior(building: str, check: bool = False) -> dict:
+    """A building's rooms, doors, stairs and room meshes (buildingInterior)."""
+    return _call("buildingInterior", building, check=check)
+
+
+def room(building: str, room_id: Optional[str] = None, **flags: Any) -> dict:
+    """Edit the room layout (buildingRoom): kind=, split=, at=, newKind=, merge=, grow=, by=, swap=, program=, reset=."""
+    return _call("buildingRoom", building, room=room_id, **flags)
+
+
+def door(building: str, add: Optional[Sequence[str]] = None, remove: Optional[str] = None, **flags: Any) -> dict:
+    """Add a door between two rooms or remove one by id (buildingDoor)."""
+    return _call("buildingDoor", building, add=list(add) if add else None, remove=remove, **flags)
+
+
+def character(**flags: Any) -> dict:
+    """The character interiors are built and checked for (buildingCharacterProfile): height=, radius=, maxStep=, maxSlope=."""
+    return _call("buildingCharacterProfile", **flags)

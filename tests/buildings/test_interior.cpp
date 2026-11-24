@@ -677,3 +677,4 @@ TEST_CASE("interiors commands: three buildings of the OSM fixture town")
     for (const char* k : {"roomUnreachable", "doorNoOpening", "stairSteep", "stairLow", "doorNarrow", "doorLow", "noEntry", "interiorMissing"})
         CHECK(check["counts"][k] == 0);
 }
+

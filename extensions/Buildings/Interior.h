@@ -109,7 +109,7 @@ struct FloorGrid
 
 struct InteriorPart
 {
-    std::string id; // room id or "core0"
+    std::string id; // room id, "core0", or "l2/ceiling" (a floor's ceilings)
     int floor = -1;
     Soup soup;
 };
