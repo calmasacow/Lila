@@ -14,6 +14,9 @@ namespace LilaLink
  * their spline mesh; with join, splines meeting at one point share its control point. Each spline is {closed, points: [{position (relative to location), arriveTangent, leaveTangent, up, roll,
  * scale}]}. Replies {actor, components, segments, warnings}.
  *
+ * Landscape mode also takes per spline layer (paint layer, added to the landscape when missing), layerWidth (share of the width
+ * it paints, 0-1) and deform (overrides deformTerrain), and replies paintLayers and paintLayersAdded.
+ *
  * removeSpline {id} deletes what setSpline made for id. Replies {removed}.
  */
 void AddSplineMethods(TMap<FString, FLilaLinkMethod>& Methods);

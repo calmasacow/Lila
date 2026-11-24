@@ -728,22 +728,143 @@ json sendCellMesh(link::RpcClient& c, const geo::Mesh& mesh, const std::string& 
                 cmd);
 }
 
+/** The polyline cut back by from at its start and to at its end; empty when nothing is left. */
+std::vector<glm::dvec3> trimmed(const std::vector<glm::dvec3>& pts, double from, double to)
+{
+    double length = 0.0;
+    for (size_t i = 1; i < pts.size(); ++i)
+        length += glm::length(pts[i] - pts[i - 1]);
+    if (from + to >= length - 1.0)
+        return {};
+    std::vector<glm::dvec3> out;
+    double at = 0.0;
+    for (size_t i = 1; i < pts.size(); ++i)
+    {
+        const double step = glm::length(pts[i] - pts[i - 1]);
+        if (step <= 0.0)
+            continue;
+        const double a0 = at, a1 = at + step;
+        if (a1 > from && a0 < length - to)
+        {
+            if (out.empty())
+                out.push_back(glm::mix(pts[i - 1], pts[i], std::max(0.0, from - a0) / step));
+            out.push_back(glm::mix(pts[i - 1], pts[i], std::min(1.0, (length - to - a0) / step)));
+        }
+        at = a1;
+    }
+    return out.size() >= 2 ? out : std::vector<glm::dvec3>{};
+}
+
+/** The polyline moved sideways by d in the ground plane, mitred at the corners. */
+std::vector<glm::dvec3> offsetLine(const std::vector<glm::dvec3>& pts, double d)
+{
+    auto side = [](const glm::dvec3& p, const glm::dvec3& q) {
+        const glm::dvec2 t(q.x - p.x, q.z - p.z);
+        const double n = glm::length(t);
+        return n > 0.0 ? glm::dvec2(-t.y, t.x) / n : glm::dvec2(0.0);
+    };
+    std::vector<glm::dvec3> out;
+    for (size_t i = 0; i < pts.size(); ++i)
+    {
+        const glm::dvec2 in = i > 0 ? side(pts[i - 1], pts[i]) : side(pts[i], pts[i + 1]);
+        const glm::dvec2 on = i + 1 < pts.size() ? side(pts[i], pts[i + 1]) : in;
+        glm::dvec2 m = in + on;
+        const double len = glm::length(m);
+        m = len > 1e-9 ? m / len : on;
+        // Mitre length, capped so a hairpin does not throw the shoulder far out.
+        const double cosHalf = std::max(0.5, glm::dot(m, on));
+        out.push_back(pts[i] + glm::dvec3(m.x, 0.0, m.y) * (d / cosHalf));
+    }
+    return out;
+}
+
+/**
+ * Ground roads as landscape splines: each road paints layer over its carriageway (lanes, median, parking) and shapes its
+ * whole width; with shoulderLayer, a spline each side that leaves the heights alone paints the sidewalk and verge strip,
+ * cut back at junctions. Shoulders go first, so on a weight-blended landscape the road layer wins where they meet.
+ */
+json landscapeRoadSplines(const Rebuilt& r, const std::string& layer, const std::string& shoulderLayer, bool deform)
+{
+    const Layout& l = r.layout;
+    const std::vector<StreetLine> lines = streetLines(l, r.ground);
+    std::map<int, double> junctionReach;
+    for (const StreetLine& s : lines)
+        if (!s.surface)
+            for (int node : {s.startNode, s.endNode})
+                if (node >= 0 && l.graph.degree(node) >= 3)
+                    junctionReach[node] = std::max(junctionReach[node], 0.5 * s.width);
+    auto reach = [&](int node) {
+        const auto it = junctionReach.find(node);
+        return it != junctionReach.end() ? it->second : 0.0;
+    };
+    auto entry = [](const curve::Spline& s, const std::string& paint, double share, bool shapes) {
+        json out = link::splinePoints({s}, glm::dvec3(0.0));
+        if (out.empty())
+            return json();
+        json j = out[0];
+        if (!paint.empty())
+        {
+            j["layer"] = paint;
+            j["layerWidth"] = share;
+        }
+        j["deform"] = shapes;
+        return j;
+    };
+    json shoulders = json::array(), roads = json::array();
+    for (const StreetLine& s : lines)
+    {
+        if (s.surface)
+            continue;
+        const double half = 0.5 * s.width;
+        double carriage = half;
+        if (s.profile >= 0 && size_t(s.profile) < l.roads.size())
+        {
+            const RoadProfile& p = l.roads[size_t(s.profile)];
+            if (p.width() > 0.0)
+                carriage = half * (p.lanes * p.laneWidth + p.median + 2.0 * p.parking) / p.width();
+        }
+        if (json j = entry(smoothSpline(s.pts, half / 100.0), layer, std::clamp(carriage / std::max(half, 1.0), 0.01, 1.0), deform); !j.is_null())
+            roads.push_back(std::move(j));
+        const double strip = half - carriage;
+        if (shoulderLayer.empty() || strip < 10.0)
+            continue;
+        const std::vector<glm::dvec3> cut = trimmed(s.pts, reach(s.startNode), reach(s.endNode));
+        if (cut.empty())
+            continue;
+        for (double sideSign : {-1.0, 1.0})
+            if (json j = entry(smoothSpline(offsetLine(cut, sideSign * (carriage + 0.5 * strip)), 0.5 * strip / 100.0), shoulderLayer, 1.0, false);
+                !j.is_null())
+                shoulders.push_back(std::move(j));
+    }
+    for (json& j : roads)
+        shoulders.push_back(std::move(j));
+    return shoulders;
+}
+
 /** Ground roads (surface=false) on the landscape or as one spline actor, or the surface paths as their own actor. */
 json sendSplines(link::RpcClient& c, const Rebuilt& r, const Args& a, const std::string& key, const std::string& label, bool surface,
                  const char* cmd)
 {
     LILA_ZONE();
 
-    curve::Splines splines;
-    for (const StreetLine& s : streetLines(r.layout, r.ground))
-        if (s.surface == surface)
-            splines.push_back(smoothSpline(s.pts, 0.5 * s.width / 100.0));
     const bool landscape = !surface && a.get<std::string>("roads", "landscape") == "landscape";
+    json points;
+    if (landscape)
+        points = landscapeRoadSplines(r, a.get<std::string>("roadLayer", "roadSurface"), a.get<std::string>("shoulderLayer", "roadVerge"),
+                                      a.get<bool>("deformTerrain", true));
+    else
+    {
+        curve::Splines splines;
+        for (const StreetLine& s : streetLines(r.layout, r.ground))
+            if (s.surface == surface)
+                splines.push_back(smoothSpline(s.pts, 0.5 * s.width / 100.0));
+        points = link::splinePoints(splines, glm::dvec3(0.0));
+    }
     json params = {{"id", key + (surface ? "/paths" : "/roads")},
                    {"label", label + (surface ? "_Paths" : "_Roads")},
                    {"mode", landscape ? "landscape" : "actor"},
                    {"location", json::array({0, 0, 0})},
-                   {"splines", link::splinePoints(splines, glm::dvec3(0.0))},
+                   {"splines", points},
                    {"folder", "Lila/Settlement"}};
     if (!surface)
     {
@@ -1165,7 +1286,9 @@ void registerUnrealCommands(ext::Context& ctx)
                "with what the last send to that project made (a manifest keyed by stable ids: streets, lots, envelopes, "
                "junctions, placements) and sends only the objects whose contents changed, removing those that are gone. "
                "Everything spatial is cut into World Partition cells of side cell, one actor per cell, so the level streams "
-               "it. Roads go as landscape splines (roads='landscape', joined at junctions, shaping the landscape), as spline "
+               "it. Roads go as landscape splines (roads='landscape', joined at junctions, shaping the landscape and painting "
+               "roadLayer over the carriageways and shoulderLayer over sidewalks and verges, layers added when the landscape "
+               "lacks them), as spline "
                "actors (roads='splines', with spline meshes of roadMesh along them), as ribbon meshes per cell "
                "(roads='meshes') or not at all; paths on the walkable mesh go as a spline actor. massing=True sends each "
                "cell's envelopes as a static mesh. pcg=True writes PCG data: per cell (partition=True) a data asset and a cell "
@@ -1181,6 +1304,8 @@ void registerUnrealCommands(ext::Context& ctx)
                   {"roadMesh", "rm", Arg::String, nullptr, "Static mesh asset laid along road splines, such as /Game/Roads/SM_Road."},
                   {"landscape", "ls", Arg::String, nullptr, "roads='landscape': the landscape's label (default the first one)."},
                   {"deformTerrain", "dt", Arg::Bool, true, "roads='landscape': the splines shape the landscape."},
+                  {"roadLayer", "rl", Arg::String, "roadSurface", "roads='landscape': landscape paint layer of the carriageways; empty paints none."},
+                  {"shoulderLayer", "sl", Arg::String, "roadVerge", "roads='landscape': landscape paint layer of the sidewalks and verges; empty paints none."},
                   {"cell", "ce", Arg::Float, 12800.0, "World Partition cell side, cm: road meshes, massing, PCG data and placements are cut by it.",
                    {}, {}, 1000.0},
                   {"massing", "ma", Arg::Bool, true, "Envelopes as a static mesh per cell."},

@@ -53,6 +53,8 @@ struct FakeLevel
     std::set<std::string> cells;      // "<settlement key>/<cell>"
     std::set<std::string> zoneGraphs; // settlement keys holding lanes
     std::set<std::string> splines;    // spline ids
+    std::map<std::string, json> splineParams; // spline id -> the last setSpline params
+    std::vector<json> massingImports;         // importAsset params of massing cells
     std::map<std::string, std::string> zoneSets; // id -> label
     std::set<std::string> zoneDataDeleted;      // labels whose ZD_ asset went
 
@@ -76,6 +78,8 @@ struct FakeLevel
         if (method == "importAsset")
         {
             ++imports;
+            if (p.value("contentPath", std::string()).find("_Massing_") != std::string::npos)
+                massingImports.push_back(p);
             return FakeServer::reply(req, {{"assets", {p["contentPath"].get<std::string>() + ".Imported"}}, {"warnings", json::array()}, {"errors", json::array()}});
         }
         if (method == "placeInstances")
@@ -169,6 +173,7 @@ struct FakeLevel
         if (method == "setSpline")
         {
             splines.insert(p["id"].get<std::string>());
+            splineParams[p["id"].get<std::string>()] = p;
             return FakeServer::reply(req, {{"actor", p.value("label", std::string())}});
         }
         if (method == "removeSpline")
@@ -366,6 +371,33 @@ TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the 
         CHECK_FALSE(level.cells.empty());
         CHECK(level.zoneSets.size() == 1);
         CHECK(std::any_of(level.splines.begin(), level.splines.end(), [&](const std::string& id) { return id.starts_with(key + "/"); }));
+        // Massing cells import with managed materials, so no Default material asset is made beside them.
+        REQUIRE_FALSE(level.massingImports.empty());
+        for (const json& imp : level.massingImports)
+            CHECK((imp.contains("materials") && imp["materials"].is_array()));
+        // Landscape roads paint roadSurface over the carriageway and shape the landscape; shoulders paint roadVerge only.
+        REQUIRE(level.splineParams.count(key + "/roads") == 1);
+        const json& roads = level.splineParams[key + "/roads"];
+        CHECK(roads["mode"] == "landscape");
+        int surface = 0, verge = 0;
+        for (const json& sp : roads["splines"])
+        {
+            if (sp.value("layer", std::string()) == "roadSurface")
+            {
+                ++surface;
+                CHECK(sp["deform"] == true);
+                CHECK(sp["layerWidth"].get<double>() > 0.0);
+                CHECK(sp["layerWidth"].get<double>() <= 1.0);
+            }
+            else if (sp.value("layer", std::string()) == "roadVerge")
+            {
+                CHECK(surface == 0); // shoulders come before the roads
+                ++verge;
+                CHECK(sp["deform"] == false);
+            }
+        }
+        CHECK(surface > 0);
+        CHECK(verge > 0);
     }
     // Rebuilt unchanged: nothing dropped.
     const json r2 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w2").generic_string()}});

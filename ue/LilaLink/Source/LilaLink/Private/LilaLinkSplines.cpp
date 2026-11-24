@@ -1,5 +1,6 @@
 #include "LilaLinkSplines.h"
 
+#include "LilaLinkLandscape.h"
 #include "LilaLinkLog.h"
 
 #include "Components/SplineComponent.h"
@@ -11,10 +12,12 @@
 #include "Landscape.h"
 #include "LandscapeEditLayer.h"
 #include "LandscapeInfo.h"
+#include "LandscapeLayerInfoObject.h"
 #include "LandscapeSplineActor.h"
 #include "LandscapeSplineControlPoint.h"
 #include "LandscapeSplineSegment.h"
 #include "LandscapeSplinesComponent.h"
+#include "Materials/Material.h"
 #include "Misc/Crc.h"
 #include "Misc/PackageName.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -40,6 +43,10 @@ struct FLilaSpline
 {
 	bool bClosed = false;
 	TArray<FLilaSplinePoint> Points;
+	/** Landscape mode: the paint layer it paints, over LayerWidth of its width, and whether it deforms (unset: deformTerrain). */
+	FName Layer;
+	double LayerWidth = 1.0;
+	TOptional<bool> Deform;
 };
 
 FName TagFor(const FString& Id)
@@ -83,6 +90,18 @@ bool ParseSplines(const TSharedPtr<FJsonObject>& Params, TArray<FLilaSpline>& Ou
 		}
 		FLilaSpline& Spline = Out.AddDefaulted_GetRef();
 		(*Object)->TryGetBoolField(TEXT("closed"), Spline.bClosed);
+		FString Layer;
+		if ((*Object)->TryGetStringField(TEXT("layer"), Layer) && !Layer.IsEmpty())
+		{
+			Spline.Layer = FName(*Layer);
+		}
+		(*Object)->TryGetNumberField(TEXT("layerWidth"), Spline.LayerWidth);
+		Spline.LayerWidth = FMath::Clamp(Spline.LayerWidth, 0.01, 1.0);
+		bool bSplineDeform = false;
+		if ((*Object)->TryGetBoolField(TEXT("deform"), bSplineDeform))
+		{
+			Spline.Deform = bSplineDeform;
+		}
 		for (const TSharedPtr<FJsonValue>& PointValue : *Points)
 		{
 			const TSharedPtr<FJsonObject>* PointObject = nullptr;
@@ -152,6 +171,63 @@ void UpdateSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& W
 		Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the splines do not deform it"));
 	}
 	Landscape->RequestSplineLayerUpdate();
+}
+
+/**
+ * Whether the landscape can take Layer's paint: a target layer with a layer info, added when missing (LI_<Layer> beside
+ * Lila's landscape material, which is rebuilt to sample it when the landscape uses it).
+ */
+bool EnsurePaintLayer(ALandscape* Landscape, FName Layer, TArray<FString>& Added, TArray<FString>& Warnings)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::EnsurePaintLayer);
+
+	ULandscapeInfo* Info = Landscape->GetLandscapeInfo();
+	if (!Info || !Info->GetLayerInfoByName(Layer))
+	{
+		const FString Label = Landscape->GetActorLabel();
+		TArray<FString> Created;
+		ULandscapeLayerInfoObject* LayerInfo = LilaLink::Landscape::LayerInfoFor(Label, Layer, Created);
+		if (!LayerInfo)
+		{
+			Warnings.Add(FString::Printf(TEXT("could not make a layer info for paint layer %s, so the splines paint nothing there"), *Layer.ToString()));
+			return false;
+		}
+		Landscape->Modify();
+		if (Landscape->HasTargetLayer(Layer))
+		{
+			Landscape->UpdateTargetLayer(Layer, FLandscapeTargetLayerSettings(LayerInfo));
+		}
+		else
+		{
+			Landscape->AddTargetLayer(Layer, FLandscapeTargetLayerSettings(LayerInfo));
+		}
+		if (Info)
+		{
+			Info->UpdateLayerInfoMap(Landscape);
+		}
+		Added.Add(Layer.ToString());
+
+		const FString Generated = FString::Printf(TEXT("/Game/LilaLink/Landscapes/%s/M_%s"), *Label, *Label);
+		UMaterialInterface* Current = Landscape->GetLandscapeMaterial();
+		if (Current && Current->GetOutermost()->GetName() == Generated)
+		{
+			TArray<FString> Ignored;
+			TArray<FName> Layers;
+			Landscape->GetTargetLayers().GetKeys(Layers);
+			UMaterial* Material = LilaLink::Landscape::GeneratedMaterial(Label, Layers, Ignored, Warnings);
+			if (Material && Material != Current)
+			{
+				Landscape->LandscapeMaterial = Material;
+				FPropertyChangedEvent Changed(FindFProperty<FProperty>(ALandscapeProxy::StaticClass(), GET_MEMBER_NAME_CHECKED(ALandscapeProxy, LandscapeMaterial)));
+				Landscape->PostEditChangeProperty(Changed);
+			}
+		}
+	}
+	if (!Landscape->RetrieveTargetLayerNamesFromMaterials(/*bIncludeVisibilityLayer=*/false).Contains(Layer))
+	{
+		Warnings.Add(FString::Printf(TEXT("the landscape's material does not sample paint layer %s: the roads' paint is there but not drawn"), *Layer.ToString()));
+	}
+	return true;
 }
 
 ESplineMeshAxis::Type AxisFrom(const FString& Name)
@@ -433,25 +509,44 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	}
 	ClearLandscapeSplines(Component, Prefix);
 
+	TArray<FString> LayersAdded;
+	TSet<FName> Paintable;
+	for (const FLilaSpline& Spline : Splines)
+	{
+		if (Spline.Layer != NAME_None && !Paintable.Contains(Spline.Layer) && EnsurePaintLayer(Landscape, Spline.Layer, LayersAdded, Warnings))
+		{
+			Paintable.Add(Spline.Layer);
+		}
+	}
+
 	const FTransform ToComponent = Component->GetComponentTransform();
 	int32 SegmentCount = 0;
-	// With join, splines ending at the same place share one control point: a road network's junctions.
-	TMap<FIntVector, ULandscapeSplineControlPoint*> Shared;
+	bool bShapes = false;
+	// With join, splines ending at the same place share one control point: a road network's junctions. Splines painting
+	// another layer or deforming differently (shoulders beside a road) keep their own points.
+	TMap<TTuple<FIntVector, FName, bool>, ULandscapeSplineControlPoint*> Shared;
 	for (int32 SplineIndex = 0; SplineIndex < Splines.Num(); ++SplineIndex)
 	{
 		const FLilaSpline& Spline = Splines[SplineIndex];
+		const bool bSplineDeforms = Spline.Deform.Get(bDeform);
+		const FName Layer = Paintable.Contains(Spline.Layer) ? Spline.Layer : NAME_None;
+		bShapes |= bSplineDeforms || Layer != NAME_None;
 		TArray<ULandscapeSplineControlPoint*> Points;
 		for (int32 Index = 0; Index < Spline.Points.Num(); ++Index)
 		{
 			const FLilaSplinePoint& In = Spline.Points[Index];
 			const FVector WorldPosition = Location + In.Position;
-			const FIntVector Key(FMath::RoundToInt(WorldPosition.X), FMath::RoundToInt(WorldPosition.Y), FMath::RoundToInt(WorldPosition.Z));
+			const TTuple<FIntVector, FName, bool> Key(
+				FIntVector(FMath::RoundToInt(WorldPosition.X), FMath::RoundToInt(WorldPosition.Y), FMath::RoundToInt(WorldPosition.Z)), Layer, bSplineDeforms);
 			if (bJoin)
 			{
 				if (ULandscapeSplineControlPoint** Found = Shared.Find(Key))
 				{
-					(*Found)->Width = FMath::Max((*Found)->Width, static_cast<float>(Width * In.Scale.Y));
-					Points.Add(*Found);
+					ULandscapeSplineControlPoint* Point = *Found;
+					const float PaintHalf = FMath::Max(Point->Width * Point->LayerWidthRatio, static_cast<float>(Width * In.Scale.Y * Spline.LayerWidth));
+					Point->Width = FMath::Max(Point->Width, static_cast<float>(Width * In.Scale.Y));
+					Point->LayerWidthRatio = FMath::Clamp(PaintHalf / FMath::Max(Point->Width, 0.001f), 0.01f, 1.0f);
+					Points.Add(Point);
 					continue;
 				}
 			}
@@ -463,8 +558,10 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 			const FVector Up = ToComponent.InverseTransformVectorNoScale(In.Up);
 			Point->Rotation = FRotationMatrix::MakeFromXZ(Forward.GetSafeNormal(), Up).Rotator();
 			Point->Width = static_cast<float>(Width * In.Scale.Y);
-			Point->bRaiseTerrain = bDeform;
-			Point->bLowerTerrain = bDeform;
+			Point->LayerWidthRatio = static_cast<float>(Spline.LayerWidth);
+			Point->LayerName = Layer;
+			Point->bRaiseTerrain = bSplineDeforms;
+			Point->bLowerTerrain = bSplineDeforms;
 			Points.Add(Point);
 			if (bJoin)
 			{
@@ -491,8 +588,9 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 			const float EndSign = FVector::DotProduct(Points[Next]->Rotation.Vector(), Along) >= 0.0 ? 1.0f : -1.0f;
 			Segment->Connections[0].TangentLen = StartSign * static_cast<float>(ToComponent.InverseTransformVector(Spline.Points[Index].LeaveTangent).Size());
 			Segment->Connections[1].TangentLen = -EndSign * static_cast<float>(ToComponent.InverseTransformVector(Spline.Points[Next].ArriveTangent).Size());
-			Segment->bRaiseTerrain = bDeform;
-			Segment->bLowerTerrain = bDeform;
+			Segment->LayerName = Layer;
+			Segment->bRaiseTerrain = bSplineDeforms;
+			Segment->bLowerTerrain = bSplineDeforms;
 			if (Mesh)
 			{
 				FLandscapeSplineMeshEntry Entry;
@@ -511,17 +609,28 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	}
 	Component->MarkRenderStateDirty();
 	Component->MarkPackageDirty();
-	// Also without deformTerrain: a re-send that turns it off takes the earlier shape out of the landscape.
-	UpdateSplineLayer(Landscape, bDeform, Warnings);
-	if (!bDeform)
+	// Also when nothing shapes: a re-send that turns it off takes the earlier shape and paint out of the landscape.
+	UpdateSplineLayer(Landscape, bShapes, Warnings);
+	if (!bShapes)
 	{
-		Warnings.Add(TEXT("deformTerrain is off: the splines do not shape the landscape"));
+		Warnings.Add(TEXT("deformTerrain is off and no paint layer is given: the splines do not shape the landscape"));
 	}
 
+	TArray<TSharedPtr<FJsonValue>> PaintValues, AddedValues;
+	for (const FName& L : Paintable)
+	{
+		PaintValues.Add(MakeShared<FJsonValueString>(L.ToString()));
+	}
+	for (const FString& L : LayersAdded)
+	{
+		AddedValues.Add(MakeShared<FJsonValueString>(L));
+	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetStringField(TEXT("actor"), OwnerPath);
 	Out->SetNumberField(TEXT("components"), Splines.Num());
 	Out->SetNumberField(TEXT("segments"), SegmentCount);
+	Out->SetArrayField(TEXT("paintLayers"), PaintValues);
+	Out->SetArrayField(TEXT("paintLayersAdded"), AddedValues);
 	return MakeShared<FJsonValueObject>(Out);
 }
 
