@@ -1,4 +1,5 @@
 #include "io/SceneFile.h"
+#include "core/Release.h"
 
 #include "ops/Command.h"
 #include "ops/Undo.h"
@@ -717,7 +718,7 @@ void load(const fs::path& path)
         progress::Scope build("", 0.0, progress::None, 7.0);
         restoreIfCancelled([&] { deserialize(doc, path.parent_path(), ec ? 0.0 : double(size)); });
         // The document holds a copy of every mesh array, slow enough to free that it goes on its own thread.
-        std::thread([d = std::move(doc)] {}).detach();
+        release::later(std::move(doc));
     }
     setCurrentPath(path);
     state().origin = origin;

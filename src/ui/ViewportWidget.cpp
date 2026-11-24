@@ -1,4 +1,5 @@
 #include "ui/PointCloudDisplay.h"
+#include "core/Release.h"
 #include "ui/ViewportWidgetDetail.h"
 
 #include "io/SceneFile.h"
@@ -563,6 +564,7 @@ render::FrameState ViewportWidget::renderFrame(const RenderView& view)
 render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
 {
     LILA_ZONE();
+    const release::Hold holdReleases;
     const Camera& camera = rv ? rv->camera : shownCamera();
     const double viewAspect = rv ? double(rv->width) / double(std::max(rv->height, 1)) : aspect();
     scene::Graph& g = scene::Graph::current();
@@ -572,6 +574,8 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     const bool inherit = scene::inheritVisibility();
 
     render::FrameState s;
+    if (!rv)
+        render::Renderer::get().reuseBuffers(mId, s);
     s.view = camera.view();
     s.proj = camera.proj(viewAspect);
     s.eye = camera.eye();

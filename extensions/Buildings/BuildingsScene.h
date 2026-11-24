@@ -63,7 +63,10 @@ struct Published
     Vec3 lo{1e300}, hi{-1e300};
 };
 std::shared_ptr<const Published> published(uint64_t modifier);
+/** Every modifier's last evaluation; entries whose modifier left the scene (a scene replaced) are dropped. */
 std::vector<std::shared_ptr<const Published>> allPublished();
+/** allPublished into out, reusing its memory. */
+void allPublished(std::vector<std::shared_ptr<const Published>>& out);
 void forgetPublished(uint64_t modifier);
 
 void registerNode(lila::ext::Context& ctx);

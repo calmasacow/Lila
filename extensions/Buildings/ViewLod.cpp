@@ -34,15 +34,18 @@ void followCamera(render::FrameState&, OverlayPainter&, const ViewInfo& view)
     const double nearTo = prefs.value<double>("general", "/buildings/lodNear", 40000.0);
     const double farFrom = prefs.value<double>("general", "/buildings/lodFar", 200000.0);
     scene::Graph& g = scene::Graph::current();
-    for (const std::shared_ptr<const Published>& p : allPublished())
+    static std::vector<std::shared_ptr<const Published>> all;
+    allPublished(all);
+    for (const std::shared_ptr<const Published>& p : all)
     {
-        if (!p->autoLod || p->lo.x > p->hi.x || !g.node(scene::NodeId(p->modifier)))
+        if (!p->autoLod || p->lo.x > p->hi.x)
             continue;
         const double d = distanceTo(view.eye, p->lo, p->hi);
         const char* lod = d < nearTo ? "near" : d < farFrom ? "hlod" : "far";
         if (setViewLod(p->modifier, lod))
             gn::rerunModifier(g, scene::NodeId(p->modifier));
     }
+    all.clear();
 }
 } // namespace
 

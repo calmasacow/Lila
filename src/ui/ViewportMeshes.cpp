@@ -1,4 +1,5 @@
 #include "ui/ViewportWidgetDetail.h"
+#include "core/Release.h"
 
 #include "scene/LightingChannels.h"
 #include "scene/SceneIndex.h"
@@ -366,7 +367,10 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
         cache.entries.assign(meshes.size(), {});
         for (size_t i = 0; i < meshes.size(); ++i)
             if (auto it = old.find(meshes[i]->id()); it != old.end() && it->second.node == meshes[i])
+            {
                 cache.entries[i] = std::move(it->second);
+                old.erase(it);
+            }
             else
             {
                 cache.entries[i].node = meshes[i];
@@ -375,7 +379,13 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
         cache.structure = g.structure();
         // A replaced scene leaves thousands of entries holding its draws: freed off the frame.
         if (constexpr size_t kOnItsOwn = 64; old.size() >= kOnItsOwn)
-            std::thread([d = std::move(old)] {}).detach();
+        {
+            std::vector<MeshEntry> dropped;
+            dropped.reserve(old.size());
+            for (auto& [id, e] : old)
+                dropped.push_back(std::move(e));
+            release::laterEach(std::move(dropped));
+        }
     }
 
     std::unordered_set<scene::NodeId> hilite;

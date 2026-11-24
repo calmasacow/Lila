@@ -6,9 +6,11 @@
 
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
+#include <lila/Graph.h>
 #include <lila/Log.h>
 #include <lila/Mesh.h>
 #include <lila/Profile.h>
+#include <lila/Release.h>
 #include <lila/Slots.h>
 #include <lila/Tasks.h>
 
@@ -37,7 +39,7 @@ constexpr size_t kCacheMax = 30000;
 
 std::mutex gPubMutex;
 /** The building Edit Rooms cuts away: its shell and modules are left out of its mesh. */
-std::string gCutaway;
+std::string gCutawayId;
 /** What modifiers set to lod auto show, by camera distance (the viewport sets it); near until it has. */
 std::unordered_map<uint64_t, std::string> gViewLod;
 std::map<uint64_t, std::shared_ptr<const Published>> gPub;
@@ -268,7 +270,7 @@ void exec(ExecContext& c)
     std::string cutaway;
     {
         std::lock_guard lock(gPubMutex);
-        cutaway = gCutaway;
+        cutaway = gCutawayId;
     }
     Soup shell;
     std::vector<int32_t> faceBuilding;
@@ -482,12 +484,30 @@ std::shared_ptr<const Published> published(uint64_t modifier)
     return it == gPub.end() ? nullptr : it->second;
 }
 
+void allPublished(std::vector<std::shared_ptr<const Published>>& out)
+{
+    out.clear();
+    const lila::scene::Graph& g = lila::scene::Graph::current();
+    std::vector<std::shared_ptr<const Published>> gone;
+    {
+        std::lock_guard lock(gPubMutex);
+        out.reserve(gPub.size());
+        for (auto it = gPub.begin(); it != gPub.end();)
+            if (!g.node(lila::scene::NodeId(it->first)))
+            {
+                gone.push_back(std::move(it->second));
+                it = gPub.erase(it);
+            }
+            else
+                out.push_back((it++)->second);
+    }
+    lila::release::laterEach(std::move(gone));
+}
+
 std::vector<std::shared_ptr<const Published>> allPublished()
 {
     std::vector<std::shared_ptr<const Published>> out;
-    std::lock_guard lock(gPubMutex);
-    for (auto& [k, v] : gPub)
-        out.push_back(v);
+    allPublished(out);
     return out;
 }
 
@@ -510,9 +530,9 @@ bool setViewLod(uint64_t modifier, const std::string& lod)
 bool setCutawayBuilding(const std::string& id)
 {
     std::lock_guard lock(gPubMutex);
-    if (gCutaway == id)
+    if (gCutawayId == id)
         return false;
-    gCutaway = id;
+    gCutawayId = id;
     return true;
 }
 
