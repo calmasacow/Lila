@@ -17,7 +17,7 @@ namespace
 {
 constexpr const char* kBlockTypes[] = {"perimeter", "courtyard", "open", "row", "superblock", "park", "plaza", "market", "churchyard", "field"};
 constexpr const char* kLotMethods[] = {"frontage", "obb", "skeleton", "burgage", "voronoi", "strips", "whole"};
-constexpr const char* kRoutes[] = {"outline", "massing", "library", "masonry", "unreal"};
+constexpr const char* kRoutes[] = {"outline", "massing", "library", "masonry", "unreal", "buildings"};
 constexpr const char* kEras[] = {"medieval", "early", "industrial", "modern", "future"};
 
 template <class E, size_t N> bool parseName(const char* const (&names)[N], std::string_view name, E* out)

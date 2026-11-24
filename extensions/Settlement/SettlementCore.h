@@ -518,6 +518,7 @@ enum class BuildingRoute : uint8_t
     Library, // prebuilt assets placed through Stagehand
     Masonry, // stone buildings through Masonry
     Unreal,  // envelopes sent as PCG data for Unreal to build
+    Buildings, // procedural buildings through the Buildings extension
 };
 
 /** A change to a block found by its stable id: another type, another lot method. */

@@ -520,6 +520,9 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     std::vector<int> flatRoofs;
     for (const Envelope& env : l.envelopes)
     {
+        // The Buildings extension's live buildings stand there instead.
+        if (env.route == BuildingRoute::Buildings)
+            continue;
         if (env.route == BuildingRoute::Massing)
         {
             if (!appendMassing(env, l, out.envelopes, [&](int part) {

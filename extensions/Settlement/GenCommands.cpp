@@ -754,7 +754,10 @@ void registerGeneratorCommands(ext::Context& ctx)
                                                            "cover less than coverage of), all, or none.", {"sparse", "all", "none"}},
                   {"coverage", "cv", GenArg::Float, 0.25, "Share of a block the imported buildings must cover for it to count as dense.", {}, {}, 0.0, 1.0},
                   {"margin", "mg", GenArg::Float, 2000.0, "Room left round the imported streets and buildings, cm.", {}, {}, 0.0},
-                  {"name", "n", GenArg::String, "Town", "Name of the settlement's mesh."}},
+                  {"name", "n", GenArg::String, "Town", "Name of the settlement's mesh."},
+                  {"buildingRoute", "br", GenArg::String, "outline", "How buildings are made once laid out; buildings makes procedural ones.",
+                   {"outline", "massing", "library", "masonry", "unreal", "buildings"}},
+                  {"buildingStyle", "bs", GenArg::String, nullptr, "buildings route: one Buildings style for every building; empty picks per envelope."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const char* cmd = "settlementFromOsm";
@@ -799,6 +802,8 @@ void registerGeneratorCommands(ext::Context& ctx)
                                                          {"osmCoverage", a.get<double>("coverage", 0.25)},
                                                          {"osmCulture", made.value("culture", std::string())},
                                                          {"terrainWater", false},
+                                                         {"buildingRoute", a.get<std::string>("buildingRoute", "outline")},
+                                                         {"buildingStyle", a.get<std::string>("buildingStyle", "")},
                                                          {"name", a.get<std::string>("name", "Town")}});
             out["import"] = {{"features", made.value("features", json::object())},
                              {"culture", made.value("culture", std::string())},

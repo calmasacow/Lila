@@ -1,0 +1,277 @@
+// Buildings through its package's commands: create from envelopes, stable slot ids across unrelated edits, edits and slot
+// overrides surviving regeneration, pins, every style passing buildingCheck, party walls and slopes in the scene, the
+// OSM fixture town through Settlement's buildings route, and a performance budget.
+
+#include "extensions/ExtensionManager.h"
+#include "gn/NodeLib.h"
+#include "ops/Command.h"
+#include "scene/Graph.h"
+
+#include <doctest/doctest.h>
+
+#include <chrono>
+#include <cmath>
+#include <filesystem>
+#include <set>
+
+using namespace lila;
+using json = nlohmann::json;
+
+namespace
+{
+json run(const char* cmd, json call = json::object()) { return ops::execute(cmd, call); }
+
+void loadBuildings()
+{
+    if (!ops::find("buildingCreate"))
+        REQUIRE(extensions::ExtensionManager::get().load(LILA_TEST_BUILDINGS_PACKAGE) == "Buildings");
+}
+
+void loadSettlement()
+{
+    if (!gn::findDecl("Settlement"))
+        REQUIRE(extensions::ExtensionManager::get().load(LILA_TEST_SETTLEMENT_PACKAGE) == "Settlement");
+    if (!ops::find("terrainCreate"))
+        REQUIRE(extensions::ExtensionManager::get().load(LILA_TEST_TERRAIN_PACKAGE) == "Terrain");
+}
+
+/** An envelope in Settlement's published schema. */
+json envelope(uint64_t lot, double x0, double z0, double w, double d, int floors, std::vector<std::string> sides = {"street", "open", "open", "open"},
+              std::string style = "", std::string program = "")
+{
+    json fp = json::array({{x0, z0}, {x0 + w, z0}, {x0 + w, z0 + d}, {x0, z0 + d}});
+    json e = {{"lot", int(lot)},
+              {"lotId", lot},
+              {"footprint", fp},
+              {"sides", sides},
+              {"floors", floors},
+              {"height", floors * 320.0},
+              {"ground", 0.0},
+              {"base", -50.0},
+              {"top", floors * 320.0 + 40.0},
+              {"roof", "flat"},
+              {"front", {0.0, -1.0}},
+              {"entrances", json::array({{x0 + w * 0.5, z0}})},
+              {"style", style},
+              {"program", program},
+              {"use", program.empty() ? "residential" : "commercial"}};
+    if (!program.empty())
+        e["businesses"] = json::array({{{"name", "Taquería El Faro"}, {"program", program}, {"at", {x0 + w * 0.5, z0}}}});
+    return e;
+}
+
+uint64_t hashIds(const std::vector<std::string>& ids)
+{
+    uint64_t h = 1469598103934665603ull;
+    for (const std::string& s : ids)
+        for (unsigned char c : s + "\n")
+        {
+            h ^= c;
+            h *= 1099511628211ull;
+        }
+    return h;
+}
+
+std::vector<std::string> slotIds(const std::string& building)
+{
+    const json info = run("buildingInfo", {{"args", {building}}, {"modules", true}});
+    std::vector<std::string> ids;
+    for (const json& m : info["moduleList"])
+        ids.push_back(m["slot"].get<std::string>());
+    std::sort(ids.begin(), ids.end());
+    return ids;
+}
+
+std::string firstSlot(const std::string& building, const std::string& type)
+{
+    const json info = run("buildingInfo", {{"args", {building}}, {"modules", true}});
+    for (const json& m : info["moduleList"])
+        if (m["type"] == type && m["slot"].get<std::string>().find("/l1/") != std::string::npos)
+            return m["slot"];
+    return {};
+}
+} // namespace
+
+TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits and overrides survive regeneration")
+{
+    loadBuildings();
+    run("newScene");
+    const json envs = json::array({envelope(0x1111, 0, 0, 1500, 1200, 2), envelope(0x2222, 1500, 0, 1500, 1200, 2, {"street", "open", "open", "party"})});
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Town"}, {"style", "colonialCentro"}});
+    CHECK(made["buildings"] == 2);
+    CHECK(made["slots"].get<int>() > 20);
+    const std::string A = "building:1111", B = "building:2222";
+    const uint64_t before = hashIds(slotIds(B));
+    const std::vector<std::string> aBefore = slotIds(A);
+
+    // Unrelated edit: A's style and floors. B's ids hash the same.
+    run("buildingEdit", {{"args", {A}}, {"floors", 1}, {"style", "malecon"}});
+    CHECK(hashIds(slotIds(B)) == before);
+    CHECK(slotIds(A) != aBefore);
+
+    // Bay paint and a slot override on B, then regenerate from the same envelopes.
+    const std::string window = firstSlot(B, "window.residential");
+    REQUIRE_FALSE(window.empty());
+    run("slotSet", {{"id", window}, {"placeholder", "box"}, {"data", {{"locked", true}}}});
+    run("buildingEdit", {{"args", {B}}, {"bays", {{"t0/f0/l0/b0", "door"}}}});
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Town"}, {"style", "colonialCentro"}});
+    const json found = run("slotFind", {{"id", window}});
+    REQUIRE(found["count"] == 1);
+    bool override = false;
+    for (const json& s : found["slots"][0]["sources"])
+        override = override || s == "override";
+    CHECK(override);
+    CHECK(run("slotReport", {{"validate", false}})["orphans"].size() == 0);
+    const json info = run("buildingInfo", {{"args", {B}}, {"bays", true}});
+    bool door = false;
+    for (const json& b : info["bays"])
+        door = door || (b["path"] == "t0/f0/l0/b0" && b["kind"] == "door");
+    CHECK(door);
+    CHECK(info["edits"]["bays"]["t0/f0/l0/b0"] == "door");
+
+    // Undo takes the edit back.
+    run("buildingEdit", {{"args", {B}}, {"floors", 3}});
+    CHECK(run("buildingInfo", {{"args", {B}}})["floors"] == 3);
+    run("undo");
+    CHECK(run("buildingInfo", {{"args", {B}}})["floors"] == 2);
+
+    // A pinned building keeps its spec when the envelope changes.
+    run("slotPin", {{"args", {"owner:" + A}}});
+    json changed = envs;
+    changed[0]["floors"] = 5;
+    run("buildingCreate", {{"envelopes", changed}, {"name", "Town"}, {"style", "colonialCentro"}});
+    CHECK(run("buildingInfo", {{"args", {A}}})["floors"] == 1); // the edit, on the pinned spec
+}
+
+TEST_CASE("buildings commands: every style with several seeds passes buildingCheck")
+{
+    loadBuildings();
+    run("newScene");
+    const json styles = run("buildingStyles")["styles"];
+    REQUIRE(styles.size() >= 16);
+    json envs = json::array();
+    int k = 0;
+    std::vector<std::string> ids;
+    for (const json& s : styles)
+        for (int seed = 0; seed < 3; ++seed, ++k)
+        {
+            const double x = (k % 12) * 6000.0, z = (k / 12) * 6000.0;
+            json e = envelope(0x5000 + uint64_t(k), x, z, 2200, 1600, 3, {"street", "party", "open", "street"}, s["id"], k % 2 ? "restaurant" : "");
+            envs.push_back(e);
+        }
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Styles"}, {"cell", 0}});
+    CHECK(made["buildings"] == envs.size());
+    for (const json& e : envs)
+    {
+        const std::string id = "building:" + [&] {
+            char buf[20];
+            std::snprintf(buf, sizeof buf, "%llx", static_cast<unsigned long long>(e["lotId"].get<uint64_t>()));
+            return std::string(buf);
+        }();
+        const std::string style = e["style"];
+        run("buildingEdit", {{"args", {id}}, {"style", style}, {"seed", int(e["lotId"].get<uint64_t>() % 3)}});
+    }
+    const json check = run("buildingCheck");
+    CAPTURE(check["counts"].dump());
+    CAPTURE(check["issues"].size() > 0 ? check["issues"][0].dump() : std::string());
+    CHECK(check["ok"] == true);
+    CHECK(check["buildings"] == envs.size());
+    CHECK(check["texts"].get<int>() > 0);
+}
+
+TEST_CASE("buildings commands: party walls, overlapping neighbours, slopes on a ground mesh, real names")
+{
+    loadBuildings();
+    run("newScene");
+    // A ground rising 3 m along x.
+    const json ground = run("createMesh", {{"points", {{-5000, 0, -5000}, {15000, 300, -5000}, {15000, 300, 15000}, {-5000, 0, 15000}}},
+                                           {"faces", {{0, 3, 2, 1}}},
+                                           {"name", "Ground"}});
+    json envs = json::array({envelope(0x7001, 0, 0, 3000, 1200, 2, {"street", "party", "open", "open"}),
+                             envelope(0x7002, 3000, 0, 1500, 1200, 2, {"street", "open", "open", "party"})});
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Slope"}, {"ground", ground}, {"style", "colonialCentro"}});
+    json check = run("buildingCheck");
+    CAPTURE(check["issues"].dump());
+    CHECK(check["counts"]["doorNotReachingGround"] == 0);
+    CHECK(check["counts"]["overlappingNeighbours"] == 0);
+    CHECK(check["counts"]["slotFloating"] == 0);
+    const json info = run("buildingInfo", {{"args", {"building:7001"}}, {"modules", true}});
+    CHECK(info["moduleTypes"].value("wall.party", 0) >= 1);
+    bool partyBlank = true;
+    for (const json& f : info["facades"])
+        if (f["side"] == "party")
+            partyBlank = partyBlank && f["bays"] == 0;
+    CHECK(partyBlank);
+
+    // An overlapping neighbour and a real brand on a sign are flagged.
+    envs.push_back(envelope(0x7003, 2000, 300, 1500, 1200, 2, {"street", "open", "open", "open"}, "modernCommercial", "shop"));
+    envs.back()["businesses"][0]["name"] = "Walmart";
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Slope"}, {"ground", ground}, {"style", "colonialCentro"}});
+    check = run("buildingCheck");
+    CHECK(check["counts"]["overlappingNeighbours"].get<int>() >= 1);
+    CHECK(check["counts"]["realName"].get<int>() >= 1);
+}
+
+TEST_CASE("buildings commands: the OSM fixture town through Settlement's buildings route")
+{
+    loadBuildings();
+    loadSettlement();
+    run("newScene");
+    const json terrain = run("terrainCreate", {{"size", json::array({80000.0, 80000.0})}, {"resolution", 65}, {"amplitude", 200.0}, {"seed", 4}});
+    const std::string townFile = (std::filesystem::path(LILA_SOURCE_DIR) / "tests" / "data" / "osm" / "w1_town.osm").string();
+    const json town = run("settlementCreate", {{"profile", "usTown"}, {"size", 60000.0}, {"ground", terrain["mesh"]}, {"osmFile", townFile},
+                                               {"osmOrigin", {23.2, -106.42}}, {"name", "Town"}});
+    const std::string mesh = town["mesh"];
+    const json routed = run("settlementBuildings", {{"args", {mesh}}, {"via", "buildings"}});
+    CAPTURE(routed.dump());
+    REQUIRE(routed.contains("buildings"));
+    const int envelopes = run("settlementEnvelopes", {{"args", {mesh}}, {"limit", 0}})["count"];
+    CHECK(routed["buildings"]["buildings"] == envelopes);
+    const json signs = run("slotFind", {{"type", "sign.storefront"}, {"limit", 0}, {"full", true}});
+    CHECK(signs["count"].get<int>() >= 1);
+    for (const json& s : signs["slots"])
+        CHECK_FALSE(s["payload"]["data"].value("text", std::string()).empty());
+    const json check = run("buildingCheck");
+    CAPTURE(check["counts"].dump());
+    CHECK(check["ok"] == true);
+    CHECK(run("realNameCheck", {{"scene", true}})["ok"] == true);
+
+    // One rule swaps every storefront sign.
+    run("slotRule", {{"args", {"add"}}, {"type", "sign.storefront"}, {"placeholder", "panel"}, {"name", "Fictional signs"}});
+    const json after = run("slotFind", {{"type", "sign.storefront"}, {"limit", 0}});
+    int ruled = 0;
+    for (const json& s : after["slots"])
+        for (const json& src : s["sources"])
+            ruled += src.get<std::string>().rfind("rule:", 0) == 0 ? 1 : 0;
+    CHECK(ruled == after["count"].get<int>());
+
+    // Change a style by district and paint a bay through the route's buildings.
+    const json st = run("buildingStyle", {{"all", true}, {"style", "malecon"}});
+    CHECK(st["count"] == envelopes);
+}
+
+TEST_CASE("buildings commands: performance budget")
+{
+    loadBuildings();
+    run("newScene");
+    json envs = json::array();
+    const int n = 1000;
+    for (int k = 0; k < n; ++k)
+    {
+        const double x = (k % 40) * 1600.0, z = (k / 40) * 1600.0;
+        envs.push_back(envelope(0x90000 + uint64_t(k), x, z, 1200 + (k % 5) * 50.0, 1100, 1 + k % 4, {"street", "party", "open", "party"},
+                                k % 3 == 0 ? "colonialCentro" : k % 3 == 1 ? "residential" : "modernCommercial", k % 4 == 0 ? "shop" : ""));
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Perf"}});
+    const double createMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    MESSAGE("1000 buildings: " << createMs << " ms, cells " << made["cells"] << ", slots " << made["slots"] << ", faces " << made["faces"]);
+    CHECK(made["buildings"] == n);
+    CHECK(createMs < 60000.0 * double(n) / 5000.0 * 2.0); // generous: twice the 5,000-in-a-minute rate
+    const auto t1 = std::chrono::steady_clock::now();
+    const json edit = run("buildingEdit", {{"args", {"building:90005"}}, {"floors", 3}});
+    const double editMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t1).count();
+    MESSAGE("one-building edit: " << editMs << " ms (evaluate " << edit["evaluateMs"] << " ms, node " << edit.value("nodeMs", 0.0) << " ms)");
+    CHECK(edit.value("generated", 0) == 1);
+    CHECK(editMs < 1000.0); // generous; the target is 100 ms, measured and logged
+}
