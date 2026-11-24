@@ -1,6 +1,6 @@
 // buildingSend: building meshes to Unreal. Shells go as Nanite static meshes placed where they stand (each cell mesh lies
 // inside one of Settlement's World Partition cells), modules as slots keyed by slot id (W0's path in
-// unrealPlaceInstances), the HLOD and far proxies as meshes of their own, and MF_LilaBuildingVariation with M_LilaBuilding
+// unrealPlaceInstances), the HLOD and far proxies as World Partition Custom HLOD actors, and MF_LilaBuildingVariation with M_LilaBuilding
 // and an instance per style, assigned to the shells' building material slots. Interiors of enterable buildings go apart from
 // their shells: their room meshes as actors colliding as modelled, made into a Level Instance (or put on a runtime data
 // layer of their own), and the windows' glass gets the fake-room material where there is no interior, clear glass where
@@ -39,7 +39,7 @@ void registerUnreal(ext::Context& ctx)
         .name = "buildingSend",
         .doc = "Send building meshes to Unreal: shells as Nanite static meshes placed where they stand (one per cell mesh, inside "
                "Settlement's World Partition cells), modules as slots keyed by slot id (actors of a slot's Unreal class, instances "
-               "of its Unreal mesh, or its placeholder), the HLOD and far proxies (proxies=True), and MF_LilaBuildingVariation with "
+               "of its Unreal mesh, or its placeholder), the HLOD and far proxies as World Partition Custom HLOD actors (proxies=True), and MF_LilaBuildingVariation with "
                "M_LilaBuilding and MI_Bld_<style> per style, assigned to the shells' building slots. Per-building colour and dirt "
                "travel in vertex colour. dryRun returns what would be sent. Returns the placement plan and the materials.",
         .positionalDoc = "building meshes (default every one)",
@@ -50,6 +50,8 @@ void registerUnreal(ext::Context& ctx)
                    "How interiors of enterable buildings stream apart from their shells: a Level Instance each (on a runtime data layer "
                    "of its own in World Partition levels), their actors on a runtime data layer, or not sent.",
                    {"levelInstance", "dataLayer", "none"}},
+                  {"hlodProxyLayer", "hpl", ArgType::String, "/Game/Lila/HLOD/HL_LilaBuildings",
+                   "Custom HLOD Actor layer for the proxies (made when missing); the far proxies go in the same path + Far."},
                   {"dryRun", "dr", ArgType::Bool, false, "Only return what would be sent."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -91,6 +93,7 @@ void registerUnreal(ext::Context& ctx)
             if (a.get<bool>("dryRun", false))
                 return out;
             std::vector<std::string> send = meshes;
+            json nearProxies = json::array(), farProxies = json::array();
             if (a.get<bool>("proxies", true))
             {
                 json args = json::array();
@@ -98,7 +101,7 @@ void registerUnreal(ext::Context& ctx)
                     args.push_back(m);
                 const json made = ops::execute("buildingProxies", {{"args", args}});
                 for (const json& p : made["proxies"])
-                    send.push_back(p["mesh"].get<std::string>());
+                    (p.value("lod", std::string()) == "far" ? farProxies : nearProxies).push_back(p["mesh"]);
                 out["proxies"] = made["proxies"].size();
             }
             try
@@ -118,14 +121,52 @@ void registerUnreal(ext::Context& ctx)
             const json plan = ops::execute("unrealPlaceInstances", {{"args", args},
                                                                     {"folder", a.get<std::string>("folder", "/Game/Lila/Buildings")},
                                                                     {"nanite", true},
+                                                                    // A module used more than once in a cell is one HISM there; the shells stay actors.
+                                                                    {"threshold", 1},
                                                                     {"hlodLayer", a.get<std::string>("hlodLayer", "")},
                                                                     {"wait", true}});
             out["plan"] = plan;
-            // The shells' assets: their building slots get their style's instance.
+            // Proxies as World Partition Custom HLOD actors: the near ones show while a cell is unloaded, the far ones
+            // once the near ones unload too.
+            const std::string folder = a.get<std::string>("folder", "/Game/Lila/Buildings");
+            const std::string nearLayer = a.get<std::string>("hlodProxyLayer", "/Game/Lila/HLOD/HL_LilaBuildings");
+            json hlods = json::object();
+            if (!nearProxies.empty() || !farProxies.empty())
+            {
+                if (std::find(features.begin(), features.end(), json("customHlod")) == features.end())
+                    hlods["warning"] = "this LilaLink has no Custom HLOD actors; proxies not sent; rebuild the plugin";
+                else
+                {
+                    auto sendProxies = [&](const json& list, const std::string& layer, const std::string& linked) {
+                        json args = list;
+                        json flags = {{"args", args}, {"folder", folder + "/HLOD"}, {"mode", "customHlod"}, {"hlodLayer", layer},
+                                      {"collision", "none"}, {"validate", false}, {"wait", true}};
+                        if (!linked.empty())
+                            flags["linkedHlodLayer"] = linked;
+                        return ops::execute("unrealPlaceInstances", flags);
+                    };
+                    if (!nearProxies.empty())
+                        hlods["near"] = sendProxies(nearProxies, nearLayer, "");
+                    if (!farProxies.empty())
+                        hlods["far"] = sendProxies(farProxies, nearLayer + "Far", nearLayer);
+                }
+            }
+            out["hlods"] = hlods;
+            // Every asset sent (shells, modules, proxies): their building slots get their style's instance, so modules and
+            // proxies shade like the shell they sit on.
+            std::set<std::string> paths;
+            auto collect = [&paths](const json& sent) {
+                for (const json& grp : sent.value("groups", json::array()))
+                    if (grp.contains("objectPath") && !grp.contains("actorClass") && !grp.contains("unrealMesh"))
+                        paths.insert(grp["objectPath"].get<std::string>());
+            };
+            collect(plan);
+            for (const char* level : {"near", "far"})
+                if (hlods.contains(level))
+                    collect(hlods[level]);
             json assets = json::array();
-            for (const json& grp : plan.value("groups", json::array()))
-                if (grp.contains("objectPath") && !grp.contains("label"))
-                    assets.push_back(grp["objectPath"]);
+            for (const std::string& path : paths)
+                assets.push_back(path);
             auto client = link::Link::get().client();
             link::RpcResult r = client->call("buildingMaterials", {{"instances", instances}, {"assets", assets}}, link::importCallOptions());
             if (!r.ok)

@@ -117,6 +117,21 @@ json call(link::RpcClient& c, const char* method, const json& params, const char
     return r.result;
 }
 
+/** The open Unreal level's package, or empty (not connected, or a plugin without levelInfo). */
+std::string openLevel()
+{
+    if (!link::Link::get().connected())
+        return {};
+    const json have = link::Link::get().status().value("features", json::array());
+    if (!have.is_array() || std::ranges::find(have, json("levelInfo")) == have.end())
+        return {};
+    std::shared_ptr<link::RpcClient> c = link::Link::get().client();
+    if (!c)
+        return {};
+    link::RpcResult r = c->call("levelInfo", json::object(), 10000);
+    return r.ok && r.result.is_object() ? r.result.value("level", std::string()) : std::string();
+}
+
 /**
  * ZoneGraph lanes of a cross-section: sidewalks, driving lanes, median, listed right to left looking along the road as
  * ZoneGraph lays them out. Driving lanes of an access direction are tagged Access instead of Vehicle, so Mass traffic
@@ -828,8 +843,10 @@ json sendToUnreal(const Args& a)
     const std::vector<SyncItem> items = syncItems(r.layout, net, cells, o, roadHashes);
     const std::map<std::string, uint64_t> elements = elementHashes(r.layout, net);
 
-    // One manifest per settlement and Unreal project: what was last sent there, for the diff.
-    const std::string project = link::Link::get().connected() ? link::Link::get().status().value("project", std::string()) : std::string();
+    // One manifest per settlement, Unreal project and level: what was last sent there, for the diff.
+    std::string project = link::Link::get().connected() ? link::Link::get().status().value("project", std::string()) : std::string();
+    if (const std::string level = openLevel(); !level.empty())
+        project += "_" + level.substr(level.rfind('/') + 1);
     const fs::path manifestPath = link::cacheDir() / "settlement" / ("sync_" + assetName(project) + "_" + assetName(key) + ".json");
     const json previous = a.get<bool>("resend", false) ? json() : readJsonFile(manifestPath);
     const SyncDiff d = diffSync(previous, items, elements);

@@ -53,6 +53,7 @@ public class LilaLink : ModuleRules
 			"StaticMeshEditor",
 			"EditorSubsystem",
 			"DataLayerEditor",
+			"BSPUtils",
 			"RenderCore",
 			"RHI",
 			"LilaLinkRuntime",

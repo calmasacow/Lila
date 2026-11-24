@@ -4,6 +4,12 @@
 #include "LilaLinkMethodRegistry.h"
 
 #include "Async/Async.h"
+#include "Editor.h"
+#include "Engine/World.h"
+#include "WorldPartition/WorldPartition.h"
+#include "WorldPartition/WorldPartitionActorDescInstance.h"
+#include "WorldPartition/LoaderAdapter/LoaderAdapterActorList.h"
+#include "WorldPartition/WorldPartitionHelpers.h"
 #include "Common/TcpSocketBuilder.h"
 #include "HAL/PlatformProcess.h"
 #include "HAL/PlatformTime.h"
@@ -315,6 +321,44 @@ void FLilaLinkServer::WatchGameThread()
 	}
 }
 
+namespace
+{
+/**
+ * Loads the open World Partition level's actors Lila made (any tag starting with Lila), once per level, so sends find,
+ * update and remove what earlier sessions placed instead of adding a second copy beside unloaded actors.
+ */
+void LoadLilaActors()
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkServer::LoadLilaActors);
+
+	static TWeakObjectPtr<UWorldPartition> Done;
+	// Holds the actors loaded; released when its level's World Partition shuts down, before the world goes.
+	static TUniquePtr<FLoaderAdapterActorList> Loader;
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	UWorldPartition* Partition = World ? World->GetWorldPartition() : nullptr;
+	if (!Partition || Done.Get() == Partition)
+	{
+		return;
+	}
+	Done = Partition;
+	TArray<FGuid> Guids;
+	FWorldPartitionHelpers::ForEachActorDescInstance(Partition, AActor::StaticClass(), [&Guids](const FWorldPartitionActorDescInstance* Desc) {
+		if (!Desc->IsLoaded() && Desc->GetTags().ContainsByPredicate([](const FName& Tag) { return Tag.ToString().StartsWith(TEXT("Lila")); }))
+		{
+			Guids.Add(Desc->GetGuid());
+		}
+		return true;
+	});
+	if (!Guids.IsEmpty())
+	{
+		Loader = MakeUnique<FLoaderAdapterActorList>(World);
+		World->OnWorldPartitionUninitialized().AddLambda([](UWorldPartition*) { Loader.Reset(); });
+		Loader->AddActors(Guids);
+		UE_LOG(LogLilaLink, Log, TEXT("Loaded %d Lila actors of %s that World Partition had unloaded"), Guids.Num(), *World->GetName());
+	}
+}
+} // namespace
+
 bool FLilaLinkServer::TickGameThread(float DeltaTime)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkServer::TickGameThread);
@@ -338,6 +382,7 @@ bool FLilaLinkServer::TickGameThread(float DeltaTime)
 			continue;
 		}
 		UE_LOG(LogLilaLink, Log, TEXT("-> %s (waited %.2f s for the game thread)"), *Call->Describe(), Now - Request.QueuedSeconds);
+		LoadLilaActors();
 		(*Handler)(Request.Params, Call);
 		if (!Call->HasReplied())
 		{

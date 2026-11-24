@@ -2,6 +2,7 @@
 // bay paint and toggles, and the polygon helpers it stands on.
 
 #include "Buildings.h"
+#include <lila/Mesh.h>
 
 #include <doctest/doctest.h>
 
@@ -78,6 +79,19 @@ TEST_CASE("buildings: polygon helpers")
     CHECK(area == doctest::Approx(1e6 - 160000.0).epsilon(0.001));
     CHECK(hexColour("#ffffff", glm::vec3(0)).r == doctest::Approx(1.0f));
     CHECK(colourHex(hexColour("#c8553d", glm::vec3(0))) == "#c8553d");
+}
+
+TEST_CASE("buildings: palette colour and dirt go in the first colour set, which exporters write as the vertex colour")
+{
+    Soup s;
+    const Vec3 quad[4] = {{0, 0, 0}, {100, 0, 0}, {100, 100, 0}, {0, 100, 0}};
+    const glm::vec2 uv[4] = {{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    s.poly(quad, uv, 4, 0, 0, 0, PartWall, -1, glm::vec4(0.5f, 0.2f, 0.1f, 0.3f));
+    const lila::geo::Mesh m = toMesh(s, {"Bld_residential_render0"});
+    REQUIRE(lila::geo::colors::sets(m).size() == 1);
+    const auto col = lila::geo::colors::values(m, lila::geo::colors::sets(m).front());
+    for (lila::geo::Index c : m.faceCorners(0))
+        CHECK(col[c] == glm::vec4(0.5f, 0.2f, 0.1f, 0.3f));
 }
 
 TEST_CASE("buildings: the shipped styles read and every style generates with several seeds")

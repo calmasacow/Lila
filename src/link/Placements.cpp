@@ -8,6 +8,7 @@
 #include "core/PrefStore.h"
 #include "core/Profile.h"
 #include "fbx/Fbx.h"
+#include "geo/ColorSets.h"
 #include "gn/Geometry.h"
 #include "gn/Gn.h"
 #include "gn/InstanceView.h"
@@ -497,6 +498,56 @@ std::string meshHash(const geo::Mesh& m)
     return std::format("{:016x}", h);
 }
 
+/** meshHash plus the colour sets and UVs the FBX carries: what decides whether Unreal's asset is still current. */
+std::string contentHash(const geo::Mesh& m)
+{
+    uint64_t h = slots::idHash(meshHash(m));
+    auto mix = [&h](const void* data, size_t size) {
+        for (const auto* p = static_cast<const uint8_t*>(data); size--; ++p)
+            h = (h ^ *p) * 1099511628211ull;
+    };
+    for (const std::string& set : geo::colors::sets(m))
+    {
+        const std::span<const glm::vec4> v = geo::colors::values(m, set);
+        mix(set.data(), set.size());
+        mix(v.data(), v.size_bytes());
+    }
+    if (m.cornerAttrs().has(geo::attr::uvName(0)))
+    {
+        const std::span<const glm::vec2> v = m.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
+        mix(v.data(), v.size_bytes());
+    }
+    return std::format("{:016x}", h);
+}
+
+/**
+ * What a group's placement in Unreal depends on, hashed: the same signature as the level holds means nothing to send.
+ * Empty for a group whose asset content Lila can't name from the plan (a plain source's mesh), which always goes.
+ */
+std::string placementSignature(const json& grp, const std::vector<scene::MeshPtr>& meshes, const std::string& hlod, const std::string& linkedHlod)
+{
+    json sig = {{"contentPath", grp.value("contentPath", "")},
+                {"mode", grp["mode"]},
+                {"collision", grp.value("collision", json())},
+                {"nanite", grp.value("nanite", false)},
+                {"customData", grp.value("customData", json::array())},
+                {"components", grp.value("components", json::array())},
+                {"materials", grp.value("materials", json::array())},
+                {"label", grp.value("label", grp.value("source", ""))},
+                {"hlod", hlod},
+                {"linkedHlod", linkedHlod},
+                {"placements", grp["placements"]}};
+    if (grp.contains("actorClass"))
+        sig["actorClass"] = grp["actorClass"];
+    else if (grp.contains("unrealMesh"))
+        sig["unrealMesh"] = grp["unrealMesh"];
+    else if (grp.contains("gnMesh") && grp["gnMesh"].get<size_t>() < meshes.size() && meshes[grp["gnMesh"].get<size_t>()])
+        sig["mesh"] = contentHash(*meshes[grp["gnMesh"].get<size_t>()]);
+    else
+        return {};
+    return slots::hex(slots::idHash(sig.dump()));
+}
+
 scene::MeshPtr cleanedMesh(const std::shared_ptr<const geo::Mesh>& m)
 {
     geo::Mesh copy = *m;
@@ -756,8 +807,8 @@ json buildPlan(scene::Graph& g, const std::vector<scene::NodeId>& roots, const P
 {
     LILA_ZONE();
 
-    if (o.mode != "auto" && o.mode != "actors" && o.mode != "ism" && o.mode != "hism")
-        throw CommandError("unrealPlaceInstances: mode is auto, actors, ism or hism, not '" + o.mode + "'");
+    if (o.mode != "auto" && o.mode != "actors" && o.mode != "ism" && o.mode != "hism" && o.mode != "customHlod")
+        throw CommandError("unrealPlaceInstances: mode is auto, actors, ism, hism or customHlod, not '" + o.mode + "'");
     if (o.collision != "auto" && o.collision != "none" && o.collision != "box" && o.collision != "convex" && o.collision != "complexAsSimple" && o.collision != "ucx")
         throw CommandError("unrealPlaceInstances: collision is auto, none, box, convex, complexAsSimple or ucx, not '" + o.collision + "'");
     g.evaluate();
@@ -840,10 +891,10 @@ json buildPlan(scene::Graph& g, const std::vector<scene::NodeId>& roots, const P
         const scene::Node* n = g.node(src);
         const std::string groupKey = keys(src);
         const std::string asset = assetNames(src, groupKey);
-        // Hidden members stay out of the level: a library asset's master only supplies the mesh.
+        // Hidden members stay out of the level (a library asset's master only supplies the mesh); HLOD proxies are hidden in Lila.
         std::vector<scene::NodeId> placed;
         for (scene::NodeId id : placedOf[k])
-            if (scene::effectivelyVisible(g, id))
+            if (o.mode == "customHlod" || scene::effectivelyVisible(g, id))
                 placed.push_back(id);
         std::vector<std::vector<Spot>> spots;
         std::vector<json> components;
@@ -939,7 +990,10 @@ json buildPlan(scene::Graph& g, const std::vector<scene::NodeId>& roots, const P
                     }
             if (gl.empty())
                 continue;
-            json pg = group(partKey, *n, asset + "_" + part.hash.substr(0, 8), std::move(gl));
+            // Named by content (geometry and materials), not by source: the same module under many cell meshes is one asset.
+            const std::string partAsset = "GN/SM_GN_" + part.hash + "_" + slots::hex(slots::idHash(meshMaterials(g, *part.mesh).dump())).substr(0, 8);
+            json pg = group(partKey, *n, partAsset, std::move(gl));
+            pg["objectPath"] = folder + "/" + partAsset + "." + partAsset.substr(3);
             pg["label"] = n->fullPath() + "_" + part.hash.substr(0, 8);
             pg["collision"] = o.collision == "auto" ? "complexAsSimple" : o.collision;
             pg["customData"] = slotsJson(gnSlots);
@@ -1050,10 +1104,13 @@ int placementTimeoutMs(size_t count)
 
 namespace
 {
-/** Roots of the last send that carried slots: a slot rule, override or pin change sends them again (auto-sync). */
-std::vector<std::string>& slotRoots()
+/**
+ * Roots of every send that carried slots, with the flags they went with (folder, mode, nanite...): a slot rule, override
+ * or pin change sends them again the same way (auto-sync); groups Unreal already holds unchanged are skipped.
+ */
+std::map<std::string, json>& slotRoots()
 {
-    static std::vector<std::string> r;
+    static std::map<std::string, json> r;
     return r;
 }
 
@@ -1066,20 +1123,27 @@ void resyncSlots()
     // Coalesced: one send after a burst of edits (an undo of several rules).
     mainq::post([] {
         queued = false;
-        json roots = json::array();
+        std::map<std::string, json> byFlags;
         scene::Graph& g = scene::Graph::current();
-        for (const std::string& r : slotRoots())
-            if (g.find(r))
-                roots.push_back(r);
-        if (roots.empty())
-            return;
-        try
+        for (const auto& [root, flags] : slotRoots())
+            if (g.find(root))
+            {
+                json& call = byFlags[flags.dump()];
+                if (call.is_null())
+                    call = flags;
+                call["args"].push_back(root);
+            }
+        for (auto& [key, call] : byFlags)
         {
-            ops::execute("unrealPlaceInstances", {{"args", roots}, {"validate", false}});
-        }
-        catch (const std::exception& e)
-        {
-            log::warn("Unreal slot sync: {}", e.what());
+            call["validate"] = false;
+            try
+            {
+                ops::execute("unrealPlaceInstances", call);
+            }
+            catch (const std::exception& e)
+            {
+                log::warn("Unreal slot sync: {}", e.what());
+            }
         }
     });
 }
@@ -1108,8 +1172,9 @@ void registerPlacementCommands()
         .positionalDoc = "objects",
         .flags = {{"folder", "f", T::String, "/Game/Lila/Instances", "Content folder the assets go in; each is SM_<source name>, with part of the source's link id appended when another mesh in the scene has the same name. The name is saved on the source, so it never changes."},
                   {"mode", "m", T::String, "auto",
-                   "How members are placed: actors, ism, hism, or auto (actors up to threshold members, then hism).",
-                   {"auto", "actors", "ism", "hism"}},
+                   "How members are placed: actors, ism, hism, auto (actors up to threshold members, then hism), or customHlod "
+                   "(World Partition Custom HLOD actors in hlodLayer, shown while their cell is unloaded: HLOD proxies).",
+                   {"auto", "actors", "ism", "hism", "customHlod"}},
                   {"threshold", "t", T::Int, nullptr, "auto switches to hism above this many members (default the unreal pref /instanceThreshold, 50).", {}, {}, 0.0},
                   {"lightingChannels", "lc", T::Bool, true,
                    "Set the actors' and lights' Lighting Channels from Lila's channels. The plan's lightingChannels lists the "
@@ -1121,7 +1186,8 @@ void registerPlacementCommands()
                    "meshes go with it, and its other children into the asset too).",
                    {"auto", "none", "box", "convex", "complexAsSimple", "ucx"}},
                   {"nanite", "na", T::Bool, false, "Build Nanite data for the assets."},
-                  {"hlodLayer", "hl", T::String, "", "HLOD layer asset path for the placed actors."},
+                  {"hlodLayer", "hl", T::String, "", "HLOD layer asset path for the placed actors; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom)."},
+                  {"linkedHlodLayer", "lhl", T::String, "", "mode=customHlod: the layer whose unloading shows these (far proxies after the near ones)."},
                   {"validate", "va", T::Bool, true,
                    "Run the validators first: an issue blocking unrealPlaceInstances, \"unreal\" or \"*\" on what is sent stops "
                    "the send; other issues come back in the result's issues."},
@@ -1204,14 +1270,20 @@ void registerPlacementCommands()
             }
 
             const std::string hlod = a.get<std::string>("hlodLayer", "");
+            const std::string linkedHlod = a.get<std::string>("linkedHlodLayer", "");
+            if (o.mode == "customHlod" && !hasFeature("customHlod"))
+                throw CommandError("unrealPlaceInstances: the LilaLink plugin predates Custom HLOD actors; rebuild it from Lila's ue/LilaLink");
             const std::string slotTablePath = a.get<std::string>("slotTable", "/Game/Lila/Slots/DA_LilaSlotTable");
             if (!plan["slotTable"].empty())
             {
-                slotRoots().clear();
+                json flags = a.flags;
+                for (const char* drop : {"args", "wait", "dryRun", "validate"})
+                    flags.erase(drop);
                 for (scene::NodeId r : roots)
-                    slotRoots().push_back(g.fullPath(r));
+                    slotRoots()[g.fullPath(r)] = flags;
             }
-            auto job = [plan, meshes, alone, withChildren, hlod, slotTablePath, dir = cacheDir()]() mutable {
+            const bool hashes = hasFeature("placementHashes");
+            auto job = [plan, meshes, alone, withChildren, hlod, linkedHlod, slotTablePath, hashes, dir = cacheDir()]() mutable {
                 LILA_ZONE_N("Unreal placements");
                 std::shared_ptr<RpcClient> client = Link::get().client();
                 if (!client)
@@ -1228,6 +1300,14 @@ void registerPlacementCommands()
                 }
                 std::error_code ec;
                 fs::create_directories(dir, ec);
+                std::map<std::string, std::string> importedThisSend;
+                // What the level already holds per group (signature, actor count): unchanged groups are skipped, so a
+                // rule swap or a one-building edit sends only what changed.
+                json inLevel = json::object();
+                if (hashes)
+                    if (RpcResult h = client->call("placementHashes", json::object(), placementTimeoutMs(0)); h.ok && h.result.is_object())
+                        inLevel = h.result.value("groups", json::object());
+                int unchanged = 0;
                 for (json& grp : plan["groups"])
                 {
                     const std::string source = grp["source"].get<std::string>();
@@ -1238,9 +1318,27 @@ void registerPlacementCommands()
                         grp["placed"] = removed.ok ? removed.result : json{{"error", removed.error}};
                         continue;
                     }
+                    const std::string signature = hashes ? placementSignature(grp, meshes, hlod, linkedHlod) : std::string();
+                    if (!signature.empty())
+                    {
+                        const json& was = inLevel.value(grp["key"].get<std::string>(), json::object());
+                        const bool oneHolder = grp["mode"] == "ism" || grp["mode"] == "hism";
+                        const size_t want = oneHolder && !grp.contains("actorClass") ? 1 : grp["placements"].size();
+                        if (was.value("hash", "") == signature && was.value("actors", size_t(0)) == want)
+                        {
+                            grp["placed"] = {{"unchanged", true}};
+                            ++unchanged;
+                            continue;
+                        }
+                    }
                     // Slots naming an Unreal class or mesh use what the project has: nothing to export.
                     std::string mesh = grp.value("unrealMesh", std::string());
-                    if (!grp.contains("actorClass") && !grp.contains("unrealMesh"))
+                    if (!grp.contains("actorClass") && !grp.contains("unrealMesh") && importedThisSend.contains(grp["contentPath"].get<std::string>()))
+                    {
+                        mesh = importedThisSend[grp["contentPath"].get<std::string>()];
+                        grp["import"] = {{"shared", true}};
+                    }
+                    else if (!grp.contains("actorClass") && !grp.contains("unrealMesh"))
                     {
                         const std::string asset = grp["contentPath"].get<std::string>();
                         const fs::path file = dir / (assetSafe(asset.substr(asset.rfind('/') + 1)) + "_instance.fbx");
@@ -1263,6 +1361,7 @@ void registerPlacementCommands()
                         mesh = grp["objectPath"].get<std::string>();
                         if (json assets = imported.result.value("assets", json::array()); assets.is_array() && !assets.empty() && assets[0].is_string())
                             mesh = assets[0].get<std::string>();
+                        importedThisSend[asset] = mesh;
                     }
                     json params = {{"group", grp["key"]},
                                    {"label", grp.value("label", source)},
@@ -1274,11 +1373,16 @@ void registerPlacementCommands()
                                    {"placements", grp["placements"]}};
                     if (!hlod.empty())
                         params["hlodLayer"] = hlod;
+                    if (!linkedHlod.empty())
+                        params["linkedHlodLayer"] = linkedHlod;
                     if (grp.contains("actorClass"))
                         params["actorClass"] = grp["actorClass"];
+                    if (!signature.empty())
+                        params["hash"] = signature;
                     RpcResult placed = client->call("placeInstances", params, placementTimeoutMs(grp["placements"].size()));
                     grp["placed"] = placed.ok ? placed.result : json{{"error", placed.error}};
                 }
+                plan["unchanged"] = unchanged;
                 // Meshes a source's geometry nodes no longer instance leave the level.
                 for (json& src : plan["gnSources"])
                 {
@@ -1287,7 +1391,11 @@ void registerPlacementCommands()
                 }
                 if (!plan["slotTable"].empty())
                 {
-                    RpcResult wrote = client->call("writeSlotTable", {{"path", slotTablePath}, {"rows", plan["slotTable"]}},
+                    // Rows of the sources sent replace theirs; other sends' rows stay in the table.
+                    json sources = json::array();
+                    for (const json& src : plan["gnSources"])
+                        sources.push_back(src["prefix"]);
+                    RpcResult wrote = client->call("writeSlotTable", {{"path", slotTablePath}, {"rows", plan["slotTable"]}, {"sources", sources}},
                                                    placementTimeoutMs(plan["slotTable"].size()));
                     plan["slotTableWritten"] = wrote.ok ? wrote.result : json{{"error", wrote.error}};
                 }

@@ -250,6 +250,26 @@ TEST_CASE("buildings commands: the OSM fixture town through Settlement's buildin
     CHECK(st["count"] == envelopes);
 }
 
+TEST_CASE("buildings commands: site kit envelopes (no lot, a stable id each) make one building each")
+{
+    loadBuildings();
+    run("newScene");
+    json envs = json::array();
+    for (int k = 0; k < 3; ++k)
+    {
+        json e = envelope(0, k * 3000.0, 0.0, 1500.0, 1200.0, 1, {"street", "open", "open", "open"}, "warehouse");
+        e.erase("lot");
+        e.erase("lotId");
+        e["id"] = "site:port1/warehouse/" + std::to_string(k);
+        envs.push_back(e);
+    }
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Site"}});
+    CHECK(made["buildings"] == 3);
+    // The same ids give the same buildings on a second run.
+    const json again = run("buildingCreate", {{"envelopes", envs}, {"name", "Site"}});
+    CHECK(again["buildings"] == 3);
+}
+
 TEST_CASE("buildings commands: performance budget")
 {
     loadBuildings();

@@ -21,6 +21,7 @@
 #include <fstream>
 #include <mutex>
 #include <set>
+#include <thread>
 
 using namespace lila;
 using namespace lila::link;
@@ -251,6 +252,128 @@ TEST_CASE("unrealPlaceInstances exports each source once, imports it and places 
     unregisterExporter("fbx:instanceSource");
     Link::get().disconnect();
     fs::remove_all(dir);
+}
+
+TEST_CASE("unrealPlaceInstances mode=customHlod: hidden proxies placed as Custom HLOD actors in the named layers")
+{
+    setupPlacementTest();
+    run("newScene");
+    run("polyCube", {{"name", "Block_HLOD"}});
+    run("hide", {{"args", {"Block_HLOD"}}});
+    fs::path dir = fs::temp_directory_path() / "lila_link_custom_hlod";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    auto serve = [](json features) {
+        return [features](const json& req) -> std::optional<json> {
+            const std::string m = req["method"];
+            if (m == "hello")
+                return FakeServer::reply(req, {{"project", "TestGame"}, {"features", features}});
+            if (m == "importAsset")
+                return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+            if (m == "placeInstances")
+                return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+            return std::nullopt;
+        };
+    };
+    const json flags = {{"args", {"Block_HLOD"}}, {"mode", "customHlod"}, {"hlodLayer", "/Game/Lila/HLOD/HL_Near"},
+                        {"linkedHlodLayer", "/Game/Lila/HLOD/HL_Base"}, {"validate", false}, {"wait", true}};
+    {
+        // A plugin without Custom HLOD actors is told so instead of getting plain actors.
+        FakeServer old(serve({"progress", "placements"}));
+        Link::ConnectOptions o;
+        o.port = old.port();
+        Link::get().connect(o);
+        CHECK_THROWS_AS(run("unrealPlaceInstances", flags), CommandError);
+        Link::get().disconnect();
+    }
+    FakeServer server(serve({"progress", "placements", "customHlod"}));
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+
+    // Hidden in Lila (a proxy) and still placed.
+    const json done = run("unrealPlaceInstances", flags);
+    REQUIRE(done["groups"].size() == 1);
+    CHECK(done["groups"][0]["mode"] == "customHlod");
+    json place;
+    for (const json& r : server.requests())
+        if (r["method"] == "placeInstances")
+            place = r["params"];
+    REQUIRE(place.is_object());
+    CHECK(place["mode"] == "customHlod");
+    CHECK(place["hlodLayer"] == "/Game/Lila/HLOD/HL_Near");
+    CHECK(place["linkedHlodLayer"] == "/Game/Lila/HLOD/HL_Base");
+    CHECK(place["placements"].size() == 1);
+    CHECK_THROWS_AS(run("unrealPlaceInstances", {{"args", {"Block_HLOD"}}, {"mode", "lod"}, {"dryRun", true}}), CommandError);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("slot table: a send replaces only its own sources' rows")
+{
+    setupPlacementTest();
+    run("newScene");
+    const json lamp = {{"unrealClass", "/Game/BP/BP_Lamp.BP_Lamp_C"}};
+    run("slotPublish", {{"args", {"Lamps"}},
+                        {"slots", {{{"id", "street/1/lamp/0"}, {"type", "lamp.street"}, {"position", {0, 0, 0}}, {"payload", lamp}},
+                                   {{"id", "street/1/lamp/1"}, {"type", "lamp.street"}, {"position", {500, 0, 0}}, {"payload", lamp}}}}});
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    FakeServer server([](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "slots"}}});
+        if (m == "placeInstances")
+            return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        if (m == "writeSlotTable")
+            return FakeServer::reply(req, {{"rows", req["params"]["rows"].size()}});
+        if (m == "removePlacements")
+            return FakeServer::reply(req, {{"removed", 0}});
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    run("unrealPlaceInstances", {{"args", {"Lamps"}}, {"wait", true}, {"validate", false}, {"folder", "/Game/Kit"}, {"mode", "actors"}});
+    json table;
+    for (const json& r : server.requests())
+        if (r["method"] == "writeSlotTable")
+            table = r["params"];
+    REQUIRE(table.is_object());
+    REQUIRE(table["rows"].size() == 2);
+    REQUIRE(table["sources"].size() == 1);
+    // Every row's group starts with a source the send names, so Unreal keeps every other send's rows.
+    for (const json& row : table["rows"])
+        CHECK(row["group"].get<std::string>().starts_with(table["sources"][0].get<std::string>()));
+
+    // A rule swap sends the lamps again by itself (auto-sync), with the flags of the send that carried them.
+    PrefStore::get().set("unreal", "/autoSync", true, PrefScope::Workspace);
+    const size_t before = server.requests().size();
+    run("slotRule", {{"args", {"add"}}, {"type", "lamp"}, {"unrealClass", "/Game/BP/BP_LampB.BP_LampB_C"}});
+    json resent;
+    for (int k = 0; k < 200 && resent.is_null(); ++k)
+    {
+        mainq::drain();
+        const std::vector<json> reqs = server.requests();
+        for (size_t i = before; i < reqs.size(); ++i)
+            if (reqs[i]["method"] == "placeInstances")
+                resent = reqs[i]["params"];
+        if (resent.is_null())
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(resent.is_object());
+    CHECK(resent["actorClass"] == "/Game/BP/BP_LampB.BP_LampB_C");
+    CHECK(resent["mode"] == "actors");
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
 }
 
 TEST_CASE("placement plan: a live array's copies are placements of their source's asset")
@@ -529,7 +652,10 @@ TEST_CASE("geometry nodes instances: one asset per referenced mesh, placed per i
         const std::string gk = grp["key"];
         CHECK(gk.starts_with(key + ":gn:"));
         CHECK(gk.size() == key.size() + 4 + 8);
-        CHECK(grp["contentPath"] == "/Game/Lila/Instances/SM_Ground_" + gk.substr(gk.size() - 8));
+        // Named by content, so the same module under many sources is one asset.
+        const std::string content = grp["contentPath"];
+        CHECK(content.starts_with("/Game/Lila/Instances/GN/SM_GN_" + gk.substr(gk.size() - 8)));
+        CHECK(grp["objectPath"] == content + "." + content.substr(content.rfind('/') + 1));
         CHECK(grp["mode"] == "hism");
         CHECK(grp["placements"].size() == each);
         CHECK(grp.contains("gnMesh"));
@@ -600,8 +726,11 @@ TEST_CASE("geometry nodes instances reach Unreal: their meshes written and impor
     o.port = server.port();
     Link::get().connect(o);
 
-    json done = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
-    REQUIRE(done["groups"].size() == 3);
+    // A second ground with the same geometry nodes shares their two meshes: still two imports for both.
+    run("polyPlane", {{"width", 100.0}, {"depth", 100.0}, {"name", "Ground2"}});
+    run("gnApply", {{"args", {"Ground2", "Boulders"}}});
+    json done = run("unrealPlaceInstances", {{"args", {"Ground", "Ground2"}}, {"wait", true}});
+    REQUIRE(done["groups"].size() == 6);
     std::vector<json> imports, places, removals;
     for (const json& r : server.requests())
     {
@@ -621,16 +750,85 @@ TEST_CASE("geometry nodes instances reach Unreal: their meshes written and impor
         CHECK(fs::file_size(file) > 1000);
         CHECK(fs::file_size(file) < 100000);
     }
-    REQUIRE(places.size() == 2);
+    REQUIRE(places.size() == 4);
+    CHECK(places[0]["mesh"] == places[2]["mesh"]);
     CHECK(places[0]["mode"] == "hism");
     CHECK(places[0]["label"].get<std::string>().starts_with("|Ground_"));
     // The holder's ULilaInstanceData learns what each custom data slot holds; it shares no components here.
     CHECK(places[0]["customData"] == json::parse(R"([{"name":"random","slot":0,"width":1}])"));
     CHECK(places[0]["components"] == json::array());
-    REQUIRE(removals.size() == 2);
+    REQUIRE(removals.size() == 4);
     CHECK(removals[0]["groups"] == json::array({done["groups"][0]["key"]}));
-    CHECK(removals[1]["prefixes"] == json::array({done["groups"][0]["key"].get<std::string>() + ":gn:"}));
-    CHECK(removals[1]["keep"].size() == 2);
+    CHECK(removals[2]["prefixes"] == json::array({done["groups"][0]["key"].get<std::string>() + ":gn:"}));
+    CHECK(removals[2]["keep"].size() == 2);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("placement signatures: a second send of the same geometry nodes result imports and places nothing")
+{
+    setupPlacementTest();
+    if (!ops::find("gnAddNode"))
+    {
+        gn::registerTypes();
+        gn::registerCommands();
+    }
+    buildScatter();
+    fs::path dir = fs::temp_directory_path() / "lila_link_signatures";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    // The level as Unreal would hold it: group -> {hash, actors}.
+    auto level = std::make_shared<json>(json::object());
+    auto mx = std::make_shared<std::mutex>();
+    FakeServer server([level, mx](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "placementHashes"}}});
+        if (m == "placementHashes")
+        {
+            std::scoped_lock lock(*mx);
+            return FakeServer::reply(req, {{"groups", *level}});
+        }
+        if (m == "importAsset")
+            return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+        if (m == "placeInstances")
+        {
+            const json& p = req["params"];
+            std::scoped_lock lock(*mx);
+            (*level)[p["group"].get<std::string>()] = {{"hash", p.value("hash", "")}, {"actors", p["mode"] == "hism" ? size_t(1) : p["placements"].size()}};
+            return FakeServer::reply(req, {{"spawned", p["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        }
+        if (m == "removePlacements")
+            return FakeServer::reply(req, {{"removed", 0}});
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    auto count = [&server](const char* method) {
+        return std::ranges::count_if(server.requests(), [method](const json& r) { return r["method"] == method; });
+    };
+
+    json first = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
+    CHECK(first["unchanged"] == 0);
+    CHECK(count("importAsset") == 2);
+    CHECK(count("placeInstances") == 2);
+    json second = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
+    CHECK(second["unchanged"] == 2);
+    CHECK(count("importAsset") == 2);
+    CHECK(count("placeInstances") == 2);
+
+    // A changed scatter changes the placements: both groups go again.
+    gnSet("Boulders", "DistributePointsOnFaces.seed", 8);
+    json third = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}});
+    CHECK(third["unchanged"] == 0);
+    CHECK(count("placeInstances") == 4);
 
     unregisterExporter("fbx:instanceSource");
     Link::get().disconnect();
