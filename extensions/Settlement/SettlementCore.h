@@ -695,6 +695,10 @@ struct Envelope
     {
         Polygon footprint;
         double bottom = 0.0, top = 0.0;
+        /** The tier's own roof (an imported building:part's roof:shape drawn as gable, hip, mansard, dome or flat) and its
+         * height above top; empty when the tier has none of its own. */
+        std::string roof;
+        double roofHeight = 0.0;
     };
     std::vector<Tier> tiers;
     std::vector<int> partyWith;    // per footprint side: the lot across a party wall, -1 none

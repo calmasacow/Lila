@@ -1,9 +1,12 @@
 #include "TestUtil.h"
 #include "Generators.h"
+#include "Parcels.h"
 
 #include "curve/CurveNodes.h"
 #include "extensions/ExtensionManager.h"
+#include "geo/Mesh.h"
 #include "gn/NodeLib.h"
+#include "names/Names.h"
 #include "ops/Command.h"
 
 #include <doctest/doctest.h>
@@ -106,6 +109,34 @@ TEST_CASE("settlement osm: imported buildings become lots and envelopes with the
     for (const json& t : cathedral["tiers"])
         tallest = std::max(tallest, t["top"].get<double>());
     CHECK(tallest - cathedral["ground"].get<double>() > 4300.0);
+    // The domed tower keeps its own roof.
+    int domes = 0;
+    for (const json& t : cathedral["tiers"])
+        if (t.value("roof", std::string()) == "dome")
+        {
+            ++domes;
+            CHECK(t["roofHeight"].get<double>() > 0.0);
+        }
+    CHECK(domes == 1);
+
+    // Streets keep the fictional names Terrain gave the same roads: one name per real street everywhere.
+    std::set<std::string> streetNames;
+    const json namedStreets = run("settlementNames", {{"args", {mesh}}});
+    for (const json& st : namedStreets["streets"])
+        streetNames.insert(st["name"].get<std::string>());
+    const json roads = run("terrainImportOsm", {{"args", {townFile()}}, {"terrain", ground}, {"kinds", {"road"}}, {"landcover", false},
+                                                {"origin", {23.2, -106.42}}, {"culture", "mexican"}});
+    const json roadInfo = json::parse(run("getAttr", {{"args", {roads["curves"]["road"].get<std::string>() + ".osmFeatures"}}}).get<std::string>());
+    std::set<std::string> terrainNames;
+    for (const json& r : roadInfo)
+        if (!r.value("name", std::string()).empty())
+            terrainNames.insert(r["name"].get<std::string>());
+    CHECK(terrainNames.size() == 6);
+    for (const std::string& n : terrainNames)
+    {
+        CAPTURE(n);
+        CHECK(streetNames.count(n) == 1);
+    }
 
     // Shops inside buildings are their businesses; one chain's branches share a name, and none is real.
     const json& pharmacy = envs.at("w1004")["businesses"];
@@ -218,4 +249,82 @@ TEST_CASE("settlement osm: fill none leaves blocks to the imported buildings, al
     const json all = makeTown(terrain["mesh"], "All", {{"osmFill", "all"}});
     CHECK(cutIn(all, "w1001") >= 0);
     CHECK(cutIn(all, "w1010") == cutIn(sparse, "w1010"));
+}
+
+TEST_CASE("settlement massing: courtyards are holes, building parts keep their own roofs")
+{
+    Layout l;
+    Envelope env;
+    env.footprint = makePolygon({{0, 0}, {2000, 0}, {2000, 2000}, {0, 2000}});
+    env.holes = {makePolygon({{700, 700}, {1300, 700}, {1300, 1300}, {700, 1300}})};
+    env.tiers = {{env.footprint, 0.0, 900.0}};
+    env.roof = "flat";
+    lila::geo::Mesh m;
+    std::vector<int> parts;
+    CHECK(appendMassing(env, l, m, [&](int part) { parts.push_back(part); }));
+    // The top's area is the footprint less the courtyard, and nothing of it lies over the courtyard.
+    double top = 0.0, over = 0.0;
+    int walls = 0;
+    size_t k = 0;
+    for (lila::geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        if (!m.faceValid(f))
+            continue;
+        const int part = parts[k++];
+        std::vector<glm::dvec3> pts;
+        for (lila::geo::Index p : m.facePoints(f))
+            pts.push_back(m.position(p));
+        glm::dvec3 c(0.0);
+        double a = 0.0;
+        for (size_t i = 0; i < pts.size(); ++i)
+        {
+            c += pts[i];
+            const glm::dvec3 &p = pts[i], &q = pts[(i + 1) % pts.size()];
+            a += p.x * q.z - q.x * p.z;
+        }
+        c /= double(pts.size());
+        if (part == 1 && std::abs(c.y - 900.0) < 1e-6)
+        {
+            top += std::abs(a) * 0.5;
+            over += c.x > 700 && c.x < 1300 && c.z > 700 && c.z < 1300 ? 1.0 : 0.0;
+        }
+        walls += part == 0 ? 1 : 0;
+    }
+    CHECK(top == doctest::Approx(2000.0 * 2000.0 - 600.0 * 600.0));
+    CHECK(over == 0.0);
+    CHECK(walls == 8);
+
+    // A tower tier with a dome of its own on a flat-roofed base.
+    Envelope twin;
+    twin.footprint = makePolygon({{0, 0}, {3000, 0}, {3000, 2000}, {0, 2000}});
+    twin.tiers = {{twin.footprint, 0.0, 800.0}, {makePolygon({{200, 200}, {800, 200}, {800, 800}, {200, 800}}), 0.0, 2500.0, "dome", 300.0}};
+    twin.roof = "flat";
+    lila::geo::Mesh m2;
+    CHECK(appendMassing(twin, l, m2, [](int) {}));
+    double high = 0.0;
+    for (lila::geo::Index p = 0; p < m2.pointCapacity(); ++p)
+        if (m2.pointValid(p))
+            high = std::max(high, m2.position(p).y);
+    CHECK(high > 2500.0 + 250.0);
+    CHECK(high <= 2500.0 + 300.0 + 1e-6);
+}
+
+TEST_CASE("names: French, Latin and Sector Codes cultures name businesses in their own words")
+{
+    using lila::names::Kind;
+    auto many = [](const char* culture, const char* program) {
+        std::set<std::string> out;
+        for (uint64_t key = 1; key <= 24; ++key)
+            out.insert(lila::names::placeName(culture, Kind::Business, program, key * 7919, 0));
+        return out;
+    };
+    for (const std::string& n : many("french", "bakery"))
+        CHECK((n.starts_with("Boulangerie") || n.starts_with("Pâtisserie")));
+    for (const std::string& n : many("latin", "bakery"))
+        CHECK(n.starts_with("Pistrinum"));
+    for (const std::string& n : many("sector", "bakery"))
+        CHECK((n.starts_with("Protein Bakery") || n.find("Ovens") != std::string::npos));
+    CHECK(lila::names::vocabularyOf("french") == "french");
+    CHECK(lila::names::vocabularyOf("latin") == "latin");
+    CHECK(lila::names::vocabularyOf("sector") == "scifi");
 }
