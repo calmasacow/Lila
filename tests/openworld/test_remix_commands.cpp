@@ -3,6 +3,7 @@
 
 #include "extensions/ExtensionManager.h"
 #include "gn/NodeLib.h"
+#include "math/MathCore.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
 
@@ -81,4 +82,27 @@ TEST_CASE("remix commands: create, region, pin, apply, check, undo")
     CHECK(view["before"].get<bool>());
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
+}
+
+TEST_CASE("remix commands: on a Z-up scene the remix stands on the ground and curves map onto it")
+{
+    loadPackages();
+    ops::execute("newScene", json::object());
+    math::setUpAxis(math::UpAxis::Z);
+    const json made = ops::execute("remixCreate", {{"name", "WorldZ"}, {"sources", json::array({{{"id", "coast"}, {"dem", data("coast.asc")}}})}});
+    const std::string mesh = made["mesh"].get<std::string>();
+    const json rot = ops::execute("getAttr", {{"args", {mesh + ".rotate"}}});
+    CHECK(rot[0].get<double>() == doctest::Approx(90.0));
+    CHECK(rot[2].get<double>() == doctest::Approx(90.0));
+    // World (X, Y) on the ground is the map's (Y, X): a curve drawn on the Z-up ground lands where it was drawn.
+    const std::string c = ops::execute("curve", {{"points", {{0, 10000, 0}, {0, 20000, 0}, {10000, 20000, 0}, {10000, 10000, 0}, {0, 10000, 0}}}, {"type", "poly"}})
+                              .get<std::string>();
+    ops::execute("remixAddRegion", {{"args", {mesh}}, {"id", "r"}, {"op", "keep"}, {"curve", c}});
+    const json poly = ops::execute("remixSpec", {{"args", {mesh}}})["regions"][0]["polygon"];
+    REQUIRE(poly.size() == 4);
+    CHECK(poly[0][0].get<double>() == doctest::Approx(10000.0).epsilon(1e-6));
+    CHECK(std::abs(poly[0][1].get<double>()) < 1e-3);
+    CHECK(poly[2][0].get<double>() == doctest::Approx(20000.0).epsilon(1e-6));
+    CHECK(poly[2][1].get<double>() == doctest::Approx(10000.0).epsilon(1e-6));
+    math::setUpAxis(math::UpAxis::Y);
 }

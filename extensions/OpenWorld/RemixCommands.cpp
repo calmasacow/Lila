@@ -12,6 +12,7 @@
 #include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
 #include <lila/Log.h>
+#include <lila/Math.h>
 #include <lila/Mcp.h>
 #include <lila/Node.h>
 #include <lila/Paths.h>
@@ -281,6 +282,9 @@ void registerRemix(ext::Context& ctx)
             Graph& g = Graph::current();
             const json made = ops::execute("createMesh", {{"points", json::array()}, {"faces", json::array()}, {"name", a.get<std::string>("name", "World")}});
             const std::string host = made.is_string() ? made.get<std::string>() : made.at(0).get<std::string>();
+            // Stood on the scene's ground as Terrain stands its terrains: the map's Y (heights) turns to world Z on a Z-up scene.
+            if (math::upAxis() == math::UpAxis::Z)
+                ops::execute("setAttr", {{"args", {host + ".rotate", json::array({90.0, 0.0, 90.0})}}});
             std::string group = g.find(host)->name() + "_Remix";
             const json groups = ops::execute("gnGroups", json::object());
             for (int k = 2;; ++k)
