@@ -6,7 +6,6 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
-#include "Engine/Level.h"
 #include "AssetToolsModule.h"
 #include "BSPOps.h"
 #include "Components/BrushComponent.h"
@@ -16,9 +15,11 @@
 #include "Engine/Polys.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "HAL/FileManager.h"
 #include "Misc/Base64.h"
 #include "Misc/Crc.h"
 #include "Misc/PackageName.h"
+#include "Misc/Paths.h"
 #include "Model.h"
 #include "ObjectTools.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
@@ -61,6 +62,23 @@ FString KeyFromTags(const AActor* Actor)
 		}
 	}
 	return FString();
+}
+
+/** The level an external actor package belongs to (/Game/__ExternalActors__/Maps/A/1/AB/X: /Game/Maps/A), else Package. */
+FString LevelOfPackage(const FString& Package)
+{
+	const FString Marker = TEXT("/__ExternalActors__");
+	const int32 At = Package.Find(Marker);
+	if (At == INDEX_NONE)
+	{
+		return Package;
+	}
+	FString Level = Package.Left(At) + Package.Mid(At + Marker.Len());
+	for (int32 Up = 0; Up < 3; ++Up)
+	{
+		Level = FPaths::GetPath(Level);
+	}
+	return Level;
 }
 
 UWorld* ZonesEditorWorld()
@@ -612,40 +630,30 @@ TSharedPtr<FJsonValue> RemoveZones(const TSharedPtr<FJsonObject>& Params, FStrin
 	}
 	TArray<FString> Errors;
 	const int32 LayersRemoved = Layers.IsEmpty() ? 0 : LilaLink::DeleteUnusedDataLayers(World, Layers, Errors);
-	// The set's zone data asset, which game code queries, goes with its volumes, unless another level holds zone
-	// volumes: sends to several levels share it.
+	// The set's zone data asset, which game code queries, goes with its volumes, unless another level's volumes name it:
+	// sends of the set to several levels share it.
 	bool bAssetDeleted = false;
-	FString OtherLevel;
-	{
-		FARFilter Filter;
-		Filter.ClassPaths.Add(ALilaZoneVolume::StaticClass()->GetClassPathName());
-		Filter.bRecursiveClasses = true;
-		TArray<FAssetData> Volumes;
-		IAssetRegistry::GetChecked().GetAssets(Filter, Volumes);
-		const TArray<FString> Own = ULevel::GetExternalActorsPaths(World->GetPackage()->GetName());
-		for (const FAssetData& Data : Volumes)
-		{
-			const FString Package = Data.PackageName.ToString();
-			if (!Own.ContainsByPredicate([&Package](const FString& P) { return Package.StartsWith(P + TEXT("/")); }) && Package != World->GetPackage()->GetName())
-			{
-				OtherLevel = Package;
-				break;
-			}
-		}
-	}
-	if (!OtherLevel.IsEmpty())
-	{
-		Errors.Add(TEXT("zone data kept: another level holds zone volumes (") + OtherLevel + TEXT(")"));
-	}
-	else if (!Label.IsEmpty())
+	if (!Label.IsEmpty())
 	{
 		const FString AssetName = ObjectTools::SanitizeObjectName(TEXT("ZD_") + Label);
 		const FString PackageName = AssetFolder / AssetName;
 		if (FPackageName::DoesPackageExist(PackageName) || FindPackage(nullptr, *PackageName))
 		{
-			if (UObject* Asset = LoadObject<UObject>(nullptr, *(PackageName + TEXT(".") + AssetName), nullptr, LOAD_NoWarn | LOAD_Quiet))
+			if (const FString User = LilaLink::UsedOutside(World, PackageName); !User.IsEmpty())
+			{
+				Errors.Add(TEXT("zone data kept: another level uses it (") + LevelOfPackage(User) + TEXT(")"));
+			}
+			else if (UObject* Asset = LoadObject<UObject>(nullptr, *(PackageName + TEXT(".") + AssetName), nullptr, LOAD_NoWarn | LOAD_Quiet))
 			{
 				bAssetDeleted = ObjectTools::ForceDeleteObjects({Asset}, /*ShowConfirmation=*/false) > 0;
+				// After the data layer assets' delete reset the undo buffer mid-transaction, this one unloads the asset but
+				// leaves its file.
+				FString File;
+				if (bAssetDeleted && !FindPackage(nullptr, *PackageName) && FPackageName::DoesPackageExist(PackageName, &File))
+				{
+					bAssetDeleted = IFileManager::Get().Delete(*File, /*RequireExists=*/false, /*EvenReadOnly=*/true);
+					IAssetRegistry::GetChecked().ScanModifiedAssetFiles({File});
+				}
 				if (!bAssetDeleted)
 				{
 					Errors.Add(PackageName + TEXT(" could not be deleted"));

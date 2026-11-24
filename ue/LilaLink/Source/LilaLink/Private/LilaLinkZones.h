@@ -16,7 +16,9 @@ namespace LilaLink
  * layer and zone id, updated in place, and the ones no longer sent are deleted. Replies {volumes, created, updated,
  * removed, asset, dataLayers}.
  *
- * removeZones {id} deletes the volumes sent for set id (the data asset stays). Replies {removed}.
+ * removeZones {id, label?, asset?} deletes the volumes sent for set id, the set's data layers no actor uses, and ZD_<label>
+ * unless another level's volumes name it (asset registry referencers, so per set: other sets' volumes don't keep it).
+ * Replies {removed, dataLayers, zoneData, warning?}.
  */
 void AddZoneMethods(TMap<FString, FLilaLinkMethod>& Methods);
 } // namespace LilaLink
