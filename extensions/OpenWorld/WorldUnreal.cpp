@@ -486,6 +486,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
         json settlements = json::array(), zoneSets = json::array();
         // Project-wide lane profiles the removals took out of the project ini, and the ini copies made first.
         json profilesRemoved = json::array(), configBackups = json::array();
+        // Landscape paint layers Lila added for the roads, taken out with them or kept (warned) because someone painted them.
+        json paintLayersRemoved = json::array(), warnings = json::array();
         for (const json& s : before.value("settlements", json::array()))
         {
             const std::string key = s.value("key", std::string());
@@ -505,6 +507,10 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
                     profilesRemoved.push_back(name);
                 if (r.contains("configBackup"))
                     configBackups.push_back(r["configBackup"]);
+                for (const json& l : r.value("paintLayersRemoved", json::array()))
+                    paintLayersRemoved.push_back(l);
+                for (const json& w : r.value("warnings", json::array()))
+                    warnings.push_back(key + ": " + w.get<std::string>());
                 if (r.contains("errors"))
                 {
                     kept.push_back(s);
@@ -557,6 +563,10 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             out["laneProfilesRemoved"] = profilesRemoved;
         if (!configBackups.empty())
             out["configBackups"] = configBackups;
+        if (!paintLayersRemoved.empty())
+            out["paintLayersRemoved"] = paintLayersRemoved;
+        if (!warnings.empty())
+            out["warnings"] = warnings;
         return out;
     });
 

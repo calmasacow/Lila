@@ -935,6 +935,17 @@ std::string labelOf(const std::string& key)
  * level splines, PCG cells with their data assets, and its ZoneGraph lanes. Works from the Unreal key alone, so a
  * settlement already deleted in Lila can be removed; the manifest of that key is deleted after.
  */
+/** Lifts a spline send or removal reply's warnings and the paint layers it took off the landscape to the command's top level. */
+void liftSplineReport(const json& reply, json& warnings, json& paintLayersRemoved)
+{
+    if (!reply.is_object())
+        return;
+    for (const json& w : reply.value("warnings", json::array()))
+        warnings.push_back(w);
+    for (const json& l : reply.value("paintLayersRemoved", json::array()))
+        paintLayersRemoved.push_back(l);
+}
+
 json removeFromUnreal(const Args& a)
 {
     LILA_ZONE();
@@ -979,12 +990,21 @@ json removeFromUnreal(const Args& a)
     if (!meshGroups.empty())
         attempt("meshCells", [&] { return call(*c, "removePlacements", {{"groups", meshGroups}, {"deleteMeshes", true}, {"meshFolder", cellFolder}}, cmd); });
     attempt("placements", [&] { return call(*c, "removePlacements", {{"prefixes", {key + "/"}}}, cmd); });
+    json warnings = json::array(), paintLayersRemoved = json::array();
     attempt("splines", [&] {
         json r = json::object();
         for (const char* s : {"/roads", "/paths", "/levels"})
-            r[s + 1] = call(*c, "removeSpline", {{"id", key + s}}, cmd).value("removed", false);
+        {
+            const json reply = call(*c, "removeSpline", {{"id", key + s}}, cmd);
+            liftSplineReport(reply, warnings, paintLayersRemoved);
+            r[s + 1] = reply.value("removed", false);
+        }
         return r;
     });
+    if (!warnings.empty())
+        out["warnings"] = warnings;
+    if (!paintLayersRemoved.empty())
+        out["paintLayersRemoved"] = paintLayersRemoved;
     if (has("settlementCells"))
         attempt("pcgCells", [&] { return call(*c, "removeSettlementCells", {{"id", key}, {"folder", cellFolder}}, cmd); });
     if (has("settlement"))
@@ -1122,7 +1142,7 @@ json sendToUnreal(const Args& a)
     if (o.massing)
         massingCells = massingByCell(r.layout, cellSize);
     json sent = json::object(), errors = json::array();
-    json warnings = json::array();
+    json warnings = json::array(), paintLayersRemoved = json::array();
     std::set<std::string> failed;
     auto send = [&](const SyncItem& i) -> json {
         const Vec2 mid = i.cell.center(cellSize);
@@ -1195,6 +1215,8 @@ json sendToUnreal(const Args& a)
             try
             {
                 sent[k] = send(*byKey[k]);
+                if (const std::string& kind = byKey[k]->kind; kind == "paths" || kind == "levels" || (kind == "roads" && mode != "meshes"))
+                    liftSplineReport(sent[k], warnings, paintLayersRemoved);
             }
             catch (const std::exception& e)
             {
@@ -1221,7 +1243,10 @@ json sendToUnreal(const Args& a)
             else if (kind == "place")
                 groups.push_back(k);
             else if (kind == "roads" || kind == "paths" || kind == "levels")
+            {
                 removed[k] = call(*c, "removeSpline", {{"id", k}}, cmd);
+                liftSplineReport(removed[k], warnings, paintLayersRemoved);
+            }
             else if (kind == "pcg" && k.find("/pcg/") != std::string::npos)
                 pcgCells.push_back(cellNameOf(k));
             else if (kind == "zoneGraph")
@@ -1277,6 +1302,8 @@ json sendToUnreal(const Args& a)
     }
     if (!warnings.empty())
         out["warnings"] = warnings;
+    if (!paintLayersRemoved.empty())
+        out["paintLayersRemoved"] = paintLayersRemoved;
     out["manifest"] = manifestPath.generic_string();
     return out;
 }
@@ -1340,7 +1367,9 @@ void registerUnrealCommands(ext::Context& ctx)
                "data. Give the settlement, or key= for one already deleted in Lila (the Unreal key its sends used, the "
                "settlement mesh's name). Its sync manifest is deleted, so a later send sends everything again. Returns what "
                "Unreal removed per kind and any errors; laneProfilesRemoved lists the Lila_ lane profiles taken out of "
-               "the project ini because no level's settlement uses them any more (configBackup: the ini as it was).",
+               "the project ini because no level's settlement uses them any more (configBackup: the ini as it was); "
+               "paintLayersRemoved lists the landscape paint layers Lila had added for the roads and took out with them, and "
+               "warnings name any such layer kept because someone painted it by hand.",
         .positionalDoc = "settlement mesh or its modifier (or key=)",
         .flags = {{"key", "k", Arg::String, nullptr, "Unreal key of a settlement no longer in the scene (its mesh's name)."},
                   {"folder", "f", Arg::String, "/Game/Lila/Settlement", "Content folder its sends used."}},

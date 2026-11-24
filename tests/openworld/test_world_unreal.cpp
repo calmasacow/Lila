@@ -177,7 +177,16 @@ struct FakeLevel
             return FakeServer::reply(req, {{"actor", p.value("label", std::string())}});
         }
         if (method == "removeSpline")
-            return FakeServer::reply(req, {{"removed", splines.erase(p["id"].get<std::string>()) > 0}});
+        {
+            // A road paint layer Lila added that someone painted by hand stays, with a warning.
+            const std::string id = p["id"].get<std::string>();
+            const bool had = splines.erase(id) > 0;
+            const bool roads = had && id.ends_with("/roads");
+            return FakeServer::reply(req, {{"removed", had},
+                                           {"paintLayersRemoved", roads ? json::array({"roadShoulder"}) : json::array()},
+                                           {"warnings", roads ? json::array({"paint layer roadAsphalt, added for Lila's roads, has paint of its own, so it stays on the landscape"})
+                                                              : json::array()}});
+        }
         if (method == "deleteAssets")
             return FakeServer::reply(req, {{"deleted", 0}, {"missing", p["paths"]}});
         return FakeServer::reply(req, json::object());
@@ -422,6 +431,10 @@ TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the 
     // The lane profiles it took out of the project ini, and where the ini as it was went, reach the build report.
     CHECK(dropped["laneProfilesRemoved"] == json::array({"Lila_Street"}));
     CHECK(dropped["configBackups"].size() == 1);
+    // So do the road paint layers that went with the roads, and the warning for one kept because it was painted by hand.
+    CHECK(dropped["paintLayersRemoved"] == json::array({"roadShoulder"}));
+    REQUIRE(dropped["warnings"].size() == 1);
+    CHECK(dropped["warnings"][0].get<std::string>().starts_with(key + ": paint layer roadAsphalt"));
     REQUIRE(dropped["zoneSets"].size() == 1);
     {
         std::scoped_lock lock(level.m);
