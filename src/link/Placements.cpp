@@ -1209,6 +1209,8 @@ void registerPlacementCommands()
                    "meshes go with it, and its other children into the asset too).",
                    {"auto", "none", "box", "convex", "complexAsSimple", "ucx"}},
                   {"nanite", "na", T::Bool, false, "Build Nanite data for the assets."},
+                  {"naniteOffMaterials", "nom", T::List, json::array(),
+                   "With nanite: assets using any of these materials go without Nanite (translucent ones, which Nanite can't draw)."},
                   {"hlodLayer", "hl", T::String, "", "HLOD layer asset path for the placed actors, or none to leave them out of HLOD generation; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom)."},
                   {"linkedHlodLayer", "lhl", T::String, "", "mode=customHlod: the HLOD layer whose unloading shows these, or default for the level's default HLOD layer (far proxies)."},
                   {"resend", "rs", T::Bool, false, "Send every group, also the ones the level already holds unchanged."},
@@ -1268,6 +1270,19 @@ void registerPlacementCommands()
                 grp["materials"] = grp.contains("actorClass") || grp.contains("unrealMesh") ? json::array()
                                    : grp.contains("gnMesh")                               ? meshMaterials(g, *meshes[grp["gnMesh"].get<size_t>()])
                                                                                           : materialParams(g, {scene::NodeId(grp["sourceId"].get<uint64_t>())});
+            const json naniteOff = a.has("naniteOffMaterials") ? a.flags["naniteOffMaterials"] : json::array();
+            int withoutNanite = 0;
+            for (json& grp : plan["groups"])
+                if (grp.value("nanite", false))
+                    for (const json& m : grp["materials"])
+                        if (std::ranges::find(naniteOff, m.value("name", json())) != naniteOff.end())
+                        {
+                            grp["nanite"] = false;
+                            ++withoutNanite;
+                            break;
+                        }
+            if (withoutNanite)
+                plan["naniteOff"] = withoutNanite;
             if (!plan["slotTable"].empty() && !hasFeature("slots"))
                 log::warn("unrealPlaceInstances: the LilaLink plugin predates slots; rebuild it from Lila's ue/LilaLink for slot classes, tags and the slot table");
             try

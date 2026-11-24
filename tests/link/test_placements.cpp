@@ -19,6 +19,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -248,6 +249,50 @@ TEST_CASE("unrealPlaceInstances exports each source once, imports it and places 
         if (r["method"] == "removePlacements")
             removal = r["params"];
     CHECK(removal["groups"] == json::array({key}));
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("unrealPlaceInstances: assets using a material named in naniteOffMaterials go without Nanite")
+{
+    setupPlacementTest();
+    buildKit();
+    run("createMaterial", {{"args", {"Glass"}}, {"blendMode", "translucent"}, {"opacity", 0.3}});
+    run("assignMaterial", {{"args", {"Glass", "Bolt"}}});
+    fs::path dir = fs::temp_directory_path() / "lila_link_placements_nanite";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [&](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    FakeServer server([](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements"}}});
+        if (m == "importAsset")
+            return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"].get<std::string>() + ".Imported"}},
+                                           {"warnings", json::array()},
+                                           {"errors", json::array()}});
+        if (m == "placeInstances")
+            return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+
+    const json done = run("unrealPlaceInstances", {{"args", {"BoltB", "Crate"}}, {"wait", true}, {"folder", "/Game/Kit"}, {"nanite", true},
+                                                   {"naniteOffMaterials", {"Glass"}}, {"resend", true}});
+    CHECK(done["naniteOff"] == 1);
+    std::map<std::string, bool> nanite;
+    for (const json& r : server.requests())
+        if (r["method"] == "importAsset")
+            nanite[r["params"]["contentPath"].get<std::string>()] = r["params"]["options"]["nanite"].get<bool>();
+    CHECK(nanite["/Game/Kit/SM_Bolt"] == false);
+    CHECK(nanite["/Game/Kit/SM_Crate"] == true);
 
     unregisterExporter("fbx:instanceSource");
     Link::get().disconnect();
