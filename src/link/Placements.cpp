@@ -1209,8 +1209,8 @@ void registerPlacementCommands()
                    "meshes go with it, and its other children into the asset too).",
                    {"auto", "none", "box", "convex", "complexAsSimple", "ucx"}},
                   {"nanite", "na", T::Bool, false, "Build Nanite data for the assets."},
-                  {"hlodLayer", "hl", T::String, "", "HLOD layer asset path for the placed actors; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom)."},
-                  {"linkedHlodLayer", "lhl", T::String, "", "mode=customHlod: the layer whose unloading shows these (far proxies after the near ones)."},
+                  {"hlodLayer", "hl", T::String, "", "HLOD layer asset path for the placed actors, or none to leave them out of HLOD generation; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom)."},
+                  {"linkedHlodLayer", "lhl", T::String, "", "mode=customHlod: the HLOD layer whose unloading shows these, or default for the level's default HLOD layer (far proxies)."},
                   {"resend", "rs", T::Bool, false, "Send every group, also the ones the level already holds unchanged."},
                   {"validate", "va", T::Bool, true,
                    "Run the validators first: an issue blocking unrealPlaceInstances, \"unreal\" or \"*\" on what is sent stops "

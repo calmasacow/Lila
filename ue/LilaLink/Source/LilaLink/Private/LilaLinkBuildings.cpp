@@ -546,7 +546,10 @@ TSharedPtr<FJsonValue> BuildingInteriors(const TSharedPtr<FJsonObject>& Params, 
 			{
 				for (AActor* A : Actors)
 				{
+					A->Modify();
 					A->Tags.AddUnique(FName(*(TEXT("LilaInterior:") + Building)));
+					// Inside its shell an interior adds nothing to the HLODs but cost.
+					A->bEnableAutoLODGeneration = false;
 				}
 				Layers->AddActorsToDataLayer(Actors, Layer);
 				R->SetStringField(TEXT("dataLayer"), Layer->GetDataLayerShortName());

@@ -9814,12 +9814,13 @@ def slotLoadItems() -> Any:
         slotLoadItems()
     """
 
-def slotPin(*objects: Any, owner: str | None = None, remove: bool | None = None, o: str | None = None, rm: bool | None = None) -> Any:
+def slotPin(*objects: Any, owner: str | None = None, swappable: bool | None = None, remove: bool | None = None, o: str | None = None, sw: bool | None = None, rm: bool | None = None) -> Any:
     """Pin slots, or every slot of an owner (a building, block or arrangement), as they are now: regenerating leaves them where they are with what they show, and differences are reported as conflicts. With no key, lists the pins.
 
     Args:
         objects: slot id, or owner:<owner id>.
         owner: Pin every slot of this owner (same as owner:<id>). Short form o.
+        swappable: Hold off regeneration only: rules and overrides still swap what the slots show. Short form sw. Default False.
         remove: Unpin. Short form rm. Default False.
 
     Examples:
@@ -12153,7 +12154,7 @@ def unrealMorphPaths(*objects: Any, skeletalMesh: str | None = None, postProcess
         dryRun: Return what would be sent without connecting to Unreal. Short form dry. Default False.
     """
 
-def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | None = None, threshold: int | None = None, lightingChannels: bool | None = None, collision: str | None = None, nanite: bool | None = None, hlodLayer: str | None = None, linkedHlodLayer: str | None = None, validate: bool | None = None, slotTable: str | None = None, dryRun: bool | None = None, wait: bool | None = None, f: str | None = None, m: str | None = None, t: int | None = None, lc: bool | None = None, col: str | None = None, na: bool | None = None, hl: str | None = None, lhl: str | None = None, va: bool | None = None, stb: str | None = None, w: bool | None = None) -> Any:
+def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | None = None, threshold: int | None = None, lightingChannels: bool | None = None, collision: str | None = None, nanite: bool | None = None, hlodLayer: str | None = None, linkedHlodLayer: str | None = None, resend: bool | None = None, validate: bool | None = None, slotTable: str | None = None, dryRun: bool | None = None, wait: bool | None = None, f: str | None = None, m: str | None = None, t: int | None = None, lc: bool | None = None, col: str | None = None, na: bool | None = None, hl: str | None = None, lhl: str | None = None, rs: bool | None = None, va: bool | None = None, stb: str | None = None, w: bool | None = None) -> Any:
     """Send meshes to Unreal as one static mesh asset per instance source, placed in the open level: an actor per member referencing that asset, or one instanced static mesh component (ISM or HISM) for a large group. Lights among them go as light actors (point, spot, directional, rect; discs as square rect lights, domes skipped). Lighting channels map onto Unreal's three: default is channel 0, the next two channels the sent nodes use (in scene order) 1 and 2; any more are dropped, with a warning naming them, and what is left in none goes on 0. Placements are keyed by each node's linkId, given on the first send and saved with the scene, so sending a group again moves, adds and removes its actors to match, also after a rename or reopening the scene. Validators run first: a blocking issue stops the send, others come back in issues. Slots (slotSet nodes, Slots geometry nodes) go keyed by slot id: as actors of their payload's Unreal class, instances of its Unreal mesh, or their Lila visual; actors carry the tags LilaSlot:<id>, LilaSlotType:<type> and LilaSlotData:<key>=<value>, and every slot is listed in the slotTable data asset. A slot rule or override change sends the last slot roots again while auto-sync is on. Returns the plan, with each group's import and placement results when wait=True.
 
     Args:
@@ -12164,8 +12165,9 @@ def unrealPlaceInstances(*objects: Any, folder: str | None = None, mode: str | N
         lightingChannels: Set the actors' and lights' Lighting Channels from Lila's channels. The plan's lightingChannels lists the channels, lights and objects, the Unreal slot of each channel and any dropped. Short form lc. Default True.
         collision: Collision the assets get: auto (ucx for a source with UCX_ children or a Stagehand body's hulls, else complexAsSimple), none (the placed actors and instances don't collide either), box, convex (Unreal's auto convex decomposition), complexAsSimple (the render mesh) or ucx (the hulls only; a source's UCX_ child meshes go with it, and its other children into the asset too). Short form col. One of 'auto', 'none', 'box', 'convex', 'complexAsSimple', 'ucx'. Default 'auto'.
         nanite: Build Nanite data for the assets. Short form na. Default False.
-        hlodLayer: HLOD layer asset path for the placed actors; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom). Short form hl.
-        linkedHlodLayer: mode=customHlod: the layer whose unloading shows these (far proxies after the near ones). Short form lhl.
+        hlodLayer: HLOD layer asset path for the placed actors, or none to leave them out of HLOD generation; with mode=customHlod the Custom HLOD Actor layer, made when missing (default /Game/Lila/HLOD/HL_LilaCustom). Short form hl.
+        linkedHlodLayer: mode=customHlod: the HLOD layer whose unloading shows these, or default for the level's default HLOD layer (far proxies). Short form lhl.
+        resend: Send every group, also the ones the level already holds unchanged. Short form rs. Default False.
         validate: Run the validators first: an issue blocking unrealPlaceInstances, "unreal" or "*" on what is sent stops the send; other issues come back in the result's issues. Short form va. Default True.
         slotTable: Data asset the sent slots are listed in (id, type, owner, class, mesh, data, transform), for game code to look slots up by id. Short form stb. Default '/Game/Lila/Slots/DA_LilaSlotTable'.
         dryRun: Return the plan without exporting or contacting Unreal. Default False.

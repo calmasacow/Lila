@@ -795,10 +795,41 @@ TSharedPtr<FJsonValue> PlacementHashes(const TSharedPtr<FJsonObject>& Params, FS
 }
 
 /**
- * The Custom HLOD Actor layer at Path, made when missing (and turned into one when it is another type). Linked names the
- * layer whose unloading shows this one's actors (far proxies show once the near ones unload); empty leaves it unset.
+ * The layer a Custom HLOD Actor layer links to: Path as it is, or the level's default HLOD layer for "default". Only a
+ * layer the level's runtime partition generates HLODs for gives the custom actors a cell to show for; a Custom HLOD Actor
+ * layer never does.
  */
-UHLODLayer* CustomHlodLayer(const FString& Path, const FString& Linked, TArray<FString>& OutWarnings)
+UHLODLayer* LinkedHlodLayer(UWorld* World, const FString& Path, TArray<FString>& OutWarnings)
+{
+	if (Path == TEXT("default"))
+	{
+		UWorldPartition* Partition = World->GetWorldPartition();
+		UHLODLayer* Default = Partition ? Partition->GetDefaultHLODLayer() : nullptr;
+		if (!Default)
+		{
+			OutWarnings.Add(TEXT("the level has no default HLOD layer (World Settings, World Partition) to link to: these show whenever their source cell is unloaded"));
+		}
+		return Default;
+	}
+	const FString Object = Path.Contains(TEXT(".")) ? Path : Path + TEXT(".") + FPackageName::GetShortName(Path);
+	UHLODLayer* Layer = LoadObject<UHLODLayer>(nullptr, *Object, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (!Layer)
+	{
+		OutWarnings.Add(TEXT("no HLOD layer ") + Path + TEXT(" to link to"));
+	}
+	else if (Layer->GetLayerType() == EHLODLayerType::CustomHLODActor)
+	{
+		OutWarnings.Add(Path + TEXT(" is a Custom HLOD Actor layer, which World Partition gives no cells: link to a layer it builds HLODs for"));
+	}
+	return Layer;
+}
+
+/**
+ * The Custom HLOD Actor layer at Path, made when missing (and turned into one when it is another type). Linked names the
+ * layer whose unloading shows this one's actors (LinkedHlodLayer: "default" for the level's own, so far proxies show once
+ * its HLODs unload); empty leaves it unset, and they show once their source cell unloads.
+ */
+UHLODLayer* CustomHlodLayer(UWorld* World, const FString& Path, const FString& Linked, TArray<FString>& OutWarnings)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::CustomHlodLayer);
 
@@ -825,7 +856,7 @@ UHLODLayer* CustomHlodLayer(const FString& Path, const FString& Linked, TArray<F
 	}
 	if (!Linked.IsEmpty())
 	{
-		UHLODLayer* LinkedLayer = CustomHlodLayer(Linked, FString(), OutWarnings);
+		UHLODLayer* LinkedLayer = LinkedHlodLayer(World, Linked, OutWarnings);
 		// LinkedLayer has no setter; it is an editor-only property of the layer.
 		if (FObjectProperty* Prop = FindFProperty<FObjectProperty>(UHLODLayer::StaticClass(), TEXT("LinkedLayer")); Prop && LinkedLayer)
 		{
@@ -1124,7 +1155,7 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 		}
 		FString Linked;
 		Params->TryGetStringField(TEXT("linkedHlodLayer"), Linked);
-		UHLODLayer* Layer = CustomHlodLayer(HlodPath.IsEmpty() ? TEXT("/Game/Lila/HLOD/HL_LilaCustom") : HlodPath, Linked, Sink.Warnings);
+		UHLODLayer* Layer = CustomHlodLayer(World, HlodPath.IsEmpty() ? TEXT("/Game/Lila/HLOD/HL_LilaCustom") : HlodPath, Linked, Sink.Warnings);
 		PlaceCustomHlods(World, Group, Label, Mesh, Layer, *Placements, Existing, Spawned, Updated, Removed);
 		HlodPath.Reset();
 	}
@@ -1137,7 +1168,19 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 		PlaceInstanced(World, Params, Group, Label, Mesh, Mode == TEXT("hism"), bCollide, *Placements, Existing, Spawned, Updated, Removed, Sink);
 	}
 	StampHash(World, Group, Params);
-	if (!HlodPath.IsEmpty())
+	if (HlodPath == TEXT("none"))
+	{
+		// Left out of HLOD generation: something else (Custom HLOD actors) stands in for them.
+		for (AActor* Actor : TaggedActors(World, GroupTag(Group)))
+		{
+			if (Actor->bEnableAutoLODGeneration)
+			{
+				Actor->Modify();
+				Actor->bEnableAutoLODGeneration = false;
+			}
+		}
+	}
+	else if (!HlodPath.IsEmpty())
 	{
 		const FString HlodObject = HlodPath.Contains(TEXT(".")) ? HlodPath : HlodPath + TEXT(".") + FPackageName::GetShortName(HlodPath);
 		if (UHLODLayer* Layer = LoadObject<UHLODLayer>(nullptr, *HlodObject, nullptr, LOAD_NoWarn | LOAD_Quiet))
