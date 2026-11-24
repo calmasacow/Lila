@@ -872,8 +872,12 @@ void MaterialEditor::rebuild()
     mUpdaters.clear();
     while (QLayoutItem* item = mBodyLayout->takeAt(0))
     {
+        // Hidden now: a deferred delete leaves the old body drawn over the new one until the event loop runs.
         if (QWidget* w = item->widget())
+        {
+            w->hide();
             w->deleteLater();
+        }
         delete item;
     }
     scene::Node* n = current();
