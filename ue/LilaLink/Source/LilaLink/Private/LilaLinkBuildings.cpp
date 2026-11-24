@@ -230,7 +230,7 @@ TSharedPtr<FJsonValue> BuildingMaterials(const TSharedPtr<FJsonObject>& Params, 
 			for (int32 K = 0; K < Slots.Num(); ++K)
 			{
 				const FString Slot = Slots[K].MaterialSlotName.ToString();
-				if (!Slot.StartsWith(TEXT("Bld_")))
+				if (!Slot.StartsWith(TEXT("Bld_"), ESearchCase::CaseSensitive))
 				{
 					continue;
 				}

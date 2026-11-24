@@ -44,6 +44,7 @@
 #include "PhysicsEngine/BodySetup.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
+#include "WorldPartition/HLOD/CustomHLODActor.h"
 #include "WorldPartition/HLOD/HLODLayer.h"
 #include "WorldPartition/WorldPartition.h"
 
@@ -717,6 +718,135 @@ void PlaceInstanced(UWorld* World, const TSharedPtr<FJsonObject>& Params, const 
 }
 
 /** placeInstances with an actorClass: an actor of that class per placement, no mesh. */
+/**
+ * The Custom HLOD Actor layer at Path, made when missing (and turned into one when it is another type). Linked names the
+ * layer whose unloading shows this one's actors (far proxies show once the near ones unload); empty leaves it unset.
+ */
+UHLODLayer* CustomHlodLayer(const FString& Path, const FString& Linked, TArray<FString>& OutWarnings)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::CustomHlodLayer);
+
+	const FString Package = Path.Contains(TEXT(".")) ? FPackageName::ObjectPathToPackageName(Path) : Path;
+	if (!FPackageName::IsValidLongPackageName(Package))
+	{
+		OutWarnings.Add(FString::Printf(TEXT("%s is not a content path like /Game/Lila/HLOD/HL_Buildings"), *Path));
+		return nullptr;
+	}
+	const FString Name = FPackageName::GetShortName(Package);
+	UHLODLayer* Layer = LoadObject<UHLODLayer>(nullptr, *(Package + TEXT(".") + Name), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	bool bDirty = false;
+	if (!Layer)
+	{
+		Layer = NewObject<UHLODLayer>(CreatePackage(*Package), *Name, RF_Public | RF_Standalone | RF_Transactional);
+		FAssetRegistryModule::AssetCreated(Layer);
+		bDirty = true;
+	}
+	if (Layer->GetLayerType() != EHLODLayerType::CustomHLODActor)
+	{
+		Layer->Modify();
+		Layer->SetLayerType(EHLODLayerType::CustomHLODActor);
+		bDirty = true;
+	}
+	if (!Linked.IsEmpty())
+	{
+		UHLODLayer* LinkedLayer = CustomHlodLayer(Linked, FString(), OutWarnings);
+		// LinkedLayer has no setter; it is an editor-only property of the layer.
+		if (FObjectProperty* Prop = FindFProperty<FObjectProperty>(UHLODLayer::StaticClass(), TEXT("LinkedLayer")); Prop && LinkedLayer)
+		{
+			if (Prop->GetObjectPropertyValue_InContainer(Layer) != LinkedLayer)
+			{
+				Layer->Modify();
+				Prop->SetObjectPropertyValue_InContainer(Layer, LinkedLayer);
+				bDirty = true;
+			}
+		}
+	}
+	if (bDirty)
+	{
+		Layer->MarkPackageDirty();
+		UEditorLoadingAndSavingUtils::SavePackages({Layer->GetPackage()}, true);
+	}
+	return Layer;
+}
+
+/**
+ * A Custom HLOD actor per placement showing Mesh while its World Partition cell is unloaded (a building block's HLOD
+ * proxy), in a Custom HLOD Actor layer; matched to the existing ones by node id.
+ */
+void PlaceCustomHlods(UWorld* World, const FString& Group, const FString& Label, UStaticMesh* Mesh, UHLODLayer* Layer,
+	const TArray<TSharedPtr<FJsonValue>>& Placements, TArray<AActor*> Existing, int32& Spawned, int32& Updated, int32& Removed)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlaceCustomHlods);
+
+	TMap<FString, AWorldPartitionCustomHLOD*> ByNode;
+	for (AActor* A : Existing)
+	{
+		if (AWorldPartitionCustomHLOD* H = Cast<AWorldPartitionCustomHLOD>(A))
+		{
+			ByNode.Add(TagValue(H, NodePrefix), H);
+		}
+		else
+		{
+			World->EditorDestroyActor(A, true);
+			++Removed;
+		}
+	}
+	const FName Folder(*(TEXT("Lila/HLOD/") + ShortGroupName(Label)));
+	TSet<FString> Sent;
+	for (const TSharedPtr<FJsonValue>& V : Placements)
+	{
+		const TSharedPtr<FJsonObject>* P = nullptr;
+		if (!V.IsValid() || !V->TryGetObject(P))
+		{
+			continue;
+		}
+		const FString Id = IdOf(*P);
+		Sent.Add(Id);
+		const FTransform Transform = TransformOf(*P);
+		AWorldPartitionCustomHLOD*& Actor = ByNode.FindOrAdd(Id);
+		if (!Actor)
+		{
+			FActorSpawnParameters Params;
+			Params.ObjectFlags |= RF_Transactional;
+			Actor = World->SpawnActor<AWorldPartitionCustomHLOD>(AWorldPartitionCustomHLOD::StaticClass(), Transform, Params);
+			if (!Actor)
+			{
+				continue;
+			}
+			Actor->Tags.Add(GroupTag(Group));
+			Actor->Tags.Add(NodeTag(Id));
+			++Spawned;
+		}
+		else
+		{
+			Actor->Modify();
+			Actor->SetActorTransform(Transform);
+			++Updated;
+		}
+		Actor->SetFolderPath(Folder);
+		FString Name;
+		if ((*P)->TryGetStringField(TEXT("name"), Name))
+		{
+			Actor->SetActorLabel(Name);
+		}
+		if (UStaticMeshComponent* Component = Actor->FindComponentByClass<UStaticMeshComponent>())
+		{
+			Component->Modify();
+			Component->SetStaticMesh(Mesh);
+			Component->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		}
+		Actor->SetHLODLayer(Layer);
+	}
+	for (const TPair<FString, AWorldPartitionCustomHLOD*>& Pair : ByNode)
+	{
+		if (Pair.Value && !Sent.Contains(Pair.Key))
+		{
+			World->EditorDestroyActor(Pair.Value, true);
+			++Removed;
+		}
+	}
+}
+
 TSharedPtr<FJsonValue> PlaceSlotClass(const TSharedPtr<FJsonObject>& Params, const FString& Group, const FString& ClassPath,
 	const TArray<TSharedPtr<FJsonValue>>& Placements, FString& OutError)
 {
@@ -855,9 +985,9 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 	const bool bCollide = Collision != TEXT("none");
 	FString Label = Group;
 	Params->TryGetStringField(TEXT("label"), Label);
-	if (Mode != TEXT("actors") && Mode != TEXT("ism") && Mode != TEXT("hism"))
+	if (Mode != TEXT("actors") && Mode != TEXT("ism") && Mode != TEXT("hism") && Mode != TEXT("customHlod"))
 	{
-		OutError = FString::Printf(TEXT("placeInstances: mode is actors, ism or hism, not '%s'"), *Mode);
+		OutError = FString::Printf(TEXT("placeInstances: mode is actors, ism, hism or customHlod, not '%s'"), *Mode);
 		return nullptr;
 	}
 	const FString ObjectPath = MeshPath.Contains(TEXT(".")) ? MeshPath : MeshPath + TEXT(".") + FPackageName::GetShortName(MeshPath);
@@ -884,7 +1014,22 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 	{
 		ApplyMeshCollision(Mesh, *Placements);
 	}
-	if (Mode == TEXT("actors"))
+	FString HlodPath;
+	Params->TryGetStringField(TEXT("hlodLayer"), HlodPath);
+	if (Mode == TEXT("customHlod"))
+	{
+		if (!World->IsPartitionedWorld())
+		{
+			OutError = TEXT("placeInstances: custom HLOD actors need a World Partition level; this level is not one");
+			return nullptr;
+		}
+		FString Linked;
+		Params->TryGetStringField(TEXT("linkedHlodLayer"), Linked);
+		UHLODLayer* Layer = CustomHlodLayer(HlodPath.IsEmpty() ? TEXT("/Game/Lila/HLOD/HL_LilaCustom") : HlodPath, Linked, Sink.Warnings);
+		PlaceCustomHlods(World, Group, Label, Mesh, Layer, *Placements, Existing, Spawned, Updated, Removed);
+		HlodPath.Reset();
+	}
+	else if (Mode == TEXT("actors"))
 	{
 		PlaceActors(World, Group, Label, Mesh, bCollide, *Placements, Existing, Spawned, Updated, Removed, Sink);
 	}
@@ -892,8 +1037,7 @@ TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FSt
 	{
 		PlaceInstanced(World, Params, Group, Label, Mesh, Mode == TEXT("hism"), bCollide, *Placements, Existing, Spawned, Updated, Removed, Sink);
 	}
-	FString HlodPath;
-	if (Params->TryGetStringField(TEXT("hlodLayer"), HlodPath) && !HlodPath.IsEmpty())
+	if (!HlodPath.IsEmpty())
 	{
 		const FString HlodObject = HlodPath.Contains(TEXT(".")) ? HlodPath : HlodPath + TEXT(".") + FPackageName::GetShortName(HlodPath);
 		if (UHLODLayer* Layer = LoadObject<UHLODLayer>(nullptr, *HlodObject, nullptr, LOAD_NoWarn | LOAD_Quiet))

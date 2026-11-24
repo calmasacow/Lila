@@ -1,6 +1,6 @@
 // buildingSend: building meshes to Unreal. Shells go as Nanite static meshes placed where they stand (each cell mesh lies
 // inside one of Settlement's World Partition cells), modules as slots keyed by slot id (W0's path in
-// unrealPlaceInstances), the HLOD and far proxies as meshes of their own, and MF_LilaBuildingVariation with M_LilaBuilding
+// unrealPlaceInstances), the HLOD and far proxies as World Partition Custom HLOD actors, and MF_LilaBuildingVariation with M_LilaBuilding
 // and an instance per style, assigned to the shells' building material slots.
 
 #include "BuildingsScene.h"
@@ -36,13 +36,15 @@ void registerUnreal(ext::Context& ctx)
         .name = "buildingSend",
         .doc = "Send building meshes to Unreal: shells as Nanite static meshes placed where they stand (one per cell mesh, inside "
                "Settlement's World Partition cells), modules as slots keyed by slot id (actors of a slot's Unreal class, instances "
-               "of its Unreal mesh, or its placeholder), the HLOD and far proxies (proxies=True), and MF_LilaBuildingVariation with "
+               "of its Unreal mesh, or its placeholder), the HLOD and far proxies as World Partition Custom HLOD actors (proxies=True), and MF_LilaBuildingVariation with "
                "M_LilaBuilding and MI_Bld_<style> per style, assigned to the shells' building slots. Per-building colour and dirt "
                "travel in vertex colour. dryRun returns what would be sent. Returns the placement plan and the materials.",
         .positionalDoc = "building meshes (default every one)",
         .flags = {{"folder", "f", ArgType::String, "/Game/Lila/Buildings", "Content folder for the shells and module meshes."},
                   {"proxies", "px", ArgType::Bool, true, "Make and send the HLOD and far proxies too."},
                   {"hlodLayer", "hl", ArgType::String, "", "HLOD layer asset for the shells."},
+                  {"hlodProxyLayer", "hpl", ArgType::String, "/Game/Lila/HLOD/HL_LilaBuildings",
+                   "Custom HLOD Actor layer for the proxies (made when missing); the far proxies go in the same path + Far."},
                   {"dryRun", "dr", ArgType::Bool, false, "Only return what would be sent."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
@@ -77,6 +79,7 @@ void registerUnreal(ext::Context& ctx)
             if (a.get<bool>("dryRun", false))
                 return out;
             std::vector<std::string> send = meshes;
+            json nearProxies = json::array(), farProxies = json::array();
             if (a.get<bool>("proxies", true))
             {
                 json args = json::array();
@@ -84,7 +87,7 @@ void registerUnreal(ext::Context& ctx)
                     args.push_back(m);
                 const json made = ops::execute("buildingProxies", {{"args", args}});
                 for (const json& p : made["proxies"])
-                    send.push_back(p["mesh"].get<std::string>());
+                    (p.value("lod", std::string()) == "far" ? farProxies : nearProxies).push_back(p["mesh"]);
                 out["proxies"] = made["proxies"].size();
             }
             try
@@ -104,9 +107,37 @@ void registerUnreal(ext::Context& ctx)
             const json plan = ops::execute("unrealPlaceInstances", {{"args", args},
                                                                     {"folder", a.get<std::string>("folder", "/Game/Lila/Buildings")},
                                                                     {"nanite", true},
+                                                                    // A module used more than once in a cell is one HISM there; the shells stay actors.
+                                                                    {"threshold", 1},
                                                                     {"hlodLayer", a.get<std::string>("hlodLayer", "")},
                                                                     {"wait", true}});
             out["plan"] = plan;
+            // Proxies as World Partition Custom HLOD actors: the near ones show while a cell is unloaded, the far ones
+            // once the near ones unload too.
+            const std::string folder = a.get<std::string>("folder", "/Game/Lila/Buildings");
+            const std::string nearLayer = a.get<std::string>("hlodProxyLayer", "/Game/Lila/HLOD/HL_LilaBuildings");
+            json hlods = json::object();
+            if (!nearProxies.empty() || !farProxies.empty())
+            {
+                if (std::find(features.begin(), features.end(), json("customHlod")) == features.end())
+                    hlods["warning"] = "this LilaLink has no Custom HLOD actors; proxies not sent; rebuild the plugin";
+                else
+                {
+                    auto sendProxies = [&](const json& list, const std::string& layer, const std::string& linked) {
+                        json args = list;
+                        json flags = {{"args", args}, {"folder", folder + "/HLOD"}, {"mode", "customHlod"}, {"hlodLayer", layer},
+                                      {"collision", "none"}, {"validate", false}, {"wait", true}};
+                        if (!linked.empty())
+                            flags["linkedHlodLayer"] = linked;
+                        return ops::execute("unrealPlaceInstances", flags);
+                    };
+                    if (!nearProxies.empty())
+                        hlods["near"] = sendProxies(nearProxies, nearLayer, "");
+                    if (!farProxies.empty())
+                        hlods["far"] = sendProxies(farProxies, nearLayer + "Far", nearLayer);
+                }
+            }
+            out["hlods"] = hlods;
             // The shells' assets: their building slots get their style's instance.
             json assets = json::array();
             for (const json& grp : plan.value("groups", json::array()))
