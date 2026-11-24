@@ -1,5 +1,6 @@
 #include "LilaLinkBuildings.h"
 
+#include "LilaLinkInterior.h"
 #include "LilaLinkLog.h"
 #include "LilaLinkMaterialFunction.h"
 #include "LilaLinkMethods.h"
@@ -18,7 +19,19 @@
 #include "Materials/MaterialFunction.h"
 #include "Materials/MaterialInstanceConstant.h"
 #include "Engine/StaticMesh.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "DataLayer/DataLayerEditorSubsystem.h"
+#include "Editor.h"
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Misc/PackageName.h"
+#include "ObjectTools.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
+#include "ScopedTransaction.h"
+#include "UObject/Package.h"
+#include "WorldPartition/DataLayer/DataLayerAsset.h"
+#include "WorldPartition/DataLayer/DataLayerInstance.h"
 
 namespace
 {
@@ -285,9 +298,253 @@ TSharedPtr<FJsonValue> BuildingMaterials(const TSharedPtr<FJsonObject>& Params, 
 	Out->SetArrayField(TEXT("warnings"), W);
 	return Obj(Out);
 }
+/** The data layer for one interior, its asset made under Folder when missing; null with Why outside World Partition. */
+UDataLayerInstance* InteriorDataLayer(UWorld* World, const FString& Folder, const FString& Name, FString& Why)
+{
+	if (!World->IsPartitionedWorld())
+	{
+		Why = TEXT("the level is not a World Partition level: no data layer");
+		return nullptr;
+	}
+	UDataLayerEditorSubsystem* Layers = UDataLayerEditorSubsystem::Get();
+	if (!Layers)
+	{
+		Why = TEXT("no data layer editor subsystem");
+		return nullptr;
+	}
+	const FString AssetName = ObjectTools::SanitizeObjectName(TEXT("DL_") + Name);
+	const FString PackageName = Folder / TEXT("DataLayers") / AssetName;
+	const FString ObjectPath = PackageName + TEXT(".") + AssetName;
+	UDataLayerAsset* Asset = FindObject<UDataLayerAsset>(nullptr, *ObjectPath);
+	if (!Asset && FPackageName::DoesPackageExist(PackageName))
+	{
+		Asset = LoadObject<UDataLayerAsset>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	}
+	if (!Asset)
+	{
+		UPackage* Package = CreatePackage(*PackageName);
+		Asset = NewObject<UDataLayerAsset>(Package, FName(*AssetName), RF_Public | RF_Standalone | RF_Transactional);
+		// Runtime, so game code loads an interior when the player comes near its door.
+		Asset->SetType(EDataLayerType::Runtime);
+		FAssetRegistryModule::AssetCreated(Asset);
+		Asset->MarkPackageDirty();
+	}
+	if (UDataLayerInstance* Existing = Layers->GetDataLayerInstance(Asset))
+	{
+		return Existing;
+	}
+	FDataLayerCreationParameters Params;
+	Params.DataLayerAsset = Asset;
+	Params.WorldDataLayers = World->GetWorldDataLayers();
+	UDataLayerInstance* Instance = Layers->CreateDataLayerInstance(Params);
+	if (!Instance)
+	{
+		Why = TEXT("could not make data layer ") + AssetName;
+	}
+	return Instance;
+}
+
+TArray<AActor*> ActorsTagged(UWorld* World, const FName& Tag)
+{
+	TArray<AActor*> Out;
+	for (TActorIterator<AActor> It(World); It; ++It)
+	{
+		if (It->Tags.Contains(Tag))
+		{
+			Out.Add(*It);
+		}
+	}
+	return Out;
+}
+
+/** Interior meshes collide as their own triangles, so a character walks the floors and stairs as modelled. */
+void CollideAsModelled(const TArray<AActor*>& Actors, TArray<FString>& OutCreated)
+{
+	for (AActor* Actor : Actors)
+	{
+		TArray<UStaticMeshComponent*> Components;
+		Actor->GetComponents(Components);
+		for (UStaticMeshComponent* C : Components)
+		{
+			UStaticMesh* Mesh = C->GetStaticMesh();
+			if (!Mesh || !Mesh->GetBodySetup() || Mesh->GetBodySetup()->CollisionTraceFlag == CTF_UseComplexAsSimple)
+			{
+				continue;
+			}
+			Mesh->Modify();
+			Mesh->GetBodySetup()->CollisionTraceFlag = CTF_UseComplexAsSimple;
+			Mesh->GetBodySetup()->CreatePhysicsMeshes();
+			Mesh->MarkPackageDirty();
+			OutCreated.AddUnique(Mesh->GetPathName());
+		}
+	}
+}
+
+/** The glass of building windows: fake rooms behind the windows of buildings without interiors, clear glass on the others. */
+TSharedRef<FJsonObject> AssignGlass(const TArray<TSharedPtr<FJsonValue>>& Assets, TArray<FString>& Created, TArray<FString>& Warnings)
+{
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	bool bBuilt = false;
+	UMaterialInterface* Card = nullptr;
+	if (UMaterial* Interior = LilaLink::InteriorMaster(false, bBuilt, Created, Warnings))
+	{
+		Card = InstanceFor(TEXT("MI_Bld_InteriorCard"), Interior, Created, Warnings);
+	}
+	UMaterial* Glass = LoadObject<UMaterial>(nullptr, TEXT("/Game/LilaLink/Buildings/M_LilaBuildingGlass.M_LilaBuildingGlass"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (!Glass)
+	{
+		UPackage* Package = CreatePackage(TEXT("/Game/LilaLink/Buildings/M_LilaBuildingGlass"));
+		Glass = NewObject<UMaterial>(Package, TEXT("M_LilaBuildingGlass"), RF_Public | RF_Standalone | RF_Transactional);
+		Glass->BlendMode = BLEND_Translucent;
+		Glass->TranslucencyLightingMode = TLM_Surface;
+		Glass->bUsedWithInstancedStaticMeshes = true;
+		FAssetRegistryModule::AssetCreated(Glass);
+		Glass->PostEditChange();
+		Glass->MarkPackageDirty();
+		Created.AddUnique(Glass->GetPathName());
+	}
+	UMaterialInterface* Clear = Glass ? InstanceFor(TEXT("MI_Bld_GlassClear"), Glass, Created, Warnings) : nullptr;
+	int32 Slots = 0, Meshes = 0;
+	for (const TSharedPtr<FJsonValue>& V : Assets)
+	{
+		UStaticMesh* Mesh = LoadObject<UStaticMesh>(nullptr, *V->AsString(), nullptr, LOAD_NoWarn | LOAD_Quiet);
+		if (!Mesh)
+		{
+			continue;
+		}
+		bool bChanged = false;
+		for (FStaticMaterial& S : Mesh->GetStaticMaterials())
+		{
+			const FString Name = S.MaterialSlotName.ToString();
+			UMaterialInterface* Use = Name == TEXT("bld_glass") ? Card : Name == TEXT("bld_glassClear") ? Clear : nullptr;
+			if (Use && S.MaterialInterface != Use)
+			{
+				S.MaterialInterface = Use;
+				bChanged = true;
+				++Slots;
+			}
+		}
+		if (bChanged)
+		{
+			Mesh->Modify();
+			Mesh->PostEditChange();
+			Mesh->MarkPackageDirty();
+			Created.AddUnique(Mesh->GetPathName());
+			++Meshes;
+		}
+	}
+	if (!Card)
+	{
+		Warnings.Add(TEXT("M_LilaInterior is missing: building windows keep their dark glass"));
+	}
+	Out->SetNumberField(TEXT("assets"), Meshes);
+	Out->SetNumberField(TEXT("slots"), Slots);
+	return Out;
+}
+
+TSharedPtr<FJsonValue> BuildingInteriors(const TSharedPtr<FJsonObject>& Params, FString& OutError)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkBuildings::BuildingInteriors);
+
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		OutError = TEXT("buildingInteriors: no level is open");
+		return nullptr;
+	}
+	FString Folder = TEXT("/Game/Lila/Buildings");
+	Params->TryGetStringField(TEXT("folder"), Folder);
+	TArray<FString> Created, Warnings;
+	TArray<TSharedPtr<FJsonValue>> Results;
+	const TArray<TSharedPtr<FJsonValue>>* Interiors = nullptr;
+	FScopedTransaction Transaction(NSLOCTEXT("LilaLink", "BuildingInteriors", "Lila: Building Interiors"));
+	if (Params->TryGetArrayField(TEXT("interiors"), Interiors))
+	{
+		UDataLayerEditorSubsystem* Layers = UDataLayerEditorSubsystem::Get();
+		for (const TSharedPtr<FJsonValue>& V : *Interiors)
+		{
+			const TSharedPtr<FJsonObject> I = V->AsObject();
+			if (!I)
+			{
+				continue;
+			}
+			FString Building, Name, Mode = TEXT("levelInstance"), Assembly;
+			I->TryGetStringField(TEXT("building"), Building);
+			I->TryGetStringField(TEXT("name"), Name);
+			I->TryGetStringField(TEXT("mode"), Mode);
+			I->TryGetStringField(TEXT("assembly"), Assembly);
+			TArray<AActor*> Actors;
+			if (Mode == TEXT("levelInstance") && !Assembly.IsEmpty())
+			{
+				Actors = ActorsTagged(World, FName(*(TEXT("LilaAssembly:") + Assembly)));
+			}
+			const TArray<TSharedPtr<FJsonValue>>* Groups = nullptr;
+			if (I->TryGetArrayField(TEXT("groups"), Groups))
+			{
+				TArray<AActor*> Members;
+				for (const TSharedPtr<FJsonValue>& G : *Groups)
+				{
+					Members.Append(ActorsTagged(World, FName(*(TEXT("LilaGroup:") + G->AsString()))));
+				}
+				CollideAsModelled(Members, Created);
+				if (Mode == TEXT("dataLayer"))
+				{
+					Actors = Members;
+				}
+			}
+			TSharedRef<FJsonObject> R = MakeShared<FJsonObject>();
+			R->SetStringField(TEXT("building"), Building);
+			R->SetNumberField(TEXT("actors"), Actors.Num());
+			FString Why;
+			UDataLayerInstance* Layer = Actors.IsEmpty() ? nullptr : InteriorDataLayer(World, Folder, Name.IsEmpty() ? Building : Name, Why);
+			if (Layer && Layers)
+			{
+				for (AActor* A : Actors)
+				{
+					A->Tags.AddUnique(FName(*(TEXT("LilaInterior:") + Building)));
+				}
+				Layers->AddActorsToDataLayer(Actors, Layer);
+				R->SetStringField(TEXT("dataLayer"), Layer->GetDataLayerShortName());
+			}
+			else
+			{
+				R->SetStringField(TEXT("dataLayer"), Actors.IsEmpty() ? FString(TEXT("no actors for this interior")) : Why);
+				if (!Actors.IsEmpty())
+				{
+					Warnings.Add(Building + TEXT(": ") + Why);
+				}
+			}
+			Results.Add(Obj(R));
+		}
+	}
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	const TArray<TSharedPtr<FJsonValue>>* GlassAssets = nullptr;
+	if (Params->TryGetArrayField(TEXT("glassAssets"), GlassAssets))
+	{
+		Out->SetObjectField(TEXT("glass"), AssignGlass(*GlassAssets, Created, Warnings));
+	}
+	TArray<FString> SaveErrors;
+	LilaLink::SaveAssetPaths(Created, SaveErrors);
+	Warnings.Append(SaveErrors);
+	TArray<TSharedPtr<FJsonValue>> C, W;
+	for (const FString& P : Created)
+	{
+		C.Add(Str(P));
+	}
+	for (const FString& P : Warnings)
+	{
+		W.Add(Str(P));
+		UE_LOG(LogLilaLink, Warning, TEXT("buildingInteriors: %s"), *P);
+	}
+	Out->SetArrayField(TEXT("interiors"), Results);
+	Out->SetArrayField(TEXT("created"), C);
+	Out->SetArrayField(TEXT("warnings"), W);
+	return Obj(Out);
+}
 } // namespace
 
 void LilaLink::AddBuildingMethods(TMap<FString, FLilaLinkMethod>& Methods)
 {
 	Methods.Add(TEXT("buildingMaterials"), LilaLink::Sync(&BuildingMaterials));
+	Methods.Add(TEXT("buildingInteriors"), LilaLink::Sync(&BuildingInteriors));
 }
