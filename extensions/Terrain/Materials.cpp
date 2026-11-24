@@ -941,6 +941,8 @@ MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> s
         l.name = name;
         l.material = defaultMaterialFor(name);
         l.color = defaultColorFor(name);
+        // A library material with no measured colour draws in the layer's own.
+        l.colorGiven = !l.material.empty() && !knownMaterialColor(l.material);
         l.terms = std::move(terms);
         l.noise = {noise, scale};
         return l;
@@ -961,8 +963,11 @@ MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> s
             where.push_back(term("height", *seaLevel + 1500.0, kMatInf, 1000.0));
         r.layers.push_back(layer("forest", std::move(where), 0.35, 6000.0));
     }
-    r.layers.push_back(layer("dirt", {term("wear", 0.25, kMatInf, 0.15)}, 0.25, 4000.0));
-    r.layers.push_back(layer("gravel", {term("deposit", 0.3, kMatInf, 0.15)}, 0.2, 2500.0));
+    // Erosion's masks: a terrain never eroded has neither.
+    if (h.findMask("wear"))
+        r.layers.push_back(layer("dirt", {term("wear", 0.25, kMatInf, 0.15)}, 0.25, 4000.0));
+    if (h.findMask("deposit"))
+        r.layers.push_back(layer("gravel", {term("deposit", 0.3, kMatInf, 0.15)}, 0.2, 2500.0));
     if (seaLevel)
         r.layers.push_back(layer("sand", {term("height", -kMatInf, *seaLevel + 300.0, 200.0), term("slope", -kMatInf, 15.0, 5.0)}, 0.15, 3000.0));
     r.layers.push_back(layer("riverbed", {term("flow", 0.82, kMatInf, 0.04)}));
