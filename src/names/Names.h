@@ -73,7 +73,7 @@ LILA_SCENE_API bool hasCulture(std::string_view culture);
 LILA_SCENE_API void requireCulture(std::string_view culture);
 /** A culture's name for menus: Old English, US Grid, Mexican. */
 LILA_SCENE_API std::string cultureLabel(std::string_view culture);
-/** The business and place vocabulary a culture names with: mexican or english. */
+/** The business and place vocabulary a culture names with: mexican, english, french, latin or scifi. */
 LILA_SCENE_API std::string vocabularyOf(std::string_view culture);
 /** The culture for a place on Earth (degrees), and why: mexican for Mexico and Latin America, usGrid, oldEnglish, french, spanish. */
 LILA_SCENE_API std::string cultureForLocation(double lat, double lon, std::string* why = nullptr);
