@@ -168,6 +168,7 @@ private:
     std::shared_ptr<const RealNames> mAvoid;
     std::unordered_map<uint64_t, std::string> mGiven;               // (bucket, key) -> name
     std::unordered_map<uint64_t, std::unordered_set<std::string>> mTaken; // bucket -> names
+    std::unordered_map<uint64_t, int> mNumberFrom;                   // bucket -> lowest number still worth trying
 };
 
 /** Real names recorded in source attributes on every node of the scene; source is "<node>.<key>". */
