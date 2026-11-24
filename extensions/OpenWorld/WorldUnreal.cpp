@@ -484,6 +484,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             zonesNow.insert(z["id"].get<std::string>());
         json kept = json::array(), keptZones = json::array();
         json settlements = json::array(), zoneSets = json::array();
+        // Project-wide lane profiles the removals took out of the project ini, and the ini copies made first.
+        json profilesRemoved = json::array(), configBackups = json::array();
         for (const json& s : before.value("settlements", json::array()))
         {
             const std::string key = s.value("key", std::string());
@@ -499,6 +501,10 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             {
                 const json r = runCmd("settlementRemoveFromUnreal", {{"key", key}});
                 e["removed"] = brief(r);
+                for (const json& name : r.value("laneProfilesRemoved", json::array()))
+                    profilesRemoved.push_back(name);
+                if (r.contains("configBackup"))
+                    configBackups.push_back(r["configBackup"]);
                 if (r.contains("errors"))
                 {
                     kept.push_back(s);
@@ -546,7 +552,12 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
         std::error_code ec;
         fs::create_directories(recordPath.parent_path(), ec);
         std::ofstream(recordPath, std::ios::binary) << record.dump(1);
-        return {{"settlements", settlements}, {"zoneSets", zoneSets}, {"record", recordPath.generic_string()}};
+        json out = {{"settlements", settlements}, {"zoneSets", zoneSets}, {"record", recordPath.generic_string()}};
+        if (!profilesRemoved.empty())
+            out["laneProfilesRemoved"] = profilesRemoved;
+        if (!configBackups.empty())
+            out["configBackups"] = configBackups;
+        return out;
     });
 
     report["groupsSent"] = keys.size();

@@ -159,7 +159,13 @@ struct FakeLevel
             return FakeServer::reply(req, {{"actor", "Lanes"}, {"shapes", 1}, {"profiles", 1}, {"warnings", json::array()}});
         }
         if (method == "removeSettlement")
-            return FakeServer::reply(req, {{"removed", zoneGraphs.erase(p["id"].get<std::string>()) > 0}});
+        {
+            // The last settlement in the project's levels on a lane profile takes it out of DefaultPlugins.ini.
+            const bool had = zoneGraphs.erase(p["id"].get<std::string>()) > 0;
+            return FakeServer::reply(req, {{"removed", had},
+                                           {"laneProfilesRemoved", had && zoneGraphs.empty() ? json::array({"Lila_Street"}) : json::array()},
+                                           {"configBackup", "Saved/LilaLink/ConfigBackups/DefaultPlugins-1.ini"}});
+        }
         if (method == "setSpline")
         {
             splines.insert(p["id"].get<std::string>());
@@ -381,6 +387,9 @@ TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the 
     REQUIRE(dropped["settlements"].size() == 1);
     CHECK(dropped["settlements"][0]["key"] == key);
     CHECK_FALSE(dropped["settlements"][0].contains("error"));
+    // The lane profiles it took out of the project ini, and where the ini as it was went, reach the build report.
+    CHECK(dropped["laneProfilesRemoved"] == json::array({"Lila_Street"}));
+    CHECK(dropped["configBackups"].size() == 1);
     REQUIRE(dropped["zoneSets"].size() == 1);
     {
         std::scoped_lock lock(level.m);

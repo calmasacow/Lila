@@ -22,7 +22,12 @@
  * vehicle, intersection, crosswalk and trunk lanes go on the matching shapes too, and folder gets its traffic light and
  * parking data (see LilaLinkSettlementTraffic.h). Replies {actor, shapes, profiles, massTraffic, warnings}.
  *
- * removeSettlement {id} deletes the ZoneGraph actor made for id. Replies {removed}.
+ * removeSettlement {id} deletes the ZoneGraph actor made for id. Replies {removed, laneProfilesRemoved, configBackup?}.
+ *
+ * Lane profiles are reference-counted by level in Config/LilaLink/LaneProfileUsers.json (LilaLink::SetLaneProfileUser):
+ * a Lila_ profile goes from the settings when no level's settlement uses it any more, on removeSettlement or a resend
+ * that stops using it (setZoneGraph replies laneProfilesRemoved). Tags stay: MassTraffic's filters and other shapes name
+ * them.
  *
  * Lane profiles, tags and MassTraffic's lane filters live in the project's DefaultPlugins.ini: before a send changes it,
  * the file as it was is copied to Saved/LilaLink/ConfigBackups (a .absent note when it did not exist yet), and the reply

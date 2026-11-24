@@ -25,7 +25,9 @@
  * enteredClosed}], characters: [{p, playing, mesh}]}: the mesh instances Mass draws, each crossing's signal and how many
  * started across on it open and shut, and the characters shown up close.
  *
- * removeMassCrowd {id} deletes the lanes actor and the spawner made for id. Replies {removed}.
+ * removeMassCrowd {id} deletes the lanes actor and the spawner made for id, and the Lila_Crowd lane profile when no
+ * level's crowd uses it any more (reference-counted by level, LilaLink::SetLaneProfileUser). Replies {removed,
+ * laneProfileRemoved, configBackup?}.
  */
 namespace LilaLinkCrowd
 {

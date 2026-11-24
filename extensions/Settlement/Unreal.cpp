@@ -864,7 +864,14 @@ json removeFromUnreal(const Args& a)
     if (has("settlementCells"))
         attempt("pcgCells", [&] { return call(*c, "removeSettlementCells", {{"id", key}, {"folder", cellFolder}}, cmd); });
     if (has("settlement"))
+    {
         attempt("zoneGraph", [&] { return call(*c, "removeSettlement", {{"id", key}}, cmd); });
+        // Lane profiles are project-wide: say which ones the project ini lost and where the ini as it was went.
+        if (const json zg = out.value("zoneGraph", json::object()); zg.is_object())
+            for (const char* f : {"laneProfilesRemoved", "configBackup"})
+                if (zg.contains(f) && !(zg[f].is_array() && zg[f].empty()))
+                    out[f] = zg[f];
+    }
     // Settlement-wide assets: the unpartitioned PCG data and Mass traffic's data assets (named after the lanes actor).
     const std::string lanes = assetName(label + "_Lanes");
     json assets = json::array({folder + "/PCG_" + assetName(label)});
@@ -1198,7 +1205,8 @@ void registerUnrealCommands(ext::Context& ctx)
                "meshes), road, path and level splines, PCG cells with their data assets, its ZoneGraph lanes and Mass traffic "
                "data. Give the settlement, or key= for one already deleted in Lila (the Unreal key its sends used, the "
                "settlement mesh's name). Its sync manifest is deleted, so a later send sends everything again. Returns what "
-               "Unreal removed per kind and any errors.",
+               "Unreal removed per kind and any errors; laneProfilesRemoved lists the Lila_ lane profiles taken out of "
+               "the project ini because no level's settlement uses them any more (configBackup: the ini as it was).",
         .positionalDoc = "settlement mesh or its modifier (or key=)",
         .flags = {{"key", "k", Arg::String, nullptr, "Unreal key of a settlement no longer in the scene (its mesh's name)."},
                   {"folder", "f", Arg::String, "/Game/Lila/Settlement", "Content folder its sends used."}},

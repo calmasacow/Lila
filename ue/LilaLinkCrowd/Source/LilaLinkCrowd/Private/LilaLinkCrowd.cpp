@@ -123,6 +123,13 @@ struct FZoneSettings
 		return P ? P->ArrayDim : 0;
 	}
 
+	/** Records whether the crowd Id in World uses Lila_Crowd, and takes it out when no level does; returns whether it went. */
+	bool UpdateProfileUsers(const UWorld* World, const FString& Id, bool bUses)
+	{
+		const TArray<FName> Unused = LilaLink::SetLaneProfileUser(World, TEXT("crowd:") + Id, bUses ? TArray<FName>{ProfileName} : TArray<FName>());
+		return Profiles && Unused.Contains(ProfileName) && Profiles->RemoveAll([](const FZoneLaneProfile& P) { return P.Name == ProfileName; }) > 0;
+	}
+
 	/** The tag of that name, made in the first free slot when the project has none. */
 	FZoneGraphTag Tag(const FString& Name, TArray<FString>& Warnings)
 	{
@@ -717,6 +724,7 @@ TSharedPtr<FJsonValue> SetMassCrowd(const TSharedPtr<FJsonObject>& Params, FStri
 		Lane.Direction = Direction;
 		Lane.Tags = FZoneGraphTagMask(CrowdTag);
 	}
+	Zone.UpdateProfileUsers(World, Id, true);
 	TArray<TSharedPtr<FJsonValue>> Backups;
 	if (const FString Backup = LilaLink::UpdateProjectIni(Zone.Settings); !Backup.IsEmpty())
 	{
@@ -1068,9 +1076,26 @@ TSharedPtr<FJsonValue> RemoveMassCrowd(const TSharedPtr<FJsonObject>& Params, FS
 	{
 		World->EditorDestroyActor(Actor, true);
 	}
+	// The lane profile is project-wide: it goes when no level keeps a crowd on it.
+	FZoneSettings Zone;
+	FString ConfigBackup;
+	if (Zone.Settings)
+	{
+		Zone.Settings->Modify();
+	}
+	const bool bProfileRemoved = Zone.UpdateProfileUsers(World, Params->GetStringField(TEXT("id")), false);
+	if (bProfileRemoved)
+	{
+		ConfigBackup = LilaLink::UpdateProjectIni(Zone.Settings);
+	}
 	UE::ZoneGraphDelegates::OnZoneGraphRequestRebuild.Broadcast();
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), Doomed.Num());
+	Out->SetBoolField(TEXT("laneProfileRemoved"), bProfileRemoved);
+	if (!ConfigBackup.IsEmpty())
+	{
+		Out->SetStringField(TEXT("configBackup"), ConfigBackup);
+	}
 	return MakeShared<FJsonValueObject>(Out);
 }
 } // namespace
