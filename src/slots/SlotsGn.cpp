@@ -125,11 +125,11 @@ gn::GeometryPtr applyToInstances(const gn::GeometryPtr& in, NodeId publisher, co
     return applySlots(in, publisher, std::move(slots));
 }
 
-std::optional<glm::vec4> dataColor(const json& data)
+std::optional<glm::vec4> dataColor(const json& data, const char* key)
 {
     if (!data.is_object())
         return std::nullopt;
-    auto it = data.find("color");
+    auto it = data.find(key);
     if (it == data.end())
         return std::nullopt;
     if (it->is_string())
@@ -175,7 +175,7 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
     std::vector<int32_t> slotIndex;
     // Payload colours (rules and overrides included) over the generator's own instance colours, which describe only its
     // own references: a swapped visual without a payload colour shows its own.
-    std::vector<std::pair<size_t, glm::vec4>> payloadColors;
+    std::vector<std::pair<size_t, glm::vec4>> payloadColors, payloadColors2;
     std::vector<size_t> ownColorsDropped;
     auto takeColors = [&](size_t row, const json& data) {
         if (!data.is_object())
@@ -184,6 +184,9 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
         if (data.contains("color"))
             if (std::optional<glm::vec4> c = dataColor(data))
                 payloadColors.push_back({row, *c}), any = true;
+        if (data.contains("color2"))
+            if (std::optional<glm::vec4> c = dataColor(data, "color2"))
+                payloadColors2.push_back({row, *c}), any = true;
         return any;
     };
     out->transforms.reserve(src.size());
@@ -258,12 +261,12 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
             out->attrs.copyFrom(src.attrs, row, size_t(slotIndex[row]));
     std::span<int32_t> idx = out->attrs.getOrAdd<int32_t>("slotIndex");
     std::copy(slotIndex.begin(), slotIndex.end(), idx.begin());
-    auto writeColors = [&](const char* attr, const std::vector<std::pair<size_t, glm::vec4>>& given) {
+    auto writeColors = [&](const char* attr, const std::vector<std::pair<size_t, glm::vec4>>& given, bool second) {
         if (given.empty() && (ownColorsDropped.empty() || !out->attrs.has(attr)))
             return;
         std::vector<glm::vec4> colors(out->size());
         for (size_t k = 0; k < colors.size(); ++k)
-            colors[k] = gn::instanceColor(*out, k);
+            colors[k] = second ? gn::instanceColor2(*out, k) : gn::instanceColor(*out, k);
         for (const auto& [row, c] : given)
             colors[row] = c;
         for (size_t row : ownColorsDropped)
@@ -272,7 +275,8 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
         std::span<glm::vec4> dst = out->attrs.getOrAdd<glm::vec4>(attr);
         std::copy(colors.begin(), colors.end(), dst.begin());
     };
-    writeColors(gn::kInstanceColorAttr, payloadColors);
+    writeColors(gn::kInstanceColorAttr, payloadColors, false);
+    writeColors(gn::kInstanceColor2Attr, payloadColors2, true);
     (void)missing;
     if (publisher != 0)
         publish(publisher, std::move(slots));

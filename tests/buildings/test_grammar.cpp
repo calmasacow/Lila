@@ -330,3 +330,31 @@ TEST_CASE("buildings: a portico's floor stands on the ground in front of the doo
             CHECK_MESSAGE(floors == 1, style);
         }
 }
+
+TEST_CASE("buildings: two-tone modules take the tones their style names, framed pieces keep their frames by default")
+{
+    const Style& centro = styles().at("colonialCentro");
+    const Style& plain = styles().at("residential");
+    Palette p;
+    p.render = {0.8f, 0.2f, 0.1f};
+    p.trim = {0.9f, 0.9f, 0.8f};
+    p.roof = {0.4f, 0.3f, 0.2f};
+    const glm::vec4 render(p.render, 1.0f), trim(p.trim, 1.0f), roof(p.roof, 1.0f), none(0.0f);
+    // Defaults: one colour on both tones, framed pieces without a second.
+    CHECK(moduleTones(plain, p, "wall") == std::array<glm::vec4, 2>{render, render});
+    CHECK(moduleTones(plain, p, "roof") == std::array<glm::vec4, 2>{roof, roof});
+    CHECK(moduleTones(plain, p, "arcade") == std::array<glm::vec4, 2>{trim, trim});
+    CHECK(moduleTones(plain, p, "window") == std::array<glm::vec4, 2>{trim, none});
+    CHECK(moduleTones(plain, p, "door") == std::array<glm::vec4, 2>{trim, none});
+    // colonialCentro: arcade beams in the render, columns in the trim; window and door frames in the trim.
+    CHECK(moduleTones(centro, p, "arcade") == std::array<glm::vec4, 2>{render, trim});
+    CHECK(moduleTones(centro, p, "window") == std::array<glm::vec4, 2>{trim, trim});
+    CHECK(moduleTones(centro, p, "door") == std::array<glm::vec4, 2>{trim, trim});
+    // The style keeps them through its JSON, and "none" drops a tone.
+    Style s = Style::fromJson(centro.toJson());
+    CHECK(s.moduleTones == centro.moduleTones);
+    json j = plain.toJson();
+    j["moduleTones"] = {{"arcade", {"none", "render"}}};
+    s = Style::fromJson(j);
+    CHECK(moduleTones(s, p, "arcade") == std::array<glm::vec4, 2>{none, render});
+}

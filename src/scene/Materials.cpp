@@ -213,6 +213,9 @@ std::vector<AttrDef> materialAttrs()
     a[kInstanceColor] = {.name = "instanceColor", .type = PlugType::Bool, .defaultValue = true, .flags = AttrInput | AttrStorable,
                          .doc = "Shows the colour instances carry (container liveries, building palettes): it replaces the base colour, "
                                 "or tints the base colour map. Off keeps this material's own colour on coloured instances."};
+    a[kInstanceColor2] = {.name = "instanceColor2", .type = PlugType::Bool, .defaultValue = false, .flags = AttrInput | AttrStorable,
+                          .doc = "Takes the instances' second colour (their color2) instead of the first: the other tone of a two-tone "
+                                 "piece, such as a building's trim against its walls."};
     stylisedAttrs(a);
     heightAttrs(a);
     samplingAttrs(a);

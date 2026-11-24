@@ -90,5 +90,10 @@
       0.15,
       0.45
     ]
+  },
+  "moduleTones": {
+    "arcade": ["render", "trim"],
+    "window": [null, "trim"],
+    "door": [null, "trim"]
   }
 }

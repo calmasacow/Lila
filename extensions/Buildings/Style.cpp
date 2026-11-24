@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 
 namespace buildings
 {
@@ -140,6 +141,11 @@ Style Style::fromJson(const json& j, std::string* error)
     read(e, "pool", s.pool);
     read(e, "bellTowers", s.bellTowers);
     read(e, "enterable", s.enterable);
+    if (const json t = j.value("moduleTones", json::object()); t.is_object())
+        for (auto it = t.begin(); it != t.end(); ++it)
+            if (it->is_array() && it->size() == 2)
+                s.moduleTones[it.key()] = {(*it)[0].is_string() ? (*it)[0].get<std::string>() : std::string(),
+                                           (*it)[1].is_string() ? (*it)[1].get<std::string>() : std::string()};
     const json p = j.value("palette", json::object());
     s.renders = colours(p, "render");
     s.trims = colours(p, "trim");
@@ -191,7 +197,46 @@ json Style::toJson() const
     j["extras"] = {{"columns", columns}, {"domes", domes}, {"perimeterWall", perimeterWall}, {"gate", gate}, {"pool", pool},
                    {"bellTowers", bellTowers}, {"enterable", enterable}};
     j["palette"] = {{"render", hexes(renders)}, {"trim", hexes(trims)}, {"roof", hexes(roofs)}, {"base", hexes(bases)}, {"dirt", {dirt.x, dirt.y}}};
+    if (!moduleTones.empty())
+    {
+        json t = json::object();
+        for (const auto& [kind, tones] : moduleTones)
+            t[kind] = {tones[0].empty() ? json() : json(tones[0]), tones[1].empty() ? json() : json(tones[1])};
+        j["moduleTones"] = t;
+    }
+    else
+        j.erase("moduleTones");
     return j;
+}
+
+std::array<glm::vec4, 2> moduleTones(const Style& st, const Palette& p, const std::string& kind)
+{
+    static const std::set<std::string> kRender = {"wall", "pilaster", "cornice", "corner", "band", "plinth", "dome"};
+    static const std::set<std::string> kFramed = {"window", "door", "shopfront", "balcony"};
+    auto entry = [&](const std::string& name) -> glm::vec4 {
+        if (name == "render")
+            return {p.render, 1.0f};
+        if (name == "trim")
+            return {p.trim, 1.0f};
+        if (name == "roof")
+            return {p.roof, 1.0f};
+        if (name == "base")
+            return {p.base, 1.0f};
+        if (name == "frame")
+            return {p.frame, 1.0f};
+        if (name == "door")
+            return {p.door, 1.0f};
+        if (name == "awning")
+            return {p.awning, 1.0f};
+        return glm::vec4(0.0f);
+    };
+    const std::string main = kind == "roof" ? "roof" : kRender.contains(kind) ? "render" : "trim";
+    std::array<std::string, 2> names = {main, kFramed.contains(kind) ? std::string("none") : main};
+    if (auto it = st.moduleTones.find(kind); it != st.moduleTones.end())
+        for (int k = 0; k < 2; ++k)
+            if (!it->second[size_t(k)].empty())
+                names[size_t(k)] = it->second[size_t(k)];
+    return {entry(names[0]), entry(names[1])};
 }
 
 const std::vector<std::string>& shippedStyleIds()

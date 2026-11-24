@@ -187,6 +187,16 @@ TEST_CASE("instance colours: a stored colour, a rule's data colour and an overri
     CHECK(red == int(n) - 1);
     CHECK(other == 0);
 
+    // A second tone from data "color2" rides beside the first.
+    CHECK_FALSE(v->parts[0].colors2);
+    gnRun("slotRule", {{"args", {"add"}}, {"type", "container"}, {"data", {{"color2", json::array({0.0, 1.0, 0.0})}}}});
+    v = settle(s.mesh);
+    REQUIRE(v->parts[0].colors2);
+    REQUIRE(v->parts[0].colors2->size() == n);
+    for (const glm::vec4& c : *v->parts[0].colors2)
+        CHECK(c == glm::vec4(0, 1, 0, 1));
+    CHECK(slots::dataColor({{"color2", "#ffffff"}}, "color2")->g == doctest::Approx(1.0f));
+
     CHECK(slots::dataColor({{"color", "#808080"}})->r == doctest::Approx(0.2158f).epsilon(0.01));
     CHECK_FALSE(slots::dataColor({{"color", "red"}}));
     CHECK_FALSE(slots::dataColor({{"livery", "x"}}));

@@ -469,10 +469,12 @@ int ensureMaterials(const std::set<std::string>& styleIds)
 {
     scene::Graph& g = G();
     int made = 0;
-    auto make = [&](const std::string& name, glm::vec3 c, double rough, bool instanceColor = true) {
+    auto make = [&](const std::string& name, glm::vec3 c, double rough, bool instanceColor = true, bool secondTone = false) {
         if (scene::materials::find(g, name))
             return;
         json call = {{"args", {name}}, {"baseColor", {c.r, c.g, c.b}}, {"roughness", rough}, {"instanceColor", instanceColor}};
+        if (secondTone)
+            call["instanceColor2"] = true;
         if (name == matName(MatGlassClear))
         {
             call["blendMode"] = "translucent";
@@ -491,7 +493,9 @@ int ensureMaterials(const std::set<std::string>& styleIds)
         {MatConcrete, {0.45f, 0.44f, 0.42f}}, {MatStone, {0.4f, 0.37f, 0.33f}}, {MatWater, {0.03f, 0.25f, 0.35f}}, {MatWood, {0.25f, 0.14f, 0.07f}},
         {MatDark, {0.03f, 0.03f, 0.03f}},     {MatGlassClear, {0.55f, 0.65f, 0.7f}}};
     for (auto& [m, c] : kShared)
-        make(matName(m), c, m == MatGlass || m == MatWater || m == MatGlassClear ? 0.1 : m == MatMetal ? 0.5 : 0.8, false);
+        make(matName(m), c, m == MatGlass || m == MatWater || m == MatGlassClear ? 0.1 : m == MatMetal ? 0.5 : 0.8, m == MatFrame, m == MatFrame);
+    // Module trim and frames take each module's second tone; with none they keep their own colour.
+    make(matName(MatTrim), glm::vec3(0.85f, 0.83f, 0.78f), 0.85, true, true);
 
     return made;
 }

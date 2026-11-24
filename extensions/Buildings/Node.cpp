@@ -93,19 +93,6 @@ GeometryPtr emptyRef()
     return g;
 }
 
-/**
- * The palette colour a module's instance carries: render for the wall-like blocks and domes, roof for roofs, trim for the
- * rest. It shows on the module's sections without a shared material (bld_render, bld_trim, bld_roof); the shared ones
- * (glass, metal, frames...) keep their own colour.
- */
-glm::vec3 modulePaletteColor(const Palette& p, const std::string& kind)
-{
-    static const std::set<std::string> kRender = {"wall", "pilaster", "cornice", "corner", "band", "plinth", "dome"};
-    if (kind == "roof")
-        return p.roof;
-    return kRender.contains(kind) ? p.render : p.trim;
-}
-
 GeometryPtr placeholderRef(const Module& m)
 {
     const Vec3 q{std::round(m.size.x / 5.0) * 5.0, std::round(m.size.y / 5.0) * 5.0, std::round(m.size.z)};
@@ -297,8 +284,8 @@ void exec(ExecContext& c)
         return id;
     };
     auto inst = std::make_shared<lila::gn::Instances>();
-    // The building's palette on its modules, which are shared placeholder meshes across buildings.
-    std::vector<glm::vec4> moduleColors;
+    // The building's palette on its modules, which are shared placeholder meshes across buildings: two tones each.
+    std::vector<glm::vec4> moduleColors, moduleColors2;
     std::unordered_map<std::string, int> refIndex;
     slots::InstanceSlots spec;
     spec.owner = "buildings:" + cell;
@@ -381,7 +368,9 @@ void exec(ExecContext& c)
                             ref = it->second;
                     }
                     inst->add(s.transform, ref);
-                    moduleColors.push_back(m.shell ? glm::vec4(0.0f) : glm::vec4(modulePaletteColor(r.palette, m.kind), 1.0f));
+                    const std::array<glm::vec4, 2> tones = m.shell ? std::array<glm::vec4, 2>{} : moduleTones(*styleOf[i], r.palette, m.kind);
+                    moduleColors.push_back(tones[0]);
+                    moduleColors2.push_back(tones[1]);
                 }
                 slotList.push_back(std::move(s));
             }

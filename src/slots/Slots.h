@@ -335,11 +335,11 @@ LILA_SCENE_API std::shared_ptr<const geo::Mesh> combinedMesh(scene::Graph& g, No
 LILA_SCENE_API void clearVisuals();
 
 /**
- * A payload's colour from its data key "color": "#rrggbb" (sRGB), or [r, g, b] / [r, g, b, a] linear with a how much it
+ * A payload's colour from its data key "color" ("color2" for the second tone of a two-tone piece): "#rrggbb" (sRGB), or [r, g, b] / [r, g, b, a] linear with a how much it
  * shows. Linear rgb and amount; nothing when there is none or it doesn't parse. Drawn per instance and sent to Unreal as
  * per-instance custom data.
  */
-LILA_SCENE_API std::optional<glm::vec4> dataColor(const json& data);
+LILA_SCENE_API std::optional<glm::vec4> dataColor(const json& data, const char* key = "color");
 
 /** Per mesh, the instance matrices (world) a slotSet's resolved slots draw with, hidden ones left out. Main thread. */
 struct DrawBatch

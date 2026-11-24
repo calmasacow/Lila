@@ -31,6 +31,13 @@ inline constexpr const char* kInstanceColorAttr = "color";
 /** Instance k's colour from kInstanceColorAttr: linear rgb and how much it shows; zero when it has none. */
 LILA_SCENE_API glm::vec4 instanceColor(const Instances& inst, size_t k);
 
+/**
+ * The second tone, as kInstanceColorAttr: what materials with "instanceColor2" on take instead (a two-tone piece's trim
+ * or frame against its body).
+ */
+inline constexpr const char* kInstanceColor2Attr = "color2";
+LILA_SCENE_API glm::vec4 instanceColor2(const Instances& inst, size_t k);
+
 /** Every instance of one referenced mesh. */
 struct InstancePart
 {
@@ -39,6 +46,8 @@ struct InstancePart
     std::shared_ptr<const std::vector<glm::mat4>> transforms;
     /** Per placement colour (see kInstanceColorAttr), null when no placement of this mesh has one. */
     std::shared_ptr<const std::vector<glm::vec4>> colors;
+    /** Per placement second tone (kInstanceColor2Attr), likewise. */
+    std::shared_ptr<const std::vector<glm::vec4>> colors2;
 };
 
 struct InstanceView

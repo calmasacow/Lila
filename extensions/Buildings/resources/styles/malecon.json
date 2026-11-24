@@ -85,5 +85,8 @@
       0.1,
       0.35
     ]
+  },
+  "moduleTones": {
+    "arcade": ["render", "trim"]
   }
 }
