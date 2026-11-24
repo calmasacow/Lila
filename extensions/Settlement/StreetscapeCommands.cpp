@@ -402,7 +402,7 @@ void registerStreetscapeCommands(ext::Context& ctx)
                "settlementEditStreet(name=). Names save with the scene and go out in settlementExport. Returns the culture, "
                "every street's name by stable id and the districts.",
         .positionalDoc = "settlement mesh or its modifier",
-        .flags = {{"culture", "cu", StreetT::String, nullptr, "Naming culture; empty for the style's.", {"oldEnglish", "latin", "french", "spanish", "usGrid", "sector", ""}},
+        .flags = {{"culture", "cu", StreetT::String, nullptr, "Naming culture; empty for the style's.", {"oldEnglish", "latin", "french", "spanish", "usGrid", "sector", "mexican", ""}},
                   {"district", "d", StreetT::Int, nullptr, "A district's id, with name=."},
                   {"name", "n", StreetT::String, nullptr, "The district's new name; empty gives it back to the culture."}},
         .run = [](const Args& a) -> json {

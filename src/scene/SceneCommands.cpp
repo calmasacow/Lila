@@ -7,6 +7,7 @@
 #include "scene/Anim.h"
 #include "media/Media.h"
 #include "media/SoundCues.h"
+#include "names/Names.h"
 #include "scene/AnimLayer.h"
 #include "scene/RigUtil.h"
 #include "scene/Take.h"
@@ -263,6 +264,7 @@ void registerCommands()
     instancing::registerCommands();
     arrays::registerCommands();
     registerBoundingMeshCommands();
+    names::registerCommands();
     modifiers::registerCommands();
     components::registerCommands();
     materials::registerCommands();
