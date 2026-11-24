@@ -71,11 +71,11 @@ bool hasFeature(const json& features, const char* f) { return features.is_array(
 
 /**
  * What one unrealPlaceInstances plan did: groups sent, held unchanged by the level, removed and failed (with why), the
- * assets imported or shared within the send, and the slot table rows. Every group key goes into keys.
+ * assets imported, shared within the send or reused from the project, and the slot table rows. Every group key goes into keys.
  */
 json placementReport(const json& plan, std::set<std::string>& keys)
 {
-    int sent = 0, unchanged = 0, removed = 0, imported = 0, shared = 0, placements = 0;
+    int sent = 0, unchanged = 0, removed = 0, imported = 0, shared = 0, reused = 0, placements = 0;
     json failed = json::array();
     for (const json& grp : plan.value("groups", json::array()))
     {
@@ -111,10 +111,12 @@ json placementReport(const json& plan, std::set<std::string>& keys)
         placements += int(grp.value("placements", json::array()).size());
         if (imp.value("shared", false))
             ++shared;
+        else if (imp.value("reused", false))
+            ++reused;
         else if (!imp.empty())
             ++imported;
     }
-    json out = {{"sent", sent}, {"unchanged", unchanged}, {"imported", imported}, {"sharedImports", shared}, {"placements", placements}};
+    json out = {{"sent", sent}, {"unchanged", unchanged}, {"imported", imported}, {"sharedImports", shared}, {"reused", reused}, {"placements", placements}};
     if (removed)
         out["removed"] = removed;
     if (!failed.empty())

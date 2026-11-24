@@ -19,6 +19,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -888,6 +889,86 @@ TEST_CASE("placement signatures: a plain mesh sent again unchanged is skipped, a
     json third = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
     CHECK(third["unchanged"] == 0);
     CHECK(count("importAsset") == 2);
+
+    unregisterExporter("fbx:instanceSource");
+    Link::get().disconnect();
+    fs::remove_all(dir);
+}
+
+TEST_CASE("content hashes: a send into a fresh level names what each asset is made from, so the project's copy is reused")
+{
+    setupPlacementTest();
+    buildKit();
+    fs::path dir = fs::temp_directory_path() / "lila_link_content_hash";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    // A project's assets (path -> content hash) outlive its levels; the level's groups do not.
+    auto level = std::make_shared<json>(json::object());
+    auto assets = std::make_shared<std::map<std::string, std::string>>();
+    auto imported = std::make_shared<int>(0);
+    auto mx = std::make_shared<std::mutex>();
+    FakeServer server([level, assets, imported, mx](const json& req) -> std::optional<json> {
+        const std::string m = req["method"];
+        const json& p = req["params"];
+        if (m == "hello")
+            return FakeServer::reply(req, {{"project", "TestGame"}, {"features", {"progress", "placements", "placementHashes"}}});
+        std::scoped_lock lock(*mx);
+        if (m == "placementHashes")
+            return FakeServer::reply(req, {{"groups", *level}});
+        if (m == "importAsset")
+        {
+            const std::string path = p["contentPath"], hash = p.value("contentHash", "");
+            if (!hash.empty() && assets->contains(path) && assets->at(path) == hash)
+                return FakeServer::reply(req, {{"assets", {path}}, {"reused", true}, {"method", "reused"}, {"warnings", json::array()}, {"errors", json::array()}});
+            ++*imported;
+            (*assets)[path] = hash;
+            return FakeServer::reply(req, {{"assets", {path}}, {"warnings", json::array()}, {"errors", json::array()}});
+        }
+        if (m == "placeInstances")
+        {
+            (*level)[p["group"].get<std::string>()] = {{"hash", p.value("hash", "")}, {"actors", p["mode"] == "hism" ? size_t(1) : p["placements"].size()}};
+            return FakeServer::reply(req, {{"spawned", p["placements"].size()}, {"updated", 0}, {"removed", 0}});
+        }
+        return std::nullopt;
+    });
+    Link::ConnectOptions o;
+    o.port = server.port();
+    Link::get().connect(o);
+    auto hashes = [&server]() {
+        std::vector<std::string> out;
+        for (const json& r : server.requests())
+            if (r["method"] == "importAsset")
+                out.push_back(r["params"].value("contentHash", ""));
+        return out;
+    };
+
+    run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    REQUIRE(hashes().size() == 1);
+    CHECK(hashes()[0].size() == 16);
+    CHECK(*imported == 1);
+
+    // A new level: nothing placed there yet, so the group goes again, but its asset is the project's already.
+    {
+        std::scoped_lock lock(*mx);
+        *level = json::object();
+    }
+    json fresh = run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    REQUIRE(hashes().size() == 2);
+    CHECK(hashes()[1] == hashes()[0]);
+    CHECK(*imported == 1);
+    CHECK(fresh["groups"][0]["import"].value("reused", false));
+
+    // Edited content is a different hash, so it imports over the old asset.
+    run("selectComponents", {{"args", {"Crate"}}, {"faces", {0}}});
+    run("deleteComponents");
+    run("unrealPlaceInstances", {{"args", {"Crate"}}, {"wait", true}});
+    REQUIRE(hashes().size() == 3);
+    CHECK(hashes()[2] != hashes()[0]);
+    CHECK(*imported == 2);
 
     unregisterExporter("fbx:instanceSource");
     Link::get().disconnect();

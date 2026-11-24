@@ -569,6 +569,22 @@ std::string placementSignature(const json& grp, const std::vector<scene::MeshPtr
     return slots::hex(slots::idHash(sig.dump()));
 }
 
+/**
+ * What an imported asset is made from: its mesh content and the import settings and materials that shape it. Empty when
+ * Lila can't name the mesh content from the plan; the asset is imported then.
+ */
+std::string assetContentHash(const json& grp, const std::vector<scene::MeshPtr>& meshes)
+{
+    json sig = {{"collision", grp.value("collision", json())}, {"nanite", grp.value("nanite", false)}, {"materials", grp.value("materials", json::array())}};
+    if (grp.contains("gnMesh") && grp["gnMesh"].get<size_t>() < meshes.size() && meshes[grp["gnMesh"].get<size_t>()])
+        sig["mesh"] = contentHash(*meshes[grp["gnMesh"].get<size_t>()]);
+    else if (!grp.value("sourceHash", std::string()).empty())
+        sig["mesh"] = grp["sourceHash"];
+    else
+        return {};
+    return slots::hex(slots::idHash(sig.dump()));
+}
+
 scene::MeshPtr cleanedMesh(const std::shared_ptr<const geo::Mesh>& m)
 {
     geo::Mesh copy = *m;
@@ -1390,7 +1406,11 @@ void registerPlacementCommands()
                         }
                         const json mapping = {{"contentPath", grp["contentPath"]}, {"kind", "static"},       {"collision", grp["collision"]},
                                               {"nanite", grp["nanite"]},           {"reapplyOptions", true}};
-                        RpcResult imported = client->call("importAsset", importParams(file, mapping, grp["materials"]), importCallOptions());
+                        json params = importParams(file, mapping, grp["materials"]);
+                        // An asset the project already holds with this content (an earlier send to any level) is used as it is.
+                        if (const std::string h = assetContentHash(grp, meshes); !h.empty())
+                            params["contentHash"] = h;
+                        RpcResult imported = client->call("importAsset", params, importCallOptions());
                         grp["import"] = imported.ok ? imported.result : json{{"error", imported.error}};
                         if (!imported.ok)
                             continue;

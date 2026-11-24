@@ -45,6 +45,8 @@
 #include "RenderUtils.h"
 #include "StaticMeshEditorSubsystem.h"
 #include "StaticMeshEditorSubsystemHelpers.h"
+#include "UObject/MetaData.h"
+#include "UObject/Package.h"
 #include "UObject/StrongObjectPtr.h"
 
 namespace
@@ -98,6 +100,8 @@ struct FImportRequest
 	FRotator SocketRotation = FRotator::ZeroRotator;
 	/** The object's attribute components; unset when Lila sent none, so the asset's are left as they are. */
 	TOptional<TArray<LilaLink::FLilaComponent>> Components;
+	/** What Lila made the asset from (mesh content, import settings, materials); an asset already holding it is used as it is. */
+	FString ContentHash;
 };
 
 struct FImportOutcome
@@ -254,6 +258,7 @@ bool ParseRequest(const TSharedPtr<FJsonObject>& Params, FImportRequest& Out, FS
 	FString Existing = TEXT("reimport");
 	Options->TryGetStringField(TEXT("existing"), Existing);
 	Out.bReplace = Existing == TEXT("replace");
+	Params->TryGetStringField(TEXT("contentHash"), Out.ContentHash);
 
 	TArray<LilaLink::FLilaComponent> Components;
 	if (LilaLink::ParseComponents(Params, Components))
@@ -283,6 +288,19 @@ UObject* FindExisting(const FImportRequest& R)
 {
 	FAssetData Data = IAssetRegistry::GetChecked().GetAssetByObjectPath(FSoftObjectPath(ObjectPathOf(R)));
 	return Data.IsValid() ? Data.GetAsset() : nullptr;
+}
+
+/** The content hash the asset at the request's path was imported with: from the loaded asset, else the registry, without loading it. */
+FString StoredContentHash(const FImportRequest& R)
+{
+	const FSoftObjectPath Path(ObjectPathOf(R));
+	if (const UObject* Loaded = Path.ResolveObject())
+	{
+		return Loaded->GetPackage()->GetMetaData().GetValue(Loaded, LilaLink::ContentHashTag);
+	}
+	FString Hash;
+	IAssetRegistry::GetChecked().GetAssetByObjectPath(Path, /*bIncludeOnlyOnDiskAssets=*/true).GetTagValue(LilaLink::ContentHashTag, Hash);
+	return Hash;
 }
 
 /** Starts from the project's FBX pipeline asset so project-wide tweaks carry over, then applies the request. */
@@ -1123,6 +1141,15 @@ void FinishImport(const FImportRequest& Request, FImportOutcome& Outcome, const 
 		Call->Progress(TEXT("saving"));
 		LilaLink::SaveAssetPaths(Outcome.Assets, Outcome.Errors);
 	}
+	// Set after saving would leave it only in memory; a dirty package saves it with the user's Save All.
+	if (!Request.ContentHash.IsEmpty() && Outcome.Errors.IsEmpty() && !Outcome.Assets.IsEmpty())
+	{
+		if (UObject* Asset = FSoftObjectPath(ObjectPathOf(Request)).ResolveObject())
+		{
+			Asset->GetPackage()->GetMetaData().SetValue(Asset, LilaLink::ContentHashTag, *Request.ContentHash);
+			Asset->MarkPackageDirty();
+		}
+	}
 	Call->Reply(ToJson(Outcome));
 }
 } // namespace
@@ -1136,6 +1163,19 @@ void LilaLink::ImportAsset(const TSharedPtr<FJsonObject>& Params, const FLilaLin
 	if (!ParseRequest(Params, Request, Error))
 	{
 		Call->Reply(nullptr, Error);
+		return;
+	}
+
+	// The project already holds this content (a send into another level made it): nothing to import.
+	if (!Request.ContentHash.IsEmpty() && !Request.bReplace && Request.Kind == EKind::Static && StoredContentHash(Request) == Request.ContentHash)
+	{
+		FImportOutcome Reused;
+		Reused.Assets.Add(ObjectPathOf(Request));
+		Reused.Method = TEXT("reused");
+		TSharedPtr<FJsonValue> Reply = ToJson(Reused);
+		Reply->AsObject()->SetBoolField(TEXT("reused"), true);
+		UE_LOG(LogLilaLink, Log, TEXT("Reused %s: the project holds it with the same content"), *ObjectPathOf(Request));
+		Call->Reply(Reply);
 		return;
 	}
 
