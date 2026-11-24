@@ -6,6 +6,7 @@
 #include "Async/Async.h"
 #include "Editor.h"
 #include "Engine/World.h"
+#include "Misc/PackageName.h"
 #include "WorldPartition/WorldPartition.h"
 #include "WorldPartition/WorldPartitionActorDescInstance.h"
 #include "WorldPartition/LoaderAdapter/LoaderAdapterActorList.h"
@@ -341,6 +342,13 @@ void LoadLilaActors()
 		return;
 	}
 	Done = Partition;
+	// The slot table sends write into, loaded now while nothing else is: loading it mid-send flushes async loading while
+	// World Partition may be registering the actors placed just before.
+	const TCHAR* SlotTable = TEXT("/Game/Lila/Slots/DA_LilaSlotTable");
+	if (FPackageName::DoesPackageExist(SlotTable))
+	{
+		LoadObject<UObject>(nullptr, TEXT("/Game/Lila/Slots/DA_LilaSlotTable.DA_LilaSlotTable"), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	}
 	TArray<FGuid> Guids;
 	FWorldPartitionHelpers::ForEachActorDescInstance(Partition, AActor::StaticClass(), [&Guids](const FWorldPartitionActorDescInstance* Desc) {
 		if (!Desc->IsLoaded() && Desc->GetTags().ContainsByPredicate([](const FName& Tag) { return Tag.ToString().StartsWith(TEXT("Lila")); }))

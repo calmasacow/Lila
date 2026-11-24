@@ -214,7 +214,8 @@ void registerUnreal(ext::Context& ctx)
                 if (interiorMode == "levelInstance")
                 {
                     const link::RpcResult li = client->call("makeLevelInstance", {{"key", key}, {"name", i["name"]}, {"kind", "levelInstance"},
-                                                                                  {"level", folder + "/Interiors/LI_" + i["name"].get<std::string>()}, {"groups", keys}},
+                                                                                  {"level", folder + "/Interiors/LI_" + i["name"].get<std::string>()}, {"groups", keys},
+                                                                                  {"load", false}},
                                                             120000);
                     entry["levelInstance"] = li.ok ? li.result : json{{"error", li.error}};
                     entry["assembly"] = key;

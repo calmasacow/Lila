@@ -33,7 +33,10 @@
 #include "FileHelpers.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/FileManager.h"
+#include "DataLayer/DataLayerEditorSubsystem.h"
 #include "LevelInstance/LevelInstanceActor.h"
+#include "WorldPartition/DataLayer/DataLayerAsset.h"
+#include "WorldPartition/DataLayer/DataLayerInstance.h"
 #include "LevelInstance/LevelInstanceInterface.h"
 #include "LevelInstance/LevelInstanceSubsystem.h"
 #include "LevelInstance/LevelInstanceTypes.h"
@@ -1026,7 +1029,12 @@ TSharedPtr<FJsonValue> WriteSlotTable(const TSharedPtr<FJsonObject>& Params, FSt
 		return nullptr;
 	}
 	const FString ObjectPath = Path + TEXT(".") + FPackageName::GetShortName(Path);
-	ULilaSlotTable* Table = LoadObject<ULilaSlotTable>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	// Found in memory first: a load mid-send flushes async loading, which can catch World Partition registering actors.
+	ULilaSlotTable* Table = FindObject<ULilaSlotTable>(nullptr, *ObjectPath);
+	if (!Table && FPackageName::DoesPackageExist(Path))
+	{
+		Table = LoadObject<ULilaSlotTable>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	}
 	if (!Table)
 	{
 		UPackage* Package = CreatePackage(*Path);
@@ -1505,6 +1513,52 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 			}
 		}
 	}
+	// levelInstances: a Lila Level Instance whose every group is being removed goes too (its contents are never edited in place).
+	bool bLevelInstances = false;
+	Params->TryGetBoolField(TEXT("levelInstances"), bLevelInstances);
+	int32 LevelInstancesRemoved = 0;
+	TArray<const UDataLayerAsset*> InteriorLayers;
+	if (bLevelInstances && !Tags.IsEmpty())
+	{
+		if (ULevelInstanceSubsystem* Instances = World->GetSubsystem<ULevelInstanceSubsystem>())
+		{
+			for (TActorIterator<ALevelInstance> It(World); It; ++It)
+			{
+				const ULevel* Inner = TagValue(*It, AssemblyPrefix).IsEmpty() ? nullptr : Instances->GetLevelInstanceLevel(*It);
+				if (!Inner)
+				{
+					continue;
+				}
+				bool bAny = false, bAll = true;
+				for (const AActor* Actor : Inner->Actors)
+				{
+					const FString Group = Actor ? TagValue(Actor, GroupPrefix) : FString();
+					if (Group.IsEmpty())
+					{
+						continue;
+					}
+					bAny = true;
+					if (!Tags.Contains(GroupTag(Group)))
+					{
+						bAll = false;
+						break;
+					}
+				}
+				if (bAny && bAll)
+				{
+					Doomed.Add(*It);
+					++LevelInstancesRemoved;
+					for (const UDataLayerAsset* Asset : It->GetDataLayerAssets())
+					{
+						if (Asset && Asset->GetName().StartsWith(TEXT("DL_Interior_")))
+						{
+							InteriorLayers.AddUnique(Asset);
+						}
+					}
+				}
+			}
+		}
+	}
 	// deleteMeshes: the static meshes the removed actors showed go too, when they lie under meshFolder and nothing left in the level shows them.
 	bool bDeleteMeshes = false;
 	Params->TryGetBoolField(TEXT("deleteMeshes"), bDeleteMeshes);
@@ -1535,6 +1589,29 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), DestroyActors(World, Doomed));
+	if (bLevelInstances)
+	{
+		// An interior's own data layer goes with its last actor.
+		int32 LayersRemoved = 0;
+		if (UDataLayerEditorSubsystem* Layers = UDataLayerEditorSubsystem::Get())
+		{
+			for (const UDataLayerAsset* Asset : InteriorLayers)
+			{
+				bool bUsed = false;
+				for (TActorIterator<AActor> It(World); It && !bUsed; ++It)
+				{
+					bUsed = IsValid(*It) && It->GetDataLayerAssets().Contains(Asset);
+				}
+				if (UDataLayerInstance* Instance = bUsed ? nullptr : Layers->GetDataLayerInstance(Asset))
+				{
+					Layers->DeleteDataLayer(Instance);
+					++LayersRemoved;
+				}
+			}
+		}
+		Out->SetNumberField(TEXT("levelInstances"), LevelInstancesRemoved);
+		Out->SetNumberField(TEXT("dataLayers"), LayersRemoved);
+	}
 	if (bDeleteMeshes)
 	{
 		for (TActorIterator<AActor> It(World); It && !Meshes.IsEmpty(); ++It)
@@ -1770,7 +1847,13 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 	}
 	if (PackageName.IsEmpty())
 	{
-		PackageName = FreePackageName(Level);
+		// The level a removed instance left behind is reused rather than numbered past.
+		bool bInUse = false;
+		for (TActorIterator<ALevelInstance> It(World); It && !bInUse; ++It)
+		{
+			bInUse = It->GetWorldAsset().GetLongPackageName() == Level;
+		}
+		PackageName = bInUse ? FreePackageName(Level) : Level;
 	}
 	const FVector Pivot = AssemblyPivot(Actors);
 	if (!SaveActorsAsLevel(World, Actors, PackageName, Pivot, OutError))
@@ -1814,7 +1897,14 @@ TSharedPtr<FJsonValue> MakeLevelInstance(const TSharedPtr<FJsonObject>& Params, 
 		return nullptr;
 	}
 	Instance->SetWorldAsset(WorldAsset);
-	Instance->LoadLevelInstance();
+	// load=false: the caller tags the actor and puts it on its data layer first (buildingInteriors), then loads it; an
+	// actor modified while its level's actors register trips World Partition.
+	bool bLoad = true;
+	Params->TryGetBoolField(TEXT("load"), bLoad);
+	if (bLoad)
+	{
+		Instance->LoadLevelInstance();
+	}
 	Actor->Tags.Add(Tag);
 	Actor->SetActorLabel(Name.IsEmpty() ? AssetName : Name);
 	Actor->SetFolderPath(FName(TEXT("Lila/Assemblies")));

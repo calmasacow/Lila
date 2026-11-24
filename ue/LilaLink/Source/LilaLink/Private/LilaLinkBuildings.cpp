@@ -21,6 +21,7 @@
 #include "Engine/StaticMesh.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "DataLayer/DataLayerEditorSubsystem.h"
+#include "LevelInstance/LevelInstanceInterface.h"
 #include "Editor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -544,14 +545,33 @@ TSharedPtr<FJsonValue> BuildingInteriors(const TSharedPtr<FJsonObject>& Params, 
 			UDataLayerInstance* Layer = Actors.IsEmpty() ? nullptr : InteriorDataLayer(World, Folder, Name.IsEmpty() ? Building : Name, Why);
 			if (Layer && Layers)
 			{
+				const FName InteriorTag(*(TEXT("LilaInterior:") + Building));
+				TArray<AActor*> Changed;
 				for (AActor* A : Actors)
 				{
+					// One already set up is left untouched: modifying a loaded Level Instance's actor can trip World Partition.
+					if (A->Tags.Contains(InteriorTag) && !A->bEnableAutoLODGeneration && A->GetDataLayerAssets().Contains(Layer->GetAsset()))
+					{
+						continue;
+					}
 					A->Modify();
-					A->Tags.AddUnique(FName(*(TEXT("LilaInterior:") + Building)));
+					A->Tags.AddUnique(InteriorTag);
 					// Inside its shell an interior adds nothing to the HLODs but cost.
 					A->bEnableAutoLODGeneration = false;
+					Changed.Add(A);
 				}
-				Layers->AddActorsToDataLayer(Actors, Layer);
+				if (!Changed.IsEmpty())
+				{
+					Layers->AddActorsToDataLayer(Changed, Layer);
+				}
+				// Level Instances placed with load=false load once they are set up.
+				for (AActor* A : Actors)
+				{
+					if (ILevelInstanceInterface* Instance = Cast<ILevelInstanceInterface>(A); Instance && !Instance->IsLoaded())
+					{
+						Instance->LoadLevelInstance();
+					}
+				}
 				R->SetStringField(TEXT("dataLayer"), Layer->GetDataLayerShortName());
 			}
 			else
@@ -560,6 +580,13 @@ TSharedPtr<FJsonValue> BuildingInteriors(const TSharedPtr<FJsonObject>& Params, 
 				if (!Actors.IsEmpty())
 				{
 					Warnings.Add(Building + TEXT(": ") + Why);
+				}
+				for (AActor* A : Actors)
+				{
+					if (ILevelInstanceInterface* Instance = Cast<ILevelInstanceInterface>(A); Instance && !Instance->IsLoaded())
+					{
+						Instance->LoadLevelInstance();
+					}
 				}
 			}
 			Results.Add(Obj(R));
