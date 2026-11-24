@@ -397,7 +397,7 @@ const std::vector<TypeDef>& slotTypes()
         {"pool.swimming", "Swimming pool", {1000, 150, 500}, "ground", "box", {"leisure"}, "A swimming pool, its rim at the ground."},
         {"helipad", "Helipad", {2000, 10, 2000}, "ground", "cylinder", {"aviation"}, "A helipad pad and marking."},
         {"lighthouse", "Lighthouse part", {300, 400, 300}, "ground", "lamp", {"lighting", "waterfront"}, "Any lighthouse part."},
-        {"lighthouse.lantern", "Lantern", {300, 400, 300}, "ground", "lamp", {"lighting", "waterfront"}, "The lantern room on top of the tower."},
+        {"lighthouse.lantern", "Lantern", {300, 400, 300}, "free", "lamp", {"lighting", "waterfront"}, "The lantern room on top of the tower."},
     };
     return all;
 }

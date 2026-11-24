@@ -438,8 +438,12 @@ json info(const SiteRef& r, const sites::Evaluated& ev, bool slotsToo)
     json envs = json::array();
     for (size_t i = 0; i < L.envelopes.size(); ++i)
         envs.push_back(sites::envelopeJson(ev, i));
+    json boundary = json::array();
+    for (P2 q : L.boundary)
+        boundary.push_back(sites::pt(sites::toWorld(r.spec, q)));
     json out = {{"mesh", r.mesh},
                 {"modifier", r.modifier},
+                {"boundary", boundary},
                 {"id", r.spec.id},
                 {"kind", r.spec.kind},
                 {"name", r.spec.name},
