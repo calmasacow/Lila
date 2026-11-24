@@ -13,6 +13,7 @@
 #include <lila/Node.h>
 #include <lila/OptionBox.h>
 #include <lila/Transform.h>
+#include <lila/ViewportTool.h>
 
 #include <QApplication>
 
@@ -216,16 +217,16 @@ void registerCoastUi(ext::Context& ctx)
          "terrainCoastMasks('Terrain')", "beach", {"beach", "surf", "shallows", "reef", "coral", "shore", "coast"}},
         {"terrain.mangroves", "Mangroves", "terrainMangroves", "Mangroves in the tidal band of the selected terrain, from land cover where it has them.",
          "terrainMangroves('Terrain')", "plant-2", {"mangrove", "swamp", "estuary", "tidal", "wetland", "lagoon"}},
-        {"terrain.addChannel", "Add Channel", "terrainAddChannel", "Carve a navigable channel along the selected curve, sized for a boat class.",
-         "terrainAddChannel('Terrain', curve='ChannelCurve', craft='goFast', braids=3)", "git-branch", {"channel", "canal", "waterway", "lagoon", "estuary", "braided", "navigable"}, true},
-        {"terrain.addReservoir", "Reservoir", "terrainAddReservoir", "Dam a valley of the selected terrain into a reservoir with a spillway and the river below.",
-         "terrainAddReservoir('Terrain', a=[-8000, 12000], b=[6000, 15000])", "wall", {"dam", "reservoir", "spillway", "lake", "presa"}},
+        {"terrain.addChannel", "Add Channel", "terrainAddChannel", "Carve a navigable channel sized for a boat class: along the selected curve, or click its line on the terrain.",
+         "terrainAddChannel('Terrain', curve='ChannelCurve', craft='goFast', braids=3)", "git-branch", {"channel", "canal", "waterway", "lagoon", "estuary", "braided", "navigable", "draw channel"}, true},
+        {"terrain.addReservoir", "Reservoir", "terrainAddReservoir", "Click a dam's two ends across a valley: a reservoir with a spillway and the river below.",
+         "terrainAddReservoir('Terrain', a=[-8000, 12000], b=[6000, 15000])", "wall", {"dam", "reservoir", "spillway", "lake", "presa", "draw dam"}},
         {"terrain.routes", "Water Routes", "terrainRoutes", "Boat lanes along the coast, channels and rivers of the selected terrain.",
          "terrainRoutes('Terrain', coastDepth=800)", "route", {"boat lanes", "routes", "zonegraph", "navigation", "shipping lane", "sea lanes"}},
         {"terrain.addLane", "Harbour Lane", "terrainAddLane", "A harbour approach from a berth out to the boat lanes, or a drawn lane.",
          "terrainAddLane('Terrain', at=[4200, -1800], craft='cutter')", "anchor", {"harbour", "harbor", "port", "marina", "dock", "approach", "lane"}, true},
-        {"terrain.addAirstrip", "Airstrip", "terrainAddAirstrip", "An airstrip with approach and departure corridors over the selected terrain.",
-         "terrainAddAirstrip('Terrain', a=[30000, 20000], b=[30000, 70000])", "plane", {"airstrip", "runway", "airfield", "landing strip", "air lanes", "flight path"}},
+        {"terrain.addAirstrip", "Airstrip", "terrainAddAirstrip", "Click a runway's two ends on the terrain: an airstrip with approach and departure corridors.",
+         "terrainAddAirstrip('Terrain', a=[30000, 20000], b=[30000, 70000])", "plane", {"airstrip", "runway", "airfield", "landing strip", "air lanes", "flight path", "draw runway"}},
         {"terrain.stashSpots", "Stash Spots", "terrainStashSpots", "Hiding places along the selected terrain's channels, as locators.",
          "terrainStashSpots('Terrain')", "map-pin", {"stash", "hideout", "hiding spot", "smuggling", "cache"}},
         {"terrain.routeCurves", "Route Curves", "terrainRouteCurves", "The selected terrain's routes as curves with craft attributes.",
@@ -243,10 +244,20 @@ void registerCoastUi(ext::Context& ctx)
     {
         const std::string cmd = e.command;
         const bool curve = e.curve;
+        // Drawn features start their viewport tool; a channel with a curve selected follows the curve instead.
+        const std::string tool = cmd == "terrainAddChannel" ? "terrain.drawChannel" : cmd == "terrainAddReservoir" ? "terrain.drawDam"
+                                 : cmd == "terrainAddAirstrip"                     ? "terrain.drawAirstrip"
+                                                                                   : std::string();
         actions::add(ctx, {.id = e.id,
                            .label = e.label,
                            .category = "Terrain",
-                           .run = [cmd, curve] { runWith(cmd, curve); },
+                           .run =
+                               [cmd, curve, tool] {
+                                   if (!tool.empty() && (!curve || terrainAndCurve().second.empty()))
+                                       viewportTools::activate(tool);
+                                   else
+                                       runWith(cmd, curve);
+                               },
                            .doc = e.doc,
                            .python = e.python,
                            .command = cmd,
@@ -274,6 +285,7 @@ void registerCoastUi(ext::Context& ctx)
                        .icon = "file-import",
                        .keywords = {"gebco", "bathymetry", "seabed", "netcdf", "geotiff"}});
     registerOptionBoxes();
+    registerCoastTools(ctx);
 
     menus::addItem(ctx, {.id = "terrain.coastMenu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Coast and Water", .after = "terrain.menu"});
     int separators = 0;
