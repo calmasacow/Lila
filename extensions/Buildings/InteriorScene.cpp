@@ -502,6 +502,60 @@ std::string interiorGroupOf(const std::string& id)
     return n ? n->path() : std::string();
 }
 
+/**
+ * Set Dressing clutter strewn on every room's floor of a building's interior (realized, settled by physics when asked),
+ * one group per room named <room>_Clutter, replacing what an earlier call strewed there.
+ */
+json scatterClutter(const std::string& id, const json& items, double density, bool settle, const char* cmd)
+{
+    json out = {{"rooms", 0}, {"placed", 0}};
+    if (!ops::find("scatterProps"))
+    {
+        out["note"] = "Set Dressing is off: no clutter strewn";
+        return out;
+    }
+    scene::Graph& g = IG();
+    scene::Node* grp = g.find(interiorGroupOf(id));
+    if (!grp)
+        return out;
+    std::vector<std::string> rooms;
+    for (scene::NodeId c : g.children(grp->id()))
+        if (scene::Node* n = g.node(c); n && n->type().attrIndex(kPartMark) >= 0)
+        {
+            const std::string part = nodeAttrString(n->path() + "." + kPartMark);
+            if (!part.ends_with("/ceiling") && !part.starts_with("core"))
+                rooms.push_back(n->path());
+        }
+    json errors = json::array();
+    int placed = 0;
+    for (const std::string& room : rooms)
+    {
+        const std::string name = safeNodeName(room.substr(room.rfind('|') + 1) + "_Clutter");
+        if (scene::Node* old = g.find(name))
+            ops::execute("delete", {{"args", {old->path()}}});
+        try
+        {
+            const json r = ops::execute("scatterProps", {{"args", {room}}, {"items", items}, {"density", density}, {"maxCount", 40},
+                                                         {"realize", true}, {"settle", settle}, {"name", name},
+                                                         // The shell around the room would count as standing on its floor.
+                                                         {"avoid", false}});
+            placed += int(r.value("count", r.value("nodes", json::array()).size()));
+        }
+        catch (const std::exception& e)
+        {
+            errors.push_back(room + ": " + e.what());
+        }
+    }
+    out["rooms"] = rooms.size();
+    out["placed"] = placed;
+    if (!errors.empty())
+    {
+        out["errors"] = errors;
+        lila::log::warn("{}: clutter not strewn in {} room(s), first: {}", cmd, errors.size(), errors[0].get<std::string>());
+    }
+    return out;
+}
+
 std::shared_ptr<const Interior> interiorOf(const std::string& id)
 {
     auto loc = locateBuilding(id);
@@ -698,14 +752,18 @@ void registerInterior(ext::Context& ctx)
                "when the interior regenerates), the slots go in Interior_<id>_Slots. The exterior doors that open into rooms are "
                "tagged 'entry' (a slot rule on that tag gives them your door Blueprint). The building is pinned against regeneration; "
                "rules and overrides still swap its slots. When no door "
-               "opens into a room, entry=True paints one on the street. Returns per building: rooms, doors, stairs, slots, entries.",
+               "opens into a room, entry=True paints one on the street. clutter= strews library items on every room's floor with Set "
+               "Dressing, settled by physics. Returns per building: rooms, doors, stairs, slots, entries (and clutter).",
         .positionalDoc = "building ids or building meshes (default the selection)",
         .flags = {{"building", "b", T::Any, nullptr, "Building id(s)."},
                   {"program", "pr", T::String, nullptr, "Interior program instead of the one from the building's use.", interiorPrograms()},
                   {"furnish", "fu", T::Bool, true, "Furnishing slots from the room presets."},
                   {"pin", "pn", T::Bool, true, "Pin the building so regeneration leaves it as it is."},
                   {"entry", "en", T::Bool, true, "Paint a door on the street when none opens into a room."},
-                  {"reset", "rs", T::Bool, false, "Regenerate hand-edited room meshes too."}},
+                  {"reset", "rs", T::Bool, false, "Regenerate hand-edited room meshes too."},
+                  {"clutter", "cl", T::List, nullptr, "Library items Set Dressing strews on every room's floor (realized), replacing earlier clutter."},
+                  {"clutterDensity", "cd", T::Float, 0.4, "Clutter per square metre.", {}, {}, 0.0, 10.0},
+                  {"settle", "st", T::Bool, true, "Drop the clutter with physics so it comes to rest."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const char* cmd = "buildingMakeEnterable";
@@ -749,6 +807,8 @@ void registerInterior(ext::Context& ctx)
                     r["entryAdded"] = added;
                 if (a.get<bool>("pin", true) && !lila::slots::isPinned("owner:" + id))
                     r["pinned"] = lila::slots::pin(IG(), "owner:" + id, true);
+                if (a.has("clutter"))
+                    r["clutter"] = scatterClutter(id, a.flags["clutter"], a.get<double>("clutterDensity", 0.4), a.get<bool>("settle", true), cmd);
                 results.push_back(r);
             }
             return {{"buildings", results}, {"count", results.size()}};
