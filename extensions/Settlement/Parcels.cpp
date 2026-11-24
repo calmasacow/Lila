@@ -1,5 +1,6 @@
 // Settlement: blocks between the streets, their types, lots cut from them, landmarks, land use and envelopes.
 
+#include "Generators.h"
 #include "Parcels.h"
 
 #include <lila/Profile.h>
@@ -1018,6 +1019,8 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
     dropOverlappingLots(l, 0, nullptr);
     placeLandmarks(l, g, era);
     assignUses(l, g, era);
+    if (hasOsmBuildings(l))
+        placeOsmBuildings(l, site, g, o, 0, nullptr);
     applyLotOverrides(l, site);
     for (Lot& lot : l.lots)
     {
@@ -1029,11 +1032,13 @@ void planParcels(Layout& l, const Site& site, const Ground& g, const Options& o)
     if (o.buildings)
     {
         for (const Lot& lot : l.lots)
-            if (getsEnvelope(lot.use) && lot.frontages > 0)
+            if (!lot.osmId.empty() || (getsEnvelope(lot.use) && lot.frontages > 0))
             {
-                Envelope env = parcelEnvelope(lot, l.blocks[size_t(lot.block)], l, g, o, site);
-                if (!env.footprint.pts.empty())
-                    l.envelopes.push_back(std::move(env));
+                Envelope env = lot.osmId.empty() ? parcelEnvelope(lot, l.blocks[size_t(lot.block)], l, g, o, site) : osmEnvelope(lot, l, g, o, site);
+                if (env.footprint.pts.empty())
+                    continue;
+                finishProgram(env, lot, l);
+                l.envelopes.push_back(std::move(env));
             }
         matchPartyWalls(l.envelopes);
         for (const Envelope& env : l.envelopes)
@@ -1205,6 +1210,8 @@ int replanParcels(Layout& l, const Site& site, const Ground& g, const Options& o
             if (!fresh[k])
                 l.lots[k] = std::move(kept[k]);
     }
+    if (hasOsmBuildings(l))
+        placeOsmBuildings(l, site, g, o, firstFresh, &fresh);
     applyLotOverrides(l, site);
     for (size_t k = 0; k < l.lots.size(); ++k)
     {
@@ -1219,11 +1226,14 @@ int replanParcels(Layout& l, const Site& site, const Ground& g, const Options& o
     if (o.buildings)
     {
         for (size_t k = 0; k < l.lots.size(); ++k)
-            if (fresh[k] && getsEnvelope(l.lots[k].use) && l.lots[k].frontages > 0)
+            if (fresh[k] && (!l.lots[k].osmId.empty() || (getsEnvelope(l.lots[k].use) && l.lots[k].frontages > 0)))
             {
-                Envelope env = parcelEnvelope(l.lots[k], l.blocks[size_t(l.lots[k].block)], l, g, o, site);
-                if (!env.footprint.pts.empty())
-                    l.envelopes.push_back(std::move(env));
+                const Lot& lot = l.lots[k];
+                Envelope env = lot.osmId.empty() ? parcelEnvelope(lot, l.blocks[size_t(lot.block)], l, g, o, site) : osmEnvelope(lot, l, g, o, site);
+                if (env.footprint.pts.empty())
+                    continue;
+                finishProgram(env, lot, l);
+                l.envelopes.push_back(std::move(env));
             }
         std::sort(l.envelopes.begin(), l.envelopes.end(), [](const Envelope& a, const Envelope& b) { return a.lot < b.lot; });
         // Party walls change only where lots were cut afresh and next to them; the kept ones are matched already.
@@ -1286,4 +1296,6 @@ int replanParcels(Layout& l, const Site& site, const Ground& g, const Options& o
     }
     return cut;
 }
+
+void finishOsmLot(Lot& lot, const Layout& l) { finishLot(lot, l); }
 } // namespace settlement

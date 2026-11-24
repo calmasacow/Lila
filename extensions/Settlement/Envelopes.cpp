@@ -531,15 +531,30 @@ json blockJson(const Block& b)
             {"reasons", b.reasons}};
 }
 
+json businessesJson(const std::vector<Business>& list)
+{
+    json out = json::array();
+    for (const Business& b : list)
+        out.push_back({{"name", b.name}, {"program", b.program}, {"osmId", b.osmId}, {"at", xzOf(b.at)}});
+    return out;
+}
+
 json lotExtras(const Lot& lot)
 {
     static const char* kWealth[] = {"low", "middle", "high"};
-    return {{"lotId", lot.key},
-            {"wealth", kWealth[std::clamp(lot.wealth, 0, 2)]},
-            {"access", lot.access},
-            {"landmark", lot.landmark},
-            {"reasons", lot.reasons},
-            {"route", routeName(lot.route)}};
+    json j = {{"lotId", lot.key},
+              {"wealth", kWealth[std::clamp(lot.wealth, 0, 2)]},
+              {"access", lot.access},
+              {"landmark", lot.landmark},
+              {"reasons", lot.reasons},
+              {"route", routeName(lot.route)},
+              {"name", lot.name},
+              {"program", lot.program}};
+    if (!lot.osmId.empty())
+        j["osmId"] = lot.osmId;
+    if (!lot.businesses.empty())
+        j["businesses"] = businessesJson(lot.businesses);
+    return j;
 }
 
 json envelopeExtras(const Envelope& env)
@@ -551,7 +566,7 @@ json envelopeExtras(const Envelope& env)
         tiers.push_back({{"footprint", ringOf(t.footprint)}, {"bottom", t.bottom}, {"top", t.top}});
     for (const Vec2& d : env.entrances)
         doors.push_back(xzOf(d));
-    return {{"lotId", env.key},
+    json j = {{"lotId", env.key},
             {"sides", sides},
             {"partyWith", env.partyWith},
             {"frontSetback", env.frontSetback},
@@ -567,7 +582,28 @@ json envelopeExtras(const Envelope& env)
             {"landmark", env.landmark},
             {"eraName", env.eraName},
             {"wealth", env.wealth},
-            {"route", routeName(env.route)}};
+            {"route", routeName(env.route)},
+            {"name", env.name},
+            {"program", env.program},
+            {"style", env.style},
+            {"styleFrom", env.styleFrom},
+            {"businesses", businessesJson(env.businesses)}};
+    if (!env.osmId.empty())
+    {
+        json holes = json::array();
+        for (const Polygon& h : env.holes)
+            holes.push_back(ringOf(h));
+        j.update({{"osmId", env.osmId},
+                  {"heightSource", env.heightSource},
+                  {"roofSource", env.roofSource},
+                  {"roofShape", env.roofShape},
+                  {"colour", env.colour},
+                  {"roofColour", env.roofColour},
+                  {"material", env.material},
+                  {"roofMaterial", env.roofMaterial},
+                  {"holes", holes}});
+    }
+    return j;
 }
 
 json parcelStats(const Layout& l)
