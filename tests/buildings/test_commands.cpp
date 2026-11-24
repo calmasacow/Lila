@@ -9,6 +9,7 @@
 
 #include <doctest/doctest.h>
 
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <filesystem>
@@ -311,4 +312,41 @@ TEST_CASE("buildings commands: performance budget")
     MESSAGE("one-building edit: " << editMs << " ms (evaluate " << edit["evaluateMs"] << " ms, node " << edit.value("nodeMs", 0.0) << " ms)");
     CHECK(edit.value("generated", 0) == 1);
     CHECK(editMs < 1000.0); // generous; the target is 100 ms, measured and logged
+}
+
+TEST_CASE("buildings commands: acute corners, a tiny edge between two walls and mansion porticos pass buildingCheck")
+{
+    loadBuildings();
+    run("newScene");
+    // A wedge (about 30 degrees at its tip), a quad whose short third edge hides an acute meeting, and a 45 degree kite.
+    const std::vector<std::vector<std::array<double, 2>>> shapes = {
+        {{0, 0}, {3000, 0}, {0, 1700}},
+        {{0, 0}, {2800, 0}, {2800, 60}, {0, 1500}},
+        {{0, 0}, {2400, 0}, {2400, 1000}, {1000, 1000}},
+    };
+    json envs = json::array();
+    int k = 0;
+    for (const char* style : {"modernCommercial", "colonialCentro", "residential", "narcoMansion", "malecon"})
+        for (const auto& shape : shapes)
+            for (int seed = 0; seed < 2; ++seed, ++k)
+            {
+                const double x0 = (k % 10) * 6000.0, z0 = (k / 10) * 6000.0;
+                json e = envelope(0xb000 + uint64_t(k), x0, z0, 100, 100, 3, {}, style, k % 2 ? "shop" : "");
+                json fp = json::array(), sides = json::array();
+                for (const auto& p : shape)
+                {
+                    fp.push_back({x0 + p[0], z0 + p[1]});
+                    sides.push_back("street");
+                }
+                e["footprint"] = fp;
+                e["sides"] = sides;
+                e["entrances"] = json::array({{x0 + shape[0][0] * 0.5 + shape[1][0] * 0.5, z0}});
+                envs.push_back(e);
+            }
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Acute"}, {"cell", 0}});
+    const json check = run("buildingCheck");
+    CAPTURE(check["counts"].dump());
+    CAPTURE(check["issues"].size() > 0 ? check["issues"][0].dump() : std::string());
+    CHECK(check["counts"]["modulesIntersecting"] == 0);
+    CHECK(check["counts"]["slotFloating"] == 0);
 }
