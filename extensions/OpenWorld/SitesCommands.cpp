@@ -59,6 +59,9 @@ json attrText(const std::string& plug)
     return json::parse(s.empty() ? std::string("{}") : s);
 }
 
+/** Kit names steer clear of the real names imported into the scene (layouts are built without it). */
+void refreshAvoid() { sites::setAvoidNames(names::sceneRealNames(Graph::current()).hashes()); }
+
 SiteRef readSite(Graph& g, Node& mod, const std::string& cmd)
 {
     SiteRef r;
@@ -1021,6 +1024,7 @@ void registerSites(ext::Context& ctx)
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const std::string cmd = "siteCreate";
+            refreshAvoid();
             Graph& g = Graph::current();
             const std::string kindId = a.get<std::string>("kind", "port");
             const sites::Kind* kind = sites::findKind(kindId);
@@ -1160,6 +1164,7 @@ void registerSites(ext::Context& ctx)
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const std::string cmd = "siteEdit";
+            refreshAvoid();
             SiteRef r = findSite(siteArg(a), cmd);
             sites::Spec s = r.spec;
             const json before = r.spec.toJson();
@@ -1231,6 +1236,7 @@ void registerSites(ext::Context& ctx)
                   {"all", "a", T::Bool, false, "Every site in the scene, in one terrain change."}},
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteGround";
+            refreshAvoid();
             if ((a.has("sites") || a.get<bool>("all", false)) && !a.get<bool>("remove", false))
             {
                 std::vector<SiteRef> list;
@@ -1291,6 +1297,7 @@ void registerSites(ext::Context& ctx)
         .flags = {{"slots", "sl", T::Bool, false, "List every slot."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
+            refreshAvoid();
             const SiteRef r = findSite(siteArg(a), "siteInfo");
             return info(r, evaluate(r, "siteInfo"), a.get<bool>("slots", false));
         },
@@ -1308,6 +1315,7 @@ void registerSites(ext::Context& ctx)
         .undoable = false,
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteEnvelopes";
+            refreshAvoid();
             std::vector<SiteRef> list;
             if (a.has("sites"))
                 for (const json& n : a.flags["sites"])
@@ -1343,6 +1351,7 @@ void registerSites(ext::Context& ctx)
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const std::string cmd = "siteBuildings";
+            refreshAvoid();
             std::vector<SiteRef> list;
             for (const json& p : a.positional)
                 if (p.is_string())
@@ -1430,6 +1439,7 @@ void registerSites(ext::Context& ctx)
         .undoable = false,
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteCheck";
+            refreshAvoid();
             const std::vector<SiteRef> everyone = allSites(cmd);
             std::vector<SiteRef> list;
             if (const std::string n = siteArg(a); !n.empty())

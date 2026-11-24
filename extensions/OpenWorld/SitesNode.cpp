@@ -591,7 +591,7 @@ std::shared_ptr<const Layout> layoutFor(const Spec& s)
 {
     static std::mutex lock;
     static std::map<std::string, std::shared_ptr<const Layout>> cache;
-    const std::string key = s.toJson().dump();
+    const std::string key = s.toJson().dump() + "#" + std::to_string(avoidRevision());
     {
         std::lock_guard l(lock);
         if (auto it = cache.find(key); it != cache.end())

@@ -30,8 +30,9 @@ struct Evaluated
 bool evaluatedSite(uint64_t modifier, Evaluated* out);
 void forgetSite(uint64_t modifier);
 
-/** The layout for a spec, cached by its text; throws std::runtime_error for a bad spec. */
+/** The layout for a spec, cached by its text (and the avoided names); throws std::runtime_error for a bad spec. */
 std::shared_ptr<const Layout> layoutFor(const Spec& s);
+
 
 /** An envelope in world space, as Settlement exports them, with the site's own fields. */
 json envelopeJson(const Evaluated& e, size_t index);
