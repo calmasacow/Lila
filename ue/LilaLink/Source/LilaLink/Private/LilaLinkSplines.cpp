@@ -9,6 +9,7 @@
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "Landscape.h"
+#include "LandscapeEditLayer.h"
 #include "LandscapeInfo.h"
 #include "LandscapeSplineActor.h"
 #include "LandscapeSplineControlPoint.h"
@@ -135,6 +136,22 @@ ALandscape* FindLandscape(UWorld* World, const FString& Label)
 		First = First ? First : *It;
 	}
 	return Label.IsEmpty() ? First : nullptr;
+}
+
+/**
+ * Has the landscape redraw its splines into the edit layer reserved for them, the only place splines deform and paint a
+ * landscape. With bAddLayer the layer is added when missing.
+ */
+void UpdateSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::UpdateSplineLayer);
+
+	if (bAddLayer && !Landscape->FindEditLayerOfTypeConst(ULandscapeEditLayerSplines::StaticClass()) &&
+		Landscape->CreateLayer(FName(TEXT("Splines")), ULandscapeEditLayerSplines::StaticClass()) == INDEX_NONE)
+	{
+		Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the splines do not deform it"));
+	}
+	Landscape->RequestSplineLayerUpdate();
 }
 
 ESplineMeshAxis::Type AxisFrom(const FString& Name)
@@ -494,6 +511,8 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	}
 	Component->MarkRenderStateDirty();
 	Component->MarkPackageDirty();
+	// Also without deformTerrain: a re-send that turns it off takes the earlier shape out of the landscape.
+	UpdateSplineLayer(Landscape, bDeform, Warnings);
 	if (!bDeform)
 	{
 		Warnings.Add(TEXT("deformTerrain is off: the splines do not shape the landscape"));
@@ -608,8 +627,15 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 	}
 	FScopedTransaction Transaction(NSLOCTEXT("LilaLink", "RemoveSpline", "Lila: Remove Spline"));
 	bool bRemoved = false;
+	TArray<ALandscape*> Reshaped;
 	if (AActor* Tagged = FindTagged(World, TagFor(Id)))
 	{
+		const ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged);
+		const ULandscapeInfo* Info = SplineActor ? SplineActor->GetLandscapeInfo() : nullptr;
+		if (ALandscape* Landscape = Info ? Info->LandscapeActor.Get() : nullptr)
+		{
+			Reshaped.Add(Landscape);
+		}
 		bRemoved = World->EditorDestroyActor(Tagged, true);
 	}
 	const FString Prefix = LandscapePrefix(Id);
@@ -619,9 +645,19 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 		{
 			const int32 Before = Splines->GetControlPoints().Num();
 			ClearLandscapeSplines(Splines, Prefix);
-			bRemoved |= Splines->GetControlPoints().Num() != Before;
+			if (Splines->GetControlPoints().Num() != Before)
+			{
+				bRemoved = true;
+				Reshaped.AddUnique(*It);
+			}
 			Splines->MarkRenderStateDirty();
 		}
+	}
+	// The removed splines' shape and paint leave the landscape when it redraws its splines layer.
+	TArray<FString> Ignored;
+	for (ALandscape* Landscape : Reshaped)
+	{
+		UpdateSplineLayer(Landscape, /*bAddLayer=*/false, Ignored);
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetBoolField(TEXT("removed"), bRemoved);
