@@ -1,6 +1,7 @@
 #include "ui/PointCloudDisplay.h"
 #include "ui/ViewportWidgetDetail.h"
 
+#include "io/SceneFile.h"
 #include "render/Surface.h"
 #include "scene/LightingChannels.h"
 #include "scene/SceneIndex.h"
@@ -541,6 +542,16 @@ void ViewportWidget::submit()
     syncLookThrough();
     if (!mId)
         return;
+    // A load pumps events; drawing then would evaluate the half-read scene, only for the rest of the load to dirty it again.
+    if (io::loading())
+    {
+        if (!std::exchange(mLoadWaitQueued, true))
+            QTimer::singleShot(100, this, [this] {
+                mLoadWaitQueued = false;
+                submit();
+            });
+        return;
+    }
     render::Renderer::get().submit(mId, buildFrame(nullptr));
 }
 

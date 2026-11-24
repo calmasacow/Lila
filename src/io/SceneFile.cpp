@@ -65,6 +65,7 @@ struct State
     bool modified = false;
     bool autosaveDirty = false;
     bool loading = false;
+    int opening = 0; // load() calls running
     uint64_t cleanStateId = 0;
     bool untracked = false; // changed outside the undo stack, so no undo can return to the saved state
     std::optional<uint64_t> autosavedStateId; // undo state the last autosave wrote, while no untracked edit followed
@@ -448,6 +449,7 @@ void deserialize(const nlohmann::json& doc, const fs::path& sceneDir, double own
         }
         refs::resolvePendingParents(warnings);
 
+        LILA_ZONE_N("load.settings");
         std::vector<NodeId> sel;
         for (const json& n : doc.value("selection", json::array()))
             try
@@ -470,7 +472,10 @@ void deserialize(const nlohmann::json& doc, const fs::path& sceneDir, double own
         scene::camera::migrateNamedSettings(g, scene::renderSettings());
         scene::renderSettingsChanged();
         scene::scripts::fromJson(doc.value("scripts", json::array()));
-        scene::data::fromJson(doc.value("data", json::object()));
+        {
+            LILA_ZONE_N("load.data");
+            scene::data::fromJson(doc.value("data", json::object()));
+        }
         scene::poses::sceneFromJson(doc.value("poses", json::array()));
         scene::picker::sceneFromJson(doc.value("pickers", json::array()));
     }
@@ -688,6 +693,11 @@ void load(const fs::path& path)
 {
     LILA_ZONE();
 
+    struct Opening
+    {
+        Opening() { ++state().opening; }
+        ~Opening() { --state().opening; }
+    } opening;
     const std::string name = path.filename().string();
     progress::Scope scope(loadingVerb() + "...", 10.0, progress::Cancellable);
     scope.setStatus(name);
@@ -741,6 +751,11 @@ void setCurrentPath(const fs::path& path)
     paths::setCurrentSceneDir(path.empty() ? fs::path() : path.parent_path());
     state().title.clear();
     notify();
+}
+
+bool loading()
+{
+    return state().loading || state().opening > 0;
 }
 
 bool modified()
