@@ -22,7 +22,7 @@
 
 namespace
 {
-constexpr int32 Version = 1;
+constexpr int32 Version = 2;
 const TCHAR* VersionTag = TEXT("Lila Building v");
 const TCHAR* InstanceFolder = TEXT("/Game/LilaLink/Buildings");
 
@@ -67,7 +67,7 @@ UMaterialExpressionCustom* Custom(LilaLink::FFunctionGraph& G, const FString& De
 /**
  * MF_LilaBuildingVariation: the building's painted colour (vertex colour RGB, one colour per building and part as Lila's
  * palette picked it) multiplied into a grey base such as the LilaBuilding trim sheet's albedo, and dirt (vertex alpha)
- * laid over it with world-space breakup, heavier near the ground. Drop it into your own material between the base colour
+ * laid over it, broken up by smooth world-space noise (two octaves at DirtScale). Drop it into your own material between the base colour
  * and the output; the generated M_LilaBuilding does exactly that.
  */
 void BuildVariation(UMaterialFunction* Function)
@@ -90,8 +90,18 @@ void BuildVariation(UMaterialFunction* Function)
 	UMaterialExpression* Result = Custom(G, TEXT("palette and dirt"),
 		TEXT("float3 painted = lerp(Base, Base * P.rgb * 1.25, saturate(S));\n"
 			 "float3 q = W / max(Scale, 1.0);\n"
-			 "float n = frac(sin(dot(floor(q), float3(127.1, 311.7, 74.7))) * 43758.5453) * 0.5\n"
-			 "        + frac(sin(dot(floor(q * 2.7 + 13.0), float3(269.5, 183.3, 246.1))) * 43758.5453) * 0.5;\n"
+			 "float n = 0.0;\n"
+			 "for (int o = 0; o < 2; ++o)\n"
+			 "{\n"
+			 "    float3 i = floor(q), f = frac(q);\n"
+			 "    f = f * f * (3.0 - 2.0 * f);\n"
+			 "    float c[8];\n"
+			 "    for (int k = 0; k < 8; ++k)\n"
+			 "        c[k] = frac(sin(dot(i + float3(k & 1, (k >> 1) & 1, k >> 2), float3(127.1, 311.7, 74.7))) * 43758.5453);\n"
+			 "    n += lerp(lerp(lerp(c[0], c[1], f.x), lerp(c[2], c[3], f.x), f.y), lerp(lerp(c[4], c[5], f.x), lerp(c[6], c[7], f.x), f.y), f.z)\n"
+			 "         * (o == 0 ? 0.65 : 0.35);\n"
+			 "    q = q * 2.7 + 13.0;\n"
+			 "}\n"
 			 "float d = saturate(P.a * A * (0.55 + 0.45 * n));\n"
 			 "return float4(lerp(painted, Dirt, d), d);"),
 		CMOT_Float4,

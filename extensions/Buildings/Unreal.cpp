@@ -138,11 +138,21 @@ void registerUnreal(ext::Context& ctx)
                 }
             }
             out["hlods"] = hlods;
-            // The shells' assets: their building slots get their style's instance.
+            // Every asset sent (shells, modules, proxies): their building slots get their style's instance, so modules and
+            // proxies shade like the shell they sit on.
+            std::set<std::string> paths;
+            auto collect = [&paths](const json& sent) {
+                for (const json& grp : sent.value("groups", json::array()))
+                    if (grp.contains("objectPath") && !grp.contains("actorClass") && !grp.contains("unrealMesh"))
+                        paths.insert(grp["objectPath"].get<std::string>());
+            };
+            collect(plan);
+            for (const char* level : {"near", "far"})
+                if (hlods.contains(level))
+                    collect(hlods[level]);
             json assets = json::array();
-            for (const json& grp : plan.value("groups", json::array()))
-                if (grp.contains("objectPath") && !grp.contains("label"))
-                    assets.push_back(grp["objectPath"]);
+            for (const std::string& path : paths)
+                assets.push_back(path);
             auto client = link::Link::get().client();
             link::RpcResult r = client->call("buildingMaterials", {{"instances", instances}, {"assets", assets}}, link::importCallOptions());
             if (!r.ok)
