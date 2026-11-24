@@ -533,7 +533,12 @@ std::string writeNode(const std::string& group, const std::string& name, const s
     }
     std::string mod = buildingsModifier(mesh);
     if (mod.empty())
+    {
         mod = pathOf(ops::execute("gnApply", {{"args", {mesh, kGroupName}}}));
+        // A group can say what level of detail its new cells start at (a world builds far towns straight to HLOD).
+        if (const std::string lod = getString(group + ".buildingsLod"); lod == "near" || lod == "hlod" || lod == "far")
+            setString(mod + ".lod", lod);
+    }
     setString(mod + ".spec", specs.dump());
     setString(mod + ".edits", edits.dump());
     setString(mod + ".cell", cell);
