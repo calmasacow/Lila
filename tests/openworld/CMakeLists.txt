@@ -20,3 +20,5 @@ target_compile_definitions(lila_openworld_tests PRIVATE
     LILA_TEST_TERRAIN_PACKAGE="${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions/Terrain.lilaext"
     LILA_TEST_OPENWORLD_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data")
 add_test(NAME lila_openworld_tests COMMAND lila_openworld_tests)
+# Clipper2 (vendored, from src/curve) trips MSVC unreachable-code warnings when its templates are instantiated.
+target_compile_options(lila_openworld_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4702>)

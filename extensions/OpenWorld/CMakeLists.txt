@@ -19,3 +19,5 @@ foreach(_host lila lilabatch)
         add_dependencies(${_host} lila_openworld_extension)
     endif()
 endforeach()
+# Clipper2 (vendored, from src/curve) trips MSVC unreachable-code warnings when its templates are instantiated.
+target_compile_options(lila_openworld_extension PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4702>)

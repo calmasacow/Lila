@@ -206,7 +206,7 @@ OsmDoc parseOsmDocXml(std::string_view text)
     return d;
 }
 
-OsmDoc readOsmDoc(const std::filesystem::path& path, std::vector<std::string>* notes)
+OsmDoc readOsmDoc(const std::filesystem::path& path, [[maybe_unused]] std::vector<std::string>* notes)
 {
     LILA_ZONE();
 
