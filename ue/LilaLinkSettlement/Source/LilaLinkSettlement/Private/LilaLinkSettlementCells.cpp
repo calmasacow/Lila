@@ -1,5 +1,6 @@
 #include "LilaLinkSettlement.h"
 
+#include "LilaLinkAssets.h"
 #include "LilaLinkMethodRegistry.h"
 
 #include "Components/BoxComponent.h"
@@ -9,13 +10,10 @@
 #include "EngineUtils.h"
 #include "PCGComponent.h"
 #include "PCGDataAsset.h"
-#include "HAL/FileManager.h"
-#include "UObject/Linker.h"
 #include "PCGGraph.h"
 #include "ProfilingDebugging/CpuProfilerTrace.h"
 #include "ScopedTransaction.h"
 #include "Misc/PackageName.h"
-#include "ObjectTools.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetRegistry/IAssetRegistry.h"
 #include "Engine/Level.h"
@@ -380,21 +378,7 @@ TSharedPtr<FJsonValue> RemoveSettlementCells(const TSharedPtr<FJsonObject>& Para
 			Deleted.Add(MakeShared<FJsonValueString>(Path));
 		}
 	}
-	const int32 AssetsDeleted = Assets.Num() > 0 ? ObjectTools::ForceDeleteObjects(Assets, false) : 0;
-	// A file the delete left on disk (seen for data assets loaded just for it) goes directly: nothing uses it now.
-	for (const TSharedPtr<FJsonValue>& V : Deleted)
-	{
-		FString File;
-		if (FPackageName::DoesPackageExist(V->AsString(), &File))
-		{
-			if (UPackage* Package = FindPackage(nullptr, *V->AsString()))
-			{
-				ResetLoaders(Package);
-			}
-			IFileManager::Get().Delete(*File, /*RequireExists=*/false, /*EvenReadOnly=*/true);
-			IAssetRegistry::GetChecked().ScanModifiedAssetFiles({File});
-		}
-	}
+	const int32 AssetsDeleted = Assets.Num() > 0 ? LilaLink::ForceDeleteAssets(Assets) : 0;
 	UE_LOG(LogLilaLinkSettlementCells, Log, TEXT("removeSettlementCells: %s: %d cells, %d data assets"), *Id, Removed, AssetsDeleted);
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), Removed);

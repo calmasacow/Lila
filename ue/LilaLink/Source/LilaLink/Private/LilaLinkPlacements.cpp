@@ -2,6 +2,7 @@
 
 #include "LilaInstanceData.h"
 #include "LilaSlotTable.h"
+#include "LilaLinkAssets.h"
 #include "LilaLinkComponents.h"
 #include "LilaLinkLog.h"
 
@@ -1753,7 +1754,7 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 			Assets.Add(Mesh);
 			Deleted.Add(MakeShared<FJsonValueString>(Mesh->GetOutermost()->GetName()));
 		}
-		Out->SetNumberField(TEXT("meshesDeleted"), Assets.IsEmpty() ? 0 : ObjectTools::ForceDeleteObjects(Assets, false));
+		Out->SetNumberField(TEXT("meshesDeleted"), Assets.IsEmpty() ? 0 : LilaLink::ForceDeleteAssets(Assets));
 		Out->SetArrayField(TEXT("meshes"), Deleted);
 	}
 	return Obj(Out);
@@ -2158,12 +2159,13 @@ int32 LilaLink::DeleteUnusedDataLayers(UWorld* World, const TArray<const UDataLa
 			Files.Add(const_cast<UDataLayerAsset*>(Asset));
 		}
 	}
-	if (!Files.IsEmpty() && ObjectTools::ForceDeleteObjects(Files, /*ShowConfirmation=*/false) < Files.Num())
+	if (!Files.IsEmpty() && LilaLink::ForceDeleteAssets(Files) < Files.Num())
 	{
 		OutErrors.Add(TEXT("some data layer assets could not be deleted; delete them in the Content Browser"));
 	}
 	return Removed;
 }
+
 
 void LilaLink::AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods)
 {

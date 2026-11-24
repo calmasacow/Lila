@@ -1,6 +1,7 @@
 #include "LilaLinkZones.h"
 
 #include "LilaLinkLog.h"
+#include "LilaLinkAssets.h"
 #include "LilaLinkPlacements.h"
 #include "LilaZone.h"
 
@@ -15,7 +16,6 @@
 #include "Engine/Polys.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
-#include "HAL/FileManager.h"
 #include "Misc/Base64.h"
 #include "Misc/Crc.h"
 #include "Misc/PackageName.h"
@@ -645,15 +645,7 @@ TSharedPtr<FJsonValue> RemoveZones(const TSharedPtr<FJsonObject>& Params, FStrin
 			}
 			else if (UObject* Asset = LoadObject<UObject>(nullptr, *(PackageName + TEXT(".") + AssetName), nullptr, LOAD_NoWarn | LOAD_Quiet))
 			{
-				bAssetDeleted = ObjectTools::ForceDeleteObjects({Asset}, /*ShowConfirmation=*/false) > 0;
-				// After the data layer assets' delete reset the undo buffer mid-transaction, this one unloads the asset but
-				// leaves its file.
-				FString File;
-				if (bAssetDeleted && !FindPackage(nullptr, *PackageName) && FPackageName::DoesPackageExist(PackageName, &File))
-				{
-					bAssetDeleted = IFileManager::Get().Delete(*File, /*RequireExists=*/false, /*EvenReadOnly=*/true);
-					IAssetRegistry::GetChecked().ScanModifiedAssetFiles({File});
-				}
+				bAssetDeleted = LilaLink::ForceDeleteAssets({Asset}) > 0;
 				if (!bAssetDeleted)
 				{
 					Errors.Add(PackageName + TEXT(" could not be deleted"));
