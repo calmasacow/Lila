@@ -1,5 +1,6 @@
 #include "slots/Slots.h"
 
+#include "core/Log.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "scene/Diagnostics.h"
@@ -22,6 +23,7 @@ std::vector<NodeId> publishedNodes();
 std::vector<Slot> publishedBy(NodeId n);
 std::vector<Slot> withPins(std::vector<Slot> slots, const State& st, std::vector<std::string>* conflicts);
 Resolved resolveImpl(const Slot& s, const State& st, bool mainThread);
+std::vector<std::string> poolForTag(const std::string& tags, bool mainThread);
 } // namespace detail
 
 namespace
@@ -428,6 +430,55 @@ void runValidator()
     }
 }
 
+/** Library items the scene names: in rules, overrides, pins and the slots' own payloads, pools and pool tags included. */
+std::set<std::string> namedItems(Graph& g)
+{
+    std::set<std::string> out;
+    auto take = [&](const Payload& p) {
+        if (!p.item.empty())
+            out.insert(p.item);
+        out.insert(p.pool.begin(), p.pool.end());
+        if (!p.poolTag.empty())
+            for (const std::string& id : detail::poolForTag(p.poolTag, true))
+                out.insert(id);
+    };
+    const StatePtr st = state();
+    for (const Rule& r : st->rules)
+        if (r.enabled)
+            take(r.payload);
+    for (const auto& [id, o] : st->overrides)
+        take(o.payload);
+    for (const auto& [key, pin] : st->pins)
+        for (const PinnedSlot& ps : pin.slots)
+            take(ps.slot.payload);
+    for (const Slot& s : collect(g))
+        take(s.payload);
+    return out;
+}
+
+/** The named items not loaded in this scene yet (asked of the item provider without loading). */
+std::vector<std::string> unloadedItems(Graph& g)
+{
+    std::vector<std::string> out;
+    MeshProvider* p = meshProviders().find("item");
+    if (!p)
+        return out;
+    for (const std::string& id : namedItems(g))
+    {
+        std::string why;
+        try
+        {
+            if (!(*p)(g, id, false, why))
+                out.push_back(id);
+        }
+        catch (const std::exception&)
+        {
+            out.push_back(id);
+        }
+    }
+    return out;
+}
+
 /** Builds every visual the scene's slots resolve to, loading what it must (inside the calling command's undo step). */
 void prewarm(Graph& g)
 {
@@ -445,6 +496,24 @@ void prewarm(Graph& g)
 
 namespace detail
 {
+bool scheduleItemLoad()
+{
+    if (!ops::find("slotLoadItems") || unloadedItems(Graph::current()).empty())
+        return false;
+    try
+    {
+        const json r = ops::execute("slotLoadItems", json::object());
+        log::info("Slots: loaded {} library item(s) the scene's slots name", r["loaded"].size());
+        for (const json& m : r["missing"])
+            log::warn("Slots: library item {} not loaded: {}", m["item"].get<std::string>(), m["why"].get<std::string>());
+    }
+    catch (const std::exception& e)
+    {
+        log::warn("Slots: library items the scene names were not loaded: {}", e.what());
+    }
+    return true;
+}
+
 void registerCommands()
 {
     using T = ArgType;
@@ -762,6 +831,47 @@ void registerCommands()
             return out;
         },
         .examples = {"slotPublish('shopSlots', slots=[{'owner': 'lot/7', 'path': 'f0/door', 'type': 'door.shop', 'position': [0, 0, 500]}])"},
+    });
+
+    ops::registerCommand({
+        .name = "slotLoadItems",
+        .doc = "Load the Set Dressing library items the scene's slots name (rules, overrides, pins, pools, pool tags and the slots' own "
+               "payloads) so they draw as themselves rather than placeholders. Runs by itself when a scene opens with named items "
+               "not loaded yet. Returns {loaded: [item ids], missing: [{item, why}]} (missing: no such library item, or its model "
+               "brought in nothing).",
+        .run = [](const Args&) -> json {
+            Graph& g = Graph::current();
+            json loaded = json::array(), missing = json::array();
+            MeshProvider* p = meshProviders().find("item");
+            const std::vector<std::string> todo = unloadedItems(g);
+            if (!todo.empty() && !p)
+                throw CommandError("slotLoadItems: nothing provides library items (load the Set Dressing extension)");
+            for (const std::string& id : todo)
+            {
+                std::string why;
+                std::shared_ptr<const geo::Mesh> mesh;
+                try
+                {
+                    mesh = (*p)(g, id, true, why);
+                }
+                catch (const std::exception& e)
+                {
+                    why = e.what();
+                }
+                if (mesh)
+                    loaded.push_back(id);
+                else
+                    missing.push_back({{"item", id}, {"why", why.empty() ? "it gave no mesh" : why}});
+            }
+            if (!loaded.empty())
+            {
+                clearVisuals();
+                prewarm(g);
+                refresh();
+            }
+            return {{"loaded", loaded}, {"missing", missing}};
+        },
+        .examples = {"slotLoadItems()"},
     });
 
     scene::diagnostics::validators().put(kValidator, {.doc = "Slots: orphaned overrides, pin conflicts, duplicate ids, unowned Slots nodes and payloads drawn as placeholders.",

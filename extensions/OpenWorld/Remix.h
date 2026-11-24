@@ -17,6 +17,11 @@
  * cut roads re-routed, rivers re-solved to drain and coastline re-merged. Everything goes through one map, so heights,
  * features and land cover stay consistent. Pure functions: no scene needed (the commands and node wrap them).
  */
+namespace terrain
+{
+struct Dem;
+}
+
 namespace openworld
 {
 using terrain::Heightfield;
@@ -29,11 +34,18 @@ struct SourceData
     Heightfield hf;
     OsmDoc osm;
     bool hasDem = false;
+    /** The source's bathymetry grid, when it has one. */
+    std::shared_ptr<const terrain::Dem> bathymetry;
+    /** 1 where the elevation leaves the sea flat (low ground joined to the data's edge), on hf's grid; empty for none. */
+    std::vector<float> flatSea;
     std::vector<std::string> notes;
 };
 
-/** Reads a source's files (cached by path and modification time). Relative paths are under the workspace. Throws std::runtime_error. */
-std::shared_ptr<const SourceData> loadSource(const Source& s);
+/**
+ * Reads a source's files (cached by path and modification time). Relative paths are under the workspace. landTolerance
+ * decides what elevation counts as flat sea (bathymetry.landTolerance). Throws std::runtime_error.
+ */
+std::shared_ptr<const SourceData> loadSource(const Source& s, double landTolerance = 50.0);
 
 /** A road or coastline end the remix cut, and what became of it. */
 struct CutEnd
@@ -60,7 +72,7 @@ struct RiverState
 
 struct RemixResult
 {
-    /** The remixed map: heights cm, land cover masks, remixSeam (0 to 1 seam bands) and remixHole (filled holes). */
+    /** The remixed map: heights cm, land cover masks, remixSeam (0 to 1 seam bands), remixHole (filled holes) and seabed (1 where the sea floor was laid). */
     Heightfield after;
     /** The base map on the same grid: sources placed and scaled, no regions or pins. */
     Heightfield before;
@@ -74,6 +86,8 @@ struct RemixResult
     Vec2 lo{0.0}, hi{0.0};
     /** Each source's outline on the base map (empty for one that could not be read). */
     std::vector<Polygon> footprints;
+    /** How far in from a source's edge it fades in, cm on the base map. */
+    double feather = 0.0;
 
     std::vector<CutEnd> roadEnds;
     std::vector<CutEnd> coastEnds;
@@ -110,6 +124,15 @@ std::shared_ptr<const RemixResult> cachedRemix(const RemixSpec& spec);
  * overlap, folds in the warp, and sources that could not be read. Returns {ok, counts, issues: [{kind, id, at, what}]}.
  */
 nlohmann::json checkRemix(const RemixSpec& spec, const RemixResult& r);
+
+/**
+ * Moves an extract of a source's own OSM (terrain::extractOsm, real latitude and longitude) onto the remixed map's latitude
+ * and longitude, every kind (roads, rivers, piers, quays, dams, land cover, buildings with holes and parts, places and
+ * points of interest) through terrain::forEachPoint, the way the remix moved the ground: each element whole with the piece
+ * holding most of its points (a cut or duplicated region's rigid motion, else the warp), so a building and the shop in it
+ * move together. Elements on nothing (deleted, off the source) are dropped; returns how many. Throws std::runtime_error.
+ */
+size_t remixExtract(const RemixSpec& spec, const RemixResult& r, std::string_view source, terrain::OsmExtract& x);
 
 /** Where a source's local point (cm) lands on the base map, and back. */
 Vec2 placeOnBase(const Source& s, double horizontal, Vec2 local);

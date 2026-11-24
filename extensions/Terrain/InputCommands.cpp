@@ -1043,24 +1043,38 @@ json runImportOsm(const Args& a)
             real->add(n, "osm");
     names::NameBook book(culture, real);
     size_t named = 0;
+    auto streetClassOf = [](const OsmFeature& f) {
+        const std::string& c = f.cls;
+        return f.kind == OsmFeatureKind::Path                                                         ? 4
+               : c.starts_with("motorway") || c.starts_with("trunk") || c.starts_with("primary") ? 0
+               : c.starts_with("secondary")                                                  ? 1
+               : c == "service" || c == "living_street"                                       ? 3
+                                                                                              : 2;
+    };
+    auto featureKey = [](const OsmFeature& f) { return names::textKey(std::string(osmFeatureKindNames()[size_t(f.kind)]) + "|" + names::normalize(f.name)); };
+    {
+        // One name per real street: its ways can carry several classes, so it takes its highest, and streets are named in
+        // key order, so the name doesn't depend on which way the data lists first. Settlement reads these names back.
+        std::map<uint64_t, int> streets;
+        for (const OsmFeature& f : x->features)
+            if (!f.name.empty() && (f.kind == OsmFeatureKind::Road || f.kind == OsmFeatureKind::Path))
+            {
+                const auto [it, fresh] = streets.try_emplace(featureKey(f), streetClassOf(f));
+                it->second = std::min(it->second, streetClassOf(f));
+            }
+        for (const auto& [key, cls] : streets)
+            book.street(cls, key);
+    }
     auto osmKey = [](char type, int64_t id) { return std::string(1, type) + std::to_string(id); };
     auto featureName = [&](const OsmFeature& f) -> std::string {
         if (f.name.empty())
             return {};
         ++named;
-        const uint64_t key = names::textKey(std::string(osmFeatureKindNames()[size_t(f.kind)]) + "|" + names::normalize(f.name));
+        const uint64_t key = featureKey(f);
         switch (f.kind)
         {
         case OsmFeatureKind::Road:
-        {
-            const std::string& c = f.cls;
-            const int cls = c.starts_with("motorway") || c.starts_with("trunk") || c.starts_with("primary") ? 0
-                            : c.starts_with("secondary")                                                  ? 1
-                            : c == "service" || c == "living_street"                                       ? 3
-                                                                                                           : 2;
-            return book.street(cls, key);
-        }
-        case OsmFeatureKind::Path: return book.street(4, key);
+        case OsmFeatureKind::Path: return book.street(streetClassOf(f), key);
         case OsmFeatureKind::River: return book.place(names::Kind::River, "", key);
         case OsmFeatureKind::Stream: return book.place(names::Kind::Stream, "", key);
         case OsmFeatureKind::Lake: return book.place(f.cls == "reservoir" ? names::Kind::Reservoir : names::Kind::Lake, "", key);

@@ -18,6 +18,8 @@ struct Work
     double feather = 1500.0;
     std::shared_ptr<Warp> warp;
     InverseGrid inverse;
+    /** The sea floor on the base map (output grid, mask seabed), empty with bathymetry off. */
+    Heightfield seaFloor;
     /** Per region: where it ends up on the output map. */
     std::vector<Polygon> targets;
     std::shared_ptr<RemixResult> out;

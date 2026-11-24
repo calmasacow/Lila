@@ -90,6 +90,9 @@ struct Source
     std::string dem;
     std::string osm;
     std::string landcover;
+    /** A bathymetry grid (GEBCO GeoTIFF, or anything Terrain reads as elevation) around the place: shapes the sea floor
+     * where this source's elevation leaves the sea flat and where no source covers, near it. */
+    std::string bathymetry;
     /** [west, south, east, north] degrees: the area remixFetch downloads; also crops the data. Empty for the files' own. */
     std::vector<double> bbox;
     /** Where the source's centre lands on the base map, cm, and its turn. */
@@ -114,7 +117,7 @@ struct RemixSpec
         Vec2 size{0.0};
         /** 0 takes the finest source's cell times the horizontal scale. */
         double cell = 0.0;
-        /** Height where no source covers the map, cm (sea floor). */
+        /** Sea floor height where no source covers the map, cm, used only with bathymetry off. */
         double seaDepth = -3000.0;
         int maxResolution = 2049;
     } map;
@@ -145,6 +148,14 @@ struct RemixSpec
         bool coast = true;
         uint32_t seed = 0;
     } seams;
+
+    /**
+     * The sea floor (Terrain's bathymetry): {enabled (default true), shoreSlope, blendWidth, smoothing, depthScale, shelfDepth,
+     * shelfWidth, dropDepth, slopeWidth, minDepth, landTolerance}, lengths cm on the map. Where no source covers, and where a
+     * source's elevation leaves the sea flat, the floor is the sources' bathymetry grids blended in from a shelf profile.
+     */
+    json bathymetry = json::object();
+    bool bathymetryOn() const { return bathymetry.value("enabled", true); }
 
     /** Overlay and preview settings the UI keeps with the spec: {overlay: bool, show: "after"|"before"}. */
     json view = json::object();

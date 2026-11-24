@@ -304,11 +304,12 @@ std::vector<ImportedStreet> streetsFrom(const json& j, const std::string& w)
     std::vector<ImportedStreet> out;
     for (const json& s : j)
     {
-        onlyKeys(s, w, {"points", "class", "name"});
+        onlyKeys(s, w, {"points", "class", "name", "id"});
         ImportedStreet x;
         x.pts = points(s, "points", w, 2);
         x.cls = classFromOsm(text(s, "class", w));
         x.name = text(s, "name", w);
+        x.osmId = text(s, "id", w);
         out.push_back(std::move(x));
     }
     return out;

@@ -82,3 +82,22 @@ for k in range(4):
 o.way([(0.3, 0.3), (0.7, 0.3), (0.7, 0.7), (0.3, 0.7)], {"landuse": "residential"}, closed=True)
 o.node(0.5, 0.5, {"amenity": "townhall", "name": "Palacio"})
 o.write("inland.json")
+
+# harbour: W1 kinds over the coast's area: a courtyard building (multipolygon) with a restaurant in it, a domed tower
+# (building with a building:part), a park, a pier, a quay, a dam across the river and a large farmland crossing the
+# region the tests cut.
+o = Osm(X0, Y0, D * (N - 1))
+outer = o.way([(0.55, 0.30), (0.62, 0.30), (0.62, 0.37), (0.55, 0.37)], {}, closed=True)
+inner = o.way([(0.57, 0.32), (0.60, 0.32), (0.60, 0.35), (0.57, 0.35)], {}, closed=True)
+o.next += 1
+o.els.append({"type": "relation", "id": o.next, "members": [{"type": "way", "ref": outer, "role": "outer"}, {"type": "way", "ref": inner, "role": "inner"}],
+              "tags": {"type": "multipolygon", "building": "civic", "name": "Palacio Real"}})
+o.node(0.56, 0.31, {"amenity": "restaurant", "name": "Fonda Real"})
+o.way([(0.64, 0.30), (0.68, 0.30), (0.68, 0.34), (0.64, 0.34)], {"building": "church", "name": "Templo"}, closed=True)
+o.way([(0.65, 0.31), (0.66, 0.31), (0.66, 0.32), (0.65, 0.32)], {"building:part": "yes", "roof:shape": "dome", "height": "30"}, closed=True)
+o.way([(0.64, 0.36), (0.68, 0.36), (0.68, 0.39), (0.64, 0.39)], {"leisure": "park", "name": "Parque Real"}, closed=True)
+o.way([(0.29, 0.62), (0.33, 0.62)], {"man_made": "pier", "name": "Muelle Real"})
+o.way([(0.31, 0.40), (0.31, 0.46)], {"man_made": "quay"})
+o.way([(0.80, 0.72), (0.80, 0.78)], {"waterway": "dam", "name": "Presa Real"})
+o.way([(0.40, 0.05), (0.90, 0.05), (0.90, 0.45), (0.40, 0.45)], {"landuse": "farmland"}, closed=True)
+o.write("harbour.json")

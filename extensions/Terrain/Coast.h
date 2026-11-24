@@ -451,6 +451,8 @@ bool publishedBathymetry(uint64_t modifier, const std::string& node, BathymetryR
 /** The bathymetry, dam and coast nodes, their commands, spec step, Level menu and toolkit entries. */
 void registerCoast(lila::ext::Context& ctx);
 void registerCoastUi(lila::ext::Context& ctx);
+/** Draw Channel, Draw Dam and Draw Airstrip: viewport tools that click the feature onto the terrain. */
+void registerCoastTools(lila::ext::Context& ctx);
 /** terrainCheck's coast issues (waterCheck's) for a terrain; empty when it has no coast. */
 nlohmann::json coastIssues(const std::string& terrain);
 /** Writes <name>_coast.json and <name>_routes.json next to a terrain export; null when the terrain has no coast. */

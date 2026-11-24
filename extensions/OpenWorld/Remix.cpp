@@ -3,6 +3,7 @@
 
 #include "RemixWork.h"
 
+#include "Coast.h"
 #include "Erosion.h"
 #include "Inputs.h"
 #include "LandCover.h"
@@ -91,11 +92,74 @@ terrain::Dem cropDem(const terrain::Dem& d, const std::vector<double>& bbox)
             c.metres[size_t(y) * c.width + x] = d.metres[size_t(y + y0) * d.width + x + x0];
     return c;
 }
+
+/** Ground within tolerance of sea level and joined to the data's edge through such ground: sea a land DEM leaves flat. */
+std::vector<float> flatSeaOf(const Heightfield& h, double tolerance)
+{
+    std::vector<float> out(h.size(), 0.0f);
+    std::deque<size_t> open;
+    auto push = [&](int x, int z) {
+        const size_t i = h.index(x, z);
+        if (out[i] == 0.0f && std::abs(h.heights[i]) <= tolerance)
+        {
+            out[i] = 1.0f;
+            open.push_back(i);
+        }
+    };
+    for (int x = 0; x < h.nx; ++x)
+        push(x, 0), push(x, h.nz - 1);
+    for (int z = 0; z < h.nz; ++z)
+        push(0, z), push(h.nx - 1, z);
+    while (!open.empty())
+    {
+        const size_t i = open.front();
+        open.pop_front();
+        const int x = int(i % size_t(h.nx)), z = int(i / size_t(h.nx));
+        if (x > 0)
+            push(x - 1, z);
+        if (x + 1 < h.nx)
+            push(x + 1, z);
+        if (z > 0)
+            push(x, z - 1);
+        if (z + 1 < h.nz)
+            push(x, z + 1);
+    }
+    bool any = false;
+    for (float v : out)
+        any = any || v > 0.0f;
+    return any ? out : std::vector<float>();
+}
+
+/** A bathymetry grid's height at a latitude and longitude, metres; NaN outside it or in a void. */
+double gridHeight(const terrain::Dem& g, LatLon ll)
+{
+    const double dx = g.dx != 0.0 ? g.dx : 1.0 / terrain::kGebcoPerDegree, dy = g.dy != 0.0 ? g.dy : 1.0 / terrain::kGebcoPerDegree;
+    double cx, cy;
+    if (g.geographic)
+    {
+        cx = (ll.lon - g.x0) / dx;
+        cy = (g.y0 - ll.lat) / dy;
+    }
+    else
+    {
+        bool south = false;
+        const int zone = terrain::utmZoneOfEpsg(g.epsg, &south);
+        const glm::dvec2 en = terrain::latLonToUtm(ll, zone ? zone : terrain::utmZone(ll), south);
+        cx = (en.x - g.x0) / dx;
+        cy = (g.y0 - en.y) / dy;
+    }
+    if (!(cx >= 0.0 && cy >= 0.0 && cx <= g.width - 1 && cy <= g.height - 1))
+        return std::numeric_limits<double>::quiet_NaN();
+    const int x0 = std::min(int(cx), g.width - 2), y0 = std::min(int(cy), g.height - 2);
+    const double fx = cx - x0, fy = cy - y0;
+    auto at = [&](int x, int y) { return double(g.metres[size_t(y) * size_t(g.width) + size_t(x)]); };
+    return (at(x0, y0) * (1 - fx) + at(x0 + 1, y0) * fx) * (1 - fy) + (at(x0, y0 + 1) * (1 - fx) + at(x0 + 1, y0 + 1) * fx) * fy;
+}
 } // namespace
 
 // ---------------------------------------------------------------------------------------------------- sources
 
-std::shared_ptr<const SourceData> loadSource(const Source& s)
+std::shared_ptr<const SourceData> loadSource(const Source& s, double landTolerance)
 {
     LILA_ZONE();
 
@@ -108,7 +172,8 @@ std::shared_ptr<const SourceData> loadSource(const Source& s)
     static std::map<Key, std::shared_ptr<const SourceData>> cache;
     static std::deque<Key> order;
     std::string key = s.dem + "|" + std::to_string(stampOf(s.dem)) + "|" + s.osm + "|" + std::to_string(stampOf(s.osm)) + "|" + s.landcover + "|" +
-                      std::to_string(stampOf(s.landcover));
+                      std::to_string(stampOf(s.landcover)) + "|" + s.bathymetry + "|" + std::to_string(stampOf(s.bathymetry)) + "|" +
+                      std::to_string(landTolerance);
     for (double v : s.bbox)
         key += "|" + std::to_string(v);
     {
@@ -143,6 +208,7 @@ std::shared_ptr<const SourceData> loadSource(const Source& s)
         terrain::DemOptions o;
         out->hf = terrain::demToTerrain(std::move(dem), o, terrain::ProjectionKind::Local, 0, true, &out->geo);
         out->hasDem = true;
+        out->flatSea = flatSeaOf(out->hf, landTolerance);
     }
     else
     {
@@ -169,6 +235,17 @@ std::shared_ptr<const SourceData> loadSource(const Source& s)
         out->hf.heights.assign(out->hf.size(), 100.0f);
         out->geo = localGeoref(centre, Vec2(0.0));
         out->notes.push_back("source " + s.id + ": no elevation file; flat ground at 1 m");
+    }
+    if (!s.bathymetry.empty())
+    {
+        const fs::path p = resolved(s.bathymetry);
+        if (!fs::exists(p))
+            throw std::runtime_error("source " + s.id + ": no bathymetry file " + lila::paths::toUtf8(p));
+        auto grid = std::make_shared<terrain::Dem>(terrain::readDem(p));
+        bool south = false;
+        if (grid->width < 2 || grid->height < 2 || (!grid->geographic && terrain::utmZoneOfEpsg(grid->epsg, &south) == 0))
+            throw std::runtime_error("source " + s.id + ": " + p.filename().string() + " is not a geographic or UTM grid; bathymetry needs one");
+        out->bathymetry = std::move(grid);
     }
     if (!s.landcover.empty())
     {
@@ -296,6 +373,8 @@ struct MaskSet
 {
     std::vector<std::string> names;
     std::vector<bool> code;
+    /** The seabed mask's index (laid by the remix, not read from sources), or -1. */
+    int seabed = -1;
     /** [source][mask] the source's values, or null. */
     std::vector<std::vector<const std::vector<float>*>> of;
 };
@@ -309,9 +388,13 @@ MaskSet masksOf(const Work& w)
             for (const auto& [n, v] : d->hf.masks)
                 if (n != "voids")
                     names.insert(n);
+    if (!w.seaFloor.empty())
+        names.insert("seabed");
     m.names.assign(names.begin(), names.end());
     for (const std::string& n : m.names)
         m.code.push_back(n == kCodeMask);
+    if (!w.seaFloor.empty())
+        m.seabed = int(std::find(m.names.begin(), m.names.end(), "seabed") - m.names.begin());
     m.of.resize(w.data.size());
     for (size_t s = 0; s < w.data.size(); ++s)
         for (const std::string& n : m.names)
@@ -326,13 +409,16 @@ struct Sample
     bool covered = false;
 };
 
-/** The base map at b: sources blended in order (later on top) over the sea floor. */
+/** The base map at b: sources blended in order (later on top) over the sea floor; flat sea in a source takes the floor too. */
 Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
 {
     Sample out;
-    out.height = w.spec.map.seaDepth;
+    const bool floor = !w.seaFloor.empty();
+    const double floorHeight = floor ? w.seaFloor.heightAt(b.x, b.y) : w.spec.map.seaDepth;
+    const double floorMask = floor ? bilinear(*w.seaFloor.findMask("seabed"), w.seaFloor, b) : 0.0;
+    out.height = floorHeight;
     for (size_t k = 0; k < m.names.size(); ++k)
-        masks[k] = 0.0f;
+        masks[k] = int(k) == m.seabed ? float(floorMask) : 0.0f;
     bool under = false;
     for (size_t s = 0; s < w.data.size(); ++s)
     {
@@ -341,10 +427,18 @@ Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
             continue;
         const Heightfield& h = w.data[s]->hf;
         const Vec2 l = baseToSource(w.spec.sources[s], w.spec.horizontal, b);
-        const double hs = h.heightAt(l.x, l.y) * w.spec.vertical;
+        double hs = h.heightAt(l.x, l.y) * w.spec.vertical;
+        const double flat = floor && !w.data[s]->flatSea.empty() ? bilinear(w.data[s]->flatSea, h, l) : 0.0;
+        if (flat > 0.0)
+            hs += (std::min(hs, floorHeight) - hs) * flat;
         out.height += (hs - out.height) * wt;
         for (size_t k = 0; k < m.names.size(); ++k)
         {
+            if (int(k) == m.seabed)
+            {
+                masks[k] = float(masks[k] + (flat * floorMask - masks[k]) * wt);
+                continue;
+            }
             const std::vector<float>* v = m.of[s][k];
             if (m.code[k])
             {
@@ -590,6 +684,83 @@ int erodeSeams(const RemixSpec& spec, Heightfield& h)
 }
 } // namespace
 
+/**
+ * The sea floor on the base map (Terrain's bathymetry): land is what the sources make above sea level, sea the rest; the
+ * sources' bathymetry grids, resampled through their placement, are blended in from the shelf profile. Into w.seaFloor.
+ */
+void layBathymetry(Work& w, RemixResult& out, const Heightfield& grid)
+{
+    LILA_ZONE();
+
+    if (!w.spec.bathymetryOn())
+    {
+        out.stats["bathymetry"] = {{"source", "flat"}, {"seaDepth", w.spec.map.seaDepth}};
+        out.notes.push_back("bathymetry off: the sea floor is flat at " + std::to_string(int(std::round(w.spec.map.seaDepth))) + " cm where no source covers");
+        return;
+    }
+    Heightfield sf;
+    sf.nx = grid.nx, sf.nz = grid.nz, sf.cell = grid.cell, sf.origin = grid.origin;
+    sf.heights.assign(sf.size(), 0.0f);
+    bool anyGrid = false;
+    for (const auto& d : w.data)
+        anyGrid = anyGrid || (d && d->bathymetry);
+    terrain::Dem g;
+    if (anyGrid)
+    {
+        g.width = sf.nx, g.height = sf.nz, g.geographic = true, g.epsg = 4326;
+        const LatLon nw = out.geo.toGeographic(sf.origin);
+        g.x0 = nw.lon, g.y0 = nw.lat;
+        g.dx = sf.cell * 0.01 / out.geo.mx, g.dy = sf.cell * 0.01 / out.geo.my;
+        g.metres.assign(sf.size(), std::numeric_limits<float>::quiet_NaN());
+    }
+    tbb::parallel_for(0, sf.nz, [&](int z) {
+        for (int x = 0; x < sf.nx; ++x)
+        {
+            const Vec2 b = sf.samplePos(x, z);
+            const size_t i = sf.index(x, z);
+            double height = 0.0;
+            for (size_t s = 0; s < w.data.size(); ++s)
+            {
+                const double wt = w.weight(s, b);
+                if (wt <= 0.0)
+                    continue;
+                const Heightfield& h = w.data[s]->hf;
+                const Vec2 l = baseToSource(w.spec.sources[s], w.spec.horizontal, b);
+                double hs = h.heightAt(l.x, l.y) * w.spec.vertical;
+                if (!w.data[s]->flatSea.empty())
+                    hs *= 1.0 - bilinear(w.data[s]->flatSea, h, l);
+                height += (hs - height) * wt;
+            }
+            sf.heights[i] = float(height);
+            if (!anyGrid)
+                continue;
+            // Later sources win, as their elevation does.
+            for (size_t s = w.data.size(); s-- > 0;)
+                if (w.data[s] && w.data[s]->bathymetry)
+                {
+                    const Vec2 l = baseToSource(w.spec.sources[s], w.spec.horizontal, b);
+                    const double v = gridHeight(*w.data[s]->bathymetry, w.data[s]->geo.toGeographic(l));
+                    if (!std::isnan(v))
+                    {
+                        g.metres[i] = float(v * w.spec.vertical);
+                        break;
+                    }
+                }
+        }
+    });
+    terrain::BathymetrySpec bs = terrain::BathymetrySpec::fromJson(w.spec.bathymetry);
+    bs.file.clear();
+    bs.seaLevel = 0.0;
+    const terrain::BathymetryResult r = terrain::applyBathymetry(sf, bs, anyGrid ? &g : nullptr, anyGrid ? &out.geo : nullptr);
+    out.stats["bathymetry"] = {{"source", r.source},      {"seaSamples", r.seaSamples}, {"gridSamples", r.gridSamples},
+                               {"maxDepth", r.maxDepth}, {"meanDepth", r.meanDepth},   {"grids", anyGrid}};
+    if (!anyGrid && r.seaSamples > 0)
+        out.notes.push_back("bathymetry: no source has a bathymetry grid; the sea floor is the shelf profile");
+    for (const std::string& n : r.notes)
+        out.notes.push_back("bathymetry: " + n);
+    w.seaFloor = std::move(sf);
+}
+
 // ---------------------------------------------------------------------------------------------------- run
 
 std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o)
@@ -612,7 +783,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
         std::shared_ptr<const SourceData> d;
         try
         {
-            d = loadSource(s);
+            d = loadSource(s, spec.bathymetry.value("landTolerance", 50.0));
         }
         catch (const std::exception& e)
         {
@@ -718,10 +889,14 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
         }
     const double falloff = spec.warp.falloff > 0.0 ? spec.warp.falloff : 0.25 * std::max(size.x, size.y);
     out.footprints = w.footprints;
+    out.feather = w.feather;
     w.warp = std::make_shared<Warp>(handles, spec.pins, falloff, spec.warp.maxSteps, out.lo, out.hi);
     out.warp = w.warp;
     w.inverse = InverseGrid(*w.warp, out.lo, out.hi, std::min(std::max(h.nx, h.nz), 257), rigid);
     timing["warp"] = ms();
+
+    layBathymetry(w, out, h);
+    timing["bathymetry"] = ms();
 
     // Background and base map.
     const MaskSet m = masksOf(w);
@@ -873,7 +1048,8 @@ std::shared_ptr<const RemixResult> cachedRemix(const RemixSpec& spec)
     static std::list<std::pair<std::string, std::shared_ptr<const RemixResult>>> cache;
     std::string key = toJson(spec).dump();
     for (const Source& s : spec.sources)
-        key += "|" + std::to_string(stampOf(s.dem)) + "|" + std::to_string(stampOf(s.osm)) + "|" + std::to_string(stampOf(s.landcover));
+        key += "|" + std::to_string(stampOf(s.dem)) + "|" + std::to_string(stampOf(s.osm)) + "|" + std::to_string(stampOf(s.landcover)) + "|" +
+               std::to_string(stampOf(s.bathymetry));
     {
         std::lock_guard l(lock);
         for (auto it = cache.begin(); it != cache.end(); ++it)

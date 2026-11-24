@@ -9807,6 +9807,13 @@ def slotFind(type: str | None = None, region: str | None = None, tag: Any | None
         slotFind(near=[0, 0, 0], radius=5000, select=True)
     """
 
+def slotLoadItems() -> Any:
+    """Load the Set Dressing library items the scene's slots name (rules, overrides, pins, pools, pool tags and the slots' own payloads) so they draw as themselves rather than placeholders. Runs by itself when a scene opens with named items not loaded yet. Returns {loaded: [item ids], missing: [{item, why}]} (missing: no such library item, or its model brought in nothing).
+
+    Examples:
+        slotLoadItems()
+    """
+
 def slotPin(*objects: Any, owner: str | None = None, remove: bool | None = None, o: str | None = None, rm: bool | None = None) -> Any:
     """Pin slots, or every slot of an owner (a building, block or arrangement), as they are now: regenerating leaves them where they are with what they show, and differences are reported as conflicts. With no key, lists the pins.
 

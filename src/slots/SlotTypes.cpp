@@ -14,6 +14,8 @@ void registerCommands();
 void servicePending(scene::Graph& g);
 void forgetSet(NodeId id);
 void clearTagCache();
+/** Loads the library items an opened scene names, when any are missing (runs slotLoadItems). True when it ran. */
+bool scheduleItemLoad();
 } // namespace detail
 
 namespace
@@ -160,6 +162,8 @@ void registerAll()
             detail::clearTagCache();
             refresh();
         });
+    // After the visuals are dropped: library items the opened scene names come in, so its slots draw them straight away.
+    events::subscribe(events::Event::SceneOpened, [](const events::EventData&) { detail::scheduleItemLoad(); });
     events::subscribe(events::Event::NodeDeleted, [](const events::EventData& d) {
         detail::forgetSet(NodeId(d.node));
         unpublish(NodeId(d.node));

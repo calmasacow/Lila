@@ -683,7 +683,24 @@ Envelope osmEnvelope(const Lot& lot, const Layout& l, const Ground& g, const Opt
                                   : part->minLevel > 0                                    ? hi + part->minLevel * storey
                                                                                           : env.base;
             const double top = std::max(bottom + 50.0, hi + partWall);
-            env.tiers.push_back({std::move(fp), bottom, top});
+            // A part keeps its own roof (a domed tower stays domed); the height comes from its tags, else from its shape.
+            std::string partSource;
+            std::string partRoof = osmRoofOf(part->roofShape, &partSource);
+            double partRoofHeight = 0.0;
+            if (partRoof == "flat")
+                partRoof.clear();
+            if (!partRoof.empty())
+            {
+                Vec2 pc{0.0}, pu{1.0, 0.0}, pv{0.0, 1.0};
+                double phu = 0.0, phv = 0.0;
+                boxOf(fp, pc, pu, pv, phu, phv);
+                partRoofHeight = std::isfinite(part->roofHeight) && part->roofHeight > 0.0 ? part->roofHeight
+                                 : part->roofLevels > 0                                  ? part->roofLevels * storey * 0.8
+                                 : partRoof == "dome"                                    ? std::min(phu, phv)
+                                 : partRoof == "mansard"                                 ? 0.9 * p.floorHeight
+                                                                                         : phv * std::tan(30.0 * kPi / 180.0);
+            }
+            env.tiers.push_back({std::move(fp), bottom, top, partRoof, partRoofHeight});
             env.top = std::max(env.top, top);
         }
         std::sort(env.tiers.begin(), env.tiers.end(), [](const Envelope::Tier& x, const Envelope::Tier& y) { return x.bottom < y.bottom; });
