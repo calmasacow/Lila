@@ -22,6 +22,11 @@ namespace LilaLink
  * removePlacements {groups?: [...], ids?: [...]} removes what placeInstances made for those groups or nodes. Returns {removed}.
  * listPlacements {} lists them: [{actor, group, node?, instances?}].
  *
+ * Slots: placeInstances with actorClass (a class path) instead of mesh spawns an actor of that class per placement. A
+ *   placement's tags (LilaSlot:<id>, LilaSlotType:<type>, LilaSlotData:<key>=<value>) replace the actor's LilaSlot tags;
+ *   instanced ones put slotType and slotData in their holder's ULilaInstanceData (columns slotType, slot.<key>).
+ * writeSlotTable {path, rows} rewrites the ULilaSlotTable data asset at path, so game code finds slots by id.
+ *
  * A placement's physics {simulate, role, material, density, friction, restitution, mass?, collision: simple |
  *   complexAsSimple} sets its component's physical material (PM_<material>, made beside the mesh), and on an actor its
  *   Simulate Physics (Movable when it simulates) and mass; the first placement's collision sets the mesh's collision

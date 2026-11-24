@@ -1,6 +1,7 @@
 #include "LilaLinkPlacements.h"
 
 #include "LilaInstanceData.h"
+#include "LilaSlotTable.h"
 #include "LilaLinkComponents.h"
 #include "LilaLinkLog.h"
 
@@ -327,6 +328,97 @@ void ApplyMeshCollision(UStaticMesh* Mesh, const TArray<TSharedPtr<FJsonValue>>&
 	}
 }
 
+/** Replaces the actor's Lila slot tags (LilaSlot:, LilaSlotType:, LilaSlotData:) with the placement's tags. */
+void ApplySlotTags(AActor* Actor, const TSharedPtr<FJsonObject>& P)
+{
+	Actor->Tags.RemoveAll([](const FName& Tag) { return Tag.ToString().StartsWith(TEXT("LilaSlot")); });
+	const TArray<TSharedPtr<FJsonValue>>* Tags = nullptr;
+	if (!P->TryGetArrayField(TEXT("tags"), Tags))
+	{
+		return;
+	}
+	for (const TSharedPtr<FJsonValue>& T : *Tags)
+	{
+		FString Tag;
+		if (T.IsValid() && T->TryGetString(Tag) && !Tag.IsEmpty())
+		{
+			Actor->Tags.AddUnique(FName(*Tag));
+		}
+	}
+}
+
+/**
+ * An actor of Class per placement (a slot's Blueprint: an interactable door, a lamp with a light), matched to the
+ * existing ones by node id; an actor of another class under the same id is replaced.
+ */
+void PlaceClassActors(UWorld* World, const FString& Group, const FString& Label, UClass* Class, const TArray<TSharedPtr<FJsonValue>>& Placements,
+	TArray<AActor*> Existing, int32& Spawned, int32& Updated, int32& Removed, FComponentSink& Sink)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlaceClassActors);
+
+	TMap<FString, AActor*> ByNode;
+	for (AActor* A : Existing)
+	{
+		if (A->GetClass() != Class || A->Tags.Contains(InstancedTag))
+		{
+			World->EditorDestroyActor(A, true);
+			++Removed;
+			continue;
+		}
+		ByNode.Add(TagValue(A, NodePrefix), A);
+	}
+	const FName Folder(*(TEXT("Lila/") + ShortGroupName(Label)));
+	TSet<FString> Sent;
+	for (const TSharedPtr<FJsonValue>& V : Placements)
+	{
+		const TSharedPtr<FJsonObject>* P = nullptr;
+		if (!V.IsValid() || !V->TryGetObject(P))
+		{
+			continue;
+		}
+		const FString Id = IdOf(*P);
+		Sent.Add(Id);
+		const FTransform Transform = TransformOf(*P);
+		AActor*& Actor = ByNode.FindOrAdd(Id);
+		if (!Actor)
+		{
+			FActorSpawnParameters Params;
+			Params.ObjectFlags |= RF_Transactional;
+			Actor = World->SpawnActor<AActor>(Class, Transform, Params);
+			if (!Actor)
+			{
+				Sink.Warnings.Add(FString::Printf(TEXT("%s: could not spawn %s"), *Id, *Class->GetName()));
+				continue;
+			}
+			Actor->Tags.Add(GroupTag(Group));
+			Actor->Tags.Add(NodeTag(Id));
+			++Spawned;
+		}
+		else
+		{
+			Actor->Modify();
+			Actor->SetActorTransform(Transform);
+			++Updated;
+		}
+		Actor->SetFolderPath(Folder);
+		FString Name;
+		if ((*P)->TryGetStringField(TEXT("name"), Name))
+		{
+			Actor->SetActorLabel(Name);
+		}
+		ApplySlotTags(Actor, *P);
+		ApplyPlacementComponents(Actor, *P, Sink);
+	}
+	for (const TPair<FString, AActor*>& Pair : ByNode)
+	{
+		if (Pair.Value && !Sent.Contains(Pair.Key))
+		{
+			World->EditorDestroyActor(Pair.Value, true);
+			++Removed;
+		}
+	}
+}
+
 /** An actor per placement, matched to the existing ones by node id. */
 void PlaceActors(UWorld* World, const FString& Group, const FString& Label, UStaticMesh* Mesh, bool bCollide, const TArray<TSharedPtr<FJsonValue>>& Placements,
 	TArray<AActor*> Existing, int32& Spawned, int32& Updated, int32& Removed, FComponentSink& Sink)
@@ -395,6 +487,7 @@ void PlaceActors(UWorld* World, const FString& Group, const FString& Label, USta
 		{
 			Actor->GetStaticMeshComponent()->SetLightingChannels(Channels->bChannel0, Channels->bChannel1, Channels->bChannel2);
 		}
+		ApplySlotTags(Actor, *P);
 		ApplyPlacementComponents(Actor, *P, Sink);
 		ApplyPhysics(Actor->GetStaticMeshComponent(), *P, Sink.Folder, false, Label, Sink);
 	}
@@ -462,6 +555,24 @@ void WriteInstanceData(AActor* Holder, const TSharedPtr<FJsonObject>& Params, co
 			continue;
 		}
 		Data->InstanceIds.Add(IdOf(*P));
+		// Slots: their type and gameplay data, so game code reads an instanced door's data like an actor's tags.
+		FString SlotType;
+		if ((*P)->TryGetStringField(TEXT("slotType"), SlotType))
+		{
+			FLilaInstanceColumn& Column = Data->Columns.FindOrAdd(TEXT("slotType"));
+			Column.Values.SetNum(Count);
+			Column.Values[Index] = SlotType;
+		}
+		const TSharedPtr<FJsonObject>* SlotData = nullptr;
+		if ((*P)->TryGetObjectField(TEXT("slotData"), SlotData))
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Value : (*SlotData)->Values)
+			{
+				FLilaInstanceColumn& Column = Data->Columns.FindOrAdd(FName(*(TEXT("slot.") + Value.Key)));
+				Column.Values.SetNum(Count);
+				Column.Values[Index] = LilaLink::ComponentValueText(Value.Value);
+			}
+		}
 		TArray<LilaLink::FLilaComponent> Components;
 		LilaLink::ParseComponents(*P, Components);
 		for (const LilaLink::FLilaComponent& C : Components)
@@ -605,17 +716,138 @@ void PlaceInstanced(UWorld* World, const TSharedPtr<FJsonObject>& Params, const 
 	}
 }
 
+/** placeInstances with an actorClass: an actor of that class per placement, no mesh. */
+TSharedPtr<FJsonValue> PlaceSlotClass(const TSharedPtr<FJsonObject>& Params, const FString& Group, const FString& ClassPath,
+	const TArray<TSharedPtr<FJsonValue>>& Placements, FString& OutError)
+{
+	UClass* Class = StaticLoadClass(AActor::StaticClass(), nullptr, *ClassPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (!Class && !ClassPath.EndsWith(TEXT("_C")))
+	{
+		Class = StaticLoadClass(AActor::StaticClass(), nullptr, *(ClassPath + TEXT("_C")), nullptr, LOAD_NoWarn | LOAD_Quiet);
+	}
+	if (!Class)
+	{
+		OutError = FString::Printf(TEXT("placeInstances: no actor class at %s"), *ClassPath);
+		return nullptr;
+	}
+	UWorld* World = EditorWorld();
+	if (!World)
+	{
+		OutError = TEXT("placeInstances: no level is open");
+		return nullptr;
+	}
+	FString Label = Group;
+	Params->TryGetStringField(TEXT("label"), Label);
+	FScopedTransaction Transaction(LOCTEXT("PlaceSlotActors", "Lila: Place Slot Actors"));
+	int32 Spawned = 0, Updated = 0, Removed = 0;
+	FComponentSink Sink;
+	PlaceClassActors(World, Group, Label, Class, Placements, TaggedActors(World, GroupTag(Group)), Spawned, Updated, Removed, Sink);
+	for (const FString& W : Sink.Warnings)
+	{
+		UE_LOG(LogLilaLink, Warning, TEXT("placeInstances %s: %s"), *Label, *W);
+	}
+	if (ULevel* Level = World->GetCurrentLevel())
+	{
+		Level->MarkPackageDirty();
+	}
+	UE_LOG(LogLilaLink, Log, TEXT("placeInstances %s: %d spawned, %d updated, %d removed (%s)"), *Label, Spawned, Updated, Removed, *Class->GetName());
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetNumberField(TEXT("spawned"), Spawned);
+	Out->SetNumberField(TEXT("updated"), Updated);
+	Out->SetNumberField(TEXT("removed"), Removed);
+	Out->SetStringField(TEXT("mode"), TEXT("actors"));
+	Out->SetStringField(TEXT("actorClass"), Class->GetPathName());
+	TArray<TSharedPtr<FJsonValue>> Warnings;
+	for (const FString& W : Sink.Warnings)
+	{
+		Warnings.Add(MakeShared<FJsonValueString>(W));
+	}
+	Out->SetArrayField(TEXT("warnings"), Warnings);
+	return MakeShared<FJsonValueObject>(Out);
+}
+
+/**
+ * writeSlotTable {path, rows: [{id, type, owner, group, actorClass, mesh, item, data, location, rotation, scale}]}
+ * rewrites the ULilaSlotTable data asset at path (made when missing) with the rows. Returns {path, rows}.
+ */
+TSharedPtr<FJsonValue> WriteSlotTable(const TSharedPtr<FJsonObject>& Params, FString& OutError)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::WriteSlotTable);
+
+	FString Path;
+	const TArray<TSharedPtr<FJsonValue>>* Rows = nullptr;
+	if (!Params->TryGetStringField(TEXT("path"), Path) || !Params->TryGetArrayField(TEXT("rows"), Rows))
+	{
+		OutError = TEXT("writeSlotTable: give path and rows");
+		return nullptr;
+	}
+	if (!FPackageName::IsValidLongPackageName(Path))
+	{
+		OutError = FString::Printf(TEXT("writeSlotTable: %s is not a content path like /Game/Lila/Slots/DA_LilaSlotTable"), *Path);
+		return nullptr;
+	}
+	const FString ObjectPath = Path + TEXT(".") + FPackageName::GetShortName(Path);
+	ULilaSlotTable* Table = LoadObject<ULilaSlotTable>(nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet);
+	if (!Table)
+	{
+		UPackage* Package = CreatePackage(*Path);
+		Table = NewObject<ULilaSlotTable>(Package, *FPackageName::GetShortName(Path), RF_Public | RF_Standalone | RF_Transactional);
+		FAssetRegistryModule::AssetCreated(Table);
+	}
+	Table->Modify();
+	Table->Rows.Reset(Rows->Num());
+	for (const TSharedPtr<FJsonValue>& V : *Rows)
+	{
+		const TSharedPtr<FJsonObject>* R = nullptr;
+		if (!V.IsValid() || !V->TryGetObject(R))
+		{
+			continue;
+		}
+		FLilaSlotRow& Row = Table->Rows.AddDefaulted_GetRef();
+		(*R)->TryGetStringField(TEXT("id"), Row.Id);
+		(*R)->TryGetStringField(TEXT("type"), Row.Type);
+		(*R)->TryGetStringField(TEXT("owner"), Row.Owner);
+		(*R)->TryGetStringField(TEXT("group"), Row.Group);
+		(*R)->TryGetStringField(TEXT("actorClass"), Row.ActorClass);
+		(*R)->TryGetStringField(TEXT("mesh"), Row.Mesh);
+		(*R)->TryGetStringField(TEXT("item"), Row.Item);
+		const TSharedPtr<FJsonObject>* Data = nullptr;
+		if ((*R)->TryGetObjectField(TEXT("data"), Data))
+		{
+			for (const TPair<FString, TSharedPtr<FJsonValue>>& Value : (*Data)->Values)
+			{
+				Row.Data.Add(Value.Key, LilaLink::ComponentValueText(Value.Value));
+			}
+		}
+		Row.Transform = TransformOf(*R);
+	}
+	Table->RebuildIndex();
+	Table->MarkPackageDirty();
+	UEditorLoadingAndSavingUtils::SavePackages({Table->GetPackage()}, true);
+	UE_LOG(LogLilaLink, Log, TEXT("writeSlotTable %s: %d rows"), *Path, Table->Rows.Num());
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetStringField(TEXT("path"), ObjectPath);
+	Out->SetNumberField(TEXT("rows"), Table->Rows.Num());
+	return MakeShared<FJsonValueObject>(Out);
+}
+
 TSharedPtr<FJsonValue> PlaceInstances(const TSharedPtr<FJsonObject>& Params, FString& OutError)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::PlaceInstances);
 
-	FString Group, MeshPath, Mode = TEXT("actors");
+	FString Group, MeshPath, Mode = TEXT("actors"), ActorClass;
 	const TArray<TSharedPtr<FJsonValue>>* Placements = nullptr;
-	if (!Params->TryGetStringField(TEXT("group"), Group) || !Params->TryGetStringField(TEXT("mesh"), MeshPath) ||
+	Params->TryGetStringField(TEXT("actorClass"), ActorClass);
+	Params->TryGetStringField(TEXT("mesh"), MeshPath);
+	if (!Params->TryGetStringField(TEXT("group"), Group) || (MeshPath.IsEmpty() && ActorClass.IsEmpty()) ||
 		!Params->TryGetArrayField(TEXT("placements"), Placements))
 	{
-		OutError = TEXT("placeInstances: give group, mesh and placements");
+		OutError = TEXT("placeInstances: give group, mesh (or actorClass) and placements");
 		return nullptr;
+	}
+	if (!ActorClass.IsEmpty())
+	{
+		return PlaceSlotClass(Params, Group, ActorClass, *Placements, OutError);
 	}
 	Params->TryGetStringField(TEXT("mode"), Mode);
 	FString Collision;
@@ -1355,6 +1587,7 @@ void LilaLink::AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods)
 	Methods.Add(TEXT("removePlacements"), LilaLink::Sync(&RemovePlacements));
 	Methods.Add(TEXT("listPlacements"), LilaLink::Sync(&ListPlacements));
 	Methods.Add(TEXT("makeLevelInstance"), LilaLink::Sync(&MakeLevelInstance));
+	Methods.Add(TEXT("writeSlotTable"), LilaLink::Sync(&WriteSlotTable));
 }
 
 #undef LOCTEXT_NAMESPACE
