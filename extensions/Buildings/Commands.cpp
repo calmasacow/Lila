@@ -1003,8 +1003,6 @@ void setShippedTrimSheet(const fs::path& p) { shippedTrimSheet() = p; }
 
 void registerCommands(ext::Context& ctx)
 {
-    std::vector<std::string> styleChoices = shippedStyleIds();
-
     ctx.registerCommand({
         .name = "buildingCreate",
         .doc = "Make live procedural buildings: from a settlement's envelopes (settlement=, lots= to pick some), envelopes given as "
@@ -1019,7 +1017,7 @@ void registerCommands(ext::Context& ctx)
                   {"envelopes", "ev", T::List, nullptr, "Envelopes in Settlement's published schema (settlementEnvelopes)."},
                   {"curve", "cv", T::String, nullptr, "Closed footprint curve(s).", {}, {}, {}, {}, "curve"},
                   {"mesh", "ms", T::String, nullptr, "A mesh whose footprint becomes a building.", {}, {}, {}, {}, "mesh"},
-                  {"style", "sy", T::String, nullptr, "One style for every building (buildingStyles lists them).", styleChoices},
+                  {"style", "sy", T::String, nullptr, "One style for every building (buildingStyles lists them)."},
                   {"floors", "fl", T::Int, nullptr, "Curve and mesh buildings: floors.", {}, {}, 1.0, 120.0},
                   {"height", "h", T::Float, nullptr, "Mesh buildings: height, cm.", {}, {}, 100.0},
                   {"roof", "rf", T::String, nullptr, "Curve and mesh buildings: flat, hip, gable, dome.", {"flat", "hip", "gable", "dome", "sheet"}},
@@ -1134,7 +1132,7 @@ void registerCommands(ext::Context& ctx)
                "evaluation time.",
         .positionalDoc = "building ids or building meshes (default the selection)",
         .flags = {{"building", "b", T::Any, nullptr, "Building id(s)."},
-                  {"style", "sy", T::String, nullptr, "Style id.", styleChoices},
+                  {"style", "sy", T::String, nullptr, "Style id."},
                   {"floors", "fl", T::Int, nullptr, "Floors.", {}, {}, 1.0, 120.0},
                   {"bayWidth", "bw", T::Float, nullptr, "Target bay width, cm.", {}, {}, 80.0, 3000.0},
                   {"floorHeight", "fh", T::Float, nullptr, "Upper floor height, cm.", {}, {}, 200.0, 1200.0},
@@ -1223,7 +1221,7 @@ void registerCommands(ext::Context& ctx)
                "or all=True. clear=True goes back to the style mapped from Settlement's guess. Kept as an edit by building id. Returns "
                "the count.",
         .positionalDoc = "building ids or building meshes (default the selection)",
-        .flags = {{"style", "sy", T::String, nullptr, "Style id (buildingStyles lists them).", styleChoices},
+        .flags = {{"style", "sy", T::String, nullptr, "Style id (buildingStyles lists them)."},
                   {"building", "b", T::Any, nullptr, "Building id(s)."},
                   {"polygon", "pg", T::List, nullptr, "District [[x, z], ...]."},
                   {"all", "a", T::Bool, false, "Every building."},
@@ -1288,7 +1286,7 @@ void registerCommands(ext::Context& ctx)
         .doc = "Save a style for everyone in this workspace (scope='workspace') or for you (scope='user'): a copy of base= with spec= "
                "merged over it (any part of the style JSON). Buildings using it regenerate. Returns the file.",
         .flags = {{"id", "i", T::String, nullptr, "Style id."},
-                  {"base", "bs", T::String, "residential", "Style to start from.", shippedStyleIds()},
+                  {"base", "bs", T::String, "residential", "Style to start from."},
                   {"spec", "sp", T::Any, nullptr, "Style JSON to merge over the base."},
                   {"label", "lb", T::String, nullptr, "Menu label."},
                   {"description", "ds", T::String, nullptr, "One line."},
