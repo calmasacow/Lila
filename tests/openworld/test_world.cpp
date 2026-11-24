@@ -13,6 +13,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <set>
 
 using json = nlohmann::json;
@@ -117,22 +118,49 @@ TEST_CASE("world spec: schema and shape checks name the bad field")
     CHECK(r["remix"]["sources"][0]["osm"] == "missing.json");
 }
 
-TEST_CASE("world spec: clipOsm keeps ways touching the area whole, tagged nodes inside, and relations with a kept member")
+TEST_CASE("world spec: clipOsm cuts lines at the area's edge, keeps closed ways mostly inside whole, and relations' kept members")
 {
     openworld::OsmDoc d;
-    auto node = [&](int64_t id, double lat, double lon, openworld::OsmTags tags = {}) { d.nodes.push_back({id, {lat, lon}, std::move(tags)}); };
-    node(1, 0, 0), node(2, 0, 2), node(3, 0, 4), node(4, 5, 5), node(5, 6, 6), node(6, 1, 1, {{"amenity", "cafe"}}), node(7, 6, 7, {{"shop", "bakery"}});
-    d.ways.push_back({10, {1, 2, 3}, {{"highway", "residential"}}});
+    std::vector<glm::dvec2> world;
+    // World x is longitude, z latitude, so the edge node's lat/lon can be read back exactly.
+    auto node = [&](int64_t id, double lat, double lon, openworld::OsmTags tags = {}) {
+        d.nodes.push_back({id, {lat, lon}, std::move(tags)});
+        world.push_back({lon, lat});
+    };
+    node(1, 0, 0), node(2, 0, 2), node(3, 0, 4), node(4, 5, 5), node(5, 6, 6), node(6, 0.5, 1, {{"amenity", "cafe"}}), node(7, 6, 7, {{"shop", "bakery"}});
+    node(8, 0.2, 0.2), node(9, 0.2, 0.6), node(13, 0.6, 0.6), node(14, 0.6, 3.5);
+    node(15, -0.5, -2), node(16, -0.5, 0.5), node(17, -0.5, 6), node(18, -0.5, 2), node(19, -0.5, 7);
+    d.ways.push_back({10, {1, 2, 3}, {{"highway", "trunk"}}});
     d.ways.push_back({11, {4, 5}, {{"highway", "track"}}});
+    d.ways.push_back({12, {8, 9, 13, 8}, {{"building", "yes"}}});
+    d.ways.push_back({21, {8, 14, 13, 8}, {{"building", "yes"}}});
+    d.ways.push_back({22, {15, 16, 17, 18, 19}, {{"highway", "primary"}}});
     d.relations.push_back({20, {{'w', 10, "outer"}, {'w', 11, "outer"}}, {{"type", "multipolygon"}}});
     d.index();
-    const openworld::OsmDoc c = clipOsm(d, [](const terrain::LatLon& p) { return p.lon < 1.5 && p.lat < 2; });
-    REQUIRE(c.ways.size() == 1);
-    CHECK(c.ways[0].id == 10);
-    std::set<int64_t> ids;
+    const openworld::OsmDoc c = clipOsm(d, world, {-1, -1}, {3, 1});
+    std::map<int64_t, const openworld::OsmDoc::Way*> ways;
+    for (const auto& w : c.ways)
+        ways[w.id] = &w;
+    REQUIRE(ways.count(10));
+    CHECK_FALSE(ways.count(11));
+    CHECK(ways.count(12));
+    CHECK(ways.count(21));
+    // The trunk keeps 1 and 2, then a node on the edge at x = 3, halfway to 3.
+    REQUIRE(ways[10]->nodes.size() == 3);
+    const openworld::OsmDoc::Node* edge = c.node(ways[10]->nodes[2]);
+    REQUIRE(edge);
+    CHECK(edge->at.lon == doctest::Approx(3.0));
+    CHECK(edge->at.lat == doctest::Approx(0.0));
+    // The primary leaves and comes back: two pieces, each closed off on the edge.
+    int primaries = 0;
+    for (const auto& w : c.ways)
+        primaries += w.tags.count("highway") && w.tags.at("highway") == "primary";
+    CHECK(primaries == 2);
+    std::set<int64_t> tagged;
     for (const auto& n : c.nodes)
-        ids.insert(n.id);
-    CHECK(ids == std::set<int64_t>{1, 2, 3, 6});
+        if (!n.tags.empty())
+            tagged.insert(n.id);
+    CHECK(tagged == std::set<int64_t>{6});
     REQUIRE(c.relations.size() == 1);
     CHECK(c.relations[0].members.size() == 1);
 }
@@ -280,4 +308,45 @@ TEST_CASE("world: worldCheck catches each issue kind, reports to Validation, and
     CHECK(doc["format"] == "lila.worldMap");
     CHECK(doc["size"][0] == 256);
     CHECK(doc["zones"].size() >= 2);
+}
+
+TEST_CASE("world: the tiny Sinaloa world builds headless from one spec file, remix to zones, with no real name out")
+{
+    loadWorldPackages();
+    run("newScene");
+    const fs::path file = fs::path(LILA_TEST_OPENWORLD_DATA) / "world_tiny" / "world.json";
+    const fs::path out = fs::temp_directory_path() / "lila_world_tiny_test";
+    std::error_code ec;
+    fs::remove_all(out, ec);
+    const json r = run("worldBuild", {{"file", file.generic_string()}, {"folder", out.generic_string()}});
+    INFO(failedSteps(r));
+    for (const json& s : r["steps"])
+    {
+        CHECK_MESSAGE(s.value("ok", false), s.dump().substr(0, 600));
+        MESSAGE(s["step"].get<std::string>() << " " << s["seconds"].get<double>() << " s " << s["memoryMB"].get<double>() << " MB");
+    }
+    REQUIRE(r["world"].is_string());
+    lila::scene::Graph& g = lila::scene::Graph::current();
+    CHECK(fs::exists(fs::path(r["built"]["remixOsm"].get<std::string>())));
+    CHECK(fs::exists(out / "settlements" / "Puerto.osm.json"));
+    CHECK(g.find("Puerto_Buildings"));
+    CHECK(g.find("Capital_Buildings"));
+    CHECK(g.find("SiteBuildings"));
+    CHECK(r["built"]["sites"].size() == 9);
+    const json c = r["check"];
+    MESSAGE(c["counts"].dump());
+    for (const char* k : {"realName", "remix.riverNoDrain", "remix.danglingRoad", "remix.coastGap", "zone.gap", "zone.overlap", "buildingOverWater",
+                          "buildingOverRoad", "propFloating", "unreachableWater", "buildingsStale", "settlement.overlap", "building.overlappingNeighbours"})
+        CHECK_MESSAGE(c["counts"].value(k, 0) == 0, k << ": " << c["counts"].dump());
+    // The reservoir forms behind its dam, and the countryside between the towns is one district.
+    const json water = run("terrainWater", {{"args", {r["terrain"]}}});
+    bool reservoir = false;
+    for (const json& l : water.value("lakes", json::array()))
+        reservoir = reservoir || l.value("id", std::string()) == "picachos_reservoir";
+    CHECK(reservoir);
+    CHECK(r["exports"].contains("map"));
+    CHECK(fs::exists(fs::path(r["exports"]["map"]["image"].get<std::string>())));
+    // Every imported brand and street became fictional: nothing named as in the source OSM.
+    const json leaks = run("realNameCheck");
+    CHECK_MESSAGE(leaks.value("ok", false), leaks.dump().substr(0, 800));
 }

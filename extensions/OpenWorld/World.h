@@ -43,11 +43,13 @@ void validateSpec(const json& spec);
 json resolvePaths(json spec, const std::string& dir);
 
 /**
- * The part of an OSM document inside an area, for one settlement of a larger map: ways with any node inside, the
- * nodes they use, tagged nodes inside, and relations with a member kept (members dropped elsewhere stay out).
- * inside(lat, lon) decides; it is asked once per node, in document order.
+ * The part of an OSM document inside an area, for one settlement of a larger map. world holds each node's world XZ
+ * (cm, in document order); lo and hi are the area's corners. Lines (roads, rivers) are cut where they leave the area,
+ * with a new node on the edge, so a long highway brings only its stretch inside; a line that leaves and comes back
+ * becomes several ways (ids from 2^52 up). Closed ways (buildings, land use) go whole when most of their nodes are
+ * inside. Tagged nodes inside are kept, and relations keep the members that stayed.
  */
-OsmDoc clipOsm(const OsmDoc& d, const std::function<bool(const terrain::LatLon&)>& inside);
+OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2 lo, glm::dvec2 hi);
 
 /** Commands worldBuild, worldSpec, worldCheck, worldMap; resources and the make_open_world prompt. */
 void registerWorld(lila::ext::Context& ctx);

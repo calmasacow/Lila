@@ -5,6 +5,7 @@
 #include "Remix.h"
 #include "RemixSpec.h"
 #include "WorldScene.h"
+#include "Zones.h"
 
 #include <lila/Command.h>
 #include <lila/Deformer.h>
@@ -268,6 +269,10 @@ public:
         step["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
         step["memoryMB"] = std::round(memoryMB());
         LILA_PLOT("world.memoryMB", memoryMB());
+        if (ok)
+            log::info("worldBuild: {} done in {:.1f} s ({:.0f} MB)", name, step["seconds"].get<double>(), step["memoryMB"].get<double>());
+        else
+            log::warn("worldBuild: {} failed: {}", name, step["error"].get<std::string>());
         mSteps.push_back(std::move(step));
         return ok;
     }
@@ -359,6 +364,85 @@ struct BuildOptions
     std::string folder;
     std::vector<std::string> skip;
 };
+
+/**
+ * Fills what a must-cover layer leaves of the play area with one painted zone, so a district layer made from
+ * settlements also covers the countryside between them. The play area is the set's, else the terrain's extent; the
+ * zone gets a fictional district name. Returns what was painted.
+ */
+json fillLayerGaps(const std::string& set, const std::string& terrain, const std::string& layerId)
+{
+    zones::ZoneSpec spec = zones::zonesFromJson(run("zoneSpec", {{"set", set}}));
+    zones::Layer* layer = nullptr;
+    for (zones::Layer& l : spec.layers)
+        if (l.id == layerId)
+            layer = &l;
+    if (!layer)
+        throw std::runtime_error("no layer " + layerId + " in " + set);
+    const std::string zoneId = "outlying";
+    std::erase_if(layer->zones, [&](const zones::Zone& z) { return z.id == zoneId; });
+    Vec2 lo, hi;
+    if (!spec.playArea.empty())
+    {
+        lo = Vec2(1e300), hi = Vec2(-1e300);
+        for (const Polygon& p : spec.playArea)
+            for (const Vec2& q : p)
+                lo = glm::min(lo, q), hi = glm::max(hi, q);
+    }
+    else if (auto h = terrainHeights(terrain))
+        lo = h->origin, hi = h->origin + h->extent();
+    else
+        throw std::runtime_error("no play area and no terrain to fill " + layerId + " over");
+    const double cell = spec.maskCell;
+    const Vec2 origin = glm::floor(lo / cell) * cell;
+    const zones::Raster r = zones::rasterize(*layer, origin, hi, cell);
+    auto inPlay = [&](Vec2 p) {
+        if (spec.playArea.empty())
+            return true;
+        for (const Polygon& poly : spec.playArea)
+        {
+            bool in = false;
+            for (size_t i = 0, j = poly.size() - 1; i < poly.size(); j = i++)
+                if ((poly[i].y > p.y) != (poly[j].y > p.y) && p.x < (poly[j].x - poly[i].x) * (p.y - poly[i].y) / (poly[j].y - poly[i].y) + poly[i].x)
+                    in = !in;
+            if (in)
+                return true;
+        }
+        return false;
+    };
+    zones::Zone z;
+    z.id = zoneId;
+    z.mask.cell = cell;
+    const glm::ivec2 base(int(std::lround(origin.x / cell)), int(std::lround(origin.y / cell)));
+    size_t painted = 0;
+    for (int zz = 0; zz < r.nz; ++zz)
+        for (int x = 0; x < r.nx; ++x)
+            if (r.winner[size_t(zz) * r.nx + x] < 0 && inPlay(r.at(x, zz)))
+            {
+                z.mask.setCell(base.x + x, base.y + zz, 255);
+                ++painted;
+            }
+    if (painted == 0)
+        return {{"layer", layerId}, {"cells", 0}};
+    z.priority = -1;
+    try
+    {
+        const json n = run("fictionalName", {{"culture", spec.culture}, {"kind", "district"}, {"key", set + "/" + layerId + "/" + zoneId}});
+        z.name = n.is_string() ? n.get<std::string>() : n.value("name", std::string());
+        z.nameSource = "fictionalName";
+    }
+    catch (const std::exception&)
+    {
+    }
+    if (z.name.empty())
+    {
+        z.name = "Outlying " + layerId;
+        z.nameSource = "given";
+    }
+    layer->zones.push_back(std::move(z));
+    run("zoneSpec", {{"set", set}, {"spec", zones::toJson(spec)}});
+    return {{"layer", layerId}, {"zone", zoneId}, {"cells", painted}, {"areaM2", double(painted) * cell * cell * 1e-4}};
+}
 
 /** Deletes what an earlier build of this world made, so a rebuild starts clean. */
 void removeBuilt(const WorldRef& w)
@@ -504,10 +588,56 @@ json buildWorld(json spec, const BuildOptions& o)
     if (terrain.empty() && !st.stopped())
         st.run("terrain", [] () -> json { throw std::runtime_error("no terrain was made"); });
 
+    // Site kits first: their grading settles the ground the settlements are laid on, and their outlines keep the
+    // settlements clear. Their buildings come after the settlements, in one Buildings pass.
+    json siteIds = json::array();
+    json siteOutlines = json::array();
+    for (const json& s : spec.value("sites", json::array()))
+    {
+        if (skipped("sites") || terrain.empty())
+            break;
+        const std::string id = s.value("id", std::string());
+        json made1;
+        if (!st.run("site." + (id.empty() ? s["kind"].get<std::string>() : id), [&] {
+                json call = {{"kind", s["kind"]}, {"terrain", terrain}, {"culture", s.value("culture", culture)}};
+                for (const char* k : {"id", "name", "seed", "at", "heading", "waterLevel", "params"})
+                    if (s.contains(k) && !s[k].is_null())
+                        call[k] = s[k];
+                return run("siteCreate", call);
+            }, &made1))
+            continue;
+        const std::string sid = made1.value("id", id);
+        built["sites"].push_back(sid);
+        try
+        {
+            const json info = run("siteInfo", {{"args", {sid}}});
+            if (info.contains("boundary") && info["boundary"].size() >= 3)
+                siteOutlines.push_back(info["boundary"]);
+        }
+        catch (const std::exception&)
+        {
+        }
+        if (s.value("buildings", true))
+            siteIds.push_back(sid);
+    }
     // Settlements: each from OSM (the remix's or a file, clipped to its area) or laid out by Settlement, then its buildings.
     const json editsByGroup = spec.value("buildings", json::object()).value("edits", json::object());
     std::optional<OsmDoc> remixDoc;
     std::vector<glm::dvec2> remixWorld;
+    // Site outlines a settlement must keep clear: only those reaching into its box (Settlement makes every exclusion a
+    // district of its own, so far ones would turn up as stray districts).
+    auto outlinesIn = [&](double x0, double z0, double x1, double z1) {
+        json out = json::array();
+        for (const json& o : siteOutlines)
+        {
+            double lx = 1e300, lz = 1e300, hx = -1e300, hz = -1e300;
+            for (const json& p : o)
+                lx = std::min(lx, p[0].get<double>()), hx = std::max(hx, p[0].get<double>()), lz = std::min(lz, p[1].get<double>()), hz = std::max(hz, p[1].get<double>());
+            if (hx >= x0 && lx <= x1 && hz >= z0 && lz <= z1)
+                out.push_back(o);
+        }
+        return out;
+    };
     for (const json& s : spec.value("settlements", json::array()))
     {
         if (skipped("settlements") || terrain.empty())
@@ -521,6 +651,17 @@ json buildWorld(json spec, const BuildOptions& o)
             {
                 json call = s["create"];
                 call["name"] = sname;
+                if (call.contains("outline") && call["outline"].is_array())
+                {
+                    double x0 = 1e300, z0 = 1e300, x1 = -1e300, z1 = -1e300;
+                    for (const json& p : call["outline"])
+                        x0 = std::min(x0, p[0].get<double>()), x1 = std::max(x1, p[0].get<double>()), z0 = std::min(z0, p[1].get<double>()), z1 = std::max(z1, p[1].get<double>());
+                    json ex = call.value("exclusions", json::array());
+                    for (const json& outline : outlinesIn(x0, z0, x1, z1))
+                        ex.push_back(outline);
+                    if (!ex.empty())
+                        call["exclusions"] = ex;
+                }
                 if (!call.contains("ground"))
                     call["ground"] = terrain;
                 return run("settlementCreate", call);
@@ -549,12 +690,7 @@ json buildWorld(json spec, const BuildOptions& o)
                     local = readOsmDoc(paths::fromUtf8(file));
                     world = worldPositions(local, terrain, origin);
                 }
-                size_t cursor = 0;
-                // clipOsm asks node by node in document order; the world positions are in the same order.
-                OsmDoc clipped = clipOsm(local, [&](const terrain::LatLon&) {
-                    const glm::dvec2 p = world[cursor++];
-                    return p.x >= x0 && p.x <= x1 && p.y >= z0 && p.y <= z1;
-                });
+                const OsmDoc clipped = clipOsm(local, world, {x0, z0}, {x1, z1});
                 const fs::path f = folder / "settlements" / (sname + ".osm.json");
                 fs::create_directories(f.parent_path());
                 std::ofstream(f, std::ios::binary) << writeOsmDocJson(clipped);
@@ -563,6 +699,12 @@ json buildWorld(json spec, const BuildOptions& o)
             json call = {{"args", {file}}, {"ground", terrain}, {"name", sname}, {"culture", s.value("culture", culture)}};
             if (!origin.is_null())
                 call["origin"] = origin;
+            if (s.contains("area"))
+            {
+                const json near = outlinesIn(s["area"][0].get<double>(), s["area"][1].get<double>(), s["area"][2].get<double>(), s["area"][3].get<double>());
+                if (!near.empty())
+                    call["exclusions"] = near;
+            }
             for (const char* k : {"profile", "fill", "coverage", "margin"})
                 if (s.contains(k))
                     call[k] = s[k];
@@ -621,27 +763,6 @@ json buildWorld(json spec, const BuildOptions& o)
             });
     }
 
-    // Site kits, then one Buildings pass over every site that wants its buildings generated.
-    json siteIds = json::array();
-    for (const json& s : spec.value("sites", json::array()))
-    {
-        if (skipped("sites") || terrain.empty())
-            break;
-        const std::string id = s.value("id", std::string());
-        json made1;
-        if (!st.run("site." + (id.empty() ? s["kind"].get<std::string>() : id), [&] {
-                json call = {{"kind", s["kind"]}, {"terrain", terrain}, {"culture", s.value("culture", culture)}};
-                for (const char* k : {"id", "name", "seed", "at", "heading", "waterLevel", "params"})
-                    if (s.contains(k) && !s[k].is_null())
-                        call[k] = s[k];
-                return run("siteCreate", call);
-            }, &made1))
-            continue;
-        const std::string sid = made1.value("id", id);
-        built["sites"].push_back(sid);
-        if (s.value("buildings", true))
-            siteIds.push_back(sid);
-    }
     if (!siteIds.empty() && !skipped("buildings") && ops::find("buildingCreate"))
         st.run("buildings.sites", [&] {
             seedEdits("SiteBuildings", editsByGroup.value("SiteBuildings", json::object()));
@@ -712,6 +833,15 @@ json buildWorld(json spec, const BuildOptions& o)
             });
         if (z.contains("playArea"))
             st.run("zones.playArea", [&] { return run("zonePlayArea", setFlags({{"polygon", z["playArea"]}})); });
+        // Must-cover layers (districts, police) filled out to the play area unless the spec says otherwise.
+        const json fg = z.value("fillGaps", json(true));
+        if (Node* setNode = g.find(setName); setNode && !(fg.is_boolean() && !fg.get<bool>()))
+        {
+            const zones::ZoneSpec now = zones::zonesFromJson(run("zoneSpec", {{"set", setNode->path()}}));
+            for (const zones::Layer& l : now.layers)
+                if (l.mustCover && (fg.is_boolean() || std::find(fg.begin(), fg.end(), json(l.id)) != fg.end()))
+                    st.run("zones.fill." + l.id, [&] { return fillLayerGaps(setNode->path(), terrain, l.id); });
+        }
         if (Node* n = g.find(setName))
         {
             built["zones"] = n->path();

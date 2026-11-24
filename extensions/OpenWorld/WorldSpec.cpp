@@ -245,48 +245,119 @@ json resolvePaths(json spec, const std::string& dir)
     return spec;
 }
 
-OsmDoc clipOsm(const OsmDoc& d, const std::function<bool(const terrain::LatLon&)>& inside)
+OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2 lo, glm::dvec2 hi)
 {
+    if (world.size() != d.nodes.size())
+        throw std::runtime_error("clipOsm: one world position per node");
     std::unordered_map<int64_t, size_t> at;
     for (size_t i = 0; i < d.nodes.size(); ++i)
         at[d.nodes[i].id] = i;
+    auto inside = [&](glm::dvec2 p) { return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y; };
     std::vector<char> in(d.nodes.size(), 0);
     for (size_t i = 0; i < d.nodes.size(); ++i)
-        in[i] = inside(d.nodes[i].at) ? 1 : 0;
+        in[i] = inside(world[i]) ? 1 : 0;
 
     OsmDoc out;
     std::unordered_set<int64_t> keepNodes, keepWays;
+    std::unordered_map<int64_t, std::vector<int64_t>> pieces; // original way -> the ways it became
+    int64_t nextId = int64_t(1) << 52;
+    // A node where the segment from a (inside) to b (outside) crosses the area's edge.
+    auto edgeNode = [&](size_t a, size_t b) {
+        const glm::dvec2 p = world[a], q = world[b];
+        double t = 1.0;
+        for (int k = 0; k < 2; ++k)
+        {
+            if (q[k] < lo[k] && q[k] != p[k])
+                t = std::min(t, (lo[k] - p[k]) / (q[k] - p[k]));
+            if (q[k] > hi[k] && q[k] != p[k])
+                t = std::min(t, (hi[k] - p[k]) / (q[k] - p[k]));
+        }
+        OsmDoc::Node n;
+        n.id = nextId++;
+        n.at = {d.nodes[a].at.lat + (d.nodes[b].at.lat - d.nodes[a].at.lat) * t, d.nodes[a].at.lon + (d.nodes[b].at.lon - d.nodes[a].at.lon) * t};
+        out.nodes.push_back(n);
+        return n.id;
+    };
     for (const OsmDoc::Way& w : d.ways)
     {
-        bool any = false;
+        std::vector<size_t> idx;
         for (int64_t n : w.nodes)
-            if (auto it = at.find(n); it != at.end() && in[it->second])
-            {
-                any = true;
-                break;
-            }
-        if (!any)
+            if (auto it = at.find(n); it != at.end())
+                idx.push_back(it->second);
+        if (idx.size() < 2)
             continue;
-        keepWays.insert(w.id);
-        for (int64_t n : w.nodes)
-            keepNodes.insert(n);
-        out.ways.push_back(w);
+        const bool closed = w.nodes.size() > 2 && w.nodes.front() == w.nodes.back();
+        size_t inCount = 0;
+        for (size_t i : idx)
+            inCount += in[i];
+        if (inCount == 0)
+            continue;
+        if (closed)
+        {
+            if (inCount * 2 < idx.size())
+                continue;
+            keepWays.insert(w.id);
+            pieces[w.id] = {w.id};
+            for (int64_t n : w.nodes)
+                keepNodes.insert(n);
+            out.ways.push_back(w);
+            continue;
+        }
+        // Runs of inside nodes, each closed off by a node on the edge where the line leaves.
+        std::vector<int64_t> run;
+        auto flush = [&] {
+            if (run.size() >= 2)
+            {
+                OsmDoc::Way piece = w;
+                piece.id = pieces[w.id].empty() ? w.id : nextId++;
+                piece.nodes = run;
+                pieces[w.id].push_back(piece.id);
+                keepWays.insert(piece.id);
+                out.ways.push_back(std::move(piece));
+            }
+            run.clear();
+        };
+        for (size_t k = 0; k < idx.size(); ++k)
+        {
+            const size_t i = idx[k];
+            if (in[i])
+            {
+                if (run.empty() && k > 0 && !in[idx[k - 1]])
+                    run.push_back(edgeNode(i, idx[k - 1]));
+                run.push_back(d.nodes[i].id);
+                keepNodes.insert(d.nodes[i].id);
+            }
+            else if (!run.empty())
+            {
+                run.push_back(edgeNode(idx[k - 1], i));
+                flush();
+            }
+        }
+        flush();
     }
-    std::unordered_set<int64_t> keepRelations;
     for (const OsmDoc::Relation& r : d.relations)
     {
         OsmDoc::Relation kept = r;
         kept.members.clear();
         for (const OsmDoc::Member& m : r.members)
-            if ((m.type == 'w' && keepWays.count(m.ref)) || (m.type == 'n' && (keepNodes.count(m.ref) || (at.count(m.ref) && in[at[m.ref]]))))
-                kept.members.push_back(m);
-        if (kept.members.empty())
-            continue;
-        for (const OsmDoc::Member& m : kept.members)
-            if (m.type == 'n')
-                keepNodes.insert(m.ref);
-        keepRelations.insert(r.id);
-        out.relations.push_back(std::move(kept));
+        {
+            if (m.type == 'w')
+            {
+                if (auto it = pieces.find(m.ref); it != pieces.end())
+                    for (int64_t id : it->second)
+                        kept.members.push_back({'w', id, m.role});
+            }
+            else if (m.type == 'n')
+            {
+                if (auto it = at.find(m.ref); it != at.end() && in[it->second])
+                {
+                    kept.members.push_back(m);
+                    keepNodes.insert(m.ref);
+                }
+            }
+        }
+        if (!kept.members.empty())
+            out.relations.push_back(std::move(kept));
     }
     for (size_t i = 0; i < d.nodes.size(); ++i)
         if (keepNodes.count(d.nodes[i].id) || (in[i] && !d.nodes[i].tags.empty()))

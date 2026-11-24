@@ -19,6 +19,7 @@
 #include <lila/Slots.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <map>
@@ -118,10 +119,12 @@ json runChild(Issues& issues, json& children, const std::string& label, const ch
 {
     LILA_ZONE_N("world.check.child");
     LILA_ZONE_TEXT(label.c_str(), label.size());
+    const auto t0 = std::chrono::steady_clock::now();
     try
     {
         json r = callCmd(cmd, std::move(flags));
-        children[label] = {{"ok", r.value("ok", true)}, {"counts", r.value("counts", json::object())}};
+        children[label] = {{"ok", r.value("ok", true)}, {"counts", r.value("counts", json::object())},
+                           {"seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count()}};
         return r;
     }
     catch (const std::exception& e)
@@ -303,18 +306,39 @@ json checkWorld(const WorldRef* w, const json& options)
     Graph& g = Graph::current();
     Issues issues;
     json children = json::object();
-    const double tol = options.value("propTolerance", 60.0);
+    double tol = options.value("propTolerance", 60.0);
     const std::string terrain = worldTerrain(w);
     json notes = json::array();
 
     // Children: every part's own check.
     if (!terrain.empty())
-        issues.child("terrain", runChild(issues, children, "terrainCheck", "terrainCheck", {{"args", {terrain}}}, terrain), terrain, [](const json& i) {
+    {
+        json tc = runChild(issues, children, "terrainCheck", "terrainCheck", {{"args", {terrain}}}, terrain);
+        // A site kit's pads and yards are earthworks by design and sit by water by design: siteCheck judges their grading
+        // (steepGround, water), so terrainCheck's cut/fill and flood findings on site stamps are counted, not listed.
+        int siteEarthworks = 0;
+        if (tc.contains("issues"))
+        {
+            json kept = json::array();
+            for (const json& i : tc["issues"])
+            {
+                const std::string t = firstString(i, {"type", "kind"});
+                if ((t == "cutFill" || t == "flood") && i.dump().find("site:") != std::string::npos)
+                    ++siteEarthworks;
+                else
+                    kept.push_back(i);
+            }
+            tc["issues"] = kept;
+        }
+        if (siteEarthworks > 0)
+            notes.push_back(std::to_string(siteEarthworks) + " terrainCheck cut/fill and flood findings on site kit stamps left to siteCheck");
+        issues.child("terrain", tc, terrain, [](const json& i) {
             const std::string t = firstString(i, {"type", "kind"});
             if (t == "laneDisconnected" || t == "harbourUnreachable" || t == "channelShallow" || t == "channelNarrow" || t == "laneShallow" || t == "laneOverLand")
                 return std::string("unreachableWater");
             return std::string();
         });
+    }
     else
         notes.push_back(terrainMeshes().empty() ? "no terrain in the scene" : "several terrains and no world node: terrainCheck skipped (name the world)");
     const std::string remix = w ? w->built.value("remix", std::string()) : std::string();
@@ -354,7 +378,7 @@ json checkWorld(const WorldRef* w, const json& options)
             const std::string k = firstString(i, {"kind"});
             return k == "realName" ? std::string("realName") : std::string();
         });
-    std::vector<std::string> zoneNames;
+    std::vector<std::string> zoneNames, settlementZoneNames;
     for (const std::string& set : zoneSetNodes())
     {
         issues.child("zone", runChild(issues, children, "zoneCheck:" + meshName(set), "zoneCheck", {{"set", set}}, set), set);
@@ -362,7 +386,8 @@ json checkWorld(const WorldRef* w, const json& options)
         for (const json& l : spec.value("layers", json::array()))
             for (const json& z : l.value("zones", json::array()))
             {
-                zoneNames.push_back(z.value("name", std::string()));
+                // Names Settlement gave its districts are curated words, checked against imported names only (as settlementCheck does).
+                (z.value("nameSource", std::string()) == "settlement" ? settlementZoneNames : zoneNames).push_back(z.value("name", std::string()));
                 if (z.value("nameSource", std::string()) == "numbered")
                     issues.add("zoneNumberedName", "zones", "warning", "zone " + z.value("id", std::string()) + " in " + l.value("id", std::string()) + " has a numbered name",
                                nullptr, set, {},
@@ -385,10 +410,31 @@ json checkWorld(const WorldRef* w, const json& options)
     json byType = json::object();
     size_t onPlaceholder = 0, swappedCount = 0, shell = 0, hidden = 0;
     std::shared_ptr<const geo::Heightfield> hf = terrain.empty() ? nullptr : terrainHeights(terrain);
+    // A prop and this check sample the ground differently between grid points; on coarse cells that differs by more.
+    if (hf)
+        tol = std::max(tol, hf->cell * 0.05);
+    double seaLevel = -1e30;
+    if (!terrain.empty())
+        try
+        {
+            const json water = callCmd("terrainWater", {{"args", {terrain}}});
+            if (water.contains("features") && water["features"].contains("settings"))
+                seaLevel = water["features"]["settings"].value("seaLevel", seaLevel);
+        }
+        catch (const std::exception&)
+        {
+        }
+    const auto tSlots = std::chrono::steady_clock::now();
     {
         LILA_ZONE_N("world.check.slots");
         const slots::StatePtr st = slots::state();
         int floating = 0, buried = 0;
+        struct GroundProp
+        {
+            glm::dvec3 at;
+            std::string type, id;
+        };
+        std::vector<GroundProp> ground;
         for (const slots::Slot& s : slots::collect(g))
         {
             const slots::Resolved r = slots::resolve(s, *st);
@@ -423,28 +469,52 @@ json checkWorld(const WorldRef* w, const json& options)
             if (!hf || !type || type->attach != slots::Attach::Ground || s.owner.starts_with("building:"))
                 continue;
             const glm::dvec3 p(s.transform[3]);
-            if (!hf->contains(p.x, p.z))
-                continue;
-            const double ground = hf->heightAt(p.x, p.z);
-            const double dy = p.y - ground;
-            const bool overWater = hf->maskAt("water", p.x, p.z) > 0.3 || hf->maskAt("sea", p.x, p.z) > 0.3 || hf->maskAt("channel", p.x, p.z) > 0.3;
-            if (dy > tol && !overWater)
+            if (hf->contains(p.x, p.z))
+                ground.push_back({p, s.type, s.id});
+        }
+        // A prop with another standing right under it is stacked (container tiers, crates), not floating.
+        std::map<std::pair<int64_t, int64_t>, std::vector<size_t>> cells;
+        auto cellOf = [](const glm::dvec3& p) { return std::pair<int64_t, int64_t>{int64_t(std::floor(p.x / 200.0)), int64_t(std::floor(p.z / 200.0))}; };
+        for (size_t i = 0; i < ground.size(); ++i)
+            cells[cellOf(ground[i].at)].push_back(i);
+        auto stacked = [&](size_t i) {
+            const glm::dvec3& p = ground[i].at;
+            const auto [cx, cz] = cellOf(p);
+            for (int64_t dz = -1; dz <= 1; ++dz)
+                for (int64_t dx = -1; dx <= 1; ++dx)
+                    if (auto it = cells.find({cx + dx, cz + dz}); it != cells.end())
+                        for (size_t j : it->second)
+                            if (j != i && ground[j].at.y < p.y - 50.0 && glm::length(glm::dvec2(ground[j].at.x - p.x, ground[j].at.z - p.z)) < 150.0)
+                                return true;
+            return false;
+        };
+        for (size_t i = 0; i < ground.size(); ++i)
+        {
+            const glm::dvec3& p = ground[i].at;
+            const double groundAt = hf->heightAt(p.x, p.z);
+            const double dy = p.y - groundAt;
+            // Ground under the sea level counts as water too: a dredged berth is cut after the sea mask is made.
+            const bool overWater = hf->maskAt("water", p.x, p.z) > 0.3 || hf->maskAt("sea", p.x, p.z) > 0.3 || hf->maskAt("channel", p.x, p.z) > 0.3 ||
+                                   groundAt < seaLevel - 50.0;
+            if (dy > tol && !overWater && !stacked(i))
             {
                 if (++floating <= 200)
-                    issues.add("propFloating", "slots", "warning", s.type + " " + s.id + " stands " + std::to_string(int(dy)) + " cm above the ground",
-                               json::array({p.x, p.z}), {}, "from lila import ops\nops.slotFind(id=" + pyString(s.id) + ", select=True)");
+                    issues.add("propFloating", "slots", "warning", ground[i].type + " " + ground[i].id + " stands " + std::to_string(int(dy)) + " cm above the ground",
+                               json::array({p.x, p.z}), {}, "from lila import ops\nops.slotFind(id=" + pyString(ground[i].id) + ", select=True)");
             }
             else if (dy < -tol)
             {
                 if (++buried <= 200)
-                    issues.add("propBuried", "slots", "warning", s.type + " " + s.id + " is " + std::to_string(int(-dy)) + " cm under the ground",
-                               json::array({p.x, p.z}), {}, "from lila import ops\nops.slotFind(id=" + pyString(s.id) + ", select=True)");
+                    issues.add("propBuried", "slots", "warning", ground[i].type + " " + ground[i].id + " is " + std::to_string(int(-dy)) + " cm under the ground",
+                               json::array({p.x, p.z}), {}, "from lila import ops\nops.slotFind(id=" + pyString(ground[i].id) + ", select=True)");
             }
         }
         if (floating > 200 || buried > 200)
             notes.push_back(std::to_string(floating) + " floating and " + std::to_string(buried) + " buried props; the first 200 of each are listed");
     }
 
+    children["slots"] = {{"seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - tSlots).count()}};
+    const auto tEnv = std::chrono::steady_clock::now();
     // Buildings over water (the terrain's water mask) or a road (a terrain road's paved width round its centreline).
     if (hf)
     {
@@ -468,6 +538,8 @@ json checkWorld(const WorldRef* w, const json& options)
         }
     }
 
+    children["envelopes"] = {{"seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - tEnv).count()}};
+    const auto tNames = std::chrono::steady_clock::now();
     // Real names in any output text: the scene's names and name attributes, plus zone names, site names and sign texts.
     {
         LILA_ZONE_N("world.check.realNames");
@@ -479,8 +551,16 @@ json checkWorld(const WorldRef* w, const json& options)
                 texts.push_back({"site " + s.value("id", std::string()), s.value("name", std::string())});
         for (const lila::names::Leak& l : lila::names::findRealNames(g, texts))
             issues.add("realName", "names", "error", "\"" + l.text + "\" (" + l.where + ") matches the real name \"" + l.real + "\" from " + l.source);
+        std::vector<lila::names::Text> districtTexts;
+        for (const std::string& z : settlementZoneNames)
+            if (!z.empty())
+                districtTexts.push_back({"district zone name", z});
+        if (!districtTexts.empty())
+            for (const lila::names::Leak& l : lila::names::findRealNames(districtTexts, lila::names::sceneRealNames(g), false))
+                issues.add("realName", "names", "error", "\"" + l.text + "\" (" + l.where + ") matches the real name \"" + l.real + "\" from " + l.source);
     }
 
+    children["realNames"] = {{"seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - tNames).count()}};
     if (onPlaceholder > 0)
         issues.add("placeholders", "slots", "info",
                    std::to_string(onPlaceholder) + " of " + std::to_string(onPlaceholder + swappedCount) + " slots still use placeholders (slotRule swaps them by type)");
@@ -622,8 +702,8 @@ json writeWorldMap(const WorldRef* w, const json& options)
         try
         {
             const json wi = callCmd("terrainWater", {{"args", {terrain}}});
-            if (wi.contains("seaLevel") && wi["seaLevel"].is_number())
-                sea = wi["seaLevel"].get<double>();
+            if (wi.contains("features") && wi["features"].contains("settings"))
+                sea = wi["features"]["settings"].value("seaLevel", 0.0);
         }
         catch (const std::exception&)
         {
