@@ -321,3 +321,25 @@ TEST_CASE("buildings commands: performance budget")
     CHECK(edit.value("generated", 0) == 1);
     CHECK(editMs < 1000.0); // generous; the target is 100 ms, measured and logged
 }
+
+TEST_CASE("buildings commands: the trim sheet goes to the user's folder without a workspace, never beside the shipped one")
+{
+    loadBuildings();
+    run("newScene");
+    run("buildingCreate", {{"envelopes", json::array({envelope(1, 0, 0, 1200, 900, 2)})}, {"name", "Block"}});
+    const std::filesystem::path shipped = std::filesystem::path(LILA_TEST_BUILDINGS_STYLES).parent_path() / "trims";
+    auto count = [](const std::filesystem::path& d) {
+        int n = 0;
+        for (const auto& e : std::filesystem::directory_iterator(d))
+            n += e.is_regular_file();
+        return n;
+    };
+    const int before = count(shipped);
+    // Baking it (Trim Sheets) writes maps beside that copy; here only the copy is made.
+    const json r = run("buildingTrimSheet", {{"bake", false}});
+    CAPTURE(r.dump().substr(0, 1500));
+    CHECK(r["fileFrom"].get<std::string>().starts_with("user folder"));
+    CHECK(r["file"].get<std::string>().find("trim-sheets") != std::string::npos);
+    CHECK(std::filesystem::exists(r["file"].get<std::string>()));
+    CHECK(count(shipped) == before);
+}

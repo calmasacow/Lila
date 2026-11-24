@@ -12,6 +12,7 @@
 #include <lila/Mesh.h>
 #include <lila/Names.h>
 #include <lila/Node.h>
+#include <lila/Prefs.h>
 #include <lila/Profile.h>
 #include <lila/Slots.h>
 #include <lila/Transform.h>
@@ -1769,7 +1770,8 @@ void registerCommands(ext::Context& ctx)
 
     ctx.registerCommand({
         .name = "buildingTrimSheet",
-        .doc = "The LilaBuilding trim sheet shells are laid on: copied into the workspace's TrimSheets folder and baked with Trim Sheets "
+        .doc = "The LilaBuilding trim sheet shells are laid on: copied into the workspace's TrimSheets folder (the user's trim-sheets "
+               "folder when no workspace is open) and baked with Trim Sheets "
                "(needs that extension), then building meshes point at the copy. The strips: Render, Plinth, Cornice, Band, Coping, "
                "Pilaster, RoofTile, Sheet. Returns the file and the bake result.",
         .flags = {{"bake", "b", T::Bool, true, "Bake the sheet's maps."}},
@@ -1779,15 +1781,16 @@ void registerCommands(ext::Context& ctx)
             std::error_code ec;
             if (src.empty() || !fs::exists(src, ec))
                 throw CommandError("buildingTrimSheet: the shipped LilaBuilding.lilatrim is missing from the Buildings resources");
-            fs::path dst = src;
-            if (lila::Workspace::get().isOpen())
-            {
-                dst = lila::Workspace::get().root() / "TrimSheets" / "LilaBuilding.lilatrim";
-                fs::create_directories(dst.parent_path(), ec);
-                if (!fs::exists(dst, ec))
-                    fs::copy_file(src, dst, ec);
-            }
-            json out = {{"file", dst.generic_string()}};
+            // Baking writes maps beside the file, so it goes to the workspace, else the user's folder, never the shipped resources.
+            const bool inWorkspace = lila::Workspace::get().isOpen();
+            const fs::path dst = (inWorkspace ? lila::Workspace::get().root() / "TrimSheets" : lila::PrefStore::get().userDir() / "trim-sheets") /
+                                 "LilaBuilding.lilatrim";
+            fs::create_directories(dst.parent_path(), ec);
+            if (!fs::exists(dst, ec))
+                fs::copy_file(src, dst, ec);
+            if (ec)
+                throw CommandError("buildingTrimSheet: could not copy the sheet to " + dst.generic_string() + " (" + ec.message() + ")");
+            json out = {{"file", dst.generic_string()}, {"fileFrom", inWorkspace ? "workspace" : "user folder (no workspace open)"}};
             if (a.get<bool>("bake", true))
             {
                 if (!ops::find("trimSheetCreate"))
