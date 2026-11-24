@@ -3537,6 +3537,22 @@ def fairCurve(*objects: Any, tolerance: float | None = None, keepTangents: bool 
         iterations: Most smoothing passes. Short form it. Default 200.
     """
 
+def fictionalName(culture: str | None = None, kind: str | None = None, program: str | None = None, key: str | None = None, streetClass: int | None = None, *, cu: str | None = None, k: str | None = None, pg: str | None = None, ky: str | None = None, sc: int | None = None) -> Any:
+    """A fictional name from a naming culture, the same every time for the same culture, kind, program and key. Never one that matches the brand blocklist or a real name an import in the scene replaced. Returns the name and the key used.
+
+    Args:
+        culture: Naming culture (namingCultures). Short form cu. Default 'mexican'.
+        kind: What is named: street, district, town, river, lake, reservoir, dam, island, beach, port, airport, cemetery, school, hospital, government, business, ... Short form k. Default 'business'.
+        program: For businesses and buildings: what they are (pharmacy, taqueria, carParts, ...). Short form pg.
+        key: Stable key: a number or any text (an id). Short form ky. Default '1'.
+        streetClass: Streets: 0 arterial, 1 collector, 2 local, 3 alley, 4 path. Short form sc. Default 2.
+
+    Examples:
+        fictionalName(culture='mexican', kind='business', program='taqueria', key='node/123')['name']
+
+        fictionalName(kind='river', key=42)
+    """
+
 def field(*objects: Any, shape: str | None = None, position: Sequence[float] | None = None, radius: float | None = None, name: str | None = None) -> Any:
     """Create a falloff field with a first shape layer, placed and sized on the given or selected meshes (or at the origin). Deformers among the objects get the field connected. Returns the field.
 
@@ -6155,6 +6171,13 @@ def namingConvention(*objects: Any, enable: bool | None = None, mode: str | None
         fix: Rename every node that breaks the rules. Short form f. Default False.
     """
 
+def namingCultures() -> Any:
+    """The naming cultures imports and settlements name things in, each with the vocabulary its businesses and places are named from, the kinds of named things, and the business programs with patterns of their own.
+
+    Examples:
+        namingCultures()['cultures']
+    """
+
 def newScene() -> Any:
     """Clear the scene. Not undoable."""
 
@@ -7538,6 +7561,21 @@ def rangeOfMotion(*objects: Any, angle: float | None = None, axes: str | None = 
         randomPoses: Poses turning every joint at once by a random amount within angle. Default 0.
         seed: Seed of the random poses. Default 1.
         name: Name of the take; <root>_ROM by default. Short form n.
+    """
+
+def realNameCheck(texts: Sequence[Any] | None = None, scene: bool | None = None, report: bool | None = None, *, tx: Sequence[Any] | None = None, sn: bool | None = None, rp: bool | None = None) -> Any:
+    """Finds output text that matches a real name: names written by imports and generators (osmFeatures, osmBuildings, osmPlaces, sign text, labels), node names, and any texts given, compared with the real names imports replaced (kept in hidden sourceNames attributes) and the brand blocklist (OpenStreetMap name-suggestion-index). Node names are compared with imported names only. report=True lists each leak in the Validation panel on its node. Returns ok, the leaks (where, text, the real name, where that came from) and how many real names were compared.
+
+    Args:
+        texts: Extra texts to check: strings, or {where, text}. Short form tx.
+        scene: Check the scene's names and name attributes too. Short form sn. Default True.
+        report: Also list leaks in the Validation panel (replacing this check's earlier ones). Short form rp. Default False.
+
+    Examples:
+        c = realNameCheck()
+        c['ok'], c['leaks']
+
+        realNameCheck(texts=['Farmacias Similares'], scene=False)
     """
 
 def rebindDeformer(*objects: Any) -> Any:

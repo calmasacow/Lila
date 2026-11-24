@@ -562,10 +562,21 @@ Georef georefFor(const TerrainRef& t, const Args& a, const std::string& cmd)
         const json o = a.flags["origin"];
         if (!o.is_array() || o.size() != 2)
             throw CommandError(cmd + ": origin is [latitude, longitude] of the terrain's centre");
+        // An option box's list field hands the numbers over as text.
+        auto degrees = [&](const json& v) {
+            if (v.is_number())
+                return v.get<double>();
+            char* end = nullptr;
+            const std::string text = v.is_string() ? v.get<std::string>() : std::string();
+            const double d = std::strtod(text.c_str(), &end);
+            if (text.empty() || end == text.c_str())
+                throw CommandError(cmd + ": origin is [latitude, longitude] of the terrain's centre");
+            return d;
+        };
         Georef g;
         g.kind = ProjectionKind::Local;
-        g.latMid = o[0].get<double>();
-        g.x0 = o[1].get<double>();
+        g.latMid = degrees(o[0]);
+        g.x0 = degrees(o[1]);
         g.y0 = g.latMid;
         const glm::dvec2 centre = t.local->origin + t.local->extent() * 0.5;
         // One degree in metres at that latitude, as Local data is flattened.

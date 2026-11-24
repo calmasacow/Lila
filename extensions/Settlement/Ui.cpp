@@ -212,8 +212,13 @@ void registerUi(ext::Context& ctx)
 
     {
         ops::options::Override o;
-        o.order = {"ground", "profile", "culture", "fill", "coverage", "origin", "margin", "name"};
+        o.order = {"file", "ground", "profile", "culture", "fill", "coverage", "origin", "margin", "name"};
         o.labels["culture"] = "Names";
+        o.shown = {"origin"};
+        o.labels["origin"] = "Origin Lat, Lon";
+        o.choices["profile"] = {{"hamlet", "Hamlet"}, {"streetVillage", "Street Village"}, {"medievalTown", "Medieval Town"}, {"usTown", "US Town"},
+                                {"manhattan", "Manhattan"}, {"europeanCity", "European City"}, {"modernCity", "Modern City"},
+                                {"scifiMegacity", "Sci-fi Megacity"}};
         std::vector<std::pair<std::string, std::string>> cultures = {{"", "From Location"}};
         for (const std::string& c : names::cultures())
             cultures.push_back({c, names::cultureLabel(c)});
@@ -224,6 +229,18 @@ void registerUi(ext::Context& ctx)
         o.enabledWhen["coverage"] = {"fill", {"sparse"}};
         o.docs = "settlement";
         ops::options::setOverride("settlementFromOsm", o);
+        // The option box: the same settings with the file as a field, the selected mesh as the ground.
+        optionBox::addCustom(ctx, "settlement.fromOsm", [] {
+            nlohmann::json call = nlohmann::json::object();
+            scene::Graph& g = scene::Graph::current();
+            for (scene::NodeId id : g.selection())
+                if (const scene::Node* n = g.node(id); n && n->type().isA("mesh"))
+                {
+                    call["ground"] = n->path();
+                    break;
+                }
+            optionBox::openCommand("Town from OSM", "settlementFromOsm", call);
+        });
     }
 
     levelToolkit::add(ctx, {.id = "settlement",

@@ -745,6 +745,7 @@ void registerGeneratorCommands(ext::Context& ctx)
                "leaves sparse. Returns what settlementCreate returns, with the import's counts, culture and curves.",
         .positionalDoc = "OSM file (.osm, Overpass .json, .osm.pbf)",
         .flags = {nodeFlag({"ground", "gd", GenArg::String, nullptr, "The terrain the data lies on."}, "mesh"),
+                  {"file", "fi", GenArg::String, "", "The OSM file, when not given as the first argument."},
                   {"origin", "or", GenArg::List, nullptr, "[latitude, longitude] of the terrain's centre, for terrains not from real data."},
                   {"profile", "pr", GenArg::String, "usTown", "Style for heights, roofs and the lots Settlement cuts itself.", profiles},
                   {"culture", "cu", GenArg::String, "", "Naming culture for every name (namingCultures); empty chooses one from where the data lies.", cultureValues},
@@ -757,13 +758,14 @@ void registerGeneratorCommands(ext::Context& ctx)
             LILA_ZONE();
             const char* cmd = "settlementFromOsm";
             Graph& g = Graph::current();
-            if (a.positional.empty())
+            const std::string file = !a.positional.empty() ? a.positional[0].get<std::string>() : a.get<std::string>("file", "");
+            if (file.empty())
                 throw CommandError(std::string(cmd) + ": give the OSM file");
             const std::string ground = a.get<std::string>("ground", "");
             if (ground.empty())
                 throw CommandError(std::string(cmd) + ": give ground= (the terrain the data lies on)");
             needCommand("terrainImportOsm", "Terrain", cmd);
-            json call = {{"args", {a.positional[0]}}, {"terrain", ground}, {"kinds", {"road", "path", "building", "place"}}, {"landcover", false}};
+            json call = {{"args", {file}}, {"terrain", ground}, {"kinds", {"road", "path", "building", "place"}}, {"landcover", false}};
             if (a.has("origin"))
                 call["origin"] = a.flags["origin"];
             if (!a.get<std::string>("culture", "").empty())
@@ -784,7 +786,7 @@ void registerGeneratorCommands(ext::Context& ctx)
                             lo = glm::min(lo, q), hi = glm::max(hi, q);
                 }
             if (!curves.contains("road") && !curves.contains("path"))
-                throw CommandError(std::string(cmd) + ": " + a.positional[0].get<std::string>() + " has no roads or paths on the ground");
+                throw CommandError(std::string(cmd) + ": " + file + " has no roads or paths on the ground");
             const double m = std::max(0.0, a.get<double>("margin", 2000.0));
             lo -= Vec2(m), hi += Vec2(m);
             const json outline = {{lo.x, lo.y}, {hi.x, lo.y}, {hi.x, hi.y}, {lo.x, hi.y}};
