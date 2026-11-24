@@ -21,6 +21,7 @@
 #include <fstream>
 #include <mutex>
 #include <set>
+#include <thread>
 
 using namespace lila;
 using namespace lila::link;
@@ -341,7 +342,7 @@ TEST_CASE("slot table: a send replaces only its own sources' rows")
     Link::ConnectOptions o;
     o.port = server.port();
     Link::get().connect(o);
-    run("unrealPlaceInstances", {{"args", {"Lamps"}}, {"wait", true}, {"validate", false}});
+    run("unrealPlaceInstances", {{"args", {"Lamps"}}, {"wait", true}, {"validate", false}, {"folder", "/Game/Kit"}, {"mode", "actors"}});
     json table;
     for (const json& r : server.requests())
         if (r["method"] == "writeSlotTable")
@@ -352,6 +353,25 @@ TEST_CASE("slot table: a send replaces only its own sources' rows")
     // Every row's group starts with a source the send names, so Unreal keeps every other send's rows.
     for (const json& row : table["rows"])
         CHECK(row["group"].get<std::string>().starts_with(table["sources"][0].get<std::string>()));
+
+    // A rule swap sends the lamps again by itself (auto-sync), with the flags of the send that carried them.
+    PrefStore::get().set("unreal", "/autoSync", true, PrefScope::Workspace);
+    const size_t before = server.requests().size();
+    run("slotRule", {{"args", {"add"}}, {"type", "lamp"}, {"unrealClass", "/Game/BP/BP_LampB.BP_LampB_C"}});
+    json resent;
+    for (int k = 0; k < 200 && resent.is_null(); ++k)
+    {
+        mainq::drain();
+        const std::vector<json> reqs = server.requests();
+        for (size_t i = before; i < reqs.size(); ++i)
+            if (reqs[i]["method"] == "placeInstances")
+                resent = reqs[i]["params"];
+        if (resent.is_null())
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(resent.is_object());
+    CHECK(resent["actorClass"] == "/Game/BP/BP_LampB.BP_LampB_C");
+    CHECK(resent["mode"] == "actors");
     unregisterExporter("fbx:instanceSource");
     Link::get().disconnect();
 }

@@ -1081,10 +1081,13 @@ int placementTimeoutMs(size_t count)
 
 namespace
 {
-/** Roots of the last send that carried slots: a slot rule, override or pin change sends them again (auto-sync). */
-std::vector<std::string>& slotRoots()
+/**
+ * Roots of every send that carried slots, with the flags they went with (folder, mode, nanite...): a slot rule, override
+ * or pin change sends them again the same way (auto-sync); groups Unreal already holds unchanged are skipped.
+ */
+std::map<std::string, json>& slotRoots()
 {
-    static std::vector<std::string> r;
+    static std::map<std::string, json> r;
     return r;
 }
 
@@ -1097,20 +1100,27 @@ void resyncSlots()
     // Coalesced: one send after a burst of edits (an undo of several rules).
     mainq::post([] {
         queued = false;
-        json roots = json::array();
+        std::map<std::string, json> byFlags;
         scene::Graph& g = scene::Graph::current();
-        for (const std::string& r : slotRoots())
-            if (g.find(r))
-                roots.push_back(r);
-        if (roots.empty())
-            return;
-        try
+        for (const auto& [root, flags] : slotRoots())
+            if (g.find(root))
+            {
+                json& call = byFlags[flags.dump()];
+                if (call.is_null())
+                    call = flags;
+                call["args"].push_back(root);
+            }
+        for (auto& [key, call] : byFlags)
         {
-            ops::execute("unrealPlaceInstances", {{"args", roots}, {"validate", false}});
-        }
-        catch (const std::exception& e)
-        {
-            log::warn("Unreal slot sync: {}", e.what());
+            call["validate"] = false;
+            try
+            {
+                ops::execute("unrealPlaceInstances", call);
+            }
+            catch (const std::exception& e)
+            {
+                log::warn("Unreal slot sync: {}", e.what());
+            }
         }
     });
 }
@@ -1243,9 +1253,11 @@ void registerPlacementCommands()
             const std::string slotTablePath = a.get<std::string>("slotTable", "/Game/Lila/Slots/DA_LilaSlotTable");
             if (!plan["slotTable"].empty())
             {
-                slotRoots().clear();
+                json flags = a.flags;
+                for (const char* drop : {"args", "wait", "dryRun", "validate"})
+                    flags.erase(drop);
                 for (scene::NodeId r : roots)
-                    slotRoots().push_back(g.fullPath(r));
+                    slotRoots()[g.fullPath(r)] = flags;
             }
             const bool hashes = hasFeature("placementHashes");
             auto job = [plan, meshes, alone, withChildren, hlod, linkedHlod, slotTablePath, hashes, dir = cacheDir()]() mutable {
