@@ -1,5 +1,6 @@
 #include "slots/SlotsGn.h"
 
+#include "core/Profile.h"
 #include "geo/Mesh.h"
 #include "gn/InstanceView.h"
 #include "gn/NodesCommon.h"
@@ -290,6 +291,7 @@ namespace detail
 /** After an evaluation, on the main thread: builds the visuals and pool tags evaluations asked for, then runs them again. */
 void servicePending(scene::Graph& g)
 {
+    LILA_ZONE();
     Pending work;
     {
         std::lock_guard lock(pendingMutex());

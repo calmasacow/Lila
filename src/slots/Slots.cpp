@@ -2,6 +2,7 @@
 
 #include "core/ExtensionContext.h"
 #include "core/Log.h"
+#include "core/Profile.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
@@ -614,6 +615,7 @@ std::optional<std::set<NodeId>> affectedPublishers(const State& before, const St
 
 void refresh()
 {
+    LILA_ZONE();
     const StatePtr before = state();
     auto next = std::make_shared<State>();
     const json rules = scene::data::get(kRulesKey, json::array());
