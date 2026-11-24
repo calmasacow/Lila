@@ -18,7 +18,9 @@
 #include <cmath>
 #include <map>
 #include <numbers>
+#include <optional>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace lila::ui
 {
@@ -504,6 +506,46 @@ const Entry* entryFor(const scene::MeshPtr& mesh, bool tangents = false, scene::
     }
 }
 } // namespace
+
+void prewarmRenderMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes)
+{
+    LILA_ZONE();
+
+    auto& c = cache();
+    std::vector<std::pair<scene::MeshPtr, bool>> todo;
+    std::unordered_set<const geo::Mesh*> seen;
+    for (const auto& [mesh, tangents] : meshes)
+    {
+        if (!mesh || mesh->numFaces() == 0 || !seen.insert(mesh.get()).second)
+            continue;
+        if (auto it = c.find(mesh.get()); it != c.end() && it->second.source.lock() == mesh && (it->second.tangents || !tangents))
+            continue;
+        todo.emplace_back(mesh, tangents);
+    }
+    constexpr size_t kWorthIt = 16;
+    if (todo.size() < kWorthIt)
+        return;
+    std::vector<std::optional<Entry>> built(todo.size());
+    std::vector<uint64_t> keys(todo.size());
+    tbb::parallel_for(size_t(0), todo.size(), [&](size_t i) {
+        try
+        {
+            keys[i] = layoutKey(*todo[i].first);
+            built[i] = build(todo[i].first, todo[i].second);
+        }
+        catch (const std::bad_alloc&)
+        {
+            // entryFor tries this one again on its own and reports it.
+        }
+    });
+    std::erase_if(c, [](const auto& kv) { return kv.second.source.expired(); });
+    for (size_t i = 0; i < todo.size(); ++i)
+        if (built[i])
+        {
+            rememberLayout(keys[i], *built[i]);
+            c[todo[i].first.get()] = std::move(*built[i]);
+        }
+}
 
 std::shared_ptr<const render::RenderMesh> renderMeshFor(const scene::MeshPtr& mesh, bool tangents, scene::NodeId owner)
 {

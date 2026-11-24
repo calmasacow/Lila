@@ -265,6 +265,55 @@ struct ViewportWidget::MeshDrawCache
 
 void ViewportWidget::MeshDrawCacheDelete::operator()(MeshDrawCache* c) const { delete c; }
 
+namespace
+{
+/**
+ * The meshes this frame rebuilds, their render copies built in parallel up front: after a load or a world build
+ * thousands of entries rebuild at once, and building each in the frame's loop takes seconds.
+ */
+template <class Cache, class Hidden>
+void prewarmRebuilds(scene::Graph& g, Cache& cache, const std::vector<scene::Node*>& meshes, const MeshSettings& set,
+                     const scene::sceneIndex::Hierarchy& hierarchy, const scene::isolation::Set* iso, const Hidden& lodHidden,
+                     const std::unordered_set<scene::NodeId>& hilite)
+{
+    if (!set.maskShown)
+        return;
+    std::vector<std::pair<scene::MeshPtr, bool>> wanted;
+    auto want = [&](const scene::MeshPtr& mesh) {
+        if (mesh)
+            wanted.emplace_back(mesh, set.showMaterials && needsTangents(*mesh));
+    };
+    for (size_t i = 0; i < meshes.size(); ++i)
+    {
+        const MeshEntry& e = cache.entries[i];
+        const scene::Node& n = *meshes[i];
+        const scene::NodeId id = n.id();
+        if (e.pass == n.evaluatedPass() && e.settings == cache.settingsId)
+            continue;
+        auto [over, added] = cache.overridden.try_emplace(&n.type());
+        if (added)
+            over->second = overridden(n);
+        if (over->second)
+            continue;
+        if (hilite.contains(id) || lodHidden.contains(id) || !hierarchy.visible(id) || (iso && !iso->shows(id)) ||
+            n.as<int64_t>(scene::MeshNode::kSmoothPreview) != 0)
+            continue;
+        if (set.terrain.drawsHeightfields() && heightfieldDisplay::heightfieldOf(g, id))
+            continue;
+        // An instanced result draws the geometry beside its instances and each referenced mesh.
+        if (gn::InstanceViewPtr view = gn::instanceViewFor(g, id))
+        {
+            want(view->base);
+            for (const gn::InstancePart& p : view->parts)
+                want(p.mesh);
+        }
+        else
+            want(n.as<scene::MeshPtr>(scene::MeshNode::kOutMesh));
+    }
+    prewarmRenderMeshes(wanted);
+}
+} // namespace
+
 void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, const std::unordered_set<scene::NodeId>& lodHidden,
                                    const std::unordered_set<scene::NodeId>& underSelection, bool highlight,
                                    std::vector<displayAids::MeshEntry>* aids)
@@ -332,6 +381,7 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
     const scene::NodeId pickHover = rv ? scene::kNoNode : viewportTools::hoverHighlight();
     const bool preselecting = !rv &&mPreselect.mode == scene::ComponentMode::Object && !componentMode && mPreselect.node != scene::kNoNode;
 
+    prewarmRebuilds(g, cache, meshes, set, hierarchy, iso, lodHidden, hilite);
     for (size_t i = 0; i < meshes.size(); ++i)
     {
         MeshEntry& e = cache.entries[i];

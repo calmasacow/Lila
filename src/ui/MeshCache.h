@@ -25,6 +25,12 @@ namespace lila::ui
 LILA_UI_API std::shared_ptr<const render::RenderMesh> renderMeshFor(const scene::MeshPtr& mesh, bool tangents = false,
                                                                     scene::NodeId owner = scene::kNoNode);
 
+/**
+ * Builds the render copies of these meshes (with tangents where the flag says) that are not cached yet, in parallel:
+ * for a frame about to draw thousands of new meshes, which renderMeshFor would otherwise build one at a time.
+ */
+LILA_UI_API void prewarmRenderMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes);
+
 /** The mesh subdivided for smooth preview, cached per snapshot and level. Level 0 returns the mesh itself. */
 LILA_UI_API scene::MeshPtr smoothedFor(const scene::MeshPtr& mesh, int level);
 
