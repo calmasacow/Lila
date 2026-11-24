@@ -161,6 +161,19 @@ std::string capitalised(std::string s)
     return s;
 }
 
+/** "goFast" as "go fast": craft ids read as words (and never as the brand a joined name can match). */
+std::string spacedWords(const std::string& id)
+{
+    std::string out;
+    for (char ch : id)
+    {
+        if (std::isupper(uint8_t(ch)) && !out.empty())
+            out += ' ';
+        out += char(std::tolower(uint8_t(ch)));
+    }
+    return out;
+}
+
 std::string singular(const std::string& label)
 {
     if (label.size() > 3 && label.ends_with("ies"))
@@ -1566,7 +1579,7 @@ void registerZoneCommands(ext::Context& ctx)
                 paintPath(z.mask, pts, d, radii);
                 const std::string craft = lane.value("craft", std::string()), kind = lane.value("kind", std::string());
                 z.attrs = {{"craft", craft}, {"kind", kind}, {"lane", lane.value("id", std::string())}};
-                z.name = capitalised(craft) + " " + kind + " lane " + std::to_string(made.size() + 1);
+                z.name = capitalised(spacedWords(craft)) + " " + kind + " lane " + std::to_string(made.size() + 1);
                 z.nameSource = "lane";
                 z.source = {{"kind", "water"}, {"terrain", terrain}, {"lane", lane.value("id", std::string())}};
                 l.zones.push_back(std::move(z));

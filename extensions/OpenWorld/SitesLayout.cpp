@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <mutex>
 #include <numbers>
 #include <stdexcept>
 
@@ -397,7 +398,7 @@ const std::vector<TypeDef>& slotTypes()
         {"pool.swimming", "Swimming pool", {1000, 150, 500}, "ground", "box", {"leisure"}, "A swimming pool, its rim at the ground."},
         {"helipad", "Helipad", {2000, 10, 2000}, "ground", "cylinder", {"aviation"}, "A helipad pad and marking."},
         {"lighthouse", "Lighthouse part", {300, 400, 300}, "ground", "lamp", {"lighting", "waterfront"}, "Any lighthouse part."},
-        {"lighthouse.lantern", "Lantern", {300, 400, 300}, "ground", "lamp", {"lighting", "waterfront"}, "The lantern room on top of the tower."},
+        {"lighthouse.lantern", "Lantern", {300, 400, 300}, "free", "lamp", {"lighting", "waterfront"}, "The lantern room on top of the tower."},
     };
     return all;
 }
@@ -492,16 +493,60 @@ int Kit::pick(int lo, int hi, uint64_t a, uint64_t b, uint64_t c) const
     return lo + std::min(hi - lo, int(rnd(a, b, c) * double(hi - lo + 1)));
 }
 
+namespace
+{
+std::mutex gAvoidLock;
+std::shared_ptr<const lila::names::NameHashes> gAvoid;
+uint64_t gAvoidRevision = 0;
+} // namespace
+
+void setAvoidNames(lila::names::NameHashes names)
+{
+    std::lock_guard l(gAvoidLock);
+    if (gAvoid && gAvoid->exact == names.exact && gAvoid->contained == names.contained)
+        return;
+    gAvoid = std::make_shared<const lila::names::NameHashes>(std::move(names));
+    ++gAvoidRevision;
+}
+
+std::shared_ptr<const lila::names::NameHashes> avoidNames()
+{
+    std::lock_guard l(gAvoidLock);
+    return gAvoid;
+}
+
+uint64_t avoidRevision()
+{
+    std::lock_guard l(gAvoidLock);
+    return gAvoidRevision;
+}
+
+namespace
+{
+/** A name from make(salt) that matches no real name imported into the scene (salted retries, as site names do). */
+template <class F>
+std::string clearOfImported(F&& make)
+{
+    const std::shared_ptr<const lila::names::NameHashes> avoid = avoidNames();
+    std::string n = make(0);
+    for (uint64_t salt = 1; avoid && avoid->matches(n) && salt < 32; ++salt)
+        n = make(salt);
+    return n;
+}
+} // namespace
+
 std::string Kit::name(const std::string& role, lila::names::Kind kind, std::string_view program)
 {
-    const std::string n = mBook.place(kind, program, lila::names::textKey(spec.id + "/" + role));
+    const uint64_t key = lila::names::textKey(spec.id + "/" + role);
+    const std::string n = clearOfImported([&](uint64_t salt) { return mBook.place(kind, program, key ^ (salt * 0x9E3779B97F4A7C15ull)); });
     L.names[role] = n;
     return n;
 }
 
 std::string Kit::street(const std::string& role, int cls)
 {
-    const std::string n = mBook.street(cls, lila::names::textKey(spec.id + "/" + role));
+    const uint64_t key = lila::names::textKey(spec.id + "/" + role);
+    const std::string n = clearOfImported([&](uint64_t salt) { return mBook.street(cls, key ^ (salt * 0x9E3779B97F4A7C15ull)); });
     L.names[role] = n;
     return n;
 }

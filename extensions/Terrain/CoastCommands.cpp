@@ -1112,7 +1112,10 @@ json runAddReservoir(const Args& a)
                     at = p;
                 }
             }
-        if (low >= dam.sill)
+        // The water's pit filling levels a basin no water holds yet to its spill height: behind a dam that is the sill, or
+        // the crest when the spillway is narrower than a cell. Ground at that level is the basin to flood, so only ground
+        // clearly above the crest stops the reservoir.
+        if (low >= std::max(dam.sill, dam.crest) + 50.0)
             notes.push_back("the ground behind the dam is above its spillway sill, so no reservoir forms; raise crest= or move the dam downstream");
         else
             lake = ops::execute("terrainAddLake", {{"args", {pathOf(now)}},

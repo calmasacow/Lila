@@ -215,6 +215,15 @@ void setOverride(const std::string& command, Override o)
     overrides()[command] = std::move(o);
 }
 
+bool clearOverride(std::string_view command)
+{
+    auto it = overrides().find(command);
+    if (it == overrides().end())
+        return false;
+    overrides().erase(it);
+    return true;
+}
+
 const Override* findOverride(std::string_view command)
 {
     auto it = overrides().find(command);

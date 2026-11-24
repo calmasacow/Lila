@@ -3,7 +3,10 @@
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
+#include <lila/Names.h>
+
 #include <cstdint>
+#include <memory>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -207,6 +210,14 @@ struct TypeDef
     std::string doc;
 };
 const std::vector<TypeDef>& slotTypes();
+
+/**
+ * Real names imported into the scene (as hashes), which kit names steer clear of: layouts are built without the scene,
+ * so the site commands set these before they lay a site out.
+ */
+void setAvoidNames(lila::names::NameHashes names);
+std::shared_ptr<const lila::names::NameHashes> avoidNames();
+uint64_t avoidRevision();
 
 /** The owner id of a site's slots and the prefix of its terrain ids: "site:<id>". */
 std::string ownerOf(const std::string& siteId);

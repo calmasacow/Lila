@@ -1,0 +1,400 @@
+{
+ "name": "SinaloaReal",
+ "description": "Real data for Mazatlan and Culiacan, fetched with remixSource(fetch=True) only after the size is shown and accepted: DEM (Copernicus 30 m via OpenTopography), OSM (Overpass), WorldCover land cover, GEBCO bathymetry. Run the fetch first (remixCreate with these sources, then remixSource(id=..., bbox=..., fetch=True) for each, and terrainBathymetry(fetch=True, estimate=True) for the GEBCO size), point the file paths at what it wrote, then worldBuild. Settlement areas and site positions follow the synthetic map: check them on worldMap first.",
+ "culture": "mexican",
+ "remix": {
+  "scale": {
+   "horizontal": "1:1.4",
+   "vertical": "1:1.2"
+  },
+  "sources": [
+   {
+    "id": "coast",
+    "bbox": [
+     -106.52,
+     23.13,
+     -106.3,
+     23.32
+    ],
+    "dem": "real/mazatlan_dem.tif",
+    "osm": "real/mazatlan.osm.pbf",
+    "landcover": "real/mazatlan_worldcover.tif",
+    "bathymetry": "real/gebco_mazatlan.tif",
+    "at": [
+     0,
+     0
+    ]
+   },
+   {
+    "id": "capital",
+    "bbox": [
+     -107.47,
+     24.74,
+     -107.33,
+     24.86
+    ],
+    "dem": "real/culiacan_dem.tif",
+    "osm": "real/culiacan.osm.pbf",
+    "landcover": "real/culiacan_worldcover.tif",
+    "at": [
+     2600000.0,
+     0.0
+    ]
+   }
+  ],
+  "regions": [
+   {
+    "id": "capital",
+    "op": "cut",
+    "polygon": [
+     [
+      2350000.0,
+      -250000.0
+     ],
+     [
+      2850000.0,
+      -250000.0
+     ],
+     [
+      2850000.0,
+      250000.0
+     ],
+     [
+      2350000.0,
+      250000.0
+     ]
+    ],
+    "translate": [
+     -2184000.0,
+     -304000.0
+    ]
+   }
+  ],
+  "map": {
+   "center": [
+    0,
+    0
+   ],
+   "size": [
+    1600000.0,
+    1600000.0
+   ],
+   "cell": 800.0,
+   "maxResolution": 2049
+  },
+  "seams": {
+   "width": 3000.0,
+   "roadReach": 60000.0
+  }
+ },
+ "terrain": {
+  "water": {
+   "sea": {
+    "level": 0
+   }
+  },
+  "coast": {
+   "bathymetry": {
+    "file": "real/gebco_mazatlan.tif"
+   },
+   "masks": true,
+   "mangroves": true,
+   "reservoirs": [
+    {
+     "id": "picachos",
+     "a": [
+      528000,
+      144000
+     ],
+     "b": [
+      528000,
+      48000
+     ],
+     "crest": 30000
+    }
+   ],
+   "channels": [
+    {
+     "id": "estero",
+     "craft": "skiff",
+     "path": [
+      [
+       -472000,
+       -616000
+      ],
+      [
+       -392000,
+       -616000
+      ],
+      [
+       -360000,
+       -648000
+      ]
+     ]
+    }
+   ],
+   "routes": {},
+   "sceneObjects": false
+  }
+ },
+ "settlements": [
+  {
+   "name": "Puerto",
+   "osm": "remix",
+   "area": [
+    -480527,
+    -192000,
+    -251170,
+    656000
+   ],
+   "profile": "usTown",
+   "fill": "sparse",
+   "buildings": {
+    "cell": 6400,
+    "districts": {}
+   }
+  },
+  {
+   "name": "Capital",
+   "osm": "remix",
+   "area": [
+    279000.0,
+    -441000.0,
+    553000.0,
+    -167000.0
+   ],
+   "profile": "usTown",
+   "fill": "sparse",
+   "buildings": {
+    "lod": "near"
+   }
+  }
+ ],
+ "sites": [
+  {
+   "kind": "port",
+   "id": "port",
+   "at": [
+    -445919,
+    632000
+   ],
+   "heading": 90,
+   "params": {
+    "quayLength": 50000,
+    "yardDepth": 24000,
+    "tiers": 3
+   }
+  },
+  {
+   "kind": "cruise",
+   "id": "cruise",
+   "at": [
+    -456488,
+    320000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "lighthouse",
+   "id": "faro",
+   "at": [
+    -667200,
+    272000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "island",
+   "id": "isla",
+   "at": [
+    -640000,
+    -352000
+   ],
+   "heading": 90,
+   "params": {
+    "islandRadius": 48000,
+    "raiseIsland": false
+   }
+  },
+  {
+   "kind": "cemetery",
+   "id": "panteon",
+   "at": [
+    264000.0,
+    -284000
+   ]
+  },
+  {
+   "kind": "compound",
+   "id": "mansion",
+   "at": [
+    568000.0,
+    -314000
+   ]
+  },
+  {
+   "kind": "farm",
+   "id": "farm1",
+   "at": [
+    80000,
+    608000
+   ]
+  },
+  {
+   "kind": "airstrip",
+   "id": "pista1",
+   "at": [
+    -128000,
+    -32000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "village",
+   "id": "habal",
+   "at": [
+    384000,
+    608000
+   ],
+   "params": {
+    "houses": 10,
+    "villageRadius": 12000
+   }
+  },
+  {
+   "kind": "farm",
+   "id": "farm2",
+   "at": [
+    224000,
+    608000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "airstrip",
+   "id": "pista2",
+   "at": [
+    -128000,
+    -288000
+   ],
+   "heading": 90
+  },
+  {
+   "kind": "village",
+   "id": "noria",
+   "at": [
+    320000,
+    -704000
+   ],
+   "params": {
+    "houses": 12,
+    "villageRadius": 14000
+   }
+  },
+  {
+   "kind": "village",
+   "id": "quelite",
+   "at": [
+    0,
+    -704000
+   ],
+   "params": {
+    "houses": 12,
+    "villageRadius": 14000
+   }
+  }
+ ],
+ "buildings": {
+  "lod": "hlod"
+ },
+ "slots": {
+  "rules": [
+   {
+    "id": "signs",
+    "name": "Fictional signs",
+    "type": "sign.storefront",
+    "payload": {
+     "poolTag": "fictional_signs"
+    }
+   },
+   {
+    "id": "palms",
+    "name": "Palms",
+    "type": "tree.palm",
+    "payload": {
+     "poolTag": "palms"
+    }
+   }
+  ]
+ },
+ "zones": {
+  "name": "Zones",
+  "fromDistricts": true,
+  "fromWater": true,
+  "spec": {
+   "layers": [
+    {
+     "id": "police",
+     "type": "police",
+     "zones": [
+      {
+       "id": "puerto",
+       "name": "Policia Municipal del Puerto",
+       "polygons": [
+        [
+         [
+          -800000,
+          -800000
+         ],
+         [
+          0,
+          -800000
+         ],
+         [
+          0,
+          800000
+         ],
+         [
+          -800000,
+          800000
+         ]
+        ]
+       ]
+      },
+      {
+       "id": "sierra",
+       "name": "Policia Estatal Serrana",
+       "polygons": [
+        [
+         [
+          0,
+          -800000
+         ],
+         [
+          800000,
+          -800000
+         ],
+         [
+          800000,
+          800000
+         ],
+         [
+          0,
+          800000
+         ]
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ },
+ "check": true,
+ "export": {
+  "target": "files",
+  "map": {
+   "resolution": 4096
+  }
+ }
+}

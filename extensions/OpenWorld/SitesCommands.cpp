@@ -59,6 +59,9 @@ json attrText(const std::string& plug)
     return json::parse(s.empty() ? std::string("{}") : s);
 }
 
+/** Kit names steer clear of the real names imported into the scene (layouts are built without it). */
+void refreshAvoid() { sites::setAvoidNames(names::sceneRealNames(Graph::current()).hashes()); }
+
 SiteRef readSite(Graph& g, Node& mod, const std::string& cmd)
 {
     SiteRef r;
@@ -330,38 +333,32 @@ std::string layoutGroundHash(const sites::Spec& s, const sites::Layout& L)
 }
 
 /** Grades the terrain under a site: every ground op sent (stamps and roads in one batch), the ones it no longer has removed. */
-json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
+/** What grading a site sends to its terrain: batched calls, calls made one by one (the airstrip), the record kept. */
+struct GradePlan
 {
-    LILA_ZONE();
-    std::shared_ptr<const sites::Layout> L;
+    std::shared_ptr<const sites::Layout> layout;
+    json calls = json::array(), record = json::array();
+    std::vector<std::pair<std::string, json>> direct;
+    std::set<std::string> made;
+    std::vector<std::string> errors;
+};
+
+GradePlan planGrade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
+{
+    GradePlan p;
     try
     {
-        L = sites::layoutFor(r.spec);
+        p.layout = sites::layoutFor(r.spec);
     }
     catch (const std::exception& e)
     {
         throw CommandError(cmd + ": " + e.what());
     }
-    std::vector<std::string> errors;
-    json out = {{"terrain", terrain}};
-    const std::string prevTerrain = r.ground.value("terrain", std::string());
-    if (terrain.empty())
-    {
-        out["removed"] = ungrade(r.ground, {}, &errors);
-        out["sent"] = 0;
-        out["errors"] = errors;
-        storeGround(r, {{"terrain", ""}, {"ops", json::array()}});
-        return out;
-    }
     for (const char* need : {"terrainBatch", "terrainStampPad", "terrainAddRoad"})
         if (!ops::find(need))
             throw CommandError(cmd + ": the Terrain command " + std::string(need) + " is not available; load the Terrain extension");
-
     const std::string owner = sites::ownerOf(r.spec.id);
-    json calls = json::array(), record = json::array();
-    std::vector<std::pair<std::string, json>> direct;
-    std::set<std::string> made;
-    for (const sites::GroundOp& op : L->ground)
+    for (const sites::GroundOp& op : p.layout->ground)
     {
         json flags = toWorldFlags(r.spec, op.flags);
         const std::string id = owner + "/" + op.id;
@@ -375,34 +372,24 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
         }
         if (op.command != "terrainAddAirstrip" && op.command != "terrainAddChannel" && !ops::find(op.command))
         {
-            errors.push_back(cmd + ": the Terrain command " + op.command + " is not available, so " + id + " was not made");
+            p.errors.push_back(cmd + ": the Terrain command " + op.command + " is not available, so " + id + " was not made");
             continue;
         }
         flags["args"] = json::array({terrain});
-        record.push_back({{"id", id}, {"command", op.command}, {"layer", layer}, {"op", op.id}});
-        made.insert(id);
+        p.record.push_back({{"id", id}, {"command", op.command}, {"layer", layer}, {"op", op.id}});
+        p.made.insert(id);
         if (op.command == "terrainAddAirstrip")
-            direct.push_back({op.command, flags});
+            p.direct.push_back({op.command, flags});
         else
-            calls.push_back({{"command", op.command}, {"flags", flags}});
+            p.calls.push_back({{"command", op.command}, {"flags", flags}});
     }
-    json prev = r.ground;
-    if (prevTerrain != terrain)
-        out["removed"] = ungrade(prev, {}, &errors);
-    else
-        out["removed"] = ungrade(prev, made, &errors);
+    return p;
+}
+
+/** Sends the calls made one by one (after the batch), counting what ran. */
+int sendDirect(const std::vector<std::pair<std::string, json>>& direct, const std::string& cmd, std::vector<std::string>& errors)
+{
     int sent = 0;
-    if (!calls.empty())
-    {
-        const json done = ops::execute("terrainBatch", {{"calls", calls}});
-        sent += done.value("ran", 0);
-        for (const json& e : done.value("errors", json::array()))
-        {
-            const size_t k = e.value("index", size_t(0));
-            errors.push_back(e.value("command", std::string()) + " " + (k < calls.size() ? calls[k]["flags"].value("id", std::string()) : std::string()) + ": " +
-                             e.value("error", std::string()));
-        }
-    }
     for (const auto& [c, flags] : direct)
     {
         if (!ops::find(c))
@@ -421,6 +408,47 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
             errors.push_back(c + " " + flags["id"].get<std::string>() + ": " + e.what());
         }
     }
+    return sent;
+}
+
+json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
+{
+    LILA_ZONE();
+    std::vector<std::string> errors;
+    json out = {{"terrain", terrain}};
+    const std::string prevTerrain = r.ground.value("terrain", std::string());
+    if (terrain.empty())
+    {
+        out["removed"] = ungrade(r.ground, {}, &errors);
+        out["sent"] = 0;
+        out["errors"] = errors;
+        storeGround(r, {{"terrain", ""}, {"ops", json::array()}});
+        return out;
+    }
+    GradePlan plan = planGrade(r, terrain, cmd);
+    errors = plan.errors;
+    const std::shared_ptr<const sites::Layout> L = plan.layout;
+    json& calls = plan.calls;
+    json& record = plan.record;
+    const std::set<std::string>& made = plan.made;
+    json prev = r.ground;
+    if (prevTerrain != terrain)
+        out["removed"] = ungrade(prev, {}, &errors);
+    else
+        out["removed"] = ungrade(prev, made, &errors);
+    int sent = 0;
+    if (!calls.empty())
+    {
+        const json done = ops::execute("terrainBatch", {{"calls", calls}});
+        sent += done.value("ran", 0);
+        for (const json& e : done.value("errors", json::array()))
+        {
+            const size_t k = e.value("index", size_t(0));
+            errors.push_back(e.value("command", std::string()) + " " + (k < calls.size() ? calls[k]["flags"].value("id", std::string()) : std::string()) + ": " +
+                             e.value("error", std::string()));
+        }
+    }
+    sent += sendDirect(plan.direct, cmd, errors);
     storeGround(r, {{"terrain", terrain}, {"ops", record}, {"hash", layoutGroundHash(r.spec, *L)}});
     out["sent"] = sent;
     out["ops"] = record.size();
@@ -428,6 +456,63 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
     for (const std::string& e : errors)
         log::warn("{}", e);
     return out;
+}
+
+/**
+ * Grades several sites with one Terrain batch: the terrain changes once and evaluates once, instead of once per site
+ * (a 2k terrain with coast and water takes seconds to evaluate). Each site keeps its own record as grade() writes it.
+ */
+json gradeMany(const std::vector<SiteRef>& sitesIn, const std::string& cmd)
+{
+    LILA_ZONE();
+    json calls = json::array(), out = json::array();
+    std::vector<std::pair<std::string, json>> direct;
+    std::vector<std::string> errors;
+    std::vector<size_t> owner;
+    std::vector<GradePlan> plans;
+    std::vector<std::string> terrains;
+    for (size_t i = 0; i < sitesIn.size(); ++i)
+    {
+        const SiteRef& r = sitesIn[i];
+        const std::string terrain = r.ground.value("terrain", std::string());
+        terrains.push_back(terrain);
+        plans.push_back(terrain.empty() ? GradePlan{} : planGrade(r, terrain, cmd));
+        if (terrain.empty())
+            continue;
+        json prev = r.ground;
+        ungrade(prev, plans.back().made, &errors);
+        for (const json& c : plans.back().calls)
+        {
+            calls.push_back(c);
+            owner.push_back(i);
+        }
+        for (auto& d : plans.back().direct)
+            direct.push_back(d);
+        for (const std::string& e : plans.back().errors)
+            errors.push_back(e);
+    }
+    int sent = 0;
+    if (!calls.empty())
+    {
+        const json done = ops::execute("terrainBatch", {{"calls", calls}});
+        sent += done.value("ran", 0);
+        for (const json& e : done.value("errors", json::array()))
+        {
+            const size_t k = e.value("index", size_t(0));
+            errors.push_back(e.value("command", std::string()) + " " + (k < calls.size() ? calls[k]["flags"].value("id", std::string()) : std::string()) + ": " +
+                             e.value("error", std::string()));
+        }
+    }
+    sent += sendDirect(direct, cmd, errors);
+    for (size_t i = 0; i < sitesIn.size(); ++i)
+        if (!terrains[i].empty() && plans[i].layout)
+        {
+            storeGround(sitesIn[i], {{"terrain", terrains[i]}, {"ops", plans[i].record}, {"hash", layoutGroundHash(sitesIn[i].spec, *plans[i].layout)}});
+            out.push_back({{"site", sitesIn[i].spec.id}, {"ops", plans[i].record.size()}});
+        }
+    for (const std::string& e : errors)
+        log::warn("{}", e);
+    return {{"sites", out}, {"sent", sent}, {"errors", errors}};
 }
 
 // Info
@@ -438,8 +523,12 @@ json info(const SiteRef& r, const sites::Evaluated& ev, bool slotsToo)
     json envs = json::array();
     for (size_t i = 0; i < L.envelopes.size(); ++i)
         envs.push_back(sites::envelopeJson(ev, i));
+    json boundary = json::array();
+    for (P2 q : L.boundary)
+        boundary.push_back(sites::pt(sites::toWorld(r.spec, q)));
     json out = {{"mesh", r.mesh},
                 {"modifier", r.modifier},
+                {"boundary", boundary},
                 {"id", r.spec.id},
                 {"kind", r.spec.kind},
                 {"name", r.spec.name},
@@ -825,12 +914,69 @@ json check(const std::vector<SiteRef>& list, const std::vector<SiteRef>& everyon
     }
     return {{"ok", issues.empty()}, {"issues", list2}, {"counts", counts}, {"sites", perSite}, {"notes", notes}};
 }
+/** The group the Buildings generator builds every site's envelopes under. */
+constexpr const char* kSiteBuildings = "SiteBuildings";
+
+bool massingOn(const SiteRef& r)
+{
+    const json v = ops::execute("getAttr", {{"args", {r.modifier + ".massing"}}});
+    return !v.is_boolean() || v.get<bool>();
+}
+
+/**
+ * Builds the envelopes of every site whose massing is off with the Buildings generator, under one group, so its
+ * styles, slots and edits apply to site buildings like any other; the group goes when no site is left on it. Edits,
+ * overrides and pins carry over by building id (each envelope's id hashed to a stable building key).
+ */
+json rebuildSiteBuildings(const std::string& cmd)
+{
+    Graph& g = Graph::current();
+    json envs = json::array();
+    std::string terrain;
+    json sitesOn = json::array();
+    for (const SiteRef& r : allSites(cmd))
+    {
+        if (massingOn(r))
+            continue;
+        sitesOn.push_back(r.spec.id);
+        if (terrain.empty())
+            terrain = r.ground.value("terrain", std::string());
+        const sites::Evaluated ev = evaluate(r, cmd);
+        for (size_t i = 0; i < ev.layout->envelopes.size(); ++i)
+        {
+            json e = sites::envelopeJson(ev, i);
+            e["lotId"] = slots::idHash(e["id"].get<std::string>());
+            envs.push_back(std::move(e));
+        }
+    }
+    if (envs.empty())
+    {
+        if (Node* n = g.find(kSiteBuildings))
+            ops::execute("delete", {{"args", {n->path()}}});
+        return {{"group", nullptr}, {"buildings", 0}, {"sites", sitesOn}};
+    }
+    if (!ops::find("buildingCreate"))
+        throw CommandError(cmd + ": site buildings need the Buildings extension (buildingCreate)");
+    json call = {{"envelopes", envs}, {"name", kSiteBuildings}};
+    if (!terrain.empty() && g.find(terrain))
+        call["ground"] = terrain;
+    json made = ops::execute("buildingCreate", call);
+    return {{"group", made.value("group", json())},  {"buildings", made.value("buildings", 0)}, {"styles", made.value("styles", json::object())},
+            {"slots", made.value("slots", 0)},       {"sites", sitesOn},                        {"ground", terrain.empty() ? json() : json(terrain)},
+            {"warnings", made.value("warnings", json::array())}};
+}
+
+/** Turns a site's greybox massing off (its buildings come from the Buildings generator) or back on. */
+void setMassing(const SiteRef& r, bool on) { ops::execute("setAttr", {{"args", {r.modifier + ".massing", on}}}); }
 } // namespace
 
 void registerSites(ext::Context& ctx)
 {
     for (const sites::TypeDef& t : sites::slotTypes())
     {
+        // Types another extension registered first (Buildings' wall, gate, pool) are shared rather than registered twice.
+        if (slots::types().find(t.id))
+            continue;
         slots::SlotType st;
         st.id = t.id;
         st.label = t.label;
@@ -858,6 +1004,7 @@ void registerSites(ext::Context& ctx)
         {"ground", "gr", T::Bool, true, "Grade the terrain: pads, quays, roads, canals, the airstrip."},
         {"waterLevel", "wl", T::Float, nullptr, "Water level its quays, docks and ships sit at, cm; default the terrain's sea level, else 0."},
         {"params", "pm", T::Any, nullptr, "Kit settings as one object, as the flags below take them."},
+        {"buildings", "bl", T::Bool, false, "Build its buildings with the Buildings generator (styles, slots, edits) instead of greybox massing."},
     };
     for (FlagDef& f : paramFlags())
         createFlags.push_back(std::move(f));
@@ -877,6 +1024,7 @@ void registerSites(ext::Context& ctx)
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const std::string cmd = "siteCreate";
+            refreshAvoid();
             Graph& g = Graph::current();
             const std::string kindId = a.get<std::string>("kind", "port");
             const sites::Kind* kind = sites::findKind(kindId);
@@ -956,7 +1104,7 @@ void registerSites(ext::Context& ctx)
                                         {{"name", kGroundAttr}, {"type", "string"}, {"default", "{}"}, {"panel", "Site"},
                                          {"description", "What the site put on its terrain (ids by command), for siteGround and siteRemove."}},
                                         {{"name", "massing"}, {"type", "bool"}, {"default", true}, {"panel", "Site"}, {"description", "Draw the buildings as greybox massing."}}})},
-                {"nodes", json::array({{{"name", "Ground"}, {"type", "ObjectInfo"}, {"props", {{"object", terrain}, {"transformSpace", "world"}}}},
+                {"nodes", json::array({{{"name", "Ground"}, {"type", "ObjectInfo"}, {"props", {{"object", terrain}, {"transformSpace", "instance"}}}},
                                        {{"name", "Site"}, {"type", "SiteKit"}}})},
                 {"links", json::array({std::string("GroupInput.") + kSpecAttr + " -> Site.spec", "GroupInput.massing -> Site.massing", "Ground.geometry -> Site.ground",
                                        "Site.geometry -> GroupOutput.geometry"})}};
@@ -979,6 +1127,11 @@ void registerSites(ext::Context& ctx)
             out["atFrom"] = atFrom;
             out["waterLevelFrom"] = waterFrom;
             out["group"] = group;
+            if (a.get<bool>("buildings", false))
+            {
+                setMassing(r, false);
+                out["buildings"] = rebuildSiteBuildings(cmd);
+            }
             ops::execute("select", {{"args", {r.mesh}}});
             return out;
         },
@@ -1011,8 +1164,10 @@ void registerSites(ext::Context& ctx)
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const std::string cmd = "siteEdit";
+            refreshAvoid();
             SiteRef r = findSite(siteArg(a), cmd);
             sites::Spec s = r.spec;
+            const json before = r.spec.toJson();
             const sites::Kind* kind = sites::findKind(s.kind);
             const json given = givenParams(a, *kind, cmd);
             for (const auto& [key, v] : given.items())
@@ -1064,6 +1219,8 @@ void registerSites(ext::Context& ctx)
                 r = findSite(r.mesh, cmd);
             }
             json out = created(r, groundOut, cmd);
+            if (!massingOn(r) && s.toJson() != before)
+                out["buildings"] = rebuildSiteBuildings(cmd);
             return out;
         },
         .examples = {"siteEdit('port1', tiers=6, fill=0.9)", "siteEdit('CargoPort', at=[5000, -21000], heading=12)"},
@@ -1074,9 +1231,22 @@ void registerSites(ext::Context& ctx)
         .doc = "Grade the terrain under a site again from its spec (after editing the terrain, or with ground=False edits), or take "
                "everything the site put on the terrain off it with remove=True. Returns what was sent and removed.",
         .positionalDoc = "site mesh, modifier or id",
-        .flags = {{"remove", "rm", T::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."}},
+        .flags = {{"remove", "rm", T::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."},
+                  {"sites", "s", T::List, nullptr, "Several sites graded in one terrain change (ids or meshes); every site with all=True."},
+                  {"all", "a", T::Bool, false, "Every site in the scene, in one terrain change."}},
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteGround";
+            refreshAvoid();
+            if ((a.has("sites") || a.get<bool>("all", false)) && !a.get<bool>("remove", false))
+            {
+                std::vector<SiteRef> list;
+                if (a.get<bool>("all", false))
+                    list = allSites(cmd);
+                else
+                    for (const json& n : a.flags["sites"])
+                        list.push_back(findSite(n.get<std::string>(), cmd));
+                return gradeMany(list, cmd);
+            }
             const SiteRef r = findSite(siteArg(a), cmd);
             if (a.get<bool>("remove", false))
                 return grade(r, "", cmd);
@@ -1110,7 +1280,10 @@ void registerSites(ext::Context& ctx)
             }
             slots::unpublish(r.modifierId);
             sites::forgetSite(r.modifierId);
-            return {{"site", r.spec.id}, {"mesh", r.mesh}, {"terrainRemoved", removed}, {"errors", errors}};
+            json out = {{"site", r.spec.id}, {"mesh", r.mesh}, {"terrainRemoved", removed}, {"errors", errors}};
+            if (Graph::current().find(kSiteBuildings))
+                out["buildings"] = rebuildSiteBuildings(cmd);
+            return out;
         },
         .examples = {"siteRemove('cemetery1')"},
     });
@@ -1124,6 +1297,7 @@ void registerSites(ext::Context& ctx)
         .flags = {{"slots", "sl", T::Bool, false, "List every slot."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
+            refreshAvoid();
             const SiteRef r = findSite(siteArg(a), "siteInfo");
             return info(r, evaluate(r, "siteInfo"), a.get<bool>("slots", false));
         },
@@ -1141,6 +1315,7 @@ void registerSites(ext::Context& ctx)
         .undoable = false,
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteEnvelopes";
+            refreshAvoid();
             std::vector<SiteRef> list;
             if (a.has("sites"))
                 for (const json& n : a.flags["sites"])
@@ -1161,6 +1336,35 @@ void registerSites(ext::Context& ctx)
             return {{"envelopes", envs}, {"count", envs.size()}, {"styles", styles}, {"sites", list.size()}};
         },
         .examples = {"e = siteEnvelopes()\n[x['style'] for x in e['envelopes']][:5]"},
+    });
+
+    ctx.registerCommand({
+        .name = "siteBuildings",
+        .doc = "Build site kits' buildings with the Buildings generator: each envelope (siteEnvelopes) becomes a procedural building "
+               "in its kit's style (portShed, warehouse, packingPlant, mausoleum, hangar, narcoMansion, church, civic, colonialCentro, "
+               "villageAdobe, ruralShack, terminal, lighthouse), under the group SiteBuildings, and the site's greybox massing turns "
+               "off. Building ids are stable per envelope, so edits, slot overrides and pins carry over; siteEdit rebuilds them when "
+               "the layout changes. remove=True turns massing back on and drops those buildings. Returns the group, building count, "
+               "styles and slots.",
+        .positionalDoc = "sites (ids or meshes; default every site)",
+        .flags = {{"remove", "rm", T::Bool, false, "Back to greybox massing."}},
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+            const std::string cmd = "siteBuildings";
+            refreshAvoid();
+            std::vector<SiteRef> list;
+            for (const json& p : a.positional)
+                if (p.is_string())
+                    list.push_back(findSite(p.get<std::string>(), cmd));
+            if (list.empty())
+                list = allSites(cmd);
+            if (list.empty())
+                throw CommandError(cmd + ": no site in the scene (make one with siteCreate)");
+            for (const SiteRef& r : list)
+                setMassing(r, a.get<bool>("remove", false));
+            return rebuildSiteBuildings(cmd);
+        },
+        .examples = {"siteBuildings()", "siteBuildings('port1')['styles']", "siteBuildings('cemetery1', remove=True)"},
     });
 
     ctx.registerCommand({
@@ -1235,6 +1439,7 @@ void registerSites(ext::Context& ctx)
         .undoable = false,
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteCheck";
+            refreshAvoid();
             const std::vector<SiteRef> everyone = allSites(cmd);
             std::vector<SiteRef> list;
             if (const std::string n = siteArg(a); !n.empty())

@@ -312,16 +312,18 @@ void placeOsmBuildings(Layout& l, const Site& site, const Ground& g, const Optio
     for (size_t k = 0; k < l.lots.size(); ++k)
     {
         const Lot& lot = l.lots[k];
-        if (size_t(lot.block) < firstBlock || inBlock[size_t(lot.block)].empty() || !lot.osmId.empty())
+        if (size_t(lot.block) < firstBlock || !lot.osmId.empty())
             continue;
-        if (denseBlock[size_t(lot.block)])
+        // fill none keeps none of Settlement's own lots, in blocks the data leaves empty too.
+        if (spec->osmFill == "none" || (!inBlock[size_t(lot.block)].empty() && denseBlock[size_t(lot.block)]))
         {
             drop[k] = 1;
             continue;
         }
+        // Any footprint reaching into the lot takes it, the block's own and one whose centre lies in the next block.
         const OsmBox lb = osmBoxOf(lot.outline);
-        for (int i : inBlock[size_t(lot.block)])
-            if (fps[size_t(i)].box.meets(lb) && polygonsShareArea(lot.outline, fps[size_t(i)].poly, 50.0))
+        for (const auto& f : fps)
+            if (f.box.meets(lb) && polygonsShareArea(lot.outline, f.poly, 50.0))
             {
                 drop[k] = 1;
                 break;

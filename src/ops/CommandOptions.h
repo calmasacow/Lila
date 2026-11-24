@@ -106,6 +106,8 @@ struct Override
 };
 
 LILA_FOUNDATION_API void setOverride(const std::string& command, Override o);
+/** Drops a command's override (its command went with the extension that made both). False when there was none. */
+LILA_FOUNDATION_API bool clearOverride(std::string_view command);
 LILA_FOUNDATION_API const Override* findOverride(std::string_view command);
 
 /** "maxDistance" reads "Max Distance", "uvSet" reads "UV Set". */

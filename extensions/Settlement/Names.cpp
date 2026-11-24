@@ -361,8 +361,13 @@ void nameStreets(Layout& l, const Site& site)
         for (int attempt = 0; attempt < 64 && n.name.empty(); ++attempt)
             if (std::string s = cultureStreetName(culture, cls, n.key, attempt); !taken.count(s) && !real(s))
                 n.name = std::move(s);
+        // Numbered only from a base that is itself no real name: a number doesn't make a real street's name fictional.
+        for (int attempt = 0; attempt < 64 * 16 && n.name.empty(); ++attempt)
+            if (const std::string base = cultureStreetName(culture, cls, n.key, attempt % 64); !real(base))
+                if (std::string s = base + " " + std::to_string((n.key + uint64_t(attempt / 64)) % 1000 + 1); !taken.count(s) && !real(s))
+                    n.name = std::move(s);
         if (n.name.empty())
-            n.name = cultureStreetName(culture, cls, n.key, 0) + " " + std::to_string(n.key % 1000);
+            n.name = cultureStreetName(culture, cls, n.key, 0) + " " + std::to_string(n.key % 100000);
         taken.insert(n.name);
     }
     for (const Named& n : runs)
@@ -390,8 +395,12 @@ void nameStreets(Layout& l, const Site& site)
         for (int attempt = 0; attempt < 64 && d.name.empty(); ++attempt)
             if (std::string s = cultureDistrictName(culture, d.id, attempt); !districtTaken.count(s) && !real(s))
                 d.name = std::move(s);
+        for (int attempt = 0; attempt < 64 * 16 && d.name.empty(); ++attempt)
+            if (const std::string base = cultureDistrictName(culture, d.id, attempt % 64); !real(base))
+                if (std::string s = base + " " + std::to_string((d.id + uint64_t(attempt / 64)) % 100 + 1); !districtTaken.count(s) && !real(s))
+                    d.name = std::move(s);
         if (d.name.empty())
-            d.name = cultureDistrictName(culture, d.id, 0) + " " + std::to_string(d.id % 100);
+            d.name = cultureDistrictName(culture, d.id, 0) + " " + std::to_string(d.id % 100000);
         districtTaken.insert(d.name);
     }
 }

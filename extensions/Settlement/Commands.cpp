@@ -19,6 +19,7 @@
 #include <lila/Profile.h>
 
 #include <algorithm>
+#include <mutex>
 #include <cctype>
 #include <cmath>
 #include <filesystem>
@@ -313,7 +314,77 @@ Polygon regionOutline(Graph& g, const Args& a, const std::string& groundName, co
     return p;
 }
 
+/**
+ * Layouts already rebuilt, by what went into them: a big settlement takes minutes to lay out and the commands that read
+ * it (envelopes, names, checks) ask in turn. The meshes it read are held, so their identity can't be reused.
+ */
+struct RebuildCache
+{
+    struct Entry
+    {
+        uint64_t key = 0;
+        std::vector<scene::MeshPtr> inputs;
+        std::shared_ptr<const Rebuilt> rebuilt;
+    };
+    std::mutex lock;
+    std::vector<Entry> entries;
+};
+RebuildCache& rebuildCache()
+{
+    static RebuildCache c;
+    return c;
+}
+
+/** The evaluated mesh of a node and its world matrix, for the rebuild cache's key. */
+scene::MeshPtr evaluatedMesh(Graph& g, const std::string& name, uint64_t& key)
+{
+    Node* n = name.empty() ? nullptr : g.find(name);
+    if (!n || !n->type().isA("mesh"))
+        return nullptr;
+    const scene::PlugValue mv = g.value({n->id(), scene::MeshNode::kOutMesh, -1});
+    const scene::PlugValue xv = g.value({n->id(), scene::Transform::kWorldMatrix, -1});
+    const scene::MeshPtr* mesh = std::get_if<scene::MeshPtr>(&mv);
+    key = (key ^ uint64_t(reinterpret_cast<uintptr_t>(mesh ? mesh->get() : nullptr))) * 1099511628211ull;
+    if (const glm::dmat4* xf = std::get_if<glm::dmat4>(&xv))
+        for (int c = 0; c < 4; ++c)
+            for (int k = 0; k < 4; ++k)
+                key = (key ^ std::hash<double>{}((*xf)[c][k])) * 1099511628211ull;
+    return mesh ? *mesh : nullptr;
+}
+
+Rebuilt rebuildUncached(Graph& g, const std::string& name, const char* cmd, const json* editsOverride);
+
 Rebuilt rebuild(Graph& g, const std::string& name, const char* cmd, const json* editsOverride = nullptr)
+{
+    Node* mod = settlementModifier(g, name, cmd);
+    const scene::NodeId meshId = scene::modifiers::meshOf(g, mod->id());
+    Node* mesh = meshId != scene::kNoNode ? g.node(meshId) : g.find(name);
+    const json values = modifierValues(*mod);
+    uint64_t key = std::hash<std::string>{}(values.dump() + "|" + (editsOverride ? editsOverride->dump() : std::string()) + "|" + mod->path());
+    std::vector<scene::MeshPtr> inputs;
+    inputs.push_back(evaluatedMesh(g, textOf(values.at("ground")), key));
+    inputs.push_back(evaluatedMesh(g, textOf(values.at("walkable")), key));
+    if (auto base = mesh ? scene::modifiers::cage(g, mesh->id()) : nullptr)
+    {
+        key = (key ^ uint64_t(reinterpret_cast<uintptr_t>(base.get()))) * 1099511628211ull;
+        inputs.push_back(std::const_pointer_cast<const geo::Mesh>(base));
+    }
+    RebuildCache& c = rebuildCache();
+    {
+        std::lock_guard l(c.lock);
+        for (const RebuildCache::Entry& e : c.entries)
+            if (e.key == key)
+                return *e.rebuilt;
+    }
+    auto made = std::make_shared<const Rebuilt>(rebuildUncached(g, name, cmd, editsOverride));
+    std::lock_guard l(c.lock);
+    if (c.entries.size() >= 4)
+        c.entries.erase(c.entries.begin());
+    c.entries.push_back({key, std::move(inputs), made});
+    return *made;
+}
+
+Rebuilt rebuildUncached(Graph& g, const std::string& name, const char* cmd, const json* editsOverride)
 {
     Node* mod = settlementModifier(g, name, cmd);
     const scene::NodeId meshId = scene::modifiers::meshOf(g, mod->id());
