@@ -177,8 +177,10 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
     std::map<std::string, int> refOfKey;
     bool missing = false;
     std::vector<int32_t> slotIndex;
-    // Payload colours (rules and overrides included) over the generator's own instance colours.
+    // Payload colours (rules and overrides included) over the generator's own instance colours, which describe only its
+    // own references: a swapped visual without a payload colour shows its own.
     std::vector<std::pair<size_t, glm::vec4>> payloadColors;
+    std::vector<size_t> ownColorsDropped;
     for (const Slot& s : pinned)
     {
         auto at = byId.find(s.id);
@@ -224,16 +226,20 @@ gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vec
         slotIndex.push_back(generated ? int32_t(at->second) : -1);
         if (std::optional<glm::vec4> c = dataColor(r.payload.data))
             payloadColors.push_back({row, *c});
+        else if (setsVisual(r.payload))
+            ownColorsDropped.push_back(row);
     }
     std::span<int32_t> idx = out->attrs.getOrAdd<int32_t>("slotIndex");
     std::copy(slotIndex.begin(), slotIndex.end(), idx.begin());
-    if (!payloadColors.empty())
+    if (!payloadColors.empty() || (!ownColorsDropped.empty() && out->attrs.has(gn::kInstanceColorAttr)))
     {
         std::vector<glm::vec4> colors(out->size());
         for (size_t k = 0; k < colors.size(); ++k)
             colors[k] = gn::instanceColor(*out, k);
         for (const auto& [row, c] : payloadColors)
             colors[row] = c;
+        for (size_t row : ownColorsDropped)
+            colors[row] = glm::vec4(0.0f);
         out->attrs.remove(gn::kInstanceColorAttr);
         std::span<glm::vec4> dst = out->attrs.getOrAdd<glm::vec4>(gn::kInstanceColorAttr);
         std::copy(colors.begin(), colors.end(), dst.begin());

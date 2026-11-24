@@ -154,6 +154,13 @@ TEST_CASE("instance colours: a stored colour, a rule's data colour and an overri
     for (const glm::vec4& c : *v->parts[0].colors)
         CHECK(c == glm::vec4(0, 1, 0, 1));
 
+    // A rule swapping in another mesh shows that mesh's own colour: the stored one was for the generator's cube.
+    gnRun("polyCylinder", {{"name", "Crate"}});
+    gnRun("slotRule", {{"args", {"add"}}, {"type", "container"}, {"mesh", "Crate"}});
+    v = settle(s.mesh);
+    REQUIRE(v->parts.size() == 1);
+    CHECK_FALSE(v->parts[0].colors);
+
     // A rule's data colour (sRGB hex) wins over it, and an override's over the rule's.
     gnRun("slotRule", {{"args", {"add"}}, {"type", "container"}, {"data", {{"color", "#ff0000"}}}});
     v = settle(s.mesh);
