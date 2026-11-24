@@ -71,10 +71,11 @@ void buildPort(Kit& k)
              heightFromWater({{"footprint", pts(rect(x0, 0.0, x1, D))}, {"mode", "flatten"}, {"falloff", 3000.0}, {"skirtGrade", kYardSkirtGrade},
                               {"masks", {"paved", "port", "cityFootprint"}}},
                              250.0));
-    k.ground("quay", "terrainStampQuay",
-             heightFromWater({{"path", json::array({pt({x0, 0.0}), pt({x1, 0.0})})}, {"kind", "quay"}, {"side", "left"}, {"depth", dredge}, {"width", 600.0}}, 250.0));
     k.ground("berths", "terrainStampRegion",
              heightFromWater({{"footprint", pts(rect(x0, -4500.0, x1, -800.0))}, {"mode", "carve"}, {"falloff", 300.0}, {"masks", {"port"}}}, -dredge));
+    // After the berths: their carve takes in whole cells and would reach under the yard's front edge.
+    k.ground("quay", "terrainStampQuay",
+             heightFromWater({{"path", json::array({pt({x0, 0.0}), pt({x1, 0.0})})}, {"kind", "quay"}, {"side", "left"}, {"depth", dredge}, {"width", 600.0}}, 250.0));
     {
         // Judged a cell or two back from the quay face, which the grid draws as a slope.
         Part& yard = k.part("yard", "yard", rect(x0, 1500.0, x1, D), Part::Needs::Land);
