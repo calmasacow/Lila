@@ -187,6 +187,8 @@ json toJson(const RemixSpec& s)
         }
         if (r.seam)
             j["seam"] = *r.seam;
+        if (!r.matchHeight)
+            j["matchHeight"] = false;
         regions.push_back(j);
     }
     for (const Pin& p : s.pins)
@@ -291,7 +293,7 @@ RemixSpec specFromJson(const json& j)
             const std::string where = "regions[" + std::to_string(i) + "].";
             if (!e.is_object())
                 throw std::runtime_error(where + " is a dict");
-            onlyKeys(e, {"id", "op", "polygon", "translate", "angle", "pivot", "seam"}, where);
+            onlyKeys(e, {"id", "op", "polygon", "translate", "angle", "pivot", "seam", "matchHeight"}, where);
             Region r;
             r.id = str(e, "id", where);
             if (r.id.empty())
@@ -309,6 +311,12 @@ RemixSpec specFromJson(const json& j)
                 r.pivot = vec2(e["pivot"], where + "pivot");
             if (e.contains("seam") && !e["seam"].is_null())
                 r.seam = std::max(0.0, num(e, "seam", 0.0, where));
+            if (e.contains("matchHeight"))
+            {
+                if (!e["matchHeight"].is_boolean())
+                    throw std::runtime_error(where + "matchHeight is true or false");
+                r.matchHeight = e["matchHeight"].get<bool>();
+            }
             if (s.region(r.id))
                 throw std::runtime_error(where + "id '" + r.id + "' is used twice");
             s.regions.push_back(std::move(r));
@@ -429,7 +437,8 @@ json remixSpecSchema()
                 {"translate", point},
                 {"angle", {{"type", "number"}}},
                 {"pivot", point},
-                {"seam", {{"type", "number"}, {"description", "Seam band width cm; default seams.width."}}}}}}}}},
+                {"seam", {{"type", "number"}, {"description", "Seam band width cm; default seams.width."}}},
+                {"matchHeight", {{"type", "boolean"}, {"description", "cut and duplicate: raise or lower the pasted ground by the median step along its edge and widen the seam where what is left would be steeper than 8% (default true)."}}}}}}}}},
           {"pins",
            {{"type", "array"},
             {"items", {{"type", "object"}, {"required", {"at"}}, {"properties", {{"id", {{"type", "string"}}}, {"at", point}, {"to", point}}}}},
