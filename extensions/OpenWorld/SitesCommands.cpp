@@ -7,6 +7,7 @@
 
 #include <lila/Command.h>
 #include <lila/Deformer.h>
+#include <lila/Events.h>
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
@@ -1585,6 +1586,17 @@ void registerSites(ext::Context& ctx)
 
     unregisterSites();
     transformListener() = ops::addExecuteListener(followTransform);
+    // An opened scene's imported real names reach the layouts before anything draws them.
+    for (events::Event e : {events::Event::SceneOpened, events::Event::SceneImported})
+        ctx.subscribe(e, [](const events::EventData&) {
+            const uint64_t before = sites::avoidRevision();
+            refreshAvoid();
+            if (sites::avoidRevision() == before)
+                return;
+            Graph& g = Graph::current();
+            for (Node* n : siteModifiers(g))
+                gn::rerunModifier(g, n->id());
+        });
 }
 
 void unregisterSites()

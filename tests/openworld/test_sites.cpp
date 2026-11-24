@@ -325,3 +325,37 @@ TEST_CASE("site commands: airstrips on a low flat coast clear their corridors")
     for (const json& i : w["issues"])
         CHECK(i.value("kind", std::string()) != "airClearance");
 }
+
+TEST_CASE("site commands: an opened scene's imported real names reach its sites' layouts before any site command runs")
+{
+    loadSitePackages();
+    ops::execute("newScene", json::object());
+    const std::string terrain = coastTerrain();
+    const json port = ops::execute("siteCreate", {{"kind", "port"}, {"terrain", terrain}, {"at", {0, -61000}}, {"id", "port1"}});
+    const std::string mesh = port["mesh"].get<std::string>();
+    auto firstLine = [&] {
+        ops::execute("meshInfo", {{"args", {mesh}}});
+        const json ships = ops::execute("slotFind", {{"type", "ship.cargo"}, {"region", "site:port1"}, {"limit", 0}, {"full", true}});
+        REQUIRE(ships["count"].get<int>() > 0);
+        std::string line;
+        for (const json& sl : ships["slots"])
+            if (sl["payload"]["data"].value("berth", 0) == 1)
+                line = sl["payload"]["data"].value("line", std::string());
+        return line;
+    };
+    const std::string line = firstLine();
+    REQUIRE_FALSE(line.empty());
+    // An import that recorded that line's name as a real one.
+    const std::string imported = ops::execute("polyCube", {{"name", "Imported"}}).at(0).get<std::string>();
+    ops::execute("addAttr", {{"args", {imported}}, {"longName", "sourceNames"}, {"dataType", "string"}});
+    ops::execute("setAttr", {{"args", {imported + ".sourceNames", json{{"operator", line}}.dump()}}});
+    const auto file = std::filesystem::temp_directory_path() / "lila_sites_avoid.lila";
+    ops::execute("saveScene", {{"args", {file.generic_string()}}});
+
+    // Another scene's site command leaves the process with no real names to avoid.
+    ops::execute("newScene", json::object());
+    ops::execute("siteCreate", {{"kind", "farm"}, {"terrain", ""}, {"id", "elsewhere"}});
+    ops::execute("openScene", {{"args", {file.generic_string()}}});
+    CHECK(firstLine() != line);
+    std::filesystem::remove(file);
+}
