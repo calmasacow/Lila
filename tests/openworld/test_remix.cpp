@@ -91,8 +91,8 @@ TEST_CASE("remix: identity at scale 1 with no regions")
     const Heightfield& h = src->hf;
     // Away from the feathered edge the heights are the source's.
     int checked = 0;
-    for (int z = 10; z < h.nz - 10; z += 7)
-        for (int x = 10; x < h.nx - 10; x += 7)
+    for (int z = h.nz / 6; z < h.nz - h.nz / 6; z += 5)
+        for (int x = h.nx / 6; x < h.nx - h.nx / 6; x += 5)
         {
             const Vec2 p = h.samplePos(x, z);
             CHECK(r->after.heightAt(p.x, p.y) == doctest::Approx(h.at(x, z)).epsilon(1e-4));
@@ -306,4 +306,35 @@ TEST_CASE("remix: two sources composed onto one map with a region moved between 
     for (const CutEnd& e : r->roadEnds)
         CHECK(e.joined);
     CHECK(r->after.nx > 100);
+}
+
+TEST_CASE("remix: cut coastline is re-merged along sea level")
+{
+    json j = base();
+    // A stretch of coast lifted and slid north along the shore.
+    j["regions"] = json::array({{{"id", "bay"}, {"op", "cut"}, {"polygon", box(-60000, 20000, -25000, 50000)}, {"translate", {0, -60000}}}});
+    j["seams"]["width"] = 1000;
+    const RemixSpec s = specFromJson(j);
+    const std::shared_ptr<RemixResult> r = runRemix(s);
+    REQUIRE(r->coastEnds.size() >= 2);
+    size_t joined = 0;
+    for (const CutEnd& e : r->coastEnds)
+        joined += e.joined;
+    CHECK(joined >= 2);
+    int merged = 0;
+    for (const OsmDoc::Way& w : r->osm.ways)
+        if (tagOf(w.tags, "remix") == "coast")
+        {
+            ++merged;
+            CHECK(tagOf(w.tags, "natural") == "coastline");
+            // The merged stretch runs along sea level.
+            for (int64_t id : w.nodes)
+            {
+                const Vec2 p = r->geo.toLocal(r->osm.node(id)->at);
+                CHECK(std::abs(r->after.heightAt(p.x, p.y)) < 800.0);
+            }
+        }
+    CHECK(merged >= 1);
+    const json c = checkRemix(s, *r);
+    CHECK(countKind(c, "coastGap") == int(r->coastEnds.size() - joined));
 }

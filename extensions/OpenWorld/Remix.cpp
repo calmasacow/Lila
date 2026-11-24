@@ -676,12 +676,14 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
     h.origin = centre - h.extent() * 0.5;
     out.lo = h.origin;
     out.hi = h.origin + h.extent();
-    w.feather = spec.seams.width;
+    // Sources fade in over a tenth of the smallest one (at least a seam width), so a source's edge meets the sea or its
+    // neighbour as a slope rather than a cliff.
+    w.feather = 1e300;
     for (size_t s = 0; s < w.data.size(); ++s)
         if (w.data[s])
         {
             const Vec2 e = w.data[s]->hf.extent() * w.scales[s];
-            w.feather = std::min(w.feather, 0.25 * std::min(e.x, e.y));
+            w.feather = std::min(w.feather, std::min(std::max(spec.seams.width, 0.1 * std::min(e.x, e.y)), 0.25 * std::min(e.x, e.y)));
         }
     w.feather = std::max(w.feather, cell);
 

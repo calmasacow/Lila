@@ -181,7 +181,7 @@ void drawRemix(OverlayPainter& p, const ViewInfo& view, const Placed& r)
             const bool handle = gEdit && (reg.op == RegionOp::Cut || reg.op == RegionOp::Move || reg.op == RegionOp::Duplicate);
             if (handle)
                 p.smoothDisc(*b, gDrag && gDrag->region == reg.id ? 7.0 : 5.0, kBright);
-            p.label(*b + QPointF(9, -9), QString::fromStdString(reg.id + " · " + regionOpNames()[size_t(reg.op)]));
+            p.label(*b + QPointF(9, -9), QString::fromStdString(reg.id + ": " + regionOpNames()[size_t(reg.op)]));
         }
     }
 
@@ -238,7 +238,7 @@ void drawAll(render::FrameState&, OverlayPainter& p, const ViewInfo& view)
         drawRemix(p, view, r);
         if (gEdit || r.p.before)
         {
-            const QString mode = QString::fromStdString(std::string(r.p.before ? "Before" : "After") + (gEdit ? " · Edit" : ""));
+            const QString mode = QString::fromStdString(std::string(r.p.before ? "Before" : "After") + (gEdit ? ", Edit" : ""));
             p.label(QPointF(12, 44), "Remix  " + mode);
         }
     }
