@@ -955,7 +955,7 @@ MaterialRules defaultMaterialRules(const Heightfield& h, std::optional<double> s
         r.layers.push_back(layer("snow", {term("temperature", -kMatInf, -2.0, 2.0), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
     else
         r.layers.push_back(layer("snow", {term("height", range.x + 0.82 * span, kMatInf, 0.04 * span), term("slope", -kMatInf, 50.0, 5.0)}, 0.2, 5000.0));
-    for (const char* road : {"road", "roads", "path", "paths"})
+    for (const char* road : {"road", "roads", "roadSurface", "path", "paths"})
         if (h.findMask(road))
         {
             LayerRule l = layer("road", {term(road, 0.5, kMatInf, 0.2)});

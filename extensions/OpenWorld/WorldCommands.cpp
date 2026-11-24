@@ -881,6 +881,19 @@ json buildWorld(json spec, const BuildOptions& o)
         if (!skipped("buildings"))
             st.run("buildings.style", [&] { return run("buildingStyle", c); });
 
+    // Material layers fitted to the finished ground when the terrain spec names none: without them the terrain and its
+    // seabed draw in one flat white.
+    if (const json ts = spec.value("terrain", json::object()); !terrain.empty() && !skipped("terrain") && !(ts.is_object() && ts.contains("materials")))
+        st.run("terrain.materials", [&] {
+            json call = {{"args", {terrain}}, {"layers", "default"}};
+            const json sea = ts.is_object() ? ts.value("water", json::object()).value("sea", json::object()) : json::object();
+            if (sea.contains("level") && sea["level"].is_number())
+                call["seaLevel"] = sea["level"];
+            json r = run("terrainMaterialRules", call);
+            notes.push_back("terrain materials: default layers fitted to the terrain (terrain.materials in the spec sets your own)");
+            return r;
+        });
+
     // Zones: the set's spec, then the generators (districts, water, terrain masks), then the play area.
     if (spec.contains("zones") && spec["zones"].is_object() && !skipped("zones") && !terrain.empty())
     {

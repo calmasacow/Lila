@@ -353,4 +353,19 @@ TEST_CASE("world: the tiny Sinaloa world builds headless from one spec file, rem
     // Every imported brand and street became fictional: nothing named as in the source OSM.
     const json leaks = run("realNameCheck");
     CHECK_MESSAGE(leaks.value("ok", false), leaks.dump().substr(0, 800));
+
+    // The terrain draws in its material layers and the sea in its own material, as built and after a reopen.
+    const std::string terrainName = g.find(r["terrain"].get<std::string>())->name();
+    auto looks = [&](const char* when) {
+        const json masks = run("terrainInfo", {{"args", {terrainName}}})["masks"];
+        for (const char* layer : {"layer_grass", "layer_sand", "layer_road"})
+            CHECK_MESSAGE(masks.dump().find(layer) != std::string::npos, when << " " << layer);
+        const json wm = run("meshInfo", {{"args", {terrainName + "_water"}}});
+        CHECK_MESSAGE(wm["materialSlots"].dump().find("TerrainWater") != std::string::npos, when << " " << wm["materialSlots"].dump());
+    };
+    looks("built");
+    const fs::path scene = out / "tiny.lila";
+    run("saveScene", {{"args", {scene.generic_string()}}});
+    run("openScene", {{"args", {scene.generic_string()}}});
+    looks("reopened");
 }
