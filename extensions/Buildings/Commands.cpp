@@ -1540,9 +1540,15 @@ void registerCommands(ext::Context& ctx)
                     }
                     const std::string name = host->name() + (std::string(lod) == "hlod" ? "_HLOD" : "_Far");
                     const scene::NodeId parent = g.parent(host->id());
-                    if (scene::Node* old = parent != scene::kNoNode && g.node(parent) ? g.find(g.node(parent)->path() + "|" + name) : g.find(name))
-                        ops::execute("delete", {{"args", {old->path()}}});
-                    scene::Node* n = g.createNode(*scene::types::find("mesh"), name, parent, true);
+                    // The proxy made last time is refilled, so it keeps the link id its Unreal placement is keyed by.
+                    scene::Node* n = parent != scene::kNoNode && g.node(parent) ? g.find(g.node(parent)->path() + "|" + name) : g.find(name);
+                    if (n && (!n->type().isA("mesh") || g.parent(n->id()) != parent))
+                    {
+                        ops::execute("delete", {{"args", {n->path()}}});
+                        n = nullptr;
+                    }
+                    if (!n)
+                        n = g.createNode(*scene::types::find("mesh"), name, parent, true);
                     g.setValue({n->id(), scene::MeshNode::kInMesh, -1}, scene::MeshPtr(std::make_shared<geo::Mesh>(toMesh(s, names))));
                     markNode(n->path(), "buildingsProxy", lod);
                     markNode(n->path(), "buildingsCell", p->cell);

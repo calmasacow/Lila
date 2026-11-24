@@ -143,6 +143,23 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
     CHECK(run("buildingInfo", {{"args", {A}}})["floors"] == 1); // the edit, on the pinned spec
 }
 
+TEST_CASE("buildings commands: proxies made again refill the same nodes")
+{
+    loadBuildings();
+    run("newScene");
+    run("buildingCreate", {{"envelopes", json::array({envelope(0x3333, 0, 0, 1500, 1200, 2)})}, {"name", "Town"}});
+    const json first = run("buildingProxies");
+    REQUIRE(first["proxies"].size() == 2);
+    scene::Graph& g = scene::Graph::current();
+    std::vector<scene::NodeId> ids;
+    for (const json& p : first["proxies"])
+        ids.push_back(g.find(p["mesh"].get<std::string>())->id());
+    const json second = run("buildingProxies");
+    REQUIRE(second["proxies"].size() == 2);
+    for (size_t k = 0; k < ids.size(); ++k)
+        CHECK(g.find(second["proxies"][k]["mesh"].get<std::string>())->id() == ids[k]);
+}
+
 TEST_CASE("buildings commands: every style with several seeds passes buildingCheck")
 {
     loadBuildings();
