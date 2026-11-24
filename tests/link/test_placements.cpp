@@ -1014,6 +1014,88 @@ TEST_CASE("custom primitive data: geometry nodes instances send their instance a
     CHECK(plan["groups"][2]["placements"][3]["customData"][0].get<double>() == doctest::Approx(double(each + 3)));
 }
 
+TEST_CASE("instance colours: geometry nodes instances send their colour as custom data 0-3, uncoloured meshes get M_LilaInstanceColor")
+{
+    setupPlacementTest();
+    if (!ops::find("gnAddNode"))
+    {
+        gn::registerTypes();
+        gn::registerCommands();
+    }
+    buildScatter();
+    const std::string store = gnAdd("Boulders", "StoreNamedAttribute");
+    gnSet("Boulders", store + ".dataType", "color");
+    gnSet("Boulders", store + ".domain", "instance");
+    gnSet("Boulders", store + ".name", "color");
+    gnSet("Boulders", store + ".value", json::array({0.5, 0.25, 0.125, 1.0}));
+    run("gnDisconnect", {{"args", {"Boulders", "GroupOutput.geometry"}}});
+    gnLink("Boulders", "JoinGeometry.geometry", store + ".geometry");
+    gnLink("Boulders", store + ".geometry", "GroupOutput.geometry");
+    // A declared slot follows the colour's four.
+    run("unrealCustomData", {{"args", {"Ground"}}, {"data", {"random"}}});
+
+    scene::Graph& g = scene::Graph::current();
+    json plan = placementPlan(g, {g.find("Ground")->id()}, PlacementOptions{});
+    REQUIRE(plan["groups"].size() == 3);
+    const json& part = plan["groups"][1];
+    CHECK(part["customData"] == json::parse(R"([{"name":"color","slot":0,"width":4},{"name":"random","slot":4,"width":1}])"));
+    CHECK(part["instanceColor"] == true);
+    CHECK(part["instanceColorMaterial"] == true);
+    const json& c = part["placements"][0]["customData"];
+    REQUIRE(c.size() == 5);
+    CHECK(c[0].get<double>() == doctest::Approx(0.5));
+    CHECK(c[1].get<double>() == doctest::Approx(0.25));
+    CHECK(c[2].get<double>() == doctest::Approx(0.125));
+    CHECK(c[3].get<double>() == doctest::Approx(1.0));
+
+    fs::path dir = fs::temp_directory_path() / "lila_link_instance_color";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    for (const bool feature : {true, false})
+    {
+        FakeServer server([feature](const json& req) -> std::optional<json> {
+            const std::string m = req["method"];
+            if (m == "hello")
+                return FakeServer::reply(req, {{"project", "TestGame"},
+                                               {"features", feature ? json{"progress", "placements", "instanceColor"} : json{"progress", "placements"}}});
+            if (m == "importAsset")
+                return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+            if (m == "placeInstances")
+                return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+            if (m == "removePlacements")
+                return FakeServer::reply(req, {{"removed", 0}});
+            if (m == "instanceColorMaterials")
+                return FakeServer::reply(req, {{"assigned", req["params"]["assets"].size()}});
+            return std::nullopt;
+        });
+        Link::ConnectOptions o;
+        o.port = server.port();
+        Link::get().connect(o);
+        json done = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}, {"resend", true}});
+        int calls = 0;
+        for (const json& r : server.requests())
+            if (r["method"] == "instanceColorMaterials")
+            {
+                ++calls;
+                CHECK(r["params"]["assets"].size() == 2);
+            }
+        CHECK(calls == (feature ? 1 : 0));
+        REQUIRE(done.contains("instanceColor"));
+        CHECK(done["instanceColor"]["groups"] == 2);
+        if (feature)
+            CHECK(done["instanceColor"]["materials"]["assigned"] == 2);
+        else
+            CHECK(done["instanceColor"].contains("note"));
+        Link::get().disconnect();
+    }
+    unregisterExporter("fbx:instanceSource");
+    fs::remove_all(dir);
+}
+
 TEST_CASE("instanced groups: the holder takes the components every member shares, each instance keeps its own")
 {
     setupPlacementTest();

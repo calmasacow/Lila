@@ -305,14 +305,23 @@ int attrWidth(const scene::Node& n, const std::string& name)
     }
 }
 
-/** The group's custom data slots: the declared names, each as wide as its attribute, in order from slot 0. */
+/**
+ * The group's custom data slots: the declared names, each as wide as its attribute, in order from slot 0. Instances that
+ * carry an instance colour put it first, undeclared, as four floats (linear rgb, amount): what MF_LilaInstanceColor reads.
+ */
 std::vector<DataSlot> dataSlots(const scene::Node& source, const gn::Instances* inst)
 {
     std::vector<DataSlot> out;
     int slot = 0;
-    for (const std::string& name : customDataNames(source))
+    const std::vector<std::string> names = customDataNames(source);
+    if (inst && inst->attrs.has(gn::kInstanceColorAttr) && std::ranges::find(names, gn::kInstanceColorAttr) == names.end())
     {
-        int width = name == kRandomData ? 1 : 0;
+        out.push_back({gn::kInstanceColorAttr, 0, 4});
+        slot = 4;
+    }
+    for (const std::string& name : names)
+    {
+        int width = name == kRandomData ? 1 : name == gn::kInstanceColorAttr && inst && inst->attrs.has(name) ? 4 : 0;
         if (const geo::Attribute* a = inst && width == 0 ? inst->attrs.find(name) : nullptr)
             width = geo::attrTypeComponents(a->type());
         if (width == 0)
@@ -387,6 +396,12 @@ json customData(scene::Graph& g, const std::vector<DataSlot>& slots, scene::Node
     {
         if (d.name == kRandomData)
             out.push_back(stableRandom(key));
+        else if (d.name == gn::kInstanceColorAttr && inst && inst->attrs.has(d.name))
+        {
+            const glm::vec4 c = gn::instanceColor(*inst, top);
+            for (int k = 0; k < 4; ++k)
+                out.push_back(c[k]);
+        }
         else if (!inst || !instanceFloats(*inst, d.name, top, d.width, out))
             nodeFloats(g, member, d.name, d.width, out);
     }
@@ -452,6 +467,42 @@ bool hasFeature(const char* feature)
 {
     const json features = Link::get().status().value("features", json::array());
     return features.is_array() && std::ranges::find(features, json(feature)) != features.end();
+}
+
+/**
+ * After a send: the meshes of instance-coloured groups that have no Lila material and were imported this send get
+ * M_LilaInstanceColor (LilaLink's instanceColorMaterials, which builds MF_LilaInstanceColor and it when missing). The
+ * outcome goes in plan["instanceColor"]; a LilaLink without the feature is reported, never skipped silently.
+ */
+void sendInstanceColorMaterials(RpcClient& client, json& plan)
+{
+    json assets = json::array();
+    int groups = 0;
+    for (const json& grp : plan["groups"])
+    {
+        if (!grp.value("instanceColor", false))
+            continue;
+        ++groups;
+        const json& imported = grp.value("import", json());
+        if (!grp.value("instanceColorMaterial", false) || !imported.is_object() || imported.contains("error") || imported.value("shared", false))
+            continue;
+        const json list = imported.value("assets", json::array());
+        const json path = list.is_array() && !list.empty() && list[0].is_string() ? list[0] : grp.value("objectPath", json());
+        if (path.is_string() && std::ranges::find(assets, path) == assets.end())
+            assets.push_back(path);
+    }
+    if (groups == 0)
+        return;
+    json& out = plan["instanceColor"];
+    out = {{"groups", groups}, {"customData", "slots 0-3: linear rgb, amount"}};
+    if (!hasFeature("instanceColor"))
+    {
+        out["note"] = "this LilaLink has no instanceColor: colours went as custom data, no M_LilaInstanceColor assigned; update LilaLink";
+        log::warn("unrealPlaceInstances: {}", out["note"].get<std::string>());
+        return;
+    }
+    RpcResult r = client.call("instanceColorMaterials", {{"assets", assets}}, importCallOptions());
+    out["materials"] = r.ok ? r.result : json{{"error", r.error}};
 }
 
 /** One instance of a geometry nodes result, nested instances flattened: object-space transform and a stable id. */
@@ -707,6 +758,17 @@ json slotRow(const slots::Slot& s, const slots::Resolved& r, const std::string& 
             {"scale", placement["scale"]}};
 }
 
+/**
+ * Marks a group whose placements carry the instance colour as custom data slots 0-3; a mesh with no Lila material gets
+ * M_LilaInstanceColor in Unreal (instanceColorMaterial) so the colour shows without a material of the user's.
+ */
+void markInstanceColor(scene::Graph& g, json& group, const geo::Mesh& mesh)
+{
+    group["customData"] = json::array({{{"name", gn::kInstanceColorAttr}, {"slot", 0}, {"width", 4}}});
+    group["instanceColor"] = true;
+    group["instanceColorMaterial"] = meshMaterials(g, mesh).empty();
+}
+
 /** Groups for slots resolving to an Unreal class (actors of it) or an Unreal mesh (an existing asset, nothing imported). */
 void addUnrealSlotGroups(const scene::Node& source, const std::string& prefix, std::map<std::string, json>& classes,
                          std::map<std::string, json>& unrealMeshes, const PlacementOptions& o, json& groups, json& keep)
@@ -759,6 +821,9 @@ void addSlotSetGroups(scene::Graph& g, scene::NodeId set, const std::string& set
     const std::string prefix = setKey + ":slot:";
     std::map<std::string, json> classes, unrealMeshes, visuals;
     std::map<std::string, scene::MeshPtr> visualMesh;
+    bool colored = false;
+    for (const slots::Slot& s : slots::slotsOf(g, set))
+        colored = colored || slots::dataColor(slots::resolve(s).payload.data).has_value();
     for (const slots::Slot& s : slots::slotsOf(g, set))
     {
         const slots::Resolved r = slots::resolve(s);
@@ -766,6 +831,11 @@ void addSlotSetGroups(scene::Graph& g, scene::NodeId set, const std::string& set
             continue;
         json p = placementAt(s.transform, s.id, s.id);
         p.update(slotFields(s, r));
+        if (colored)
+        {
+            const glm::vec4 c = slots::dataColor(r.payload.data).value_or(glm::vec4(0.0f));
+            p["customData"] = {c.r, c.g, c.b, c.a};
+        }
         std::string group;
         if (!r.payload.unrealClass.empty())
         {
@@ -808,6 +878,8 @@ void addSlotSetGroups(scene::Graph& g, scene::NodeId set, const std::string& set
                           {"label", n->fullPath() + "_" + vkey},
                           {"gnMesh", meshes.size()},
                           {"placements", std::move(list)}});
+        if (colored)
+            markInstanceColor(g, groups.back(), *visualMesh[vkey]);
         meshes.push_back(visualMesh[vkey]);
         keep.push_back(key);
     }
@@ -1020,6 +1092,11 @@ json buildPlan(scene::Graph& g, const std::vector<scene::NodeId>& roots, const P
             pg["label"] = n->fullPath() + "_" + part.hash.substr(0, 8);
             pg["collision"] = o.collision == "auto" ? "complexAsSimple" : o.collision;
             pg["customData"] = slotsJson(gnSlots);
+            if (!gnSlots.empty() && gnSlots.front().name == gn::kInstanceColorAttr)
+            {
+                pg["instanceColor"] = true;
+                pg["instanceColorMaterial"] = meshMaterials(g, *part.mesh).empty();
+            }
             pg["gnMesh"] = meshes.size();
             meshes.push_back(part.mesh);
             groups.push_back(std::move(pg));
@@ -1434,6 +1511,7 @@ void registerPlacementCommands()
                     grp["placed"] = placed.ok ? placed.result : json{{"error", placed.error}};
                 }
                 plan["unchanged"] = unchanged;
+                sendInstanceColorMaterials(*client, plan);
                 // Meshes a source's geometry nodes no longer instance leave the level.
                 for (json& src : plan["gnSources"])
                 {
