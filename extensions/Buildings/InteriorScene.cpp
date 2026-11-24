@@ -429,7 +429,9 @@ void ensureRoomArrangements()
     if (done || !ops::find("arrangementRegister"))
         return;
     done = true;
-    for (auto& [kind, preset] : roomPresets().items())
+    // Held: items() of the temporary roomPresets() returns would dangle.
+    const json presets = roomPresets();
+    for (const auto& [kind, preset] : presets.items())
     {
         std::string label = kind;
         label[0] = char(std::toupper(static_cast<unsigned char>(label[0])));
