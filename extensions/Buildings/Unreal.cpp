@@ -184,7 +184,6 @@ void registerUnreal(ext::Context& ctx)
                 out["interiorsNote"] = "this LilaLink has no buildingInteriors feature: interiors and window glass were not sent; update the plugin";
                 return out;
             }
-            const std::string folder = a.get<std::string>("folder", "/Game/Lila/Buildings");
             json entries = json::array();
             for (const json& i : interiorGroups)
             {
