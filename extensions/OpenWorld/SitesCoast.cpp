@@ -57,6 +57,9 @@ json heightFromWater(json flags, double above)
 }
 } // namespace
 
+/** Yards sit at a fixed height above the water: their skirt widens to stay a slope the town's streets can meet, percent. */
+constexpr double kYardSkirtGrade = 8.0;
+
 void buildPort(Kit& k)
 {
     const Spec& s = k.spec;
@@ -65,7 +68,9 @@ void buildPort(Kit& k)
     k.L.boundary = rect(x0, -4500.0, x1, D);
 
     k.ground("yard", "terrainStampPad",
-             heightFromWater({{"footprint", pts(rect(x0, 0.0, x1, D))}, {"mode", "flatten"}, {"falloff", 3000.0}, {"masks", {"paved", "port", "cityFootprint"}}}, 250.0));
+             heightFromWater({{"footprint", pts(rect(x0, 0.0, x1, D))}, {"mode", "flatten"}, {"falloff", 3000.0}, {"skirtGrade", kYardSkirtGrade},
+                              {"masks", {"paved", "port", "cityFootprint"}}},
+                             250.0));
     k.ground("quay", "terrainStampQuay",
              heightFromWater({{"path", json::array({pt({x0, 0.0}), pt({x1, 0.0})})}, {"kind", "quay"}, {"side", "left"}, {"depth", dredge}, {"width", 600.0}}, 250.0));
     k.ground("berths", "terrainStampRegion",
@@ -265,7 +270,9 @@ void buildCruise(Kit& k)
     k.ground("quay", "terrainStampQuay",
              heightFromWater({{"path", json::array({pt({-Ls * 0.5, 0.0}), pt({Ls * 0.5, 0.0})})}, {"kind", "quay"}, {"side", "left"}, {"depth", 1000.0}, {"width", 500.0}}, 200.0));
     k.ground("plaza", "terrainStampRegion",
-             heightFromWater({{"footprint", pts(rect(-Ls * 0.5, 0.0, Ls * 0.5, 11000.0))}, {"mode", "flatten"}, {"falloff", 1500.0}, {"masks", {"paved", "cityFootprint"}}}, 220.0));
+             heightFromWater({{"footprint", pts(rect(-Ls * 0.5, 0.0, Ls * 0.5, 11000.0))}, {"mode", "flatten"}, {"falloff", 1500.0}, {"skirtGrade", kYardSkirtGrade},
+                              {"masks", {"paved", "cityFootprint"}}},
+                             220.0));
     k.ground("berths", "terrainStampRegion",
              heightFromWater({{"footprint", pts(rect(-Wp * 0.5 - 5500.0, -Lp - 500.0, Wp * 0.5 + 5500.0, -1200.0))}, {"mode", "carve"}, {"falloff", 300.0}, {"masks", {"port"}}},
                              -1100.0));

@@ -562,6 +562,8 @@ json stampJson(const Found& f, const Stamp& s, const StampResult& r, const std::
             {"levels", levels},
             {"walls", walls},
             {"piles", piles}};
+    if (r.falloff > 0.0)
+        out["falloffUsed"] = r.falloff * a;
     if (s.isLine())
     {
         json line = json::array(), spans = json::array(), culverts = json::array();
@@ -601,6 +603,7 @@ std::vector<FlagDef> stampFlags(bool region)
         {"height", "h", T::Float, nullptr, "Target height along the scene's up axis, cm; overrides level."},
         {"offset", "of", T::Float, 0.0, "Added to the target height, cm."},
         {"falloff", "fo", T::Float, 500.0, "Skirt width back to the ground, cm.", {}, {}, 0.0},
+        {"skirtGrade", "sg", T::Float, 0.0, "Steepest the skirt may fall, percent: the falloff widens up to four times to keep to it. 0 keeps it as given.", {}, {}, 0.0},
         {"strength", "st", T::Float, 1.0, "Blend: how far toward the target, 0 to 1.", {}, {}, 0.0, 1.0},
         {"masks", "mk", T::List, json::array({"cityFootprint"}), "Masks its coverage is written to."},
         {"maskValue", "mv", T::Float, 1.0, "Mask value inside.", {}, {}, 0.0, 1.0},
@@ -663,6 +666,7 @@ json runStamp(const Args& a, bool region, const std::string& cmd, const std::str
     s.level = StampLevel(std::find(stampLevelNames().begin(), stampLevelNames().end(), level) - stampLevelNames().begin());
     s.offset = a.get<double>("offset", 0.0) / fr.vertical();
     s.falloff = std::max(0.0, a.get<double>("falloff", 500.0)) / fr.across();
+    s.skirtGrade = std::max(0.0, a.get<double>("skirtGrade", 0.0)) / 100.0 * fr.across() / fr.vertical();
     s.strength = std::clamp(a.get<double>("strength", 1.0), 0.0, 1.0);
     s.stepHeight = std::max(1.0, a.get<double>("stepHeight", 150.0)) / fr.vertical();
     s.steps = int(std::clamp<int64_t>(a.get<int64_t>("steps", 0), 0, 64));
