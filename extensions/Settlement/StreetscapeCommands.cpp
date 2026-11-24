@@ -136,7 +136,12 @@ json namesJson(const Layout& l)
     for (auto& [id, j] : streets)
         s.push_back(std::move(j));
     for (const District& x : l.districts)
-        d.push_back({{"id", x.id}, {"name", x.name}, {"areaM2", x.area}, {"center", json::array({x.center.x, x.center.y})}});
+    {
+        json outline = json::array();
+        for (const Vec2& p : x.outline.pts)
+            outline.push_back({p.x, p.y});
+        d.push_back({{"id", x.id}, {"name", x.name}, {"areaM2", x.area}, {"center", json::array({x.center.x, x.center.y})}, {"outline", outline}});
+    }
     return {{"culture", l.culture}, {"cultures", cultureNames()}, {"streets", s}, {"districts", d}};
 }
 } // namespace
@@ -400,7 +405,7 @@ void registerStreetscapeCommands(ext::Context& ctx)
                "ids of the streets in it; districts are the quarters between arterials. culture= sets the settlement's "
                "culture (default from its style); district= with name= renames a district. Street names change with "
                "settlementEditStreet(name=). Names save with the scene and go out in settlementExport. Returns the culture, "
-               "every street's name by stable id and the districts.",
+               "every street's name by stable id and the districts (id, name, area, center, outline in cm).",
         .positionalDoc = "settlement mesh or its modifier",
         .flags = {{"culture", "cu", StreetT::String, nullptr, "Naming culture; empty for the style's.", {"oldEnglish", "latin", "french", "spanish", "usGrid", "sector", ""}},
                   {"district", "d", StreetT::Int, nullptr, "A district's id, with name=."},
