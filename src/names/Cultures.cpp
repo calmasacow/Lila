@@ -252,6 +252,11 @@ const Vocab& mexicanVocab()
         p["building"] = {"Edificio {e}", "Torre {e}", "Condominios {e}"};
         p["apartments"] = {"Condominios {e}", "Departamentos {n}", "Torre {e}"};
         p["mansion"] = {"Quinta {e}", "Villa {e}"};
+        p["shipping"] = {"Naviera {e}", "Línea Marítima {s}", "Transportes Marítimos {e}", "Contenedores {s}"};
+        p["cruiseLine"] = {"Cruceros {e}", "Cruceros {s}"};
+        p["cruiseTerminal"] = {"Terminal de Cruceros {e}", "Muelle de Cruceros {s}"};
+        p["customs"] = {"Aduana Marítima {e}", "Aduana {s}"};
+        p["mausoleum"] = {"Familia {s} {s}", "Capilla Familiar {s} {s}", "Familia {s}"};
         x.business = {"Comercial {s}", "Tienda {e}", "Negocio {g}"};
         auto& k = x.kinds;
         k[Kind::Town] = {"{a} de {n}", "Villa {s}", "{n}", "Puerto {e}", "Real de {n}"};
@@ -371,6 +376,11 @@ const Vocab& englishVocab()
         p["building"] = {"The {e} Building", "{s} Tower"};
         p["apartments"] = {"{e} Apartments", "{s} Court"};
         p["mansion"] = {"{s} House", "{e} Manor"};
+        p["shipping"] = {"{e} Lines", "{s} Shipping", "{e} Container Line"};
+        p["cruiseLine"] = {"{e} Cruises", "{s} Cruise Line"};
+        p["cruiseTerminal"] = {"{e} Cruise Terminal", "{s} Pier"};
+        p["customs"] = {"{e} Customs House", "{s} Customs Post"};
+        p["mausoleum"] = {"{s} Family", "{s}-{s} Family", "{s} Family Chapel"};
         x.business = {"{s} & Co.", "{e} Store", "{g}'s"};
         auto& k = x.kinds;
         k[Kind::Town] = {"{n}", "Port {s}", "{s}ville", "{s} Springs", "New {s}"};
