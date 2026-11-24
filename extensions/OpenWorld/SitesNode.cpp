@@ -37,30 +37,47 @@ std::map<uint64_t, Evaluated>& evaluated()
 
 // Ground
 
-/** Heights over a mesh seen from above: its triangles bucketed on a grid, the highest hit wins. */
+/**
+ * Heights over a mesh seen from above: its triangles bucketed on a grid, the highest hit wins. The mesh is shared, not
+ * copied (a terrain's is millions of triangles); a ground that is only moved (no turn or scale) is read through its
+ * offset, anything else is read from a world-space copy.
+ */
 class GroundGrid
 {
 public:
-    explicit GroundGrid(const lila::geo::Mesh& m)
+    GroundGrid(std::shared_ptr<const lila::geo::Mesh> m, const glm::dmat4& xf)
     {
-        for (Index f = 0; f < m.faceCapacity(); ++f)
+        const bool moveOnly = glm::length(glm::dvec3(xf[0]) - glm::dvec3(1, 0, 0)) < 1e-9 && glm::length(glm::dvec3(xf[1]) - glm::dvec3(0, 1, 0)) < 1e-9 &&
+                              glm::length(glm::dvec3(xf[2]) - glm::dvec3(0, 0, 1)) < 1e-9;
+        if (moveOnly)
         {
-            if (!m.faceValid(f))
+            mMesh = std::move(m);
+            mOffset = glm::dvec3(xf[3]);
+        }
+        else
+        {
+            lila::geo::Mesh copy = *m;
+            for (Index v = 0; v < copy.pointCapacity(); ++v)
+                if (copy.pointValid(v))
+                    copy.setPosition(v, glm::dvec3(xf * glm::dvec4(copy.position(v), 1.0)));
+            mMesh = std::make_shared<const lila::geo::Mesh>(std::move(copy));
+        }
+        const lila::geo::Mesh& mesh = *mMesh;
+        for (Index f = 0; f < mesh.faceCapacity(); ++f)
+        {
+            if (!mesh.faceValid(f))
                 continue;
-            const std::vector<Index> fp = m.facePoints(f);
+            const std::vector<Index> fp = mesh.facePoints(f);
             for (size_t k = 1; k + 1 < fp.size(); ++k)
-            {
-                mTri.push_back(m.position(fp[0]));
-                mTri.push_back(m.position(fp[k]));
-                mTri.push_back(m.position(fp[k + 1]));
-            }
+                mTri.insert(mTri.end(), {uint32_t(fp[0]), uint32_t(fp[k]), uint32_t(fp[k + 1])});
         }
         if (mTri.empty())
             return;
         mLo = glm::dvec2(std::numeric_limits<double>::infinity());
         glm::dvec2 hi(-std::numeric_limits<double>::infinity());
-        for (const glm::dvec3& p : mTri)
+        for (uint32_t i : mTri)
         {
+            const glm::dvec3 p = at(i);
             mLo = glm::min(mLo, glm::dvec2(p.x, p.z));
             hi = glm::max(hi, glm::dvec2(p.x, p.z));
         }
@@ -69,16 +86,24 @@ public:
         mCell = std::max(1.0, std::sqrt(ext.x * ext.y / std::max<size_t>(1, tris / 2)));
         mNx = std::max(1, int(ext.x / mCell) + 1);
         mNz = std::max(1, int(ext.y / mCell) + 1);
-        mBuckets.assign(size_t(mNx) * size_t(mNz), {});
-        for (uint32_t t = 0; t < tris; ++t)
-        {
-            const glm::dvec3 &a = mTri[t * 3], &b = mTri[t * 3 + 1], &c = mTri[t * 3 + 2];
+        // Two passes, count then fill one flat array, so a terrain's millions of buckets are not a vector each.
+        mStart.assign(size_t(mNx) * size_t(mNz) + 1, 0);
+        auto cells = [&](uint32_t t, auto&& visit) {
+            const glm::dvec3 a = at(mTri[t * 3]), b = at(mTri[t * 3 + 1]), c = at(mTri[t * 3 + 2]);
             const int x0 = cellX(std::min({a.x, b.x, c.x})), x1 = cellX(std::max({a.x, b.x, c.x}));
             const int z0 = cellZ(std::min({a.z, b.z, c.z})), z1 = cellZ(std::max({a.z, b.z, c.z}));
             for (int z = z0; z <= z1; ++z)
                 for (int x = x0; x <= x1; ++x)
-                    mBuckets[size_t(z) * size_t(mNx) + size_t(x)].push_back(t);
-        }
+                    visit(size_t(z) * size_t(mNx) + size_t(x));
+        };
+        for (uint32_t t = 0; t < tris; ++t)
+            cells(t, [&](size_t cell) { ++mStart[cell + 1]; });
+        for (size_t k = 1; k < mStart.size(); ++k)
+            mStart[k] += mStart[k - 1];
+        mItems.resize(mStart.back());
+        std::vector<uint32_t> fill(mStart.begin(), mStart.end() - 1);
+        for (uint32_t t = 0; t < tris; ++t)
+            cells(t, [&](size_t cell) { mItems[fill[cell]++] = t; });
     }
 
     bool empty() const { return mTri.empty(); }
@@ -91,9 +116,11 @@ public:
         if (cx < 0 || cz < 0 || cx >= mNx || cz >= mNz)
             return false;
         bool hit = false;
-        for (uint32_t t : mBuckets[size_t(cz) * size_t(mNx) + size_t(cx)])
+        const size_t cell = size_t(cz) * size_t(mNx) + size_t(cx);
+        for (uint32_t k = mStart[cell]; k < mStart[cell + 1]; ++k)
         {
-            const glm::dvec3 &a = mTri[t * 3], &b = mTri[t * 3 + 1], &c = mTri[t * 3 + 2];
+            const uint32_t t = mItems[k];
+            const glm::dvec3 a = at(mTri[t * 3]), b = at(mTri[t * 3 + 1]), c = at(mTri[t * 3 + 2]);
             const double d = (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z);
             if (std::abs(d) < 1e-12)
                 continue;
@@ -111,35 +138,48 @@ public:
     }
 
 private:
+    glm::dvec3 at(uint32_t i) const { return mMesh->position(Index(i)) + mOffset; }
     int cellX(double x) const { return std::clamp(int(std::floor((x - mLo.x) / mCell)), 0, mNx - 1); }
     int cellZ(double z) const { return std::clamp(int(std::floor((z - mLo.y) / mCell)), 0, mNz - 1); }
 
-    std::vector<glm::dvec3> mTri;
+    std::shared_ptr<const lila::geo::Mesh> mMesh;
+    glm::dvec3 mOffset{0.0};
+    std::vector<uint32_t> mTri;
     glm::dvec2 mLo{0.0};
     double mCell = 1.0;
     int mNx = 1, mNz = 1;
-    std::vector<std::vector<uint32_t>> mBuckets;
+    std::vector<uint32_t> mStart, mItems;
 };
 
-/** The grid for a ground mesh, rebuilt only when its points change (Object Info hands a fresh copy every evaluation). */
-std::shared_ptr<const GroundGrid> groundFor(const lila::geo::Mesh& m)
+/**
+ * The grid for a ground mesh and its placement, rebuilt only when either changes. Keyed by a sample of the points
+ * (a terrain has millions): the counts, every 97th position and the placement.
+ */
+std::shared_ptr<const GroundGrid> groundFor(const std::shared_ptr<const lila::geo::Mesh>& m, const glm::dmat4& xf)
 {
-    uint64_t h = 1469598103934665603ull ^ m.numFaces();
-    for (const glm::dvec3& p : m.positions())
-        for (double v : {p.x, p.y, p.z})
-        {
-            uint64_t bits;
-            std::memcpy(&bits, &v, sizeof bits);
-            h = (h ^ bits) * 1099511628211ull;
-        }
+    uint64_t h = 1469598103934665603ull ^ uint64_t(m->numFaces()) ^ (uint64_t(m->numPoints()) << 32);
+    auto mix = [&](double v) {
+        uint64_t bits;
+        std::memcpy(&bits, &v, sizeof bits);
+        h = (h ^ bits) * 1099511628211ull;
+    };
+    const auto pts = m->positions();
+    for (size_t i = 0; i < pts.size(); i += 97)
+        mix(pts[i].x), mix(pts[i].y), mix(pts[i].z);
+    if (!pts.empty())
+        mix(pts.back().y);
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            mix(xf[c][r]);
     static std::mutex lock;
     static std::map<uint64_t, std::shared_ptr<const GroundGrid>> cache;
     std::lock_guard l(lock);
     if (auto it = cache.find(h); it != cache.end())
         return it->second;
-    if (cache.size() > 8)
+    // Two: the ground before and after an edit. A changed terrain's older grids are not asked for again.
+    if (cache.size() >= 2)
         cache.clear();
-    auto g = std::make_shared<const GroundGrid>(m);
+    auto g = std::make_shared<const GroundGrid>(m, xf);
     cache[h] = g;
     return g;
 }
@@ -437,8 +477,16 @@ lila::gn::NodeDecl siteDecl()
                 }
 
                 std::shared_ptr<const GroundGrid> grid;
-                if (lila::gn::GeometryPtr g = c.geometry("ground"); g && g->mesh && !g->mesh->empty())
-                    grid = groundFor(*g->mesh);
+                if (lila::gn::GeometryPtr g = c.geometry("ground"))
+                {
+                    // Object Info hands the terrain as one shared instance (no copy), or as a mesh in world space.
+                    const auto& inst = g->instances;
+                    if (inst && inst->size() == 1 && !inst->references.empty() && inst->references[0] && inst->references[0]->mesh &&
+                        !inst->references[0]->mesh->empty())
+                        grid = groundFor(inst->references[0]->mesh, inst->transforms[0]);
+                    else if (g->mesh && !g->mesh->empty())
+                        grid = groundFor(g->mesh, glm::dmat4(1.0));
+                }
                 auto groundAt = [&](P2 w) {
                     double y = 0.0;
                     if (grid && grid->height(w.x, w.y, &y))

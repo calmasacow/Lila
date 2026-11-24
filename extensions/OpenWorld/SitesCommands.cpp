@@ -330,38 +330,32 @@ std::string layoutGroundHash(const sites::Spec& s, const sites::Layout& L)
 }
 
 /** Grades the terrain under a site: every ground op sent (stamps and roads in one batch), the ones it no longer has removed. */
-json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
+/** What grading a site sends to its terrain: batched calls, calls made one by one (the airstrip), the record kept. */
+struct GradePlan
 {
-    LILA_ZONE();
-    std::shared_ptr<const sites::Layout> L;
+    std::shared_ptr<const sites::Layout> layout;
+    json calls = json::array(), record = json::array();
+    std::vector<std::pair<std::string, json>> direct;
+    std::set<std::string> made;
+    std::vector<std::string> errors;
+};
+
+GradePlan planGrade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
+{
+    GradePlan p;
     try
     {
-        L = sites::layoutFor(r.spec);
+        p.layout = sites::layoutFor(r.spec);
     }
     catch (const std::exception& e)
     {
         throw CommandError(cmd + ": " + e.what());
     }
-    std::vector<std::string> errors;
-    json out = {{"terrain", terrain}};
-    const std::string prevTerrain = r.ground.value("terrain", std::string());
-    if (terrain.empty())
-    {
-        out["removed"] = ungrade(r.ground, {}, &errors);
-        out["sent"] = 0;
-        out["errors"] = errors;
-        storeGround(r, {{"terrain", ""}, {"ops", json::array()}});
-        return out;
-    }
     for (const char* need : {"terrainBatch", "terrainStampPad", "terrainAddRoad"})
         if (!ops::find(need))
             throw CommandError(cmd + ": the Terrain command " + std::string(need) + " is not available; load the Terrain extension");
-
     const std::string owner = sites::ownerOf(r.spec.id);
-    json calls = json::array(), record = json::array();
-    std::vector<std::pair<std::string, json>> direct;
-    std::set<std::string> made;
-    for (const sites::GroundOp& op : L->ground)
+    for (const sites::GroundOp& op : p.layout->ground)
     {
         json flags = toWorldFlags(r.spec, op.flags);
         const std::string id = owner + "/" + op.id;
@@ -375,34 +369,24 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
         }
         if (op.command != "terrainAddAirstrip" && op.command != "terrainAddChannel" && !ops::find(op.command))
         {
-            errors.push_back(cmd + ": the Terrain command " + op.command + " is not available, so " + id + " was not made");
+            p.errors.push_back(cmd + ": the Terrain command " + op.command + " is not available, so " + id + " was not made");
             continue;
         }
         flags["args"] = json::array({terrain});
-        record.push_back({{"id", id}, {"command", op.command}, {"layer", layer}, {"op", op.id}});
-        made.insert(id);
+        p.record.push_back({{"id", id}, {"command", op.command}, {"layer", layer}, {"op", op.id}});
+        p.made.insert(id);
         if (op.command == "terrainAddAirstrip")
-            direct.push_back({op.command, flags});
+            p.direct.push_back({op.command, flags});
         else
-            calls.push_back({{"command", op.command}, {"flags", flags}});
+            p.calls.push_back({{"command", op.command}, {"flags", flags}});
     }
-    json prev = r.ground;
-    if (prevTerrain != terrain)
-        out["removed"] = ungrade(prev, {}, &errors);
-    else
-        out["removed"] = ungrade(prev, made, &errors);
+    return p;
+}
+
+/** Sends the calls made one by one (after the batch), counting what ran. */
+int sendDirect(const std::vector<std::pair<std::string, json>>& direct, const std::string& cmd, std::vector<std::string>& errors)
+{
     int sent = 0;
-    if (!calls.empty())
-    {
-        const json done = ops::execute("terrainBatch", {{"calls", calls}});
-        sent += done.value("ran", 0);
-        for (const json& e : done.value("errors", json::array()))
-        {
-            const size_t k = e.value("index", size_t(0));
-            errors.push_back(e.value("command", std::string()) + " " + (k < calls.size() ? calls[k]["flags"].value("id", std::string()) : std::string()) + ": " +
-                             e.value("error", std::string()));
-        }
-    }
     for (const auto& [c, flags] : direct)
     {
         if (!ops::find(c))
@@ -421,6 +405,47 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
             errors.push_back(c + " " + flags["id"].get<std::string>() + ": " + e.what());
         }
     }
+    return sent;
+}
+
+json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
+{
+    LILA_ZONE();
+    std::vector<std::string> errors;
+    json out = {{"terrain", terrain}};
+    const std::string prevTerrain = r.ground.value("terrain", std::string());
+    if (terrain.empty())
+    {
+        out["removed"] = ungrade(r.ground, {}, &errors);
+        out["sent"] = 0;
+        out["errors"] = errors;
+        storeGround(r, {{"terrain", ""}, {"ops", json::array()}});
+        return out;
+    }
+    GradePlan plan = planGrade(r, terrain, cmd);
+    errors = plan.errors;
+    const std::shared_ptr<const sites::Layout> L = plan.layout;
+    json& calls = plan.calls;
+    json& record = plan.record;
+    const std::set<std::string>& made = plan.made;
+    json prev = r.ground;
+    if (prevTerrain != terrain)
+        out["removed"] = ungrade(prev, {}, &errors);
+    else
+        out["removed"] = ungrade(prev, made, &errors);
+    int sent = 0;
+    if (!calls.empty())
+    {
+        const json done = ops::execute("terrainBatch", {{"calls", calls}});
+        sent += done.value("ran", 0);
+        for (const json& e : done.value("errors", json::array()))
+        {
+            const size_t k = e.value("index", size_t(0));
+            errors.push_back(e.value("command", std::string()) + " " + (k < calls.size() ? calls[k]["flags"].value("id", std::string()) : std::string()) + ": " +
+                             e.value("error", std::string()));
+        }
+    }
+    sent += sendDirect(plan.direct, cmd, errors);
     storeGround(r, {{"terrain", terrain}, {"ops", record}, {"hash", layoutGroundHash(r.spec, *L)}});
     out["sent"] = sent;
     out["ops"] = record.size();
@@ -428,6 +453,63 @@ json grade(const SiteRef& r, const std::string& terrain, const std::string& cmd)
     for (const std::string& e : errors)
         log::warn("{}", e);
     return out;
+}
+
+/**
+ * Grades several sites with one Terrain batch: the terrain changes once and evaluates once, instead of once per site
+ * (a 2k terrain with coast and water takes seconds to evaluate). Each site keeps its own record as grade() writes it.
+ */
+json gradeMany(const std::vector<SiteRef>& sitesIn, const std::string& cmd)
+{
+    LILA_ZONE();
+    json calls = json::array(), out = json::array();
+    std::vector<std::pair<std::string, json>> direct;
+    std::vector<std::string> errors;
+    std::vector<size_t> owner;
+    std::vector<GradePlan> plans;
+    std::vector<std::string> terrains;
+    for (size_t i = 0; i < sitesIn.size(); ++i)
+    {
+        const SiteRef& r = sitesIn[i];
+        const std::string terrain = r.ground.value("terrain", std::string());
+        terrains.push_back(terrain);
+        plans.push_back(terrain.empty() ? GradePlan{} : planGrade(r, terrain, cmd));
+        if (terrain.empty())
+            continue;
+        json prev = r.ground;
+        ungrade(prev, plans.back().made, &errors);
+        for (const json& c : plans.back().calls)
+        {
+            calls.push_back(c);
+            owner.push_back(i);
+        }
+        for (auto& d : plans.back().direct)
+            direct.push_back(d);
+        for (const std::string& e : plans.back().errors)
+            errors.push_back(e);
+    }
+    int sent = 0;
+    if (!calls.empty())
+    {
+        const json done = ops::execute("terrainBatch", {{"calls", calls}});
+        sent += done.value("ran", 0);
+        for (const json& e : done.value("errors", json::array()))
+        {
+            const size_t k = e.value("index", size_t(0));
+            errors.push_back(e.value("command", std::string()) + " " + (k < calls.size() ? calls[k]["flags"].value("id", std::string()) : std::string()) + ": " +
+                             e.value("error", std::string()));
+        }
+    }
+    sent += sendDirect(direct, cmd, errors);
+    for (size_t i = 0; i < sitesIn.size(); ++i)
+        if (!terrains[i].empty() && plans[i].layout)
+        {
+            storeGround(sitesIn[i], {{"terrain", terrains[i]}, {"ops", plans[i].record}, {"hash", layoutGroundHash(sitesIn[i].spec, *plans[i].layout)}});
+            out.push_back({{"site", sitesIn[i].spec.id}, {"ops", plans[i].record.size()}});
+        }
+    for (const std::string& e : errors)
+        log::warn("{}", e);
+    return {{"sites", out}, {"sent", sent}, {"errors", errors}};
 }
 
 // Info
@@ -1018,7 +1100,7 @@ void registerSites(ext::Context& ctx)
                                         {{"name", kGroundAttr}, {"type", "string"}, {"default", "{}"}, {"panel", "Site"},
                                          {"description", "What the site put on its terrain (ids by command), for siteGround and siteRemove."}},
                                         {{"name", "massing"}, {"type", "bool"}, {"default", true}, {"panel", "Site"}, {"description", "Draw the buildings as greybox massing."}}})},
-                {"nodes", json::array({{{"name", "Ground"}, {"type", "ObjectInfo"}, {"props", {{"object", terrain}, {"transformSpace", "world"}}}},
+                {"nodes", json::array({{{"name", "Ground"}, {"type", "ObjectInfo"}, {"props", {{"object", terrain}, {"transformSpace", "instance"}}}},
                                        {{"name", "Site"}, {"type", "SiteKit"}}})},
                 {"links", json::array({std::string("GroupInput.") + kSpecAttr + " -> Site.spec", "GroupInput.massing -> Site.massing", "Ground.geometry -> Site.ground",
                                        "Site.geometry -> GroupOutput.geometry"})}};
@@ -1144,9 +1226,21 @@ void registerSites(ext::Context& ctx)
         .doc = "Grade the terrain under a site again from its spec (after editing the terrain, or with ground=False edits), or take "
                "everything the site put on the terrain off it with remove=True. Returns what was sent and removed.",
         .positionalDoc = "site mesh, modifier or id",
-        .flags = {{"remove", "rm", T::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."}},
+        .flags = {{"remove", "rm", T::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."},
+                  {"sites", "s", T::List, nullptr, "Several sites graded in one terrain change (ids or meshes); every site with all=True."},
+                  {"all", "a", T::Bool, false, "Every site in the scene, in one terrain change."}},
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteGround";
+            if ((a.has("sites") || a.get<bool>("all", false)) && !a.get<bool>("remove", false))
+            {
+                std::vector<SiteRef> list;
+                if (a.get<bool>("all", false))
+                    list = allSites(cmd);
+                else
+                    for (const json& n : a.flags["sites"])
+                        list.push_back(findSite(n.get<std::string>(), cmd));
+                return gradeMany(list, cmd);
+            }
             const SiteRef r = findSite(siteArg(a), cmd);
             if (a.get<bool>("remove", false))
                 return grade(r, "", cmd);
