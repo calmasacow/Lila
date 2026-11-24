@@ -892,6 +892,28 @@ public:
                 if (auto a = view.project(draped(ground, mOutline.front())), b = view.project(draped(ground, mOutline.back())); a && b)
                     p.dashedLine(*a, *b, 1.0f, 3.0f, glm::vec4(1.0f, 1.0f, 1.0f, 0.4f));
         }
+        // Preselection: in Pick, the zone the click would read is outlined under the cursor.
+        if (st.mode == Mode::Pick && layer && mView == view.camera && !layer->zones.empty())
+        {
+            Vec2 c;
+            if (groundHit(ground, mHover, view, c))
+                if (const std::vector<const Zone*> at = zonesAt(*layer, c); !at.empty())
+                {
+                    const int index = int(at.front() - layer->zones.data());
+                    p.setShadow(true);
+                    for (const LayerDraw::Line& line : layerDraw(set->id(), *spec, 0, *layer, ground).lines)
+                        if (line.zone == index)
+                        {
+                            std::vector<QPointF> pts;
+                            for (const glm::dvec3& w : line.pts)
+                                if (auto s = view.project(w))
+                                    pts.push_back(*s);
+                            p.polyline(pts, 3.0f, glm::vec4(1.0f), true);
+                        }
+                    p.label(mHover + QPointF(14.0, -10.0), QString::fromStdString(at.front()->name.empty() ? at.front()->id : at.front()->name));
+                    p.setShadow(false);
+                }
+        }
         if ((st.mode == Mode::Paint || st.mode == Mode::Erase) && mView == view.camera)
         {
             Vec2 c;
