@@ -6,6 +6,7 @@
 #include "LilaLinkLog.h"
 
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Components/DirectionalLightComponent.h"
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/InstancedStaticMeshComponent.h"
@@ -30,6 +31,10 @@
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
+#include "UObject/UObjectIterator.h"
+#include "UObject/Linker.h"
+#include "Engine/Level.h"
+#include "ExternalPackageHelper.h"
 #include "FileHelpers.h"
 #include "GameFramework/WorldSettings.h"
 #include "HAL/FileManager.h"
@@ -216,6 +221,101 @@ int32 DestroyActors(UWorld* World, const TArray<AActor*>& Actors)
 		World->EditorDestroyActor(Actor, true);
 	}
 	return Removed;
+}
+
+TSharedPtr<FJsonValue> StringArray(const TArray<FString>& Strings)
+{
+	TArray<TSharedPtr<FJsonValue>> Values;
+	for (const FString& S : Strings)
+	{
+		Values.Add(MakeShared<FJsonValueString>(S));
+	}
+	return MakeShared<FJsonValueArray>(Values);
+}
+
+/**
+ * Deletes the level files (with their external actors and objects) of removed Level Instances that no instance left in
+ * World or in another level shows; OutKept says which stayed and why. Returns the packages deleted.
+ */
+TArray<FString> DeleteUnusedAssemblyLevels(UWorld* World, const TArray<FString>& Levels, TArray<FString>& OutKept, TArray<FString>& OutErrors)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::DeleteUnusedAssemblyLevels);
+
+	TArray<FString> Unused;
+	for (const FString& Level : Levels)
+	{
+		bool bInUse = Level.IsEmpty() || !FPackageName::DoesPackageExist(Level);
+		for (TActorIterator<ALevelInstance> It(World); It && !bInUse; ++It)
+		{
+			bInUse = IsValid(*It) && It->GetWorldAsset().GetLongPackageName() == Level;
+		}
+		// Another level's Level Instance of the same interior (sends to several levels share its level) keeps it too.
+		if (const FString By = bInUse ? FString() : LilaLink::UsedOutside(World, Level); !By.IsEmpty())
+		{
+			bInUse = true;
+			OutKept.Add(FString::Printf(TEXT("%s: %s uses it"), *Level, *By));
+		}
+		if (!bInUse)
+		{
+			Unused.Add(Level);
+		}
+	}
+	if (Unused.IsEmpty())
+	{
+		return {};
+	}
+	// The level and its external packages are known unused: nothing to load or scan for references, so the files go
+	// directly once no package in memory (the unloaded instance's /Temp copy included) still reads them.
+	auto Folders = [](const FString& Level) {
+		TArray<FString> Out = ULevel::GetExternalActorsPaths(Level);
+		Out.Add(FExternalPackageHelper::GetExternalObjectsPath(Level));
+		return Out;
+	};
+	TArray<UPackage*> InMemory;
+	for (TObjectIterator<UPackage> It; It; ++It)
+	{
+		const FString Name = It->GetName(), From = It->GetLoadedPath().GetPackageName();
+		for (const FString& Level : Unused)
+		{
+			const bool bOwn = Name == Level || From == Level ||
+							  Folders(Level).ContainsByPredicate([&Name](const FString& F) { return Name.StartsWith(F + TEXT("/")); });
+			if (bOwn)
+			{
+				InMemory.Add(*It);
+				break;
+			}
+		}
+	}
+	for (UPackage* Package : InMemory)
+	{
+		ResetLoaders(Package);
+	}
+	TArray<FString> Deleted;
+	for (const FString& Level : Unused)
+	{
+		FString File;
+		const bool bFile = FPackageName::DoesPackageExist(Level, &File);
+		if (bFile && !IFileManager::Get().Delete(*File, /*RequireExists=*/false, /*EvenReadOnly=*/true))
+		{
+			OutErrors.Add(FString::Printf(TEXT("%s could not be deleted (in use); delete it in the Content Browser"), *Level));
+			continue;
+		}
+		IAssetRegistry::GetChecked().ScanModifiedAssetFiles({File});
+		for (const FString& Folder : Folders(Level))
+		{
+			FString Dir;
+			if (FPackageName::TryConvertLongPackageNameToFilename(Folder, Dir) && IFileManager::Get().DirectoryExists(*Dir))
+			{
+				if (!IFileManager::Get().DeleteDirectory(*Dir, /*RequireExists=*/false, /*Tree=*/true))
+				{
+					OutErrors.Add(FString::Printf(TEXT("%s: some of %s could not be deleted"), *Level, *Folder));
+				}
+				IAssetRegistry::GetChecked().ScanPathsSynchronous({Folder}, /*bForceRescan=*/true);
+			}
+		}
+		Deleted.Add(Level);
+	}
+	return Deleted;
 }
 
 FString ShortGroupName(const FString& Group)
@@ -1518,6 +1618,8 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	Params->TryGetBoolField(TEXT("levelInstances"), bLevelInstances);
 	int32 LevelInstancesRemoved = 0;
 	TArray<const UDataLayerAsset*> InteriorLayers;
+	TArray<FString> InteriorLevels;
+	TArray<const ULevel*> InteriorContents;
 	if (bLevelInstances && !Tags.IsEmpty())
 	{
 		if (ULevelInstanceSubsystem* Instances = World->GetSubsystem<ULevelInstanceSubsystem>())
@@ -1548,6 +1650,8 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 				{
 					Doomed.Add(*It);
 					++LevelInstancesRemoved;
+					InteriorLevels.AddUnique(It->GetWorldAsset().GetLongPackageName());
+					InteriorContents.Add(Inner);
 					for (const UDataLayerAsset* Asset : It->GetDataLayerAssets())
 					{
 						if (Asset && Asset->GetName().StartsWith(TEXT("DL_Interior_")))
@@ -1573,7 +1677,18 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	if (bDeleteMeshes)
 	{
 		const FString Prefix = MeshFolder.EndsWith(TEXT("/")) ? MeshFolder : MeshFolder + TEXT("/");
-		for (AActor* Actor : Doomed)
+		TArray<AActor*> Showing = Doomed;
+		for (const ULevel* Inner : InteriorContents)
+		{
+			for (AActor* A : Inner->Actors)
+			{
+				if (A)
+				{
+					Showing.Add(A);
+				}
+			}
+		}
+		for (AActor* Actor : Showing)
 		{
 			TArray<UStaticMeshComponent*> Components;
 			Actor->GetComponents(Components);
@@ -1589,28 +1704,28 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetNumberField(TEXT("removed"), DestroyActors(World, Doomed));
+	// The removed Level Instances unload now rather than on the next tick, so their level files are free to delete
+	// below; the subsystem skips its update while a transaction records, and this one is only removals.
+	if (ULevelInstanceSubsystem* Instances = InteriorLevels.IsEmpty() ? nullptr : World->GetSubsystem<ULevelInstanceSubsystem>())
+	{
+		TGuardValue<ITransaction*> NoUndo(GUndo, nullptr);
+		Instances->OnUpdateStreamingState();
+	}
 	if (bLevelInstances)
 	{
-		// An interior's own data layer goes with its last actor.
-		int32 LayersRemoved = 0;
-		if (UDataLayerEditorSubsystem* Layers = UDataLayerEditorSubsystem::Get())
-		{
-			for (const UDataLayerAsset* Asset : InteriorLayers)
-			{
-				bool bUsed = false;
-				for (TActorIterator<AActor> It(World); It && !bUsed; ++It)
-				{
-					bUsed = IsValid(*It) && It->GetDataLayerAssets().Contains(Asset);
-				}
-				if (UDataLayerInstance* Instance = bUsed ? nullptr : Layers->GetDataLayerInstance(Asset))
-				{
-					Layers->DeleteDataLayer(Instance);
-					++LayersRemoved;
-				}
-			}
-		}
+		// An interior's own data layer and its level go with its last actor.
+		TArray<FString> Errors, Kept;
 		Out->SetNumberField(TEXT("levelInstances"), LevelInstancesRemoved);
-		Out->SetNumberField(TEXT("dataLayers"), LayersRemoved);
+		Out->SetNumberField(TEXT("dataLayers"), LilaLink::DeleteUnusedDataLayers(World, InteriorLayers, Errors));
+		Out->SetField(TEXT("levelsDeleted"), StringArray(DeleteUnusedAssemblyLevels(World, InteriorLevels, Kept, Errors)));
+		if (!Kept.IsEmpty())
+		{
+			Out->SetField(TEXT("levelsKept"), StringArray(Kept));
+		}
+		if (!Errors.IsEmpty())
+		{
+			Out->SetField(TEXT("errors"), StringArray(Errors));
+		}
 	}
 	if (bDeleteMeshes)
 	{
@@ -1630,6 +1745,11 @@ TSharedPtr<FJsonValue> RemovePlacements(const TSharedPtr<FJsonObject>& Params, F
 		TArray<TSharedPtr<FJsonValue>> Deleted;
 		for (UStaticMesh* Mesh : Meshes)
 		{
+			// Another level's actors showing it (sends to several levels share meshes) keep it.
+			if (!LilaLink::UsedOutside(World, Mesh->GetOutermost()->GetName()).IsEmpty())
+			{
+				continue;
+			}
 			Assets.Add(Mesh);
 			Deleted.Add(MakeShared<FJsonValueString>(Mesh->GetOutermost()->GetName()));
 		}
@@ -1973,6 +2093,77 @@ TSharedPtr<FJsonValue> ListPlacements(const TSharedPtr<FJsonObject>& Params, FSt
 	return MakeShared<FJsonValueArray>(Out);
 }
 } // namespace
+
+FString LilaLink::UsedOutside(UWorld* World, const FString& Package)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::UsedOutside);
+
+	TArray<FString> Own = ULevel::GetExternalActorsPaths(Package);
+	Own.Add(FExternalPackageHelper::GetExternalObjectsPath(Package));
+	TArray<FName> Referencers;
+	IAssetRegistry::GetChecked().GetReferencers(FName(*Package), Referencers);
+	for (const FName& Ref : Referencers)
+	{
+		const FString Name = Ref.ToString();
+		if (Own.ContainsByPredicate([&Name](const FString& P) { return Name.StartsWith(P + TEXT("/")); }))
+		{
+			continue;
+		}
+		// This world's own packages are judged by what is in memory: actors just removed still list it until saved.
+		const UPackage* Loaded = FindPackage(nullptr, *Name);
+		const AActor* Actor = Loaded ? AActor::FindActorInPackage(const_cast<UPackage*>(Loaded)) : nullptr;
+		if (Actor && (!IsValid(Actor) || Actor->GetWorld() == World))
+		{
+			continue;
+		}
+		if (World && Loaded == World->GetPackage())
+		{
+			continue;
+		}
+		return Name;
+	}
+	return FString();
+}
+
+int32 LilaLink::DeleteUnusedDataLayers(UWorld* World, const TArray<const UDataLayerAsset*>& Assets, TArray<FString>& OutErrors)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkPlacements::DeleteUnusedDataLayers);
+
+	UDataLayerEditorSubsystem* Layers = UDataLayerEditorSubsystem::Get();
+	if (!Layers)
+	{
+		return 0;
+	}
+	int32 Removed = 0;
+	TArray<UObject*> Files;
+	for (const UDataLayerAsset* Asset : Assets)
+	{
+		bool bUsed = !Asset;
+		for (TActorIterator<AActor> It(World); It && !bUsed; ++It)
+		{
+			bUsed = IsValid(*It) && It->GetDataLayerAssets().Contains(Asset);
+		}
+		if (bUsed)
+		{
+			continue;
+		}
+		if (UDataLayerInstance* Instance = Layers->GetDataLayerInstance(Asset))
+		{
+			Layers->DeleteDataLayer(Instance);
+			++Removed;
+		}
+		// Another level's data layer of the same asset (sends to several levels share it) keeps the asset.
+		if (LilaLink::UsedOutside(World, Asset->GetPackage()->GetName()).IsEmpty())
+		{
+			Files.Add(const_cast<UDataLayerAsset*>(Asset));
+		}
+	}
+	if (!Files.IsEmpty() && ObjectTools::ForceDeleteObjects(Files, /*ShowConfirmation=*/false) < Files.Num())
+	{
+		OutErrors.Add(TEXT("some data layer assets could not be deleted; delete them in the Content Browser"));
+	}
+	return Removed;
+}
 
 void LilaLink::AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods)
 {

@@ -404,7 +404,10 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
         json out = {{"worldGroups", ours}, {"sentThisBuild", keys.size()}, {"stale", stale.size()}};
         if (!stale.empty())
         {
-            const link::RpcResult r = c->call("removePlacements", {{"groups", stale}, {"levelInstances", true}}, 300000);
+            // The meshes only they showed go too (under the world's content folder, and not shown by another level).
+            const link::RpcResult r = c->call("removePlacements",
+                                              {{"groups", stale}, {"levelInstances", true}, {"deleteMeshes", true}, {"meshFolder", ue.value("folder", std::string("/Game/Lila"))}},
+                                              300000);
             if (!r.ok)
                 throw std::runtime_error("removePlacements: " + r.error);
             out["removed"] = r.result;

@@ -20,6 +20,9 @@ namespace LilaLink
  *   lightingChannels?}]} spawns or updates a light actor per Lila light, matched by node id (forward is where it shines).
  *   Returns {spawned, updated, warnings}.
  * removePlacements {groups?: [...], ids?: [...]} removes what placeInstances made for those groups or nodes. Returns {removed}.
+ *   levelInstances=true also removes Lila Level Instances made only of those groups, their DL_Interior_ data layer (with
+ *   its asset) and their level file with its external actors, once nothing else uses them: {levelInstances, dataLayers,
+ *   levelsDeleted}.
  * listPlacements {} lists them: [{actor, group, node?, instances?}].
  *
  * Slots: placeInstances with actorClass (a class path) instead of mesh spawns an actor of that class per placement. A
@@ -38,4 +41,13 @@ namespace LilaLink
  *   Returns {actor, level, kind, actors, replaced}. Placement and removal RPCs leave actors inside Level Instances alone.
  */
 void AddPlacementMethods(TMap<FString, FLilaLinkMethod>& Methods);
+
+/**
+ * A package that uses Package and is not World's own (World's actors are judged by what is in memory, so ones just
+ * removed don't count) nor Package's own external actors; empty when there is none, so Package may be deleted.
+ */
+FString UsedOutside(class UWorld* World, const FString& Package);
+
+/** Deletes the data layers no actor of World uses any more, and their assets unless another level uses them; returns how many went. */
+int32 DeleteUnusedDataLayers(class UWorld* World, const TArray<const class UDataLayerAsset*>& Assets, TArray<FString>& OutErrors);
 } // namespace LilaLink
