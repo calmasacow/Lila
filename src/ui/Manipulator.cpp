@@ -118,6 +118,8 @@ struct ComponentPivot
     bool placed = false;
 };
 std::optional<ComponentPivot> gComponentPivot;
+/** The component pivot as an Edit Pivot drag found it, for that drag's undo step. */
+std::optional<ComponentPivot> gComponentPivotAtPress;
 /** Where the component manipulator last sat and how it was turned, which Pin Component Pivot keeps. */
 std::optional<std::pair<glm::dvec3, glm::dmat3>> gLastComponentManip;
 const QString kBadgeText = QString::fromUtf8("Pinned pivot  ×");
@@ -125,9 +127,31 @@ const QString kBadgeText = QString::fromUtf8("Pinned pivot  ×");
 struct ComponentPivotAction final : UndoAction
 {
     std::optional<ComponentPivot> before, after;
-    void undo() override { gComponentPivot = before; }
-    void redo() override { gComponentPivot = after; }
+    void undo() override
+    {
+        gComponentPivot = before;
+        tools::changed();
+    }
+    void redo() override
+    {
+        gComponentPivot = after;
+        tools::changed();
+    }
 };
+
+/** One undo step for an Edit Pivot drag on components; a click that moved nothing leaves the pivot as it was. */
+void recordComponentPivotDrag(bool moved)
+{
+    if (!moved)
+    {
+        gComponentPivot = gComponentPivotAtPress;
+        return;
+    }
+    auto a = std::make_unique<ComponentPivotAction>();
+    a->before = gComponentPivotAtPress;
+    a->after = gComponentPivot;
+    UndoStack::get().record(std::move(a));
+}
 
 int handleAxis(H h)
 {
@@ -775,6 +799,7 @@ bool Manipulator::press(QPointF px, Qt::MouseButton button, Qt::KeyboardModifier
     d.gimbal = mGimbal && h >= H::X && h <= H::Z;
     d.components = mComponents && !d.pivotEdit;
     d.componentPivot = mComponents && d.pivotEdit;
+    gComponentPivotAtPress = gComponentPivot;
     if (d.componentPivot && !gComponentPivot)
     {
         const scene::ComponentMode mode = scene::components::mode();
@@ -1032,7 +1057,8 @@ void Manipulator::update(QPointF px, Qt::KeyboardModifiers mods)
         else if (inc.enabled)
             delta = inc.absolute ? gizmo::snapAbsolute(d.startPivot, delta, d.frame, moveMask(h), inc.step)
                                  : gizmo::snapRelative(delta, d.frame, moveMask(h), inc.step);
-        std::optional<glm::dvec3> snap = snapTarget(cur, tools::snaps());
+        // Point snaps take the real cursor: a fine-control drag lags it, and the target is what the cursor is over.
+        std::optional<glm::dvec3> snap = snapTarget(px, tools::snaps());
         d.alignRotations.clear();
         if (!snap && sliding)
             snap = surfaceSlide(cur, mods & Qt::ShiftModifier);
@@ -1444,7 +1470,10 @@ void Manipulator::commit()
         names.push_back(nameOf(s.id));
     Tool t = pivotTool(d.pivotEdit, d.tool);
     if (d.componentPivot)
+    {
+        recordComponentPivotDrag(t == Tool::Move ? glm::length(d.moveDelta) > 1e-9 : std::abs(d.angle) > 1e-9);
         return;
+    }
     std::optional<UndoChunk> cloneChunk;
     if (d.clone)
     {
