@@ -349,6 +349,22 @@ void registerUi(ext::Context& ctx)
          .python = "buildingCreate(settlement='Town')",
          .command = "buildingCreate",
          .icon = "building-community"});
+    add({.id = "buildings.refresh",
+         .label = "Refresh Buildings",
+         .run =
+             [] {
+                 const json r = runUi("buildingRefresh", json::object());
+                 if (r.is_null())
+                     return;
+                 if (r["refreshed"].empty())
+                     log::info("buildingRefresh: every settlement's buildings are up to date");
+                 for (const json& g : r["refreshed"])
+                     log::info("buildingRefresh: {} rebuilt from {} ({} buildings)", g["group"].get<std::string>(), g["settlement"].get<std::string>(), g.value("buildings", 0));
+             },
+         .doc = "Rebuild the buildings of settlements that changed since they were made, keeping edits, overrides and pins.",
+         .python = "buildingRefresh()",
+         .icon = "refresh",
+         .keywords = {"update", "regenerate", "rebuild", "sync"}});
     add({.id = "buildings.style",
          .label = "Building Style",
          .run = [] { warnOnThrow([] { actions::runWithOptions("buildingStyle", {{"building", selectedBuildings()}}); }); },
@@ -422,7 +438,7 @@ void registerUi(ext::Context& ctx)
     menus::addItem(ctx, {.id = "buildings.menu", .menu = levelToolkit::kMenu, .kind = menus::Kind::Submenu, .label = "Buildings",
                          .before = levelToolkit::kDressSection});
     int sep = 0;
-    for (const char* a : {"buildings.create", "buildings.paint", "buildings.style", "buildings.check", "", "buildings.age", "buildings.standalone",
+    for (const char* a : {"buildings.create", "buildings.refresh", "buildings.paint", "buildings.style", "buildings.check", "", "buildings.age", "buildings.standalone",
                           "buildings.lod", "buildings.proxies", "", "buildings.saveStyle", "buildings.reloadStyles", "buildings.trimSheet"})
         if (!*a)
             menus::addItem(ctx, {.id = "buildings.menu.sep" + std::to_string(++sep), .menu = kMenu, .kind = menus::Kind::Separator});
@@ -437,6 +453,7 @@ void registerUi(ext::Context& ctx)
                                       {.action = "buildings.check", .icon = "list-check", .text = "Check"},
                                       {.action = "buildings.age", .text = "Age"},
                                       {.action = "buildings.standalone", .text = "Standalone"},
+                                      {.action = "buildings.refresh", .text = "Refresh", .rare = true},
                                       {.action = "buildings.lod", .text = "LOD", .rare = true},
                                       {.action = "buildings.proxies", .text = "Proxies", .rare = true},
                                       {.action = "buildings.saveStyle", .text = "Save Style", .rare = true},

@@ -1001,6 +1001,39 @@ std::optional<BayHit> pickBay(Vec3 origin, Vec3 dir)
 
 void setShippedTrimSheet(const fs::path& p) { shippedTrimSheet() = p; }
 
+constexpr const char* kSourceHashAttr = "buildingsSourceHash";
+constexpr const char* kSourceCallAttr = "buildingsSourceCall";
+
+/** A settlement's envelopes as a hash, so a group can tell when the settlement it was built from has changed. */
+std::string envelopesHash(const json& envs) { return hex64(fnv(envs.value("envelopes", json::array()).dump())); }
+
+struct SourcedGroup
+{
+    std::string group, settlement, hash;
+    json call;
+};
+
+/** Groups built from a settlement, with the call that built them. */
+std::vector<SourcedGroup> sourcedGroups()
+{
+    std::vector<SourcedGroup> out;
+    scene::Graph& g = G();
+    for (scene::NodeId id : g.nodes())
+    {
+        scene::Node* n = g.node(id);
+        if (!n || n->type().attrIndex(kSourceCallAttr) < 0)
+            continue;
+        SourcedGroup s;
+        s.group = n->path();
+        s.call = parseObject(getString(s.group + "." + kSourceCallAttr));
+        s.hash = getString(s.group + "." + kSourceHashAttr);
+        s.settlement = s.call.value("settlement", std::string());
+        if (!s.settlement.empty())
+            out.push_back(std::move(s));
+    }
+    return out;
+}
+
 void registerCommands(ext::Context& ctx)
 {
     ctx.registerCommand({
@@ -1030,7 +1063,7 @@ void registerCommands(ext::Context& ctx)
             LILA_ZONE();
             const char* cmd = "buildingCreate";
             std::vector<Spec> specs;
-            std::string settlement, groundNode, settlementMod;
+            std::string settlement, groundNode, settlementMod, sourceHash;
             const std::string forced = a.get<std::string>("style", "");
             if (!forced.empty() && !findStyle(forced))
                 throw CommandError(std::string(cmd) + ": no style '" + forced + "' (buildingStyles lists them)");
@@ -1051,6 +1084,7 @@ void registerCommands(ext::Context& ctx)
                 const scene::NodeId meshId = lila::gn::isGnModifier(*sn) ? scene::modifiers::meshOf(G(), sn->id()) : sn->id();
                 settlement = G().node(meshId) ? G().node(meshId)->name() : shortName(sArg);
                 const json envs = ops::execute("settlementEnvelopes", {{"args", {sArg}}, {"limit", 0}});
+                sourceHash = envelopesHash(envs);
                 std::set<uint64_t> lots;
                 if (a.has("lots"))
                     for (const json& l : a.flags["lots"])
@@ -1097,20 +1131,31 @@ void registerCommands(ext::Context& ctx)
             }
             int named = 0;
             {
-                // Names may repeat across a city (NameBook's no-repeat rule runs out of words over thousands of shops); never a real one.
-                lila::names::NameBook book(culture);
+                lila::names::NameBook book(culture, std::make_shared<lila::names::RealNames>(lila::names::sceneRealNames(G())));
+                std::vector<Spec*> unnamed;
                 for (Spec& s : specs)
                     if (isBusiness(s) && s.businesses.empty() && s.name.empty())
-                    {
-                        for (int attempt = 0; attempt < 8 && (s.name.empty() || book.real(s.name)); ++attempt)
-                            s.name = lila::names::placeName(culture, lila::names::Kind::Business, s.program.empty() ? "shop" : s.program, s.key, attempt);
-                        if (book.real(s.name))
-                            s.name.clear();
-                        ++named;
-                    }
+                        unnamed.push_back(&s);
+                // Handed out in key order, so a building's name doesn't depend on the order its cells were read.
+                std::sort(unnamed.begin(), unnamed.end(), [](const Spec* x, const Spec* y) { return x->key < y->key; });
+                for (Spec* s : unnamed)
+                {
+                    s->name = book.place(lila::names::Kind::Business, s->program.empty() ? "shop" : s->program, s->key);
+                    ++named;
+                }
             }
             const std::string group = a.get<std::string>("name", settlement.empty() ? std::string("Buildings") : settlement + "_Buildings");
             json out = layout(std::move(specs), group, settlement, a.get<double>("cell", 6400.0), a.get<bool>("standalone", false), cmd);
+            if (!sourceHash.empty())
+            {
+                // What buildingRefresh needs to tell a changed settlement and to build it again the same way.
+                json call = {{"settlement", a.get<std::string>("settlement")}, {"cell", a.get<double>("cell", 6400.0)}, {"name", group}};
+                for (const char* k : {"lots", "style", "culture", "standalone", "ground"})
+                    if (a.has(k))
+                        call[k] = a.flags[k];
+                markNode(out["group"].get<std::string>(), kSourceHashAttr, sourceHash);
+                markNode(out["group"].get<std::string>(), kSourceCallAttr, call.dump());
+            }
             if (named > 0)
                 out["names"] = {{"generated", named}, {"culture", culture}, {"cultureFrom", cultureFrom}};
             if (!groundNode.empty())
@@ -1121,6 +1166,59 @@ void registerCommands(ext::Context& ctx)
         },
         .examples = {"buildingCreate(settlement='Town')", "buildingCreate(settlement='Town', style='colonialCentro', cell=6400)",
                      "buildingCreate(curve='Footprints', floors=3, style='residential')", "buildingCreate(mesh='Block_3', style='warehouse')"},
+    });
+
+    ctx.registerCommand({
+        .name = "buildingRefresh",
+        .doc = "Build again the buildings of settlements that changed since their buildings were made (streets, lots, profile, "
+               "districts): each group built from a settlement remembers the settlement's envelopes and the call that made it, and is "
+               "rebuilt the same way. Edits (bays, floors, styles), slot overrides and pins carry over by building id, as with "
+               "buildingCreate. all=True rebuilds every one; dryRun=True only lists the stale groups. Returns refreshed and stale "
+               "groups with their settlements, and each rebuild's counts.",
+        .positionalDoc = "settlements or building groups (default every one)",
+        .flags = {{"all", "a", T::Bool, false, "Rebuild every group, changed or not."},
+                  {"dryRun", "dr", T::Bool, false, "List the stale groups without rebuilding."}},
+        .undoable = true,
+        .run = [](const Args& a) -> json {
+            LILA_ZONE();
+            const char* cmd = "buildingRefresh";
+            std::set<std::string> only;
+            for (const json& p : a.positional)
+                if (p.is_string())
+                {
+                    scene::Node* n = G().find(p.get<std::string>());
+                    if (!n)
+                        throw CommandError(std::string(cmd) + ": no node " + p.get<std::string>());
+                    only.insert(n->path());
+                    only.insert(n->name());
+                }
+            json stale = json::array(), refreshed = json::array(), missing = json::array();
+            for (const SourcedGroup& s : sourcedGroups())
+            {
+                scene::Node* sn = G().find(s.settlement);
+                if (!only.empty() && !only.count(s.group) && !(sn && (only.count(sn->path()) || only.count(sn->name()))))
+                    continue;
+                if (!sn)
+                {
+                    missing.push_back({{"group", s.group}, {"settlement", s.settlement}});
+                    continue;
+                }
+                const std::string now = envelopesHash(ops::execute("settlementEnvelopes", {{"args", {s.settlement}}, {"limit", 0}}));
+                const bool changed = now != s.hash;
+                if (changed)
+                    stale.push_back({{"group", s.group}, {"settlement", s.settlement}});
+                if (a.get<bool>("dryRun", false) || (!changed && !a.get<bool>("all", false)))
+                    continue;
+                const json r = ops::execute("buildingCreate", s.call);
+                refreshed.push_back({{"group", s.group}, {"settlement", s.settlement}, {"buildings", r.value("buildings", 0)},
+                                     {"generated", r.value("generated", 0)}, {"orphanEdits", r.value("orphanEdits", 0)}, {"changed", changed}});
+            }
+            json out = {{"stale", stale}, {"refreshed", refreshed}};
+            if (!missing.empty())
+                out["missingSettlements"] = missing;
+            return out;
+        },
+        .examples = {"buildingRefresh()", "buildingRefresh(dryRun=True)['stale']", "buildingRefresh('Town', all=True)"},
     });
 
     ctx.registerCommand({

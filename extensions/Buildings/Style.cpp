@@ -199,7 +199,7 @@ const std::vector<std::string>& shippedStyleIds()
     static const std::vector<std::string> ids = {"colonialCentro", "malecon",     "resortTower", "modernCommercial", "residential",
                                                  "narcoMansion",   "civic",       "policeStation", "church",         "mausoleum",
                                                  "warehouse",      "packingPlant", "portShed",   "hangar",           "villageAdobe",
-                                                 "ruralShack"};
+                                                 "ruralShack",     "terminal",    "lighthouse"};
     return ids;
 }
 
@@ -210,6 +210,8 @@ std::string styleFor(std::string_view settlementStyle, std::string_view program,
         return "policeStation";
     if (s == "mansion")
         return "narcoMansion";
+    if (s == "colonial")
+        return "colonialCentro";
     if (s == "church" || s == "mausoleum" || s == "civic" || s == "packingPlant" || s == "portShed" || s == "warehouse" ||
         s == "resortTower" || s == "malecon" || s == "colonialCentro" || s == "villageAdobe" || s == "ruralShack" ||
         s == "modernCommercial" || s == "residential")
