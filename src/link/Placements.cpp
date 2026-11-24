@@ -8,6 +8,7 @@
 #include "core/PrefStore.h"
 #include "core/Profile.h"
 #include "fbx/Fbx.h"
+#include "geo/ColorSets.h"
 #include "gn/Geometry.h"
 #include "gn/Gn.h"
 #include "gn/InstanceView.h"
@@ -497,6 +498,28 @@ std::string meshHash(const geo::Mesh& m)
     return std::format("{:016x}", h);
 }
 
+/** meshHash plus the colour sets and UVs the FBX carries: what decides whether Unreal's asset is still current. */
+std::string contentHash(const geo::Mesh& m)
+{
+    uint64_t h = slots::idHash(meshHash(m));
+    auto mix = [&h](const void* data, size_t size) {
+        for (const auto* p = static_cast<const uint8_t*>(data); size--; ++p)
+            h = (h ^ *p) * 1099511628211ull;
+    };
+    for (const std::string& set : geo::colors::sets(m))
+    {
+        const std::span<const glm::vec4> v = geo::colors::values(m, set);
+        mix(set.data(), set.size());
+        mix(v.data(), v.size_bytes());
+    }
+    if (m.cornerAttrs().has(geo::attr::uvName(0)))
+    {
+        const std::span<const glm::vec2> v = m.cornerAttrs().get<glm::vec2>(geo::attr::uvName(0));
+        mix(v.data(), v.size_bytes());
+    }
+    return std::format("{:016x}", h);
+}
+
 /**
  * What a group's placement in Unreal depends on, hashed: the same signature as the level holds means nothing to send.
  * Empty for a group whose asset content Lila can't name from the plan (a plain source's mesh), which always goes.
@@ -519,7 +542,7 @@ std::string placementSignature(const json& grp, const std::vector<scene::MeshPtr
     else if (grp.contains("unrealMesh"))
         sig["unrealMesh"] = grp["unrealMesh"];
     else if (grp.contains("gnMesh") && grp["gnMesh"].get<size_t>() < meshes.size() && meshes[grp["gnMesh"].get<size_t>()])
-        sig["mesh"] = meshHash(*meshes[grp["gnMesh"].get<size_t>()]);
+        sig["mesh"] = contentHash(*meshes[grp["gnMesh"].get<size_t>()]);
     else
         return {};
     return slots::hex(slots::idHash(sig.dump()));
