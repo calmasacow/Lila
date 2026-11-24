@@ -1,5 +1,6 @@
 // buildingCheck: modules intersecting, doors not reaching the ground, buildings overlapping their neighbours, slots
-// floating off their building, and real names on signs.
+// floating off their building, real names on signs, and the interiors of enterable buildings (reachability, door
+// openings, stairs and doors against the character profile).
 
 #include "BuildingsScene.h"
 
@@ -147,7 +148,7 @@ void addIssue(json& issues, json& counts, const std::string& kind, const std::st
 }
 } // namespace
 
-json checkBuildings(const std::vector<uint64_t>& modifiers, double tol)
+json checkBuildings(const std::vector<uint64_t>& modifiers, double tol, const json& profile)
 {
     LILA_ZONE();
     scene::Graph& g = scene::Graph::current();
@@ -164,6 +165,7 @@ json checkBuildings(const std::vector<uint64_t>& modifiers, double tol)
     std::vector<Entry> all;
     std::vector<std::shared_ptr<const Published>> keep;
     std::vector<names::Text> texts;
+    std::vector<std::string> enterable;
     size_t buildings = 0;
     for (const auto& p : allPublished())
     {
@@ -178,6 +180,8 @@ json checkBuildings(const std::vector<uint64_t>& modifiers, double tol)
             const Spec& s = p->specs[i];
             const Result& r = *p->results[i];
             ++buildings;
+            if (r.enterable)
+                enterable.push_back(s.id);
             Vec2 lo(1e300), hi(-1e300);
             for (const Vec2& q : s.footprint)
             {
@@ -303,10 +307,29 @@ json checkBuildings(const std::vector<uint64_t>& modifiers, double tol)
             addIssue(issues, counts, "realName", l.where.substr(0, l.where.find('/', 9)), "'" + l.text + "' matches the real name '" + l.real + "' (" + l.source + ")",
                      Vec3(0.0), l.where);
     }
+    // Interiors.
+    std::sort(enterable.begin(), enterable.end());
+    enterable.erase(std::unique(enterable.begin(), enterable.end()), enterable.end());
+    if (!enterable.empty())
+    {
+        CharacterProfile prof = characterProfile();
+        if (profile.is_object())
+        {
+            json j = prof.toJson();
+            for (auto& [k, v] : profile.items())
+                j[k] = v;
+            prof = CharacterProfile::fromJson(j);
+        }
+        const json in = interiorIssues(enterable, prof);
+        for (const json& i : in["issues"])
+            issues.push_back(i);
+        for (auto& [k, v] : in["counts"].items())
+            counts[k] = v;
+    }
     size_t total = 0;
     for (auto& [k, v] : counts.items())
         total += v.get<size_t>();
-    return {{"ok", total == 0}, {"buildings", buildings}, {"counts", counts}, {"issues", issues}, {"texts", texts.size()}};
+    return {{"ok", total == 0}, {"buildings", buildings}, {"interiors", enterable.size()}, {"counts", counts}, {"issues", issues}, {"texts", texts.size()}};
 }
 
 void registerCheck(ext::Context& ctx)
@@ -315,10 +338,17 @@ void registerCheck(ext::Context& ctx)
         .name = "buildingCheck",
         .doc = "Check buildings: modules intersecting (instanced parts meeting where they shouldn't), doors not reaching the ground "
                "(sill above it without steps, or buried), buildings overlapping their neighbours (party walls only touch), slots "
-               "floating off their building, and real names on signs or buildings (against imported real names and the brand "
-               "blocklist). Returns ok, counts by kind and issues (kind, building, what, at, slot).",
+               "floating off their building, real names on signs or buildings (against imported real names and the brand "
+               "blocklist), and for enterable buildings: rooms the entry can't reach, doors whose wall the room meshes close, stairs "
+               "steeper or lower than the character profile, doors narrower or lower than the character, no exterior door into a "
+               "room, and enterable buildings with no interior. height=, radius=, maxStep=, maxSlope= override the scene's profile "
+               "(buildingCharacterProfile) for this check. Returns ok, counts by kind and issues (kind, building, what, at, slot).",
         .positionalDoc = "building meshes (default every one)",
-        .flags = {{"tolerance", "tl", T::Float, 1.0, "cm of slack on every test.", {}, {}, 0.0}},
+        .flags = {{"tolerance", "tl", T::Float, 1.0, "cm of slack on every test.", {}, {}, 0.0},
+                  {"height", "h", T::Float, nullptr, "Character height, cm.", {}, {}, 30.0, 1000.0},
+                  {"radius", "r", T::Float, nullptr, "Character radius, cm.", {}, {}, 5.0, 300.0},
+                  {"maxStep", "ms", T::Float, nullptr, "Highest step the character walks up, cm.", {}, {}, 1.0, 200.0},
+                  {"maxSlope", "sl", T::Float, nullptr, "Steepest slope it walks, degrees.", {}, {}, 5.0, 85.0}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             std::vector<uint64_t> mods;
@@ -335,7 +365,11 @@ void registerCheck(ext::Context& ctx)
                 for (scene::NodeId m : scene::modifiers::stack(g, n->id()))
                     mods.push_back(uint64_t(m));
             }
-            return checkBuildings(mods, a.get<double>("tolerance", 1.0));
+            json prof = json::object();
+            for (const char* k : {"height", "radius", "maxStep", "maxSlope"})
+                if (a.has(k))
+                    prof[k] = a.get<double>(k);
+            return checkBuildings(mods, a.get<double>("tolerance", 1.0), prof.empty() ? json() : prof);
         },
         .examples = {"buildingCheck()", "buildingCheck('Town_Buildings_0_0')['counts']"},
     });

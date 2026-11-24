@@ -470,7 +470,13 @@ int ensureMaterials(const std::set<std::string>& styleIds)
     auto make = [&](const std::string& name, glm::vec3 c, double rough) {
         if (scene::materials::find(g, name))
             return;
-        ops::execute("createMaterial", {{"args", {name}}, {"baseColor", {c.r, c.g, c.b}}, {"roughness", rough}});
+        json call = {{"args", {name}}, {"baseColor", {c.r, c.g, c.b}}, {"roughness", rough}};
+        if (name == matName(MatGlassClear))
+        {
+            call["blendMode"] = "translucent";
+            call["opacity"] = 0.25;
+        }
+        ops::execute("createMaterial", call);
         ++made;
     };
     for (const std::string& id : styleIds)
@@ -481,9 +487,10 @@ int ensureMaterials(const std::set<std::string>& styleIds)
         {MatRooftop, {0.32f, 0.31f, 0.3f}}, {MatGlass, {0.05f, 0.07f, 0.09f}}, {MatFrame, {0.85f, 0.85f, 0.82f}}, {MatDoor, {0.18f, 0.09f, 0.04f}},
         {MatMetal, {0.25f, 0.26f, 0.27f}},  {MatSign, {0.75f, 0.72f, 0.65f}},  {MatSignFace, {0.9f, 0.9f, 0.88f}}, {MatAwning, {0.6f, 0.1f, 0.08f}},
         {MatConcrete, {0.45f, 0.44f, 0.42f}}, {MatStone, {0.4f, 0.37f, 0.33f}}, {MatWater, {0.03f, 0.25f, 0.35f}}, {MatWood, {0.25f, 0.14f, 0.07f}},
-        {MatDark, {0.03f, 0.03f, 0.03f}}};
+        {MatDark, {0.03f, 0.03f, 0.03f}},     {MatGlassClear, {0.55f, 0.65f, 0.7f}}};
     for (auto& [m, c] : kShared)
-        make(matName(m), c, m == MatGlass || m == MatWater ? 0.1 : m == MatMetal ? 0.5 : 0.8);
+        make(matName(m), c, m == MatGlass || m == MatWater || m == MatGlassClear ? 0.1 : m == MatMetal ? 0.5 : 0.8);
+
     return made;
 }
 
@@ -701,6 +708,13 @@ json layout(std::vector<Spec> specs, const std::string& groupName, const std::st
                 {"ms", msSince(t0)}};
     if (!warnings.empty())
         out["warnings"] = warnings;
+    // Interiors follow their buildings; their hand-edited rooms stay.
+    std::vector<std::string> enterable;
+    for (const std::string& id : ids)
+        if (edited.contains(id) && edited[id].value("enterable", false))
+            enterable.push_back(id);
+    if (!enterable.empty())
+        out["interiors"] = refreshInteriors(enterable);
     (void)cmd;
     return out;
 }
@@ -1001,6 +1015,40 @@ std::optional<BayHit> pickBay(Vec3 origin, Vec3 dir)
 
 void setShippedTrimSheet(const fs::path& p) { shippedTrimSheet() = p; }
 
+std::optional<BuildingLoc> locateBuilding(const std::string& id)
+{
+    auto l = locate(id);
+    if (!l)
+        return std::nullopt;
+    return BuildingLoc{l->mesh, l->modifier, l->pub, l->index};
+}
+
+json buildingEditsOf(const std::string& id)
+{
+    for (const auto& p : allPublished())
+        if (p->byId.count(id))
+            if (scene::Node* mod = G().node(scene::NodeId(p->modifier)))
+                return parseObject(getString(mod->path() + ".edits")).value(id, json::object());
+    for (auto& [mesh, mod] : buildingMeshes())
+    {
+        const json e = parseObject(getString(mod + ".edits"));
+        if (e.contains(id))
+            return e[id];
+    }
+    return json::object();
+}
+
+void changeBuildingEdits(const std::vector<std::string>& ids, const std::function<void(const std::string&, json&)>& change, const char* cmd)
+{
+    editBuildings(ids, change, cmd);
+}
+
+std::vector<std::string> buildingTargets(const Args& a, const char* cmd, bool allowEmpty) { return targetIds(a, cmd, allowEmpty); }
+void markNodeAttr(const std::string& node, const char* attr, const std::string& value) { markNode(node, attr, value); }
+std::string nodeAttrString(const std::string& plug) { return getString(plug); }
+std::string safeNodeName(const std::string& s) { return safeName(s); }
+int ensureBuildingMaterials(const std::set<std::string>& styleIds) { return ensureMaterials(styleIds); }
+
 void registerCommands(ext::Context& ctx)
 {
     ctx.registerCommand({
@@ -1202,6 +1250,8 @@ void registerCommands(ext::Context& ctx)
             G().evaluate();
             const double ms = msSince(t0);
             json out = {{"buildings", ids}, {"evaluateMs", ms}};
+            if (const json in = refreshInteriors(ids); !in.empty())
+                out["interiors"] = in;
             if (ids.size() == 1)
                 if (auto loc = locate(ids[0]))
                 {
@@ -1245,7 +1295,10 @@ void registerCommands(ext::Context& ctx)
                 ensureMaterials({style});
             const auto t0 = std::chrono::steady_clock::now();
             G().evaluate();
-            return {{"count", ids.size()}, {"style", clear ? json() : json(style)}, {"evaluateMs", msSince(t0)}};
+            json out = {{"count", ids.size()}, {"style", clear ? json() : json(style)}, {"evaluateMs", msSince(t0)}};
+            if (const json in = refreshInteriors(ids); !in.empty())
+                out["interiors"] = in;
+            return out;
         },
         .examples = {"buildingStyle('Town_Buildings_0_0', style='malecon')", "buildingStyle(polygon=[[0, 0], [8000, 0], [8000, 8000], [0, 8000]], style='colonialCentro')"},
     });

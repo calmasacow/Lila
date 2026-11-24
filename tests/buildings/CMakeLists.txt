@@ -2,8 +2,8 @@
 # driven through its commands with Settlement and Terrain for the OSM fixture town.
 set(_bld ${CMAKE_SOURCE_DIR}/extensions/Buildings)
 set(_weathering ${CMAKE_SOURCE_DIR}/extensions/Weathering)
-add_executable(lila_buildings_tests main.cpp test_grammar.cpp test_commands.cpp
-    ${_bld}/Geometry.cpp ${_bld}/Style.cpp ${_bld}/Grammar.cpp ${_bld}/Modules.cpp ${_weathering}/RooftopLayout.cpp ${_weathering}/GenCommon.cpp)
+add_executable(lila_buildings_tests main.cpp test_grammar.cpp test_commands.cpp test_interior.cpp
+    ${_bld}/Geometry.cpp ${_bld}/Style.cpp ${_bld}/Grammar.cpp ${_bld}/Modules.cpp ${_bld}/Interior.cpp ${_weathering}/RooftopLayout.cpp ${_weathering}/GenCommon.cpp)
 set_source_files_properties(${_weathering}/RooftopLayout.cpp ${_weathering}/GenCommon.cpp TARGET_DIRECTORY lila_buildings_tests PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(lila_buildings_tests PRIVATE ${_bld} ${_weathering})
 target_link_libraries(lila_buildings_tests PRIVATE LilaUI doctest::doctest)

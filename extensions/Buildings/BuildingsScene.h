@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Buildings.h"
+#include "Interior.h"
 
 #include <filesystem>
 #include <functional>
+#include <set>
 #include <memory>
 #include <string>
 #include <vector>
@@ -11,6 +13,10 @@
 namespace lila::ext
 {
 class Context;
+}
+namespace lila
+{
+struct Args;
 }
 
 /** The scene side of Buildings: the style library, the live node and what it published, commands and UI. */
@@ -91,6 +97,62 @@ std::optional<BayHit> pickBay(Vec3 origin, Vec3 dir);
 /** The shipped LilaBuilding.lilatrim the shell's uv0 follows. */
 void setShippedTrimSheet(const std::filesystem::path& p);
 
-/** buildingCheck as a function: issues for the given modifiers (all when empty). */
-nlohmann::json checkBuildings(const std::vector<uint64_t>& modifiers, double tolerance);
+/** buildingCheck as a function: issues for the given modifiers (all when empty), interiors held to the profile (the scene's when null). */
+nlohmann::json checkBuildings(const std::vector<uint64_t>& modifiers, double tolerance, const nlohmann::json& profile = nullptr);
+
+// Shared by the command files ---------------------------------------------------------------------------------------------
+
+struct BuildingLoc
+{
+    std::string mesh, modifier;
+    std::shared_ptr<const Published> pub;
+    int index = -1;
+};
+/** Where a building is (its mesh, modifier and what it published), after evaluating. */
+std::optional<BuildingLoc> locateBuilding(const std::string& id);
+/** A building's edits object. */
+nlohmann::json buildingEditsOf(const std::string& id);
+/** Changes buildings' edits, one setAttr per modifier. */
+void changeBuildingEdits(const std::vector<std::string>& ids, const std::function<void(const std::string&, nlohmann::json&)>& change, const char* cmd);
+/** Building ids from positional args, building=, polygon=, all= or the selection. */
+std::vector<std::string> buildingTargets(const lila::Args& a, const char* cmd, bool allowEmpty = false);
+void markNodeAttr(const std::string& node, const char* attr, const std::string& value);
+std::string nodeAttrString(const std::string& plug);
+std::string safeNodeName(const std::string& s);
+/** The Lila materials building meshes use, for these styles and the shared module ones. Returns how many were made. */
+int ensureBuildingMaterials(const std::set<std::string>& styleIds);
+
+// Interiors (W4) ----------------------------------------------------------------------------------------------------------
+
+/** Group attribute naming the building an interior belongs to; part meshes carry their part id and the hash they were made with. */
+inline constexpr const char* kInteriorMark = "buildingInterior";
+inline constexpr const char* kPartMark = "interiorPart";
+inline constexpr const char* kPartHash = "interiorHash";
+
+void registerInterior(lila::ext::Context& ctx);
+void registerRoomTool(lila::ext::Context& ctx);
+/** The scene's character profile (buildingCharacterProfile). */
+CharacterProfile characterProfile();
+/** Regenerates the interiors of these buildings (every enterable one when empty); hand-edited room meshes are kept. */
+nlohmann::json refreshInteriors(const std::vector<std::string>& ids);
+/** The interior a building has now, generated from what its node published. Null when it isn't enterable. Main thread. */
+std::shared_ptr<const Interior> interiorOf(const std::string& id);
+/** The interior's group node path, or empty. */
+std::string interiorGroupOf(const std::string& id);
+/** Ids of the buildings marked enterable. */
+std::vector<std::string> enterableBuildings();
+/** Interior issues for buildingCheck: unreachable rooms, doors with no opening in the room meshes, stairs, door sizes, no entry. */
+nlohmann::json interiorIssues(const std::vector<std::string>& ids, const CharacterProfile& p);
+
+/** A room under a ray: its building, room id, kind, floor and the point on its floor. */
+struct RoomHit
+{
+    std::string building, room, kind;
+    int floor = 0;
+    Vec3 point{0.0};
+    std::vector<std::array<Vec2, 4>> rects;
+    double y = 0.0;
+};
+/** The room whose floor a ray meets first (floor >= 0 limits it to that floor). Main thread. */
+std::optional<RoomHit> pickRoom(Vec3 origin, Vec3 dir, int floor = -1, const std::string& building = {});
 } // namespace buildings

@@ -84,13 +84,16 @@ void frame(Soup& s, double x0, double x1, double y0, double y1, double z0, doubl
 Soup build(const std::string& kind, Vec3 sz, int variant)
 {
     Soup s;
+    // Variants from 10 up are the same pieces glazed clear (enterable buildings).
+    const int glass = variant >= 10 ? MatGlassClear : MatGlass;
+    variant %= 10;
     const double w = std::max(sz.x, 1.0), h = std::max(sz.y, 1.0), d = std::max(sz.z, 1.0);
     const double hw = w * 0.5;
     if (kind == "window")
     {
         const double b = std::clamp(w * 0.06, 5.0, 9.0);
         frame(s, -hw, hw, 0.0, h, -4.0, 4.0, b, MatFrame);
-        card(s, -hw + b, hw - b, b, h - b, 0.0, MatGlass);
+        card(s, -hw + b, hw - b, b, h - b, 0.0, glass);
         if (variant == 0 && w > 70.0)
         {
             box(s, {-2.5, b, -2.5}, {2.5, h - b, 2.5}, MatFrame);
@@ -119,7 +122,7 @@ Soup build(const std::string& kind, Vec3 sz, int variant)
         if (variant == 1 || variant == 2)
         {
             frame(s, -hw + b, hw - b, 0.0, h - b, -2.0, 2.0, 6.0, MatFrame);
-            card(s, -hw + b + 6.0, hw - b - 6.0, 6.0, h - b - 6.0, 0.0, MatGlass);
+            card(s, -hw + b + 6.0, hw - b - 6.0, 6.0, h - b - 6.0, 0.0, glass);
         }
         else
         {
@@ -142,7 +145,7 @@ Soup build(const std::string& kind, Vec3 sz, int variant)
         frame(s, -hw, hw, 0.0, h, -5.0, 5.0, b, MatFrame);
         box(s, {-hw + b, b, -4.0}, {hw - b, kick, 2.0}, MatFrame);
         box(s, {-hw + b, transom - 3.0, -4.0}, {hw - b, transom + 3.0, 4.0}, MatFrame);
-        card(s, -hw + b, hw - b, kick, h - b, 0.0, MatGlass);
+        card(s, -hw + b, hw - b, kick, h - b, 0.0, glass);
         const int n = std::max(1, int(w / 160.0));
         for (int k = 1; k < n; ++k)
         {

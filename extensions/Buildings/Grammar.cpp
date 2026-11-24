@@ -2,6 +2,7 @@
 // floor plates and proxies. One call per building, pure, any thread.
 
 #include "Buildings.h"
+#include "Interior.h"
 
 #include "RooftopLayout.h"
 
@@ -49,6 +50,8 @@ struct Ctx
     int floors = 1;
     bool business = false;
     bool slope = false;
+    std::string program; // the interior program, for the rooms fake interiors show
+    int glazing = 0;     // placeholder variant offset: 10 glazes enterable buildings clear
     glm::vec4 cRender{1.0f}, cTrim{1.0f}, cBase{1.0f}, cRoof{1.0f};
     int bayCounter = 0;
 
@@ -902,13 +905,17 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 op.origin = f.at(oc, o.t0, d0);
                 if (openKind == "shopfront" || kind == "shopdoor")
                 {
-                    Module m = wallModule(f, oc, o.t0, inset, "shopfront", "shopfront", bpath + "/shopfront", {ow, oh, 15.0});
+                    Module m = wallModule(f, oc, o.t0, inset, "shopfront", "shopfront", bpath + "/shopfront", {ow, oh, 15.0}, c.glazing);
+                    if (!r.enterable)
+                        m.data = {{"interior", "card"}, {"room", fakeRoomKind(c.program, 0)}};
                     c.addModule(std::move(m));
                     if (kind == "shopdoor" || (kind == "arcade" && doorInArcade))
                     {
                         const double dw = std::min(120.0, ow * 0.4);
                         Module d = wallModule(f, o.s1 - dw * 0.5 - 10.0, o.t0, inset - 2.0, "door.shop", "door", bpath + "/door",
-                                              {dw, std::min(oh - 10.0, 250.0), 8.0}, 2);
+                                              {dw, std::min(oh - 10.0, 250.0), 8.0}, 2 + c.glazing);
+                        if (r.enterable && !courtyard)
+                            d.data = {{"entry", true}, {"interior", c.spec.id}};
                         c.addModule(std::move(d));
                         stoop(oc, ow);
                     }
@@ -935,7 +942,9 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 else if (openKind == "door" || openKind == "rollup")
                 {
                     Module m = wallModule(f, oc, o.t0, inset - 4.0, openType, openKind == "rollup" ? "rollup" : "door", bpath + "/door", {ow, oh, 8.0},
-                                          openVariant);
+                                          openVariant + (openKind == "rollup" ? 0 : c.glazing));
+                    if (r.enterable && ground && !courtyard)
+                        m.data = {{"entry", true}, {"interior", c.spec.id}};
                     c.addModule(std::move(m));
                     op.kind = openKind == "rollup" ? "garage" : "door";
                     op.slot = openType;
@@ -943,7 +952,10 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 }
                 else
                 {
-                    Module m = wallModule(f, oc, o.t0, inset, openType, "window", bpath + "/window", {ow, oh, 12.0}, openVariant);
+                    Module m = wallModule(f, oc, o.t0, inset, openType, "window", bpath + "/window", {ow, oh, 12.0}, openVariant + c.glazing);
+                    // Windows of buildings without rooms show a fake one (Weathering's interior card in Unreal).
+                    if (!r.enterable && !tower)
+                        m.data = {{"interior", "card"}, {"room", fakeRoomKind(c.program, fl.index)}};
                     c.addModule(std::move(m));
                     op.kind = "window";
                     op.slot = openType;
@@ -1726,6 +1738,8 @@ std::shared_ptr<const Result> generate(const Spec& spec, const Style& style, con
     }
     c.business = isBusiness(spec);
     r.enterable = ed.enterable.value_or(c.st.enterable);
+    c.glazing = r.enterable ? 10 : 0;
+    c.program = interiorProgramFor(spec, style, ed.interior.is_object() ? ed.interior.value("program", std::string()) : std::string());
     r.floors = c.floors;
     r.palette = paletteFor(c);
     c.cRender = glm::vec4(r.palette.render, r.palette.dirt);
@@ -1780,6 +1794,9 @@ std::shared_ptr<const Result> generate(const Spec& spec, const Style& style, con
             p.height = fl.y1 - fl.y0;
             p.outline = cleanRing(offsetRing(tiers[t].ring, -c.st.wallThickness));
             p.holes = tiers[t].holes;
+            p.ring = tiers[t].ring;
+            p.wall = c.st.wallThickness;
+            p.tower = !tiers[t].cap.empty();
             r.plates.push_back(std::move(p));
         }
     {

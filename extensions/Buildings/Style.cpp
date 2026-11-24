@@ -451,7 +451,7 @@ double Spec::groundAt(Vec2 p) const
 bool Edits::empty() const
 {
     return style.empty() && !floors && !seed && !bayWidth && !floorHeight && !roof && !enterable && palette.empty() && bays.empty() &&
-           toggles.empty() && facadeBays.empty();
+           toggles.empty() && facadeBays.empty() && (!interior.is_object() || interior.empty());
 }
 
 json Edits::toJson() const
@@ -479,6 +479,8 @@ json Edits::toJson() const
         j["toggles"] = toggles;
     if (!facadeBays.empty())
         j["facadeBays"] = facadeBays;
+    if (interior.is_object() && !interior.empty())
+        j["interior"] = interior;
     return j;
 }
 
@@ -505,6 +507,8 @@ Edits Edits::fromJson(const json& j)
     read(j, "bays", e.bays);
     read(j, "toggles", e.toggles);
     read(j, "facadeBays", e.facadeBays);
+    if (j.contains("interior") && j["interior"].is_object())
+        e.interior = j["interior"];
     return e;
 }
 } // namespace buildings

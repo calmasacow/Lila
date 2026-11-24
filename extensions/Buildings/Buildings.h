@@ -78,6 +78,7 @@ enum Mat : int32_t
     MatWater,
     MatWood,
     MatDark,
+    MatGlassClear, // glazing of enterable buildings, seen through into the rooms
     MatCount
 };
 const char* matName(int m);
@@ -302,6 +303,8 @@ struct Edits
     std::map<std::string, std::map<std::string, bool>> toggles;
     /** Bay counts by facade "t0/f2". */
     std::map<std::string, int> facadeBays;
+    /** The interior's layout edits (W4, Interior.h InteriorEdits): program, room kinds, splits, merges, moves, doors. */
+    json interior = json::object();
 
     bool empty() const;
     json toJson() const;
@@ -356,6 +359,10 @@ struct FloorPlate
     double y = 0.0, height = 0.0;
     Ring outline;
     std::vector<Ring> holes;
+    /** The tier's outer ring (the facades' plane) and wall thickness; tower caps (bell, corner towers) have no rooms. */
+    Ring ring;
+    double wall = 30.0;
+    bool tower = false;
 };
 
 /** W4: an opening on a facade: what it is and where (bay path, world rectangle). */

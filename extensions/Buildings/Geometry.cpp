@@ -281,7 +281,7 @@ const char* matName(int m)
 {
     static const char* kNames[MatCount] = {"bld_render", "bld_trim",  "bld_base", "bld_roof",     "bld_rooftop", "bld_glass",
                                            "bld_frame",  "bld_door",  "bld_metal", "bld_sign",    "bld_signFace", "bld_awning",
-                                           "bld_concrete", "bld_stone", "bld_water", "bld_wood", "bld_dark"};
+                                           "bld_concrete", "bld_stone", "bld_water", "bld_wood", "bld_dark", "bld_glassClear"};
     return m >= 0 && m < MatCount ? kNames[m] : "bld_render";
 }
 

@@ -283,6 +283,8 @@ void exec(ExecContext& c)
             std::vector<std::string> tags = {"building"};
             if (!sp.program.empty())
                 tags.push_back(sp.program);
+            if (r.enterable)
+                tags.push_back("enterable");
             std::vector<char> dropped(r.modules.size(), 0);
             for (size_t k = 0; k < r.modules.size(); ++k)
             {
@@ -294,7 +296,12 @@ void exec(ExecContext& c)
                 s.regions = regions;
                 s.tags = tags;
                 if (!m.data.is_null())
+                {
                     s.payload.data = m.data;
+                    // The entry doors of enterable buildings: a rule on tag "entry" gives them the game's door class.
+                    if (m.data.contains("entry"))
+                        s.tags.push_back("entry");
+                }
                 s.transform = m.frame();
                 if (m.shell && anyChange)
                 {

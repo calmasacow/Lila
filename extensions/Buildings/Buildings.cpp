@@ -41,6 +41,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     buildings::registerNode(ctx);
     buildings::registerCommands(ctx);
     buildings::registerCheck(ctx);
+    buildings::registerInterior(ctx);
     buildings::registerUi(ctx);
     buildings::registerAgent(ctx);
     buildings::registerUnreal(ctx);
