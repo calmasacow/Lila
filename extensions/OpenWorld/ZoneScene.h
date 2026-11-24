@@ -26,6 +26,11 @@ inline constexpr const char* kGroundAttr = "ground";
 inline constexpr const char* kOverlayAttr = "overlay";
 inline constexpr const char* kOpacityAttr = "fillOpacity";
 
+/** The scene's ground plane, which zones live on: world XZ in a Y-up scene, world XY in a Z-up one. */
+glm::dvec3 worldOf(Vec2 p, double up);
+Vec2 planeOf(const glm::dvec3& w);
+double upOf(const glm::dvec3& w);
+
 /** A terrain the zones drape over: its last heightfield and where it sits. */
 struct Ground
 {
@@ -35,9 +40,9 @@ struct Ground
     glm::dmat4 inv{1.0};
 
     bool valid() const { return h && !h->empty(); }
-    /** World height at a world XZ point; 0 without a ground. */
+    /** World height at a ground plane point; 0 without a ground. */
     double heightAt(Vec2 p) const;
-    /** The heightfield's extent in world XZ. */
+    /** The heightfield's extent on the ground plane. */
     bool extent(Vec2& lo, Vec2& hi) const;
 };
 /** The terrain a mesh path names (its last heightfield-making modifier); invalid when it is not one. */
@@ -50,7 +55,7 @@ std::shared_ptr<const ZoneSpec> specOf(const lila::scene::Node& set, std::string
 /** The set's ground attribute. */
 std::string groundPathOf(const lila::scene::Node& set);
 
-/** A world point from [x, z] or [x, y, z]. */
+/** A ground plane point from [x, z] or [x, y, z] ([x, y] in a Z-up scene). */
 Vec2 planePoint(const nlohmann::json& v, const std::string& what, const std::string& cmd);
 
 void registerZoneCommands(lila::ext::Context& ctx);

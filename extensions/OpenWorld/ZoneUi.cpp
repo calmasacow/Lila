@@ -158,7 +158,7 @@ QString display(const std::string& camel)
 // ----------------------------------------------------------------------------------------------------------------------
 // Overlay
 
-glm::dvec3 draped(const Ground& g, Vec2 p) { return {p.x, g.heightAt(p) + 30.0, p.y}; }
+glm::dvec3 draped(const Ground& g, Vec2 p) { return worldOf(p, g.heightAt(p) + 30.0); }
 
 struct LayerDraw
 {
@@ -404,25 +404,25 @@ bool groundHit(const Ground& g, QPointF px, const ViewInfo& view, Vec2& out)
 {
     glm::dvec3 o, d;
     view.ray(px, o, d);
-    if (std::abs(d.y) < 1e-9)
+    if (std::abs(upOf(d)) < 1e-9)
         return false;
     // March along the ray until it drops under the ground, then bisect; a flat plane at 0 without a ground.
     if (!g.valid())
     {
-        const double t = -o.y / d.y;
+        const double t = -upOf(o) / upOf(d);
         if (t <= 0.0)
             return false;
-        out = Vec2(o.x + d.x * t, o.z + d.z * t);
+        out = planeOf(o + d * t);
         return true;
     }
     Vec2 lo, hi;
     g.extent(lo, hi);
-    const double span = glm::length(hi - lo) * 2.0 + glm::length(Vec2(o.x, o.z) - (lo + hi) * 0.5);
+    const double span = glm::length(hi - lo) * 2.0 + glm::length(planeOf(o) - (lo + hi) * 0.5);
     const double step = std::max(g.h->cell * 0.5, span / 4000.0);
     double t0 = 0.0;
     auto below = [&](double t) {
         const glm::dvec3 p = o + d * t;
-        return p.y < g.heightAt({p.x, p.z});
+        return upOf(p) < g.heightAt(planeOf(p));
     };
     if (below(0.0))
         return false;
@@ -436,18 +436,17 @@ bool groundHit(const Ground& g, QPointF px, const ViewInfo& view, Vec2& out)
                 const double m = (a + b) * 0.5;
                 (below(m) ? b : a) = m;
             }
-            const glm::dvec3 p = o + d * b;
-            out = Vec2(p.x, p.z);
+            out = planeOf(o + d * b);
             return true;
         }
         t0 = t;
     }
     // Past the ground's edge: fall onto the plane of its lowest point so painting off the map still works.
     const double base = g.h->range().x;
-    const double t = (base - o.y) / d.y;
+    const double t = (base - upOf(o)) / upOf(d);
     if (t <= 0.0)
         return false;
-    out = Vec2(o.x + d.x * t, o.z + d.z * t);
+    out = planeOf(o + d * t);
     return true;
 }
 

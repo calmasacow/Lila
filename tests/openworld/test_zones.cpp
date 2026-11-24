@@ -4,6 +4,7 @@
 #include "Zones.h"
 
 #include "extensions/ExtensionManager.h"
+#include "math/MathCore.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
 
@@ -400,4 +401,26 @@ TEST_CASE("zone commands: create, paint, query, list, check, undo, districts, te
     for (double x = -45000; x <= 45000; x += 7500)
         CHECK(run("zoneQuery", {{"point", {x, x * 0.3}}})["layers"] == answers[k++]);
     std::filesystem::remove_all(dir);
+}
+
+TEST_CASE("zone commands: on a Z-up scene zones lie on world XY")
+{
+    loadPackages();
+    run("newScene");
+    lila::math::setUpAxis(lila::math::UpAxis::Z);
+    run("terrainCreate", {{"size", {100000.0, 100000.0}}, {"resolution", 129}, {"flat", true}, {"name", "Ground"}});
+    run("terrainStroke", {{"args", {"Ground"}}, {"brush", "mask"}, {"mask", "market"}, {"points", {{20000.0, -30000.0}}}, {"radius", 6000.0},
+                          {"strength", 1.0}, {"value", 1.0}, {"stage", "final"}});
+    run("zoneFromTerrain", {{"masks", {"market"}}, {"layer", "peds"}, {"type", "pedSpawn"}});
+    CHECK(run("zoneQuery", {{"point", {20000, -30000}}, {"layer", "peds"}})["layers"]["peds"]["zone"] == "market");
+    CHECK(run("zoneQuery", {{"point", {20000, -30000, 0}}, {"layer", "peds"}})["layers"]["peds"]["zone"] == "market");
+    CHECK(run("zoneQuery", {{"point", {-30000, 20000}}, {"layer", "peds"}})["layers"]["peds"]["zone"].is_null());
+
+    // A closed curve drawn on the XY ground outlines the zone it was drawn as.
+    const std::string c = run("curve", {{"points", {{0, 10000, 0}, {0, 20000, 0}, {10000, 20000, 0}, {10000, 10000, 0}, {0, 10000, 0}}}, {"type", "poly"}})
+                              .get<std::string>();
+    run("zoneCreate", {{"layer", "district"}, {"type", "district"}, {"id", "block"}, {"curve", c}});
+    CHECK(run("zoneQuery", {{"point", {5000, 15000, 0}}, {"layer", "district"}})["layers"]["district"]["zone"] == "block");
+    CHECK(run("zoneQuery", {{"point", {5000, 0, 15000}}, {"layer", "district"}})["layers"]["district"]["zone"].is_null());
+    lila::math::setUpAxis(lila::math::UpAxis::Y);
 }
