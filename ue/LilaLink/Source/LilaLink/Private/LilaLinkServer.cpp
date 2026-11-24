@@ -360,7 +360,15 @@ void LoadLilaActors()
 	if (!Guids.IsEmpty())
 	{
 		Loader = MakeUnique<FLoaderAdapterActorList>(World);
-		World->OnWorldPartitionUninitialized().AddLambda([](UWorldPartition*) { Loader.Reset(); });
+		// Level Instance partitions broadcast here too, while their cleanup swallows unregistrations: releasing the loader
+		// then leaves its actors flagged as unregistering, and the next reference to one asserts in World Partition.
+		TWeakObjectPtr<UWorldPartition> Owner = Partition;
+		World->OnWorldPartitionUninitialized().AddLambda([Owner](UWorldPartition* Gone) {
+			if (Gone == Owner.Get())
+			{
+				Loader.Reset();
+			}
+		});
 		Loader->AddActors(Guids);
 		UE_LOG(LogLilaLink, Log, TEXT("Loaded %d Lila actors of %s that World Partition had unloaded"), Guids.Num(), *World->GetName());
 	}
