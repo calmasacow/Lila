@@ -74,7 +74,7 @@ fs::path exportDir()
 gn::GNode* waterNode(gn::Group& grp, bool create, const std::string& cmd)
 {
     // Water sits right after the ground forms: stamps, roads (which bridge it), the volume and surface layers come after.
-    static const std::set<std::string> after = {"TerrainStamps", "TerrainRoads", "TerrainVolume", "TerrainBiomes", "TerrainLayers"};
+    static const std::set<std::string> after = {"TerrainStamps", "TerrainRoads", "TerrainVolume", "TerrainBiomes", "TerrainLayers", "TerrainCoast"};
     if (nodeNamed(grp, kNodeName))
         return &chainNode(grp, kNodeName, kNodeType, after, -160.0, cmd);
     for (gn::GNode& n : grp.nodes)

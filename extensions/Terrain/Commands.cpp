@@ -5,6 +5,7 @@
 #include "Analysis.h"
 #include "Checks.h"
 #include "CliffScene.h"
+#include "Coast.h"
 #include "Erosion.h"
 #include "ErosionGpu.h"
 #include "Export.h"
@@ -1893,7 +1894,7 @@ void registerContractCommands(ext::Context& ctx)
                "mesh covers, roads (terrainAddRoad) steeper or more banked than their design or over water with no bridge or culvert, "
                "rivers rising downstream, lakes below their rim with no outlet or above it with no dam, cliff pieces floating above the "
                "ground (floatingCliff), cracks where a cliff meets the terrain (cliffCrack) and cliff tiles over triangleBudget in a "
-               "World Partition cell (tileOverBudget). Returns ok and the issues, each with its type, what it is about, where and a message.",
+               "World Partition cell (tileOverBudget), and waterCheck's channel, lane and air corridor issues. Returns ok and the issues, each with its type, what it is about, where and a message.",
         .positionalDoc = "terrain mesh or its modifier",
         .flags = withAnalysisFlags({nodeFlag({"buildings", "b", T::List, json::array(), "Meshes standing on the terrain to check."}, "mesh"),
                                     {"cutFillLimit", "cf", T::Float, 500.0, "Largest cut plus fill per pad, m3.", {}, {}, 0.0},
@@ -2050,6 +2051,8 @@ void registerContractCommands(ext::Context& ctx)
                 issues.push_back(i);
             for (const json& i : cliffs::cliffIssues(pathOf(f, a.objects()[0]), a.get<double>("cliffTolerance", 5.0), a.get<double>("triangleBudget", 400000.0),
                                                      a.get<double>("cellSize", 12800.0)))
+                issues.push_back(i);
+            for (const json& i : coastIssues(pathOf(f, a.objects()[0])))
                 issues.push_back(i);
             return {{"ok", issues.empty()}, {"issues", issues}, {"revision", revision(h)}};
         },
@@ -2453,6 +2456,8 @@ void registerCommands(ext::Context& ctx)
                     out["volume"] = v;
                 if (json water = exportTerrainWater(names[0], folder, name); !water.is_null())
                     out["water"] = water;
+                if (json coast = exportTerrainCoast(names[0], folder, name); !coast.is_null())
+                    out["coast"] = coast;
             }
             catch (const std::exception& e)
             {
@@ -2569,6 +2574,16 @@ void registerCommands(ext::Context& ctx)
                 {
                     if (json water = sendTerrainWater(names[0], a.get<double>("timeout", 300.0)); !water.is_null())
                         out["water"] = water;
+                    try
+                    {
+                        if (json coast = sendTerrainCoast(names[0], a.get<double>("timeout", 300.0)); !coast.is_null())
+                            out["coast"] = coast;
+                    }
+                    catch (const std::exception& e)
+                    {
+                        log::warn("terrainSendToUnreal: the landscape and water went, the coast and routes didn't: {}", e.what());
+                        out["coastError"] = e.what();
+                    }
                 }
                 catch (const std::exception& e)
                 {

@@ -1,6 +1,7 @@
 // Terrain: heightfield terrain as geometry nodes, with commands that build and read it and their UI.
 
 #include "CliffScene.h"
+#include "Coast.h"
 #include "ExportEngines.h"
 #include "Http.h"
 #include "Roads.h"
@@ -25,7 +26,9 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     terrain::registerSurfaceCommands(ctx);
     terrain::registerExportEngines(ctx);
     terrain::registerWater(ctx);
+    terrain::registerCoast(ctx);
     terrain::registerUi(ctx);
+    terrain::registerCoastUi(ctx);
     terrain::registerSurfaceUi(ctx);
     if (!terrain::registerRoads(ctx))
         return 1;
