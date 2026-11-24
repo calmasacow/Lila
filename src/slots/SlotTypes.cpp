@@ -5,6 +5,7 @@
 #include "scene/AttrBuilders.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
+#include "scene/SceneData.h"
 
 namespace lila::slots
 {
@@ -164,6 +165,9 @@ void registerAll()
             detail::clearTagCache();
             refresh();
         });
+    // The rules, overrides and pins as soon as the scene's data is read, so publishers evaluated during the rest of the load
+    // see them and need no rerun when the scene has opened.
+    scene::data::onLoaded([] { refresh(); });
     // After the visuals are dropped: library items the opened scene names come in, so its slots draw them straight away.
     events::subscribe(events::Event::SceneOpened, [](const events::EventData&) {
         LILA_ZONE_N("slots.itemLoad");
