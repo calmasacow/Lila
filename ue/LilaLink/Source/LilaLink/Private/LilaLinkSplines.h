@@ -2,6 +2,9 @@
 
 #include "LilaLinkServer.h"
 
+class ALandscape;
+class ULandscapeSplinesComponent;
+
 namespace LilaLink
 {
 /**
@@ -27,4 +30,19 @@ void AddSplineMethods(TMap<FString, FLilaLinkMethod>& Methods);
  * redraw reaches them; they stay loaded until the level closes, for Save All to write what changed. Returns how many it loaded.
  */
 int32 LoadLandscapeUnder(UWorld* World, const FBox& Box);
+
+/** In a World Partition level, loads every unloaded landscape spline actor, so tagged ones are found and all paint is known. */
+int32 LoadSplineActors(UWorld* World);
+
+/**
+ * World bounds of what a landscape splines component's points named with Prefix (all with an empty Prefix) shape and paint:
+ * each control point grown by its half width and falloffs.
+ */
+FBox SplineBounds(const ULandscapeSplinesComponent* Component, const FString& Prefix);
+
+/**
+ * Has the landscape redraw its splines edit layer now (added first with bAddLayer) and marks the regions it changed dirty for
+ * Save All.
+ */
+void RedrawSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings);
 } // namespace LilaLink

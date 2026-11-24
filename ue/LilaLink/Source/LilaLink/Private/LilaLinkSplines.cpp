@@ -162,29 +162,6 @@ ALandscape* FindLandscape(UWorld* World, const FString& Label)
 }
 
 /**
- * Has the landscape redraw its splines into the edit layer reserved for them, the only place splines deform and paint a
- * landscape. With bAddLayer the layer is added when missing.
- */
-void UpdateSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings)
-{
-	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::UpdateSplineLayer);
-
-	if (bAddLayer && !Landscape->FindEditLayerOfTypeConst(ULandscapeEditLayerSplines::StaticClass()) &&
-		Landscape->CreateLayer(FName(TEXT("Splines")), ULandscapeEditLayerSplines::StaticClass()) == INDEX_NONE)
-	{
-		Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the splines do not deform it"));
-	}
-	Landscape->RequestSplineLayerUpdate();
-	// Redrawn now rather than on a later tick, so the regions it changed can be marked dirty: the editor only records
-	// automatic landscape changes as modified, and Save All would leave them out.
-	Landscape->ForceUpdateLayersContent();
-	if (ULandscapeInfo* Info = Landscape->GetLandscapeInfo())
-	{
-		Info->MarkModifiedPackagesAsDirty();
-	}
-}
-
-/**
  * Whether the landscape can take Layer's paint: a target layer with a layer info, added when missing (LI_<Layer> beside
  * Lila's landscape material, which is rebuilt to sample it when the landscape uses it).
  */
@@ -239,30 +216,6 @@ bool EnsurePaintLayer(ALandscape* Landscape, FName Layer, TArray<FString>& Added
 		Warnings.Add(FString::Printf(TEXT("the landscape's material does not sample paint layer %s: the roads' paint is there but not drawn"), *Layer.ToString()));
 	}
 	return true;
-}
-
-/**
- * World bounds of what a landscape splines component's points named with Prefix (all with an empty Prefix) shape and paint:
- * each control point grown by its half width and falloffs. Built from the saved point settings, since the computed spline
- * bounds are empty until the points are updated.
- */
-FBox SplineBounds(const ULandscapeSplinesComponent* Component, const FString& Prefix)
-{
-	FBox Box(ForceInit);
-	if (!Component)
-	{
-		return Box;
-	}
-	const FTransform ToWorld = Component->GetComponentTransform();
-	for (const ULandscapeSplineControlPoint* Point : Component->GetControlPoints())
-	{
-		if (Point && (Prefix.IsEmpty() || Point->GetName().StartsWith(Prefix)))
-		{
-			const double Reach = (Point->Width + Point->SideFalloff + Point->EndFalloff) * ToWorld.GetMaximumAxisScale();
-			Box += FBox::BuildAABB(ToWorld.TransformPosition(Point->Location), FVector(Reach));
-		}
-	}
-	return Box;
 }
 
 ESplineMeshAxis::Type AxisFrom(const FString& Name)
@@ -494,6 +447,7 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 		return nullptr;
 	}
 	const FName Tag = TagFor(Id);
+	LilaLink::LoadSplineActors(World);
 	AActor* Tagged = FindTagged(World, Tag);
 	ULandscapeSplinesComponent* Component = nullptr;
 	FString Prefix = LandscapePrefix(Id);
@@ -505,7 +459,7 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 		ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged);
 		// Only loaded landscape takes a redraw: load what the earlier and the new splines cover, before the Splines layer is
 		// added, so every region gets that layer too.
-		FBox Covered = SplineActor ? SplineBounds(SplineActor->GetSplinesComponent(), FString()) : FBox(ForceInit);
+		FBox Covered = SplineActor ? LilaLink::SplineBounds(SplineActor->GetSplinesComponent(), FString()) : FBox(ForceInit);
 		for (const FLilaSpline& Spline : Splines)
 		{
 			for (const FLilaSplinePoint& In : Spline.Points)
@@ -658,7 +612,7 @@ TSharedPtr<FJsonValue> SetLandscapeSplines(UWorld* World, const FString& Id, con
 	Component->MarkRenderStateDirty();
 	Component->MarkPackageDirty();
 	// Also when nothing shapes: a re-send that turns it off takes the earlier shape and paint out of the landscape.
-	UpdateSplineLayer(Landscape, bShapes, Warnings);
+	LilaLink::RedrawSplineLayer(Landscape, bShapes, Warnings);
 	if (!bShapes)
 	{
 		Warnings.Add(TEXT("deformTerrain is off and no paint layer is given: the splines do not shape the landscape"));
@@ -787,13 +741,14 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 	bool bRemoved = false;
 	int32 RegionsLoaded = 0;
 	TArray<ALandscape*> Reshaped;
+	LilaLink::LoadSplineActors(World);
 	if (AActor* Tagged = FindTagged(World, TagFor(Id)))
 	{
 		const ALandscapeSplineActor* SplineActor = Cast<ALandscapeSplineActor>(Tagged);
 		if (SplineActor)
 		{
 			// The redraw that takes the splines out reaches loaded landscape only.
-			RegionsLoaded = LilaLink::LoadLandscapeUnder(World, SplineBounds(SplineActor->GetSplinesComponent(), FString()));
+			RegionsLoaded = LilaLink::LoadLandscapeUnder(World, LilaLink::SplineBounds(SplineActor->GetSplinesComponent(), FString()));
 		}
 		const ULandscapeInfo* Info = SplineActor ? SplineActor->GetLandscapeInfo() : nullptr;
 		if (ALandscape* Landscape = Info ? Info->LandscapeActor.Get() : nullptr)
@@ -821,7 +776,7 @@ TSharedPtr<FJsonValue> RemoveSpline(const TSharedPtr<FJsonObject>& Params, FStri
 	TArray<FString> Ignored;
 	for (ALandscape* Landscape : Reshaped)
 	{
-		UpdateSplineLayer(Landscape, /*bAddLayer=*/false, Ignored);
+		LilaLink::RedrawSplineLayer(Landscape, /*bAddLayer=*/false, Ignored);
 	}
 	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
 	Out->SetBoolField(TEXT("removed"), bRemoved);
@@ -835,6 +790,31 @@ void LilaLink::AddSplineMethods(TMap<FString, FLilaLinkMethod>& Methods)
 	Methods.Add(TEXT("setSpline"), LilaLink::Sync(&SetSpline));
 	Methods.Add(TEXT("removeSpline"), LilaLink::Sync(&RemoveSpline));
 }
+
+namespace
+{
+/** Loads actors of a World Partition level by guid; they stay loaded until its World Partition shuts down. */
+void LoadActorGuids(UWorld* World, UWorldPartition* Partition, const TArray<FGuid>& Guids)
+{
+	// Released when its level's World Partition shuts down, before the world goes (as LoadLilaActors' loader).
+	static TWeakObjectPtr<UWorldPartition> Owner;
+	static TUniquePtr<FLoaderAdapterActorList> Loader;
+	if (!Loader || Owner.Get() != Partition)
+	{
+		Loader = MakeUnique<FLoaderAdapterActorList>(World);
+		Owner = Partition;
+		TWeakObjectPtr<UWorldPartition> Bound = Partition;
+		World->OnWorldPartitionUninitialized().AddLambda([Bound](UWorldPartition* Gone) {
+			if (Gone == Bound.Get() && Owner.Get() == Gone)
+			{
+				Loader.Reset();
+				Owner.Reset();
+			}
+		});
+	}
+	Loader->AddActors(Guids);
+}
+} // namespace
 
 int32 LilaLink::LoadLandscapeUnder(UWorld* World, const FBox& Box)
 {
@@ -858,23 +838,71 @@ int32 LilaLink::LoadLandscapeUnder(UWorld* World, const FBox& Box)
 	{
 		return 0;
 	}
-	// Released when its level's World Partition shuts down, before the world goes (as LoadLilaActors' loader).
-	static TWeakObjectPtr<UWorldPartition> Owner;
-	static TUniquePtr<FLoaderAdapterActorList> Loader;
-	if (!Loader || Owner.Get() != Partition)
-	{
-		Loader = MakeUnique<FLoaderAdapterActorList>(World);
-		Owner = Partition;
-		TWeakObjectPtr<UWorldPartition> Bound = Partition;
-		World->OnWorldPartitionUninitialized().AddLambda([Bound](UWorldPartition* Gone) {
-			if (Gone == Bound.Get() && Owner.Get() == Gone)
-			{
-				Loader.Reset();
-				Owner.Reset();
-			}
-		});
-	}
-	Loader->AddActors(Guids);
+	LoadActorGuids(World, Partition, Guids);
 	UE_LOG(LogLilaLink, Log, TEXT("Loaded %d landscape region(s) under splines so their redraw reaches them"), Guids.Num());
 	return Guids.Num();
+}
+
+int32 LilaLink::LoadSplineActors(UWorld* World)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::LoadSplineActors);
+
+	UWorldPartition* Partition = World ? World->GetWorldPartition() : nullptr;
+	if (!Partition)
+	{
+		return 0;
+	}
+	TArray<FGuid> Guids;
+	FWorldPartitionHelpers::ForEachActorDescInstance(Partition, ALandscapeSplineActor::StaticClass(), [&](const FWorldPartitionActorDescInstance* Desc) {
+		if (!Desc->IsLoaded())
+		{
+			Guids.Add(Desc->GetGuid());
+		}
+		return true;
+	});
+	if (!Guids.IsEmpty())
+	{
+		LoadActorGuids(World, Partition, Guids);
+		UE_LOG(LogLilaLink, Log, TEXT("Loaded %d landscape spline actor(s)"), Guids.Num());
+	}
+	return Guids.Num();
+}
+
+FBox LilaLink::SplineBounds(const ULandscapeSplinesComponent* Component, const FString& Prefix)
+{
+	// Built from the saved point settings, since the computed spline bounds are empty until the points are updated.
+	FBox Box(ForceInit);
+	if (!Component)
+	{
+		return Box;
+	}
+	const FTransform ToWorld = Component->GetComponentTransform();
+	for (const ULandscapeSplineControlPoint* Point : Component->GetControlPoints())
+	{
+		if (Point && (Prefix.IsEmpty() || Point->GetName().StartsWith(Prefix)))
+		{
+			const double Reach = (Point->Width + Point->SideFalloff + Point->EndFalloff) * ToWorld.GetMaximumAxisScale();
+			Box += FBox::BuildAABB(ToWorld.TransformPosition(Point->Location), FVector(Reach));
+		}
+	}
+	return Box;
+}
+
+void LilaLink::RedrawSplineLayer(ALandscape* Landscape, bool bAddLayer, TArray<FString>& Warnings)
+{
+	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkSplines::RedrawSplineLayer);
+
+	if (bAddLayer && !Landscape->FindEditLayerOfTypeConst(ULandscapeEditLayerSplines::StaticClass()) &&
+		Landscape->CreateLayer(FName(TEXT("Splines")), ULandscapeEditLayerSplines::StaticClass()) == INDEX_NONE)
+	{
+		Warnings.Add(TEXT("could not add a Splines edit layer to the landscape, so the splines neither paint nor deform it"));
+	}
+	Landscape->RequestSplineLayerUpdate();
+	// Redrawn now rather than on a later tick, so the regions it changed can be marked dirty: the editor only records
+	// automatic landscape changes as modified, and Save All would leave them out.
+	Landscape->ForceUpdateLayersContent();
+	if (ULandscapeInfo* Info = Landscape->GetLandscapeInfo())
+	{
+		Info->MarkModifiedPackagesAsDirty();
+	}
 }
