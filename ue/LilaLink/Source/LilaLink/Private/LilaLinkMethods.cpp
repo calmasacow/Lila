@@ -106,6 +106,21 @@ FAssetData FindAsset(const FString& Path)
 	return IAssetRegistry::GetChecked().GetAssetByObjectPath(FSoftObjectPath(ToObjectPath(Path)));
 }
 
+/** levelInfo {}: the open level's package ({level, partitioned}), so Lila keys what it sent per level. */
+TSharedPtr<FJsonValue> LevelInfo(const TSharedPtr<FJsonObject>&, FString& OutError)
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		OutError = TEXT("levelInfo: no level is open");
+		return nullptr;
+	}
+	TSharedRef<FJsonObject> Out = MakeShared<FJsonObject>();
+	Out->SetStringField(TEXT("level"), World->GetOutermost()->GetName());
+	Out->SetBoolField(TEXT("partitioned"), World->IsPartitionedWorld());
+	return MakeShared<FJsonValueObject>(Out);
+}
+
 TSharedPtr<FJsonValue> Hello(const TSharedPtr<FJsonObject>&, FString&)
 {
 	TRACE_CPUPROFILER_EVENT_SCOPE(LilaLinkMethods::Hello);
@@ -137,7 +152,7 @@ TSharedPtr<FJsonValue> Hello(const TSharedPtr<FJsonObject>&, FString&)
 		Str(TEXT("stylisedInstances")), Str(TEXT("mlDeformer")), Str(TEXT("splines")), Str(TEXT("placements")), Str(TEXT("landscape")), Str(TEXT("landscapeRegions")), Str(TEXT("terrainWater")), Str(TEXT("waterRoutes")), Str(TEXT("zones")), Str(TEXT("landscapeVolume")),
 		Str(TEXT("masonryMaterials")), Str(TEXT("ivyMaterials")), Str(TEXT("trimMaterials")), Str(TEXT("imposters")), Str(TEXT("components")), Str(TEXT("lights")), Str(TEXT("lightingChannels")),
 		Str(TEXT("geometryCollection")), Str(TEXT("trimDecals")), Str(TEXT("weatheringInteriors")), Str(TEXT("meshDecals")), Str(TEXT("physics")), Str(TEXT("levelInstances")),
-		Str(TEXT("collision")), Str(TEXT("instanceData")), Str(TEXT("expressionRig")), Str(TEXT("morphPaths")), Str(TEXT("terrainRoads")), Str(TEXT("terrainMaterial")), Str(TEXT("render")), Str(TEXT("seams")), Str(TEXT("panelLines")), Str(TEXT("cliffMaterial")), Str(TEXT("cliffTiles")), Str(TEXT("groom")), Str(TEXT("georeference")), Str(TEXT("pointClouds")), Str(TEXT("groundTint")), Str(TEXT("grunge")), Str(TEXT("flipbook")), Str(TEXT("sky")), Str(TEXT("volumes")), Str(TEXT("slots")), Str(TEXT("buildings")), Str(TEXT("customHlod")), Str(TEXT("placementHashes"))});
+		Str(TEXT("collision")), Str(TEXT("instanceData")), Str(TEXT("expressionRig")), Str(TEXT("morphPaths")), Str(TEXT("terrainRoads")), Str(TEXT("terrainMaterial")), Str(TEXT("render")), Str(TEXT("seams")), Str(TEXT("panelLines")), Str(TEXT("cliffMaterial")), Str(TEXT("cliffTiles")), Str(TEXT("groom")), Str(TEXT("georeference")), Str(TEXT("pointClouds")), Str(TEXT("groundTint")), Str(TEXT("grunge")), Str(TEXT("flipbook")), Str(TEXT("sky")), Str(TEXT("volumes")), Str(TEXT("slots")), Str(TEXT("buildings")), Str(TEXT("customHlod")), Str(TEXT("placementHashes")), Str(TEXT("levelInfo"))});
 	// Features of the optional plugins that registered methods, such as LilaLinkSettlement's "settlement".
 	TArray<TSharedPtr<FJsonValue>> Features = Out->GetArrayField(TEXT("features"));
 	for (const FString& Feature : LilaLink::ExternalFeatures())
@@ -434,6 +449,7 @@ TMap<FString, FLilaLinkMethod> LilaLink::MakeMethods()
 	TMap<FString, FLilaLinkMethod> Methods;
 	Methods.Add(TEXT("hello"), LilaLink::Sync(&Hello));
 	Methods.Add(TEXT("ping"), LilaLink::Sync(&Ping));
+	Methods.Add(TEXT("levelInfo"), LilaLink::Sync(&LevelInfo));
 	Methods.Add(TEXT("importAsset"), &LilaLink::ImportAsset);
 	Methods.Add(TEXT("saveAssets"), LilaLink::Sync(&SaveAssets));
 	Methods.Add(TEXT("listAssets"), LilaLink::Sync(&ListAssets));
