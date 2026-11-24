@@ -73,6 +73,7 @@ struct Candidate
     glm::dvec2 p;
     double fit;
     uint32_t hash;
+    int32_t i = 0, j = 0;
 };
 
 int64_t cellKey(int x, int z) { return (int64_t(x) << 32) ^ int64_t(uint32_t(z)); }
@@ -504,7 +505,7 @@ CoverResult scatterCover(const Heightfield& h, const CoverSpec& s, const std::ve
                     continue;
                 const double fit = inputs[r].fit(h, p.x, p.y);
                 if (fit >= rule.minFit && fit > 0.0)
-                    rows[size_t(j)].push_back({p, fit, hsh});
+                    rows[size_t(j)].push_back({p, fit, hsh, int32_t(i), int32_t(j)});
             }
         });
         for (std::vector<Candidate>& row : rows)
@@ -557,6 +558,8 @@ CoverResult scatterCover(const Heightfield& h, const CoverSpec& s, const std::ve
             p.random = float(coverUnit(coverHash(c.hash, 6u, 23u)));
             p.rule = int(r);
             p.item = item;
+            p.cellX = c.i;
+            p.cellZ = c.j;
             const uint32_t index = uint32_t(out.pieces.size());
             out.pieces.push_back(p);
             own.add(c.p, index);

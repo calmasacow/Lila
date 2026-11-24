@@ -14,6 +14,10 @@
 #include <lila/Mesh.h>
 #include <lila/Node.h>
 #include <lila/Profile.h>
+#include <lila/Slots.h>
+#include <lila/Transform.h>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -29,6 +33,51 @@ namespace
 using scene::Graph;
 using scene::Node;
 using StreetT = ArgType;
+
+/** The slot type a furniture kind fills. */
+std::string furnitureSlotType(const std::string& kind)
+{
+    static const std::map<std::string, std::string> types = {
+        {"lamp", "lamp.street"},         {"lantern", "lamp.lantern"},        {"tree", "tree.street"},
+        {"signal", "sign.traffic.signal"}, {"stopSign", "sign.traffic.stop"}, {"yieldSign", "sign.traffic.yield"},
+        {"streetSign", "sign.street"},   {"namePlaque", "sign.street.plaque"}, {"bench", "furniture.bench"},
+        {"bin", "furniture.bin"},        {"bollard", "furniture.bollard"},   {"hydrant", "furniture.hydrant"},
+        {"well", "furniture.well"},      {"stall", "furniture.stall"},       {"cart", "furniture.cart"}};
+    auto it = types.find(kind);
+    return it != types.end() ? it->second : "furniture." + kind;
+}
+
+/**
+ * Writes the placements as slots into <mesh>_FurnitureSlots under the settlement mesh: ids are the owner (the street, or
+ * the settlement's junctions or squares) plus kind and the placement's stable id, so slot rules and overrides outlive
+ * regenerating. Returns writeSet's stats.
+ */
+json writeFurnitureSlots(Graph& g, const Rebuilt& r, const std::vector<FurniturePlacement>& placed, const json& edits, const json& assets)
+{
+    Node* mesh = g.find(r.mesh);
+    if (!mesh)
+        return nullptr;
+    const glm::dmat4 world = std::get<glm::dmat4>(g.value({mesh->id(), scene::Transform::kWorldMatrix}));
+    const std::string root = "settlement:" + mesh->name();
+    std::vector<slots::Slot> out;
+    out.reserve(placed.size());
+    for (const FurniturePlacement& p : placed)
+    {
+        slots::Slot s;
+        const std::string owner = p.street ? root + "/street/" + slots::hex(p.street) : p.junction >= 0 ? root + "/junctions" : root + "/squares";
+        s.id = slots::makeId(owner, p.kind + "/" + slots::hex(p.id));
+        s.type = furnitureSlotType(p.kind);
+        s.owner = owner;
+        s.regions = {root, "profile:" + p.profile};
+        s.tags = {"furniture", p.kind};
+        s.transform = world * glm::translate(glm::dmat4(1.0), p.p) * glm::rotate(glm::dmat4(1.0), glm::radians(p.heading), glm::dvec3(0, 1, 0));
+        s.payload.unrealMesh = furnitureAsset(edits, p.kind);
+        if (assets.is_object() && assets.contains(p.kind) && assets[p.kind].is_string())
+            s.payload.item = assets[p.kind].get<std::string>();
+        out.push_back(std::move(s));
+    }
+    return slots::writeSet(g, mesh->name() + "_FurnitureSlots", mesh->id(), out, "settlementFurniture");
+}
 
 std::string settlementOf(const Args& a, const char* cmd)
 {
@@ -275,7 +324,10 @@ void registerStreetscapeCommands(ext::Context& ctx)
                   {"assets", "as", StreetT::Any, nullptr, "{kind: library asset id} for realize."},
                   {"limit", "lm", StreetT::Int, int64_t(2000), "Most placements returned in the list (counts cover all).", {}, {}, 0.0},
                   {"store", "sr", StreetT::Bool, false, "Keep sets= with the settlement, so its placements (exports, Send to Unreal) use them."},
-                  {"engineAssets", "ea", StreetT::Any, nullptr, "{kind: engine asset path} the settlement's placements use, kept with it."}},
+                  {"engineAssets", "ea", StreetT::Any, nullptr, "{kind: engine asset path} the settlement's placements use, kept with it."},
+                  {"slots", "sl", StreetT::Bool, true,
+                   "Write the placements as slots (<mesh>_FurnitureSlots; not with kinds=), drawn in the viewport and swapped by slot rules (lamp.street, "
+                   "tree.street, sign.street, sign.traffic, furniture.*)."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
 
@@ -285,6 +337,7 @@ void registerStreetscapeCommands(ext::Context& ctx)
             Rebuilt r = rebuildSettlement(g, target, cmd);
             const bool medieval = medievalStyle(r.layout);
             std::vector<FurnitureSet> sets;
+            json editsUsed;
             try
             {
                 const json raw = ops::execute("getAttr", {{"args", {r.modifier + ".edits"}}});
@@ -306,6 +359,7 @@ void registerStreetscapeCommands(ext::Context& ctx)
                     r = rebuildSettlement(g, target, cmd);
                 }
                 sets = applyFurnitureJson(furnitureSetsFor(r.layout, edits), a.flags.value("sets", json()));
+                editsUsed = edits;
             }
             catch (const std::runtime_error& e)
             {
@@ -346,6 +400,9 @@ void registerStreetscapeCommands(ext::Context& ctx)
                 setsJson[s.profile] = toJson(s);
             json out = {{"count", placed.size()}, {"byKind", byKind}, {"byProfile", byProfile}, {"sets", setsJson},
                         {"medieval", medieval}, {"placements", list}, {"layoutPlacements", r.layout.placements.size()}};
+            // A kinds= run lists a subset; the slot set keeps the full run.
+            if (a.get<bool>("slots", true) && !a.has("kinds"))
+                out["slots"] = writeFurnitureSlots(g, r, placed, editsUsed, a.flags.value("assets", json()));
             if (a.get<bool>("realize", false))
             {
                 if (!ops::find("place"))

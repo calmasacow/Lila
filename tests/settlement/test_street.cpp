@@ -494,6 +494,16 @@ TEST_CASE("settlement streetscape: commands mesh roads, place furniture, name st
     CHECK(run("settlementFurniture", {{"args", {mesh}}})["placements"] == f["placements"]);
     CHECK(run("settlementFurniture", {{"args", {mesh}}, {"kinds", {"lamp"}}})["byKind"].size() == 1);
     CHECK(f["layoutPlacements"] == f["count"]);
+    // The placements are slots: one per placement, ids stable across a rerun, swapped by a rule.
+    CHECK(f["slots"]["written"] == f["count"]);
+    const json lampSlots = run("slotFind", {{"type", "lamp.street"}, {"limit", 0}});
+    CHECK(lampSlots["count"] == f["byKind"]["lamp"]);
+    const json slotIds = run("slotFind", {{"limit", 0}, {"region", "settlement:"}});
+    run("settlementFurniture", {{"args", {mesh}}});
+    CHECK(run("slotFind", {{"limit", 0}, {"region", "settlement:"}}) == slotIds);
+    run("slotRule", {{"args", {"add"}}, {"type", "lamp"}, {"unrealClass", "/Game/BP/BP_Lamp"}});
+    CHECK(run("slotReport", {{"validate", false}})["byRule"]["r1"] == f["byKind"]["lamp"]);
+    run("undo");
     const json stored = run("settlementFurniture", {{"args", {mesh}}, {"store", true}, {"sets", {{"lane", json::array()}, {"street", json::array()}}},
                                                     {"engineAssets", {{"lamp", "/Game/City/SM_Lamp"}}}});
     CHECK(stored["count"].get<int>() < f["count"].get<int>());

@@ -407,10 +407,17 @@ TEST_CASE("terrain commands: biomes, layers and ground cover as nodes, coverage 
     REQUIRE(geom);
     REQUIRE(geom->instances);
     CHECK(geom->instances->size() == count);
+    // Every piece is a slot keyed by its rule's grid cell, so the same seed gives the same ids.
+    const json pieces = run("slotFind", {{"tag", {"groundcover"}}, {"limit", 0}});
+    CHECK(pieces["count"] == count);
+    REQUIRE(pieces["slots"].size() > 0);
+    CHECK(pieces["slots"][0]["id"].get<std::string>().find("/rule") != std::string::npos);
 
     // Again with the same seed: same count; another seed moves them.
     json same = run("terrainGroundCover", {{"args", {mesh}}, {"density", 4.0}});
     CHECK(same["count"] == cover["count"]);
     CHECK(same["placeholders"].size() == 4);
+    g.evaluate();
+    CHECK(run("slotFind", {{"tag", {"groundcover"}}, {"limit", 0}}) == pieces);
     run("newScene");
 }
