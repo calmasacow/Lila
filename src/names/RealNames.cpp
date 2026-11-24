@@ -14,6 +14,7 @@
 #include <fstream>
 #include <mutex>
 #include <set>
+#include <stdexcept>
 
 namespace lila::names
 {
@@ -334,9 +335,15 @@ std::string NameBook::unique(uint64_t bucket, uint64_t key, F&& make)
     for (int attempt = 0; attempt < 96 && name.empty(); ++attempt)
         if (std::string s = make(attempt); !taken.count(s) && !real(s))
             name = std::move(s);
+    // Numbered after any of the attempts whose own name is not real, so a real first attempt can't loop forever.
     for (int n = 2; name.empty(); ++n)
-        if (std::string s = make(0) + " " + std::to_string(n); !taken.count(s) && !real(s))
-            name = std::move(s);
+    {
+        for (int attempt = 0; attempt < 96 && name.empty(); ++attempt)
+            if (std::string s = make(attempt) + " " + std::to_string(n); !taken.count(s) && !real(s))
+                name = std::move(s);
+        if (name.empty() && n > 4096)
+            throw std::runtime_error("no fictional name left that matches no real name");
+    }
     taken.insert(name);
     mGiven.emplace(id, name);
     return name;

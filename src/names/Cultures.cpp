@@ -255,6 +255,11 @@ const Vocab& mexicanVocab()
         p["building"] = {"Edificio {e}", "Torre {e}", "Condominios {e}"};
         p["apartments"] = {"Condominios {e}", "Departamentos {n}", "Torre {e}"};
         p["mansion"] = {"Quinta {e}", "Villa {e}"};
+        p["shipping"] = {"Naviera {e}", "Línea Marítima {s}", "Transportes Marítimos {e}", "Contenedores {s}"};
+        p["cruiseLine"] = {"Cruceros {e}", "Cruceros {s}"};
+        p["cruiseTerminal"] = {"Terminal de Cruceros {e}", "Muelle de Cruceros {s}"};
+        p["customs"] = {"Aduana Marítima {e}", "Aduana {s}"};
+        p["mausoleum"] = {"Familia {s} {s}", "Capilla Familiar {s} {s}", "Familia {s}"};
         x.business = {"Comercial {s}", "Tienda {e}", "Negocio {g}"};
         auto& k = x.kinds;
         k[Kind::Town] = {"{a} de {n}", "Villa {s}", "{n}", "Puerto {e}", "Real de {n}"};
@@ -374,6 +379,11 @@ const Vocab& englishVocab()
         p["building"] = {"The {e} Building", "{s} Tower"};
         p["apartments"] = {"{e} Apartments", "{s} Court"};
         p["mansion"] = {"{s} House", "{e} Manor"};
+        p["shipping"] = {"{e} Lines", "{s} Shipping", "{e} Container Line"};
+        p["cruiseLine"] = {"{e} Cruises", "{s} Cruise Line"};
+        p["cruiseTerminal"] = {"{e} Cruise Terminal", "{s} Pier"};
+        p["customs"] = {"{e} Customs House", "{s} Customs Post"};
+        p["mausoleum"] = {"{s} Family", "{s}-{s} Family", "{s} Family Chapel"};
         x.business = {"{s} & Co.", "{e} Store", "{g}'s"};
         auto& k = x.kinds;
         k[Kind::Town] = {"{n}", "Port {s}", "{s}ville", "{s} Springs", "New {s}"};
@@ -393,358 +403,710 @@ const Vocab& englishVocab()
     return v;
 }
 
-const Vocab& frenchVocab()
-{
-    static const Vocab v = [] {
-        Vocab x;
-        x.given = {"Jojo", "Mimi", "Dédé", "Lulu", "Fanfan", "Riri", "Gégé", "Titi", "Nono", "Loulou", "Pépé", "Mémé", "Bébert",
-                   "Momo", "Coco", "Zaza", "Fifi", "Toto", "Néné", "Bibi", "Marcel", "Odette", "Gaston", "Simone", "Lucien", "Yvette"};
-        x.surnames = {"Dubreuil", "Lemaire", "Vasseur", "Delacroix", "Marchand", "Fontaine", "Rochefort", "Bonnard", "Duclos",
-                      "Lefèvre", "Chaumont", "Garnier", "Morel", "Brissac", "Lambert", "Roussel", "Cordier", "Daumier", "Vernet",
-                      "Perrin", "Aubert", "Clément", "Mercier", "Thibault", "Legrand", "Masson", "Boucher", "Charpentier"};
-        x.evocative = {"Le Bon Accueil", "La Belle Époque", "La Petite Barque", "L'Étoile d'Or", "Le Coq Hardi", "La Mouette",
-                       "Le Vieux Port", "La Lanterne", "Le Lion d'Argent", "La Rose des Vents", "Le Phare", "La Sirène", "Le Cheval Pie",
-                       "La Bonne Mère", "Le Moulin Bleu", "Les Trois Pigeons", "Le Grand Cerf", "La Fleur de Lys", "Le Soleil Levant",
-                       "La Belle Meunière", "L'Ancre", "Le Chat Gris", "La Licorne", "Le Pélican", "La Gaieté", "Le Rivage"};
-        x.nature = {"Les Pins", "Les Tilleuls", "Bois-Joli", "Les Saules", "Val Fleuri", "Les Chênes", "La Garenne", "Les Mimosas",
-                    "Beauséjour", "Les Peupliers", "Mont-Fleuri", "La Pinède", "Les Glycines", "Bellevue", "Les Charmes", "Clairefontaine"};
-        x.saints = {"Saint-Aubin", "Sainte-Anne", "Saint-Éloi", "Sainte-Claire", "Saint-Florent", "Sainte-Marthe", "Saint-Gildas",
-                    "Sainte-Odile", "Saint-Hilaire", "Sainte-Agathe", "Saint-Rémi", "Sainte-Cécile", "Saint-Yves", "Saint-Blaise"};
-        x.persons = {"Émile Dubreuil", "Jeanne Lemaire", "Aristide Vasseur", "Hortense Delacroix", "Achille Marchand",
-                     "Berthe Fontaine", "Honoré Rochefort", "Léonie Bonnard", "Firmin Duclos", "Adèle Lefèvre", "Anatole Chaumont",
-                     "Pauline Garnier"};
-        auto& p = x.programs;
-        p["taqueria"] = {"Tacos {g}", "Comptoir à Tacos {e}"};
-        p["restaurant"] = {"Restaurant {e}", "Chez {g}", "Bistrot {s}", "Brasserie {e}", "Auberge {e}"};
-        p["seafood"] = {"Poissonnerie {s}", "La Marée de {g}", "Huîtres {e}"};
-        p["cafe"] = {"Café {e}", "Café des {s}", "Salon de Thé {g}"};
-        p["bar"] = {"Bar {e}", "Le Bar de {g}", "Estaminet {e}"};
-        p["cantina"] = {"Taverne {e}", "Buvette {g}"};
-        p["nightclub"] = {"Club {e}", "Cabaret {e}"};
-        p["fastFood"] = {"Crêperie {g}", "Sandwicherie {e}", "Friterie {g}"};
-        p["bakery"] = {"Boulangerie {s}", "Boulangerie {e}", "Pâtisserie {g}"};
-        p["iceCream"] = {"Glacier {e}", "Glaces {g}"};
-        p["tortilleria"] = {"Tortillas {e}"};
-        p["pharmacy"] = {"Pharmacie {a}", "Pharmacie {s}", "Pharmacie du {e}"};
-        p["grocery"] = {"Épicerie {g}", "Épicerie {e}", "Alimentation {s}"};
-        p["supermarket"] = {"Marché {s}", "Supérette {e}"};
-        p["butcher"] = {"Boucherie {s}", "Charcuterie {g}"};
-        p["carParts"] = {"Pièces Auto {s}", "Accessoires {e}"};
-        p["tyres"] = {"Pneus {s}", "Pneumatiques {g}"};
-        p["carRepair"] = {"Garage {s}", "Garage {e}", "Carrosserie {g}"};
-        p["carWash"] = {"Lavage {e}"};
-        p["hardware"] = {"Quincaillerie {s}", "Droguerie {e}"};
-        p["clothes"] = {"Boutique {g}", "Mode {e}", "Maison {s}"};
-        p["shoes"] = {"Chaussures {s}"};
-        p["electronics"] = {"Radio {s}", "Électronique {e}"};
-        p["furniture"] = {"Meubles {s}", "Ébénisterie {e}"};
-        p["stationery"] = {"Papeterie {e}", "Librairie {s}"};
-        p["hairdresser"] = {"Salon {g}", "Coiffure {e}", "Barbier {g}"};
-        p["laundry"] = {"Laverie {e}", "Blanchisserie {s}"};
-        p["bank"] = {"Banque {s}", "Crédit {e}", "Caisse {s}"};
-        p["fuel"] = {"Station {e}", "Relais {s}"};
-        p["hotel"] = {"Hôtel {e}", "Hôtel {s}", "Grand Hôtel du {e}"};
-        p["motel"] = {"Relais {e}", "Motel {e}"};
-        p["mall"] = {"Galerie {e}", "Passage {s}"};
-        p["market"] = {"Marché {e}", "Halles {s}"};
-        p["liquor"] = {"Cave {s}", "Vins {g}"};
-        p["florist"] = {"Fleurs {g}", "Fleuriste {e}"};
-        p["jewelry"] = {"Bijouterie {s}", "Joaillerie {e}"};
-        p["optician"] = {"Optique {s}"};
-        p["clinic"] = {"Clinique {a}", "Cabinet Médical {s}"};
-        p["dentist"] = {"Cabinet Dentaire {s}"};
-        p["vet"] = {"Clinique Vétérinaire {e}"};
-        p["gym"] = {"Gymnase {e}", "Salle {s}"};
-        p["cinema"] = {"Cinéma {e}", "Ciné {s}"};
-        p["church"] = {"Église {a}", "Chapelle {a}"};
-        p["cathedral"] = {"Cathédrale {a}"};
-        p["school"] = {"École {p}", "Collège {p}", "Lycée {p}"};
-        p["university"] = {"Université {s}", "Faculté {e}"};
-        p["hospital"] = {"Hôpital {a}", "Centre Hospitalier {s}"};
-        p["police"] = {"Commissariat {#}", "Gendarmerie {s}"};
-        p["fireStation"] = {"Caserne des Pompiers {#}"};
-        p["townhall"] = {"Hôtel de Ville", "Mairie {e}"};
-        p["government"] = {"Préfecture {s}", "Bureau Municipal {#}"};
-        p["courthouse"] = {"Palais de Justice {s}"};
-        p["military"] = {"Caserne {s}", "Fort {s}"};
-        p["postOffice"] = {"Bureau de Poste {#}"};
-        p["library"] = {"Bibliothèque {p}"};
-        p["museum"] = {"Musée {p}", "Musée {e}"};
-        p["theatre"] = {"Théâtre {e}", "Théâtre {s}"};
-        p["stadium"] = {"Stade {p}", "Stade {e}"};
-        p["sports"] = {"Terrain {s}", "Complexe Sportif {e}"};
-        p["port"] = {"Port {s}", "Quais {e}"};
-        p["ferryTerminal"] = {"Gare Maritime {e}"};
-        p["marina"] = {"Port de Plaisance {e}"};
-        p["airport"] = {"Aéroport {p}", "Aérodrome {s}"};
-        p["airstrip"] = {"Piste {s}"};
-        p["busStation"] = {"Gare Routière {e}"};
-        p["cemetery"] = {"Cimetière {a}", "Cimetière {e}"};
-        p["park"] = {"Jardin {e}", "Parc {s}"};
-        p["office"] = {"Bureaux {s}", "Immeuble {s}"};
-        p["warehouse"] = {"Entrepôts {s}", "Dépôt {e}"};
-        p["factory"] = {"Usine {s}", "Manufacture {e}"};
-        p["packingPlant"] = {"Conserverie {e}", "Coopérative {s}"};
-        p["coldStorage"] = {"Entrepôt Frigorifique {e}"};
-        p["truckYard"] = {"Transports {s}", "Routiers {e}"};
-        p["farm"] = {"Ferme {e}", "Domaine {s}", "Mas {s}"};
-        p["greenhouse"] = {"Serres {e}", "Horticulture {s}"};
-        p["lighthouse"] = {"Phare {e}"};
-        p["shop"] = {"Maison {s}", "Comptoir {e}"};
-        p["building"] = {"Immeuble {e}", "Résidence {s}"};
-        p["apartments"] = {"Résidence {e}", "Les Jardins de {n}"};
-        p["mansion"] = {"Hôtel Particulier {s}", "Château {s}"};
-        x.business = {"Maison {s}", "Comptoir {e}", "Chez {g}"};
-        auto& k = x.kinds;
-        k[Kind::Town] = {"{a}", "{a}-sur-Mer", "Villeneuve-{s}", "{n}", "Port-{s}"};
-        k[Kind::River] = {"La {s}", "Rivière {e}"};
-        k[Kind::Stream] = {"Ruisseau {e}", "Ru de {n}"};
-        k[Kind::Lake] = {"Lac {s}", "Étang {e}"};
-        k[Kind::Reservoir] = {"Lac de Retenue {s}"};
-        k[Kind::Dam] = {"Barrage {s}"};
-        k[Kind::Island] = {"Île {e}", "Île {s}"};
-        k[Kind::Beach] = {"Plage {e}", "Plage des {n}"};
-        k[Kind::Bay] = {"Baie {s}", "Anse {e}"};
-        k[Kind::Mountain] = {"Mont {s}", "Pic {e}"};
-        k[Kind::Park] = {"Jardin {e}", "Parc {s}"};
-        k[Kind::Landmark] = {"Monument {e}", "Colonne {s}"};
-        return x;
-    }();
-    return v;
-}
-
-const Vocab& latinVocab()
-{
-    static const Vocab v = [] {
-        Vocab x;
-        x.given = {"Marcus", "Lucius", "Gaius", "Quintus", "Titus", "Aulus", "Decimus", "Sextus", "Publius", "Gnaeus", "Servius",
-                   "Tiberius", "Julia", "Livia", "Octavia", "Cornelia", "Claudia", "Flavia", "Aurelia", "Valeria", "Tullia", "Fabia"};
-        x.surnames = {"Varro", "Cato", "Rufus", "Crispus", "Naso", "Strabo", "Lentulus", "Calvus", "Balbus", "Celer", "Longinus",
-                      "Paetus", "Severus", "Felix", "Pulcher", "Bassus", "Macer", "Niger", "Priscus", "Vetus", "Sabinus", "Galba"};
-        x.evocative = {"Aquila", "Lupa", "Delphinus", "Columba", "Fortuna", "Concordia", "Victoria", "Pax", "Spes", "Aurora",
-                       "Sol Invictus", "Luna", "Stella Maris", "Ancora", "Leo Aureus", "Ceres", "Neptunus", "Minerva", "Bacchus",
-                       "Mercurius", "Vulcanus", "Faunus", "Pomona", "Flora"};
-        x.nature = {"Olivetum", "Pinetum", "Laurentum", "Fons Clarus", "Saxa Rubra", "Vallis Amoena", "Silva Nigra", "Collis Viridis",
-                    "Ripa Alta", "Campus Florum", "Lacus Placidus", "Mons Albus", "Quercetum", "Vinea Nova"};
-        x.saints = {"Iovis", "Iunonis", "Martis", "Apollinis", "Dianae", "Vestae", "Saturni", "Herculis", "Castoris", "Ianus",
-                    "Veneris", "Fortunae", "Mercurii", "Cereris"};
-        x.persons = {"Marcus Varro", "Lucius Crispus", "Gaius Severus", "Quintus Balbus", "Titus Longinus", "Aulus Priscus",
-                     "Publius Sabinus", "Decimus Celer", "Julia Felix", "Cornelia Pulchra", "Livia Macrina", "Claudia Severa"};
-        auto& p = x.programs;
-        p["taqueria"] = {"Popina {g}", "Thermopolium {e}"};
-        p["restaurant"] = {"Popina {e}", "Caupona {g}", "Taberna {s}"};
-        p["seafood"] = {"Piscaria {s}", "Ostrearia {e}"};
-        p["cafe"] = {"Thermopolium {e}", "Taberna {g}"};
-        p["bar"] = {"Caupona {e}", "Taberna Vinaria {g}"};
-        p["cantina"] = {"Caupona {g}"};
-        p["nightclub"] = {"Lupanar {e}", "Taberna {e}"};
-        p["fastFood"] = {"Thermopolium {g}", "Popina {e}"};
-        p["bakery"] = {"Pistrinum {s}", "Pistrinum {e}"};
-        p["iceCream"] = {"Nivaria {e}"};
-        p["tortilleria"] = {"Pistrinum {g}"};
-        p["pharmacy"] = {"Medicamentaria {s}", "Taberna Medica {e}"};
-        p["grocery"] = {"Taberna {g}", "Macellum {e}"};
-        p["supermarket"] = {"Macellum {s}", "Horrea {e}"};
-        p["butcher"] = {"Laniena {s}", "Lanius {g}"};
-        p["carParts"] = {"Fabrica Rotarum {s}"};
-        p["tyres"] = {"Rotaria {g}"};
-        p["carRepair"] = {"Fabrica Vehiculorum {s}", "Officina {g}"};
-        p["carWash"] = {"Lavatrina {e}"};
-        p["hardware"] = {"Ferraria {s}", "Officina Fabri {e}"};
-        p["clothes"] = {"Vestiaria {g}", "Fullonica {e}"};
-        p["shoes"] = {"Sutrina {s}"};
-        p["electronics"] = {"Officina {e}"};
-        p["furniture"] = {"Lignaria {s}"};
-        p["stationery"] = {"Libraria {e}", "Chartaria {s}"};
-        p["hairdresser"] = {"Tonstrina {g}", "Tonstrina {e}"};
-        p["laundry"] = {"Fullonica {s}"};
-        p["bank"] = {"Argentaria {s}", "Mensa {e}"};
-        p["fuel"] = {"Statio {e}", "Mansio {s}"};
-        p["hotel"] = {"Hospitium {e}", "Mansio {s}"};
-        p["motel"] = {"Mansio {e}", "Stabulum {g}"};
-        p["mall"] = {"Porticus {e}", "Basilica {s}"};
-        p["market"] = {"Macellum {e}", "Forum {s}"};
-        p["liquor"] = {"Vinaria {s}", "Taberna Vinaria {e}"};
-        p["florist"] = {"Coronaria {g}"};
-        p["jewelry"] = {"Aurifex {s}", "Gemmaria {e}"};
-        p["optician"] = {"Ocularia {s}"};
-        p["clinic"] = {"Valetudinarium {e}", "Medicus {s}"};
-        p["dentist"] = {"Medicus Dentium {s}"};
-        p["vet"] = {"Mulomedicus {s}"};
-        p["gym"] = {"Palaestra {e}", "Gymnasium {s}"};
-        p["cinema"] = {"Odeum {e}"};
-        p["church"] = {"Aedes {a}", "Sacellum {a}"};
-        p["cathedral"] = {"Templum {a}"};
-        p["school"] = {"Ludus {p}", "Schola {s}"};
-        p["university"] = {"Athenaeum {s}", "Academia {e}"};
-        p["hospital"] = {"Valetudinarium {a}"};
-        p["police"] = {"Statio Vigilum {#}", "Excubitorium {#}"};
-        p["fireStation"] = {"Statio Vigilum {#}"};
-        p["townhall"] = {"Curia", "Curia {e}"};
-        p["government"] = {"Tabularium {s}", "Praetorium {#}"};
-        p["courthouse"] = {"Basilica Iudicaria {s}"};
-        p["military"] = {"Castra {s}", "Castellum {e}"};
-        p["postOffice"] = {"Cursus Publicus {#}"};
-        p["library"] = {"Bibliotheca {p}"};
-        p["museum"] = {"Museum {e}", "Pinacotheca {p}"};
-        p["theatre"] = {"Theatrum {s}", "Theatrum {e}"};
-        p["stadium"] = {"Amphitheatrum {s}", "Circus {e}"};
-        p["sports"] = {"Campus {s}", "Palaestra {e}"};
-        p["port"] = {"Portus {s}", "Navalia {e}"};
-        p["ferryTerminal"] = {"Statio Navium {e}"};
-        p["marina"] = {"Portus {e}"};
-        p["airport"] = {"Aeroportus {p}", "Campus Volatus {s}"};
-        p["airstrip"] = {"Campus Volatus {s}"};
-        p["busStation"] = {"Statio Raedarum {e}"};
-        p["cemetery"] = {"Necropolis {e}", "Sepulcretum {a}"};
-        p["park"] = {"Horti {s}", "Lucus {e}"};
-        p["office"] = {"Tabularium {s}", "Insula {s}"};
-        p["warehouse"] = {"Horrea {s}", "Apotheca {e}"};
-        p["factory"] = {"Officina {s}", "Fabrica {e}"};
-        p["packingPlant"] = {"Salsamentaria {e}", "Officina {s}"};
-        p["coldStorage"] = {"Cella Nivaria {e}"};
-        p["truckYard"] = {"Stabulum Plaustrorum {s}"};
-        p["farm"] = {"Villa Rustica {s}", "Fundus {e}"};
-        p["greenhouse"] = {"Hortus {e}"};
-        p["lighthouse"] = {"Pharus {e}"};
-        p["shop"] = {"Taberna {s}", "Officina {e}"};
-        p["building"] = {"Insula {e}", "Domus {s}"};
-        p["apartments"] = {"Insula {e}", "Insula {s}"};
-        p["mansion"] = {"Domus {s}", "Villa {s}"};
-        x.business = {"Taberna {s}", "Officina {e}", "Taberna {g}"};
-        auto& k = x.kinds;
-        k[Kind::Town] = {"Colonia {s}", "Forum {s}", "{n}", "Portus {e}", "Castra {s}"};
-        k[Kind::River] = {"Flumen {s}", "Flumen {e}"};
-        k[Kind::Stream] = {"Rivus {e}", "Rivus {s}"};
-        k[Kind::Lake] = {"Lacus {s}", "Lacus {e}"};
-        k[Kind::Reservoir] = {"Piscina {s}"};
-        k[Kind::Dam] = {"Moles {s}"};
-        k[Kind::Island] = {"Insula {e}", "Insula {s}"};
-        k[Kind::Beach] = {"Litus {e}", "Litus {s}"};
-        k[Kind::Bay] = {"Sinus {s}", "Sinus {e}"};
-        k[Kind::Mountain] = {"Mons {s}", "Mons {e}"};
-        k[Kind::Park] = {"Horti {s}", "Lucus {e}"};
-        k[Kind::Landmark] = {"Arcus {s}", "Columna {e}"};
-        return x;
-    }();
-    return v;
-}
-
-const Vocab& scifiVocab()
-{
-    static const Vocab v = [] {
-        Vocab x;
-        x.given = {"Zed", "Kira", "Vex", "Nova", "Rho", "Juno", "Tycho", "Lyra", "Orin", "Sable", "Kade", "Echo", "Pax", "Ryn",
-                   "Quill", "Vega", "Dax", "Mira", "Cobalt", "Jett"};
-        x.surnames = {"Okonkwo-Hale", "Vashti", "Kepler", "Ansari", "Takeda", "Novak", "Halloran", "Ishikawa", "Mbeki", "Sorensen",
-                      "Castellan", "Varga", "Oyelaran", "Petrov", "Lindgren", "Achebe", "Moreau", "Tanaka", "Reyes", "Volkov"};
-        x.evocative = {"Helix", "Quasar", "Spindrift", "Vector", "Nebula", "Ion", "Apogee", "Aurora", "Photon", "Meridian", "Orbit",
-                       "Pulsar", "Halcyon", "Axiom", "Cinder", "Arc", "Lumen", "Flux", "Bulwark", "Solstice", "Parallax", "Nadir"};
-        x.nature = {"Hydroponics", "Biodome", "Arboretum", "Greenring", "Lichen Deck", "Algae Bay", "Fern Vault", "Moss Terrace",
-                    "Seedbank", "Rain Hall"};
-        x.saints = {"Sol", "Terra", "Luna", "Ceres", "Titan", "Europa", "Io", "Vesta", "Callisto", "Triton"};
-        x.persons = {"Ada Okonkwo-Hale", "Teo Vashti", "Mira Kepler", "Idris Ansari", "Ren Takeda", "Lena Novak", "Cal Halloran",
-                     "Yuki Ishikawa", "Sipho Mbeki", "Ingrid Sorensen"};
-        auto& p = x.programs;
-        p["taqueria"] = {"Taco Unit {#}", "{g}'s Wraps"};
-        p["restaurant"] = {"Mess Hall {#}", "{e} Galley", "{g}'s Canteen"};
-        p["seafood"] = {"{e} Aquafarm Bar", "Kelp & Krill {#}"};
-        p["cafe"] = {"{e} Caf", "Stim Bar {#}", "{g}'s Brew"};
-        p["bar"] = {"The {e} Lounge", "Bar {#}", "{g}'s Den"};
-        p["cantina"] = {"{e} Cantina", "{g}'s Hole"};
-        p["nightclub"] = {"Club {e}", "{e} Pulse"};
-        p["fastFood"] = {"Ration Stall {#}", "{g}'s Noodles", "{e} Bites"};
-        p["bakery"] = {"Protein Bakery {#}", "{e} Ovens"};
-        p["iceCream"] = {"Cryo Treats {#}", "{e} Freeze"};
-        p["tortilleria"] = {"Flatbread Press {#}"};
-        p["pharmacy"] = {"Medbay Dispensary {#}", "{e} Pharma"};
-        p["grocery"] = {"Supply Depot {#}", "{g}'s Provisions"};
-        p["supermarket"] = {"{e} Commissary", "Commissary {#}"};
-        p["butcher"] = {"Vat Meats {#}", "{s} Proteins"};
-        p["carParts"] = {"{s} Drive Parts", "Spares Bay {#}"};
-        p["tyres"] = {"Track & Wheel {#}"};
-        p["carRepair"] = {"{s} Rover Works", "Hangar {#} Repairs", "{g}'s Mech Shop"};
-        p["carWash"] = {"Decon Bay {#}"};
-        p["hardware"] = {"{s} Fabrication", "Parts Locker {#}"};
-        p["clothes"] = {"{e} Outfitters", "Suit Shop {#}"};
-        p["shoes"] = {"Mag Boots {#}"};
-        p["electronics"] = {"{e} Circuits", "{s} Systems", "Comms Shop {#}"};
-        p["furniture"] = {"{e} Habitat Goods"};
-        p["stationery"] = {"Datapad Supply {#}"};
-        p["hairdresser"] = {"{g}'s Cuts", "{e} Grooming"};
-        p["laundry"] = {"Sonic Wash {#}"};
-        p["bank"] = {"{e} Credit Union", "{s} Exchange", "Credit Hub {#}"};
-        p["fuel"] = {"Fuel Cell Station {#}", "{e} Charge"};
-        p["hotel"] = {"{e} Hostel", "Capsule Hotel {#}", "The {e} Suites"};
-        p["motel"] = {"Transit Pods {#}"};
-        p["mall"] = {"{e} Concourse", "Promenade {#}"};
-        p["market"] = {"{e} Bazaar", "Trade Deck {#}"};
-        p["liquor"] = {"Synth Spirits {#}", "{g}'s Still"};
-        p["florist"] = {"{e} Botanics"};
-        p["jewelry"] = {"{e} Crystal Works"};
-        p["optician"] = {"Optics Lab {#}"};
-        p["clinic"] = {"Medbay {#}", "{s} Clinic"};
-        p["dentist"] = {"Dental Bay {#}"};
-        p["vet"] = {"Xenovet {#}"};
-        p["gym"] = {"Gravity Gym {#}", "{e} Conditioning"};
-        p["cinema"] = {"{e} Holotheatre"};
-        p["church"] = {"Chapel of {a}", "Shrine of {a}"};
-        p["cathedral"] = {"Sanctum of {a}"};
-        p["school"] = {"Learning Center {#}", "{p} Academy"};
-        p["university"] = {"{s} Institute", "{e} Polytechnic"};
-        p["hospital"] = {"Med Center {#}", "{s} Medical"};
-        p["police"] = {"Security Post {#}", "Enforcement Station {#}"};
-        p["fireStation"] = {"Fire Control {#}"};
-        p["townhall"] = {"Administration", "{e} Council Hall"};
-        p["government"] = {"Admin Block {#}", "{s} Directorate"};
-        p["courthouse"] = {"Tribunal {#}"};
-        p["military"] = {"Garrison {s}", "Outpost {#}"};
-        p["postOffice"] = {"Mail Node {#}"};
-        p["library"] = {"{p} Archive"};
-        p["museum"] = {"{e} Heritage Vault", "{p} Museum"};
-        p["theatre"] = {"{e} Stage"};
-        p["stadium"] = {"{e} Arena", "Arena {#}"};
-        p["sports"] = {"Rec Deck {#}"};
-        p["port"] = {"Dock {#}", "{e} Docks"};
-        p["ferryTerminal"] = {"Shuttle Terminal {#}"};
-        p["marina"] = {"Skiff Berths {#}"};
-        p["airport"] = {"{p} Spaceport", "Launch Field {#}"};
-        p["airstrip"] = {"Landing Pad {#}"};
-        p["busStation"] = {"Transit Hub {#}"};
-        p["cemetery"] = {"{e} Memorial Columbarium", "Rest Ring {#}"};
-        p["park"] = {"{n}", "{e} Commons"};
-        p["office"] = {"{s} Offices", "Office Block {#}"};
-        p["warehouse"] = {"Storage Bay {#}", "{s} Logistics"};
-        p["factory"] = {"{s} Fabricators", "Fab Plant {#}"};
-        p["packingPlant"] = {"Packing Line {#}"};
-        p["coldStorage"] = {"Cryo Store {#}"};
-        p["truckYard"] = {"Hauler Yard {#}", "{s} Freight"};
-        p["farm"] = {"{n} {#}", "Agri Ring {#}"};
-        p["greenhouse"] = {"{n} Grow Bay"};
-        p["lighthouse"] = {"Beacon {#}"};
-        p["shop"] = {"{s} Supply", "{e} Goods"};
-        p["building"] = {"Block {#}", "{e} Tower"};
-        p["apartments"] = {"Hab Block {#}", "{e} Residences"};
-        p["mansion"] = {"{s} Estate", "{e} Penthouse"};
-        x.business = {"{s} Supply", "{e} Goods", "{g}'s"};
-        auto& k = x.kinds;
-        k[Kind::Town] = {"{a} Station", "New {a}", "{e} Colony", "Outpost {e}", "{a} Prime"};
-        k[Kind::River] = {"{e} Channel", "Conduit {#}"};
-        k[Kind::Stream] = {"Runoff {#}", "{e} Rill"};
-        k[Kind::Lake] = {"{e} Basin", "Reservoir {#}"};
-        k[Kind::Reservoir] = {"Water Store {#}"};
-        k[Kind::Dam] = {"{e} Barrier"};
-        k[Kind::Island] = {"{e} Atoll", "Platform {#}"};
-        k[Kind::Beach] = {"{e} Shore"};
-        k[Kind::Bay] = {"{e} Bay"};
-        k[Kind::Mountain] = {"{e} Spire", "Peak {#}"};
-        k[Kind::Park] = {"{n}", "{e} Commons"};
-        k[Kind::Landmark] = {"{e} Monolith", "{e} Obelisk"};
-        return x;
-    }();
-    return v;
-}
-
+const Vocab& frenchVocab()
+
+{
+
+    static const Vocab v = [] {
+
+        Vocab x;
+
+        x.given = {"Jojo", "Mimi", "Dédé", "Lulu", "Fanfan", "Riri", "Gégé", "Titi", "Nono", "Loulou", "Pépé", "Mémé", "Bébert",
+
+                   "Momo", "Coco", "Zaza", "Fifi", "Toto", "Néné", "Bibi", "Marcel", "Odette", "Gaston", "Simone", "Lucien", "Yvette"};
+
+        x.surnames = {"Dubreuil", "Lemaire", "Vasseur", "Delacroix", "Marchand", "Fontaine", "Rochefort", "Bonnard", "Duclos",
+
+                      "Lefèvre", "Chaumont", "Garnier", "Morel", "Brissac", "Lambert", "Roussel", "Cordier", "Daumier", "Vernet",
+
+                      "Perrin", "Aubert", "Clément", "Mercier", "Thibault", "Legrand", "Masson", "Boucher", "Charpentier"};
+
+        x.evocative = {"Le Bon Accueil", "La Belle Époque", "La Petite Barque", "L'Étoile d'Or", "Le Coq Hardi", "La Mouette",
+
+                       "Le Vieux Port", "La Lanterne", "Le Lion d'Argent", "La Rose des Vents", "Le Phare", "La Sirène", "Le Cheval Pie",
+
+                       "La Bonne Mère", "Le Moulin Bleu", "Les Trois Pigeons", "Le Grand Cerf", "La Fleur de Lys", "Le Soleil Levant",
+
+                       "La Belle Meunière", "L'Ancre", "Le Chat Gris", "La Licorne", "Le Pélican", "La Gaieté", "Le Rivage"};
+
+        x.nature = {"Les Pins", "Les Tilleuls", "Bois-Joli", "Les Saules", "Val Fleuri", "Les Chênes", "La Garenne", "Les Mimosas",
+
+                    "Beauséjour", "Les Peupliers", "Mont-Fleuri", "La Pinède", "Les Glycines", "Bellevue", "Les Charmes", "Clairefontaine"};
+
+        x.saints = {"Saint-Aubin", "Sainte-Anne", "Saint-Éloi", "Sainte-Claire", "Saint-Florent", "Sainte-Marthe", "Saint-Gildas",
+
+                    "Sainte-Odile", "Saint-Hilaire", "Sainte-Agathe", "Saint-Rémi", "Sainte-Cécile", "Saint-Yves", "Saint-Blaise"};
+
+        x.persons = {"Émile Dubreuil", "Jeanne Lemaire", "Aristide Vasseur", "Hortense Delacroix", "Achille Marchand",
+
+                     "Berthe Fontaine", "Honoré Rochefort", "Léonie Bonnard", "Firmin Duclos", "Adèle Lefèvre", "Anatole Chaumont",
+
+                     "Pauline Garnier"};
+
+        auto& p = x.programs;
+
+        p["taqueria"] = {"Tacos {g}", "Comptoir à Tacos {e}"};
+
+        p["restaurant"] = {"Restaurant {e}", "Chez {g}", "Bistrot {s}", "Brasserie {e}", "Auberge {e}"};
+
+        p["seafood"] = {"Poissonnerie {s}", "La Marée de {g}", "Huîtres {e}"};
+
+        p["cafe"] = {"Café {e}", "Café des {s}", "Salon de Thé {g}"};
+
+        p["bar"] = {"Bar {e}", "Le Bar de {g}", "Estaminet {e}"};
+
+        p["cantina"] = {"Taverne {e}", "Buvette {g}"};
+
+        p["nightclub"] = {"Club {e}", "Cabaret {e}"};
+
+        p["fastFood"] = {"Crêperie {g}", "Sandwicherie {e}", "Friterie {g}"};
+
+        p["bakery"] = {"Boulangerie {s}", "Boulangerie {e}", "Pâtisserie {g}"};
+
+        p["iceCream"] = {"Glacier {e}", "Glaces {g}"};
+
+        p["tortilleria"] = {"Tortillas {e}"};
+
+        p["pharmacy"] = {"Pharmacie {a}", "Pharmacie {s}", "Pharmacie du {e}"};
+
+        p["grocery"] = {"Épicerie {g}", "Épicerie {e}", "Alimentation {s}"};
+
+        p["supermarket"] = {"Marché {s}", "Supérette {e}"};
+
+        p["butcher"] = {"Boucherie {s}", "Charcuterie {g}"};
+
+        p["carParts"] = {"Pièces Auto {s}", "Accessoires {e}"};
+
+        p["tyres"] = {"Pneus {s}", "Pneumatiques {g}"};
+
+        p["carRepair"] = {"Garage {s}", "Garage {e}", "Carrosserie {g}"};
+
+        p["carWash"] = {"Lavage {e}"};
+
+        p["hardware"] = {"Quincaillerie {s}", "Droguerie {e}"};
+
+        p["clothes"] = {"Boutique {g}", "Mode {e}", "Maison {s}"};
+
+        p["shoes"] = {"Chaussures {s}"};
+
+        p["electronics"] = {"Radio {s}", "Électronique {e}"};
+
+        p["furniture"] = {"Meubles {s}", "Ébénisterie {e}"};
+
+        p["stationery"] = {"Papeterie {e}", "Librairie {s}"};
+
+        p["hairdresser"] = {"Salon {g}", "Coiffure {e}", "Barbier {g}"};
+
+        p["laundry"] = {"Laverie {e}", "Blanchisserie {s}"};
+
+        p["bank"] = {"Banque {s}", "Crédit {e}", "Caisse {s}"};
+
+        p["fuel"] = {"Station {e}", "Relais {s}"};
+
+        p["hotel"] = {"Hôtel {e}", "Hôtel {s}", "Grand Hôtel du {e}"};
+
+        p["motel"] = {"Relais {e}", "Motel {e}"};
+
+        p["mall"] = {"Galerie {e}", "Passage {s}"};
+
+        p["market"] = {"Marché {e}", "Halles {s}"};
+
+        p["liquor"] = {"Cave {s}", "Vins {g}"};
+
+        p["florist"] = {"Fleurs {g}", "Fleuriste {e}"};
+
+        p["jewelry"] = {"Bijouterie {s}", "Joaillerie {e}"};
+
+        p["optician"] = {"Optique {s}"};
+
+        p["clinic"] = {"Clinique {a}", "Cabinet Médical {s}"};
+
+        p["dentist"] = {"Cabinet Dentaire {s}"};
+
+        p["vet"] = {"Clinique Vétérinaire {e}"};
+
+        p["gym"] = {"Gymnase {e}", "Salle {s}"};
+
+        p["cinema"] = {"Cinéma {e}", "Ciné {s}"};
+
+        p["church"] = {"Église {a}", "Chapelle {a}"};
+
+        p["cathedral"] = {"Cathédrale {a}"};
+
+        p["school"] = {"École {p}", "Collège {p}", "Lycée {p}"};
+
+        p["university"] = {"Université {s}", "Faculté {e}"};
+
+        p["hospital"] = {"Hôpital {a}", "Centre Hospitalier {s}"};
+
+        p["police"] = {"Commissariat {#}", "Gendarmerie {s}"};
+
+        p["fireStation"] = {"Caserne des Pompiers {#}"};
+
+        p["townhall"] = {"Hôtel de Ville", "Mairie {e}"};
+
+        p["government"] = {"Préfecture {s}", "Bureau Municipal {#}"};
+
+        p["courthouse"] = {"Palais de Justice {s}"};
+
+        p["military"] = {"Caserne {s}", "Fort {s}"};
+
+        p["postOffice"] = {"Bureau de Poste {#}"};
+
+        p["library"] = {"Bibliothèque {p}"};
+
+        p["museum"] = {"Musée {p}", "Musée {e}"};
+
+        p["theatre"] = {"Théâtre {e}", "Théâtre {s}"};
+
+        p["stadium"] = {"Stade {p}", "Stade {e}"};
+
+        p["sports"] = {"Terrain {s}", "Complexe Sportif {e}"};
+
+        p["port"] = {"Port {s}", "Quais {e}"};
+
+        p["ferryTerminal"] = {"Gare Maritime {e}"};
+
+        p["marina"] = {"Port de Plaisance {e}"};
+
+        p["airport"] = {"Aéroport {p}", "Aérodrome {s}"};
+
+        p["airstrip"] = {"Piste {s}"};
+
+        p["busStation"] = {"Gare Routière {e}"};
+
+        p["cemetery"] = {"Cimetière {a}", "Cimetière {e}"};
+
+        p["park"] = {"Jardin {e}", "Parc {s}"};
+
+        p["office"] = {"Bureaux {s}", "Immeuble {s}"};
+
+        p["warehouse"] = {"Entrepôts {s}", "Dépôt {e}"};
+
+        p["factory"] = {"Usine {s}", "Manufacture {e}"};
+
+        p["packingPlant"] = {"Conserverie {e}", "Coopérative {s}"};
+
+        p["coldStorage"] = {"Entrepôt Frigorifique {e}"};
+
+        p["truckYard"] = {"Transports {s}", "Routiers {e}"};
+
+        p["farm"] = {"Ferme {e}", "Domaine {s}", "Mas {s}"};
+
+        p["greenhouse"] = {"Serres {e}", "Horticulture {s}"};
+
+        p["lighthouse"] = {"Phare {e}"};
+
+        p["shop"] = {"Maison {s}", "Comptoir {e}"};
+
+        p["building"] = {"Immeuble {e}", "Résidence {s}"};
+
+        p["apartments"] = {"Résidence {e}", "Les Jardins de {n}"};
+
+        p["mansion"] = {"Hôtel Particulier {s}", "Château {s}"};
+
+        x.business = {"Maison {s}", "Comptoir {e}", "Chez {g}"};
+
+        auto& k = x.kinds;
+
+        k[Kind::Town] = {"{a}", "{a}-sur-Mer", "Villeneuve-{s}", "{n}", "Port-{s}"};
+
+        k[Kind::River] = {"La {s}", "Rivière {e}"};
+
+        k[Kind::Stream] = {"Ruisseau {e}", "Ru de {n}"};
+
+        k[Kind::Lake] = {"Lac {s}", "Étang {e}"};
+
+        k[Kind::Reservoir] = {"Lac de Retenue {s}"};
+
+        k[Kind::Dam] = {"Barrage {s}"};
+
+        k[Kind::Island] = {"Île {e}", "Île {s}"};
+
+        k[Kind::Beach] = {"Plage {e}", "Plage des {n}"};
+
+        k[Kind::Bay] = {"Baie {s}", "Anse {e}"};
+
+        k[Kind::Mountain] = {"Mont {s}", "Pic {e}"};
+
+        k[Kind::Park] = {"Jardin {e}", "Parc {s}"};
+
+        k[Kind::Landmark] = {"Monument {e}", "Colonne {s}"};
+
+        return x;
+
+    }();
+
+    return v;
+
+}
+
+
+
+const Vocab& latinVocab()
+
+{
+
+    static const Vocab v = [] {
+
+        Vocab x;
+
+        x.given = {"Marcus", "Lucius", "Gaius", "Quintus", "Titus", "Aulus", "Decimus", "Sextus", "Publius", "Gnaeus", "Servius",
+
+                   "Tiberius", "Julia", "Livia", "Octavia", "Cornelia", "Claudia", "Flavia", "Aurelia", "Valeria", "Tullia", "Fabia"};
+
+        x.surnames = {"Varro", "Cato", "Rufus", "Crispus", "Naso", "Strabo", "Lentulus", "Calvus", "Balbus", "Celer", "Longinus",
+
+                      "Paetus", "Severus", "Felix", "Pulcher", "Bassus", "Macer", "Niger", "Priscus", "Vetus", "Sabinus", "Galba"};
+
+        x.evocative = {"Aquila", "Lupa", "Delphinus", "Columba", "Fortuna", "Concordia", "Victoria", "Pax", "Spes", "Aurora",
+
+                       "Sol Invictus", "Luna", "Stella Maris", "Ancora", "Leo Aureus", "Ceres", "Neptunus", "Minerva", "Bacchus",
+
+                       "Mercurius", "Vulcanus", "Faunus", "Pomona", "Flora"};
+
+        x.nature = {"Olivetum", "Pinetum", "Laurentum", "Fons Clarus", "Saxa Rubra", "Vallis Amoena", "Silva Nigra", "Collis Viridis",
+
+                    "Ripa Alta", "Campus Florum", "Lacus Placidus", "Mons Albus", "Quercetum", "Vinea Nova"};
+
+        x.saints = {"Iovis", "Iunonis", "Martis", "Apollinis", "Dianae", "Vestae", "Saturni", "Herculis", "Castoris", "Ianus",
+
+                    "Veneris", "Fortunae", "Mercurii", "Cereris"};
+
+        x.persons = {"Marcus Varro", "Lucius Crispus", "Gaius Severus", "Quintus Balbus", "Titus Longinus", "Aulus Priscus",
+
+                     "Publius Sabinus", "Decimus Celer", "Julia Felix", "Cornelia Pulchra", "Livia Macrina", "Claudia Severa"};
+
+        auto& p = x.programs;
+
+        p["taqueria"] = {"Popina {g}", "Thermopolium {e}"};
+
+        p["restaurant"] = {"Popina {e}", "Caupona {g}", "Taberna {s}"};
+
+        p["seafood"] = {"Piscaria {s}", "Ostrearia {e}"};
+
+        p["cafe"] = {"Thermopolium {e}", "Taberna {g}"};
+
+        p["bar"] = {"Caupona {e}", "Taberna Vinaria {g}"};
+
+        p["cantina"] = {"Caupona {g}"};
+
+        p["nightclub"] = {"Lupanar {e}", "Taberna {e}"};
+
+        p["fastFood"] = {"Thermopolium {g}", "Popina {e}"};
+
+        p["bakery"] = {"Pistrinum {s}", "Pistrinum {e}"};
+
+        p["iceCream"] = {"Nivaria {e}"};
+
+        p["tortilleria"] = {"Pistrinum {g}"};
+
+        p["pharmacy"] = {"Medicamentaria {s}", "Taberna Medica {e}"};
+
+        p["grocery"] = {"Taberna {g}", "Macellum {e}"};
+
+        p["supermarket"] = {"Macellum {s}", "Horrea {e}"};
+
+        p["butcher"] = {"Laniena {s}", "Lanius {g}"};
+
+        p["carParts"] = {"Fabrica Rotarum {s}"};
+
+        p["tyres"] = {"Rotaria {g}"};
+
+        p["carRepair"] = {"Fabrica Vehiculorum {s}", "Officina {g}"};
+
+        p["carWash"] = {"Lavatrina {e}"};
+
+        p["hardware"] = {"Ferraria {s}", "Officina Fabri {e}"};
+
+        p["clothes"] = {"Vestiaria {g}", "Fullonica {e}"};
+
+        p["shoes"] = {"Sutrina {s}"};
+
+        p["electronics"] = {"Officina {e}"};
+
+        p["furniture"] = {"Lignaria {s}"};
+
+        p["stationery"] = {"Libraria {e}", "Chartaria {s}"};
+
+        p["hairdresser"] = {"Tonstrina {g}", "Tonstrina {e}"};
+
+        p["laundry"] = {"Fullonica {s}"};
+
+        p["bank"] = {"Argentaria {s}", "Mensa {e}"};
+
+        p["fuel"] = {"Statio {e}", "Mansio {s}"};
+
+        p["hotel"] = {"Hospitium {e}", "Mansio {s}"};
+
+        p["motel"] = {"Mansio {e}", "Stabulum {g}"};
+
+        p["mall"] = {"Porticus {e}", "Basilica {s}"};
+
+        p["market"] = {"Macellum {e}", "Forum {s}"};
+
+        p["liquor"] = {"Vinaria {s}", "Taberna Vinaria {e}"};
+
+        p["florist"] = {"Coronaria {g}"};
+
+        p["jewelry"] = {"Aurifex {s}", "Gemmaria {e}"};
+
+        p["optician"] = {"Ocularia {s}"};
+
+        p["clinic"] = {"Valetudinarium {e}", "Medicus {s}"};
+
+        p["dentist"] = {"Medicus Dentium {s}"};
+
+        p["vet"] = {"Mulomedicus {s}"};
+
+        p["gym"] = {"Palaestra {e}", "Gymnasium {s}"};
+
+        p["cinema"] = {"Odeum {e}"};
+
+        p["church"] = {"Aedes {a}", "Sacellum {a}"};
+
+        p["cathedral"] = {"Templum {a}"};
+
+        p["school"] = {"Ludus {p}", "Schola {s}"};
+
+        p["university"] = {"Athenaeum {s}", "Academia {e}"};
+
+        p["hospital"] = {"Valetudinarium {a}"};
+
+        p["police"] = {"Statio Vigilum {#}", "Excubitorium {#}"};
+
+        p["fireStation"] = {"Statio Vigilum {#}"};
+
+        p["townhall"] = {"Curia", "Curia {e}"};
+
+        p["government"] = {"Tabularium {s}", "Praetorium {#}"};
+
+        p["courthouse"] = {"Basilica Iudicaria {s}"};
+
+        p["military"] = {"Castra {s}", "Castellum {e}"};
+
+        p["postOffice"] = {"Cursus Publicus {#}"};
+
+        p["library"] = {"Bibliotheca {p}"};
+
+        p["museum"] = {"Museum {e}", "Pinacotheca {p}"};
+
+        p["theatre"] = {"Theatrum {s}", "Theatrum {e}"};
+
+        p["stadium"] = {"Amphitheatrum {s}", "Circus {e}"};
+
+        p["sports"] = {"Campus {s}", "Palaestra {e}"};
+
+        p["port"] = {"Portus {s}", "Navalia {e}"};
+
+        p["ferryTerminal"] = {"Statio Navium {e}"};
+
+        p["marina"] = {"Portus {e}"};
+
+        p["airport"] = {"Aeroportus {p}", "Campus Volatus {s}"};
+
+        p["airstrip"] = {"Campus Volatus {s}"};
+
+        p["busStation"] = {"Statio Raedarum {e}"};
+
+        p["cemetery"] = {"Necropolis {e}", "Sepulcretum {a}"};
+
+        p["park"] = {"Horti {s}", "Lucus {e}"};
+
+        p["office"] = {"Tabularium {s}", "Insula {s}"};
+
+        p["warehouse"] = {"Horrea {s}", "Apotheca {e}"};
+
+        p["factory"] = {"Officina {s}", "Fabrica {e}"};
+
+        p["packingPlant"] = {"Salsamentaria {e}", "Officina {s}"};
+
+        p["coldStorage"] = {"Cella Nivaria {e}"};
+
+        p["truckYard"] = {"Stabulum Plaustrorum {s}"};
+
+        p["farm"] = {"Villa Rustica {s}", "Fundus {e}"};
+
+        p["greenhouse"] = {"Hortus {e}"};
+
+        p["lighthouse"] = {"Pharus {e}"};
+
+        p["shop"] = {"Taberna {s}", "Officina {e}"};
+
+        p["building"] = {"Insula {e}", "Domus {s}"};
+
+        p["apartments"] = {"Insula {e}", "Insula {s}"};
+
+        p["mansion"] = {"Domus {s}", "Villa {s}"};
+
+        x.business = {"Taberna {s}", "Officina {e}", "Taberna {g}"};
+
+        auto& k = x.kinds;
+
+        k[Kind::Town] = {"Colonia {s}", "Forum {s}", "{n}", "Portus {e}", "Castra {s}"};
+
+        k[Kind::River] = {"Flumen {s}", "Flumen {e}"};
+
+        k[Kind::Stream] = {"Rivus {e}", "Rivus {s}"};
+
+        k[Kind::Lake] = {"Lacus {s}", "Lacus {e}"};
+
+        k[Kind::Reservoir] = {"Piscina {s}"};
+
+        k[Kind::Dam] = {"Moles {s}"};
+
+        k[Kind::Island] = {"Insula {e}", "Insula {s}"};
+
+        k[Kind::Beach] = {"Litus {e}", "Litus {s}"};
+
+        k[Kind::Bay] = {"Sinus {s}", "Sinus {e}"};
+
+        k[Kind::Mountain] = {"Mons {s}", "Mons {e}"};
+
+        k[Kind::Park] = {"Horti {s}", "Lucus {e}"};
+
+        k[Kind::Landmark] = {"Arcus {s}", "Columna {e}"};
+
+        return x;
+
+    }();
+
+    return v;
+
+}
+
+
+
+const Vocab& scifiVocab()
+
+{
+
+    static const Vocab v = [] {
+
+        Vocab x;
+
+        x.given = {"Zed", "Kira", "Vex", "Nova", "Rho", "Juno", "Tycho", "Lyra", "Orin", "Sable", "Kade", "Echo", "Pax", "Ryn",
+
+                   "Quill", "Vega", "Dax", "Mira", "Cobalt", "Jett"};
+
+        x.surnames = {"Okonkwo-Hale", "Vashti", "Kepler", "Ansari", "Takeda", "Novak", "Halloran", "Ishikawa", "Mbeki", "Sorensen",
+
+                      "Castellan", "Varga", "Oyelaran", "Petrov", "Lindgren", "Achebe", "Moreau", "Tanaka", "Reyes", "Volkov"};
+
+        x.evocative = {"Helix", "Quasar", "Spindrift", "Vector", "Nebula", "Ion", "Apogee", "Aurora", "Photon", "Meridian", "Orbit",
+
+                       "Pulsar", "Halcyon", "Axiom", "Cinder", "Arc", "Lumen", "Flux", "Bulwark", "Solstice", "Parallax", "Nadir"};
+
+        x.nature = {"Hydroponics", "Biodome", "Arboretum", "Greenring", "Lichen Deck", "Algae Bay", "Fern Vault", "Moss Terrace",
+
+                    "Seedbank", "Rain Hall"};
+
+        x.saints = {"Sol", "Terra", "Luna", "Ceres", "Titan", "Europa", "Io", "Vesta", "Callisto", "Triton"};
+
+        x.persons = {"Ada Okonkwo-Hale", "Teo Vashti", "Mira Kepler", "Idris Ansari", "Ren Takeda", "Lena Novak", "Cal Halloran",
+
+                     "Yuki Ishikawa", "Sipho Mbeki", "Ingrid Sorensen"};
+
+        auto& p = x.programs;
+
+        p["taqueria"] = {"Taco Unit {#}", "{g}'s Wraps"};
+
+        p["restaurant"] = {"Mess Hall {#}", "{e} Galley", "{g}'s Canteen"};
+
+        p["seafood"] = {"{e} Aquafarm Bar", "Kelp & Krill {#}"};
+
+        p["cafe"] = {"{e} Caf", "Stim Bar {#}", "{g}'s Brew"};
+
+        p["bar"] = {"The {e} Lounge", "Bar {#}", "{g}'s Den"};
+
+        p["cantina"] = {"{e} Cantina", "{g}'s Hole"};
+
+        p["nightclub"] = {"Club {e}", "{e} Pulse"};
+
+        p["fastFood"] = {"Ration Stall {#}", "{g}'s Noodles", "{e} Bites"};
+
+        p["bakery"] = {"Protein Bakery {#}", "{e} Ovens"};
+
+        p["iceCream"] = {"Cryo Treats {#}", "{e} Freeze"};
+
+        p["tortilleria"] = {"Flatbread Press {#}"};
+
+        p["pharmacy"] = {"Medbay Dispensary {#}", "{e} Pharma"};
+
+        p["grocery"] = {"Supply Depot {#}", "{g}'s Provisions"};
+
+        p["supermarket"] = {"{e} Commissary", "Commissary {#}"};
+
+        p["butcher"] = {"Vat Meats {#}", "{s} Proteins"};
+
+        p["carParts"] = {"{s} Drive Parts", "Spares Bay {#}"};
+
+        p["tyres"] = {"Track & Wheel {#}"};
+
+        p["carRepair"] = {"{s} Rover Works", "Hangar {#} Repairs", "{g}'s Mech Shop"};
+
+        p["carWash"] = {"Decon Bay {#}"};
+
+        p["hardware"] = {"{s} Fabrication", "Parts Locker {#}"};
+
+        p["clothes"] = {"{e} Outfitters", "Suit Shop {#}"};
+
+        p["shoes"] = {"Mag Boots {#}"};
+
+        p["electronics"] = {"{e} Circuits", "{s} Systems", "Comms Shop {#}"};
+
+        p["furniture"] = {"{e} Habitat Goods"};
+
+        p["stationery"] = {"Datapad Supply {#}"};
+
+        p["hairdresser"] = {"{g}'s Cuts", "{e} Grooming"};
+
+        p["laundry"] = {"Sonic Wash {#}"};
+
+        p["bank"] = {"{e} Credit Union", "{s} Exchange", "Credit Hub {#}"};
+
+        p["fuel"] = {"Fuel Cell Station {#}", "{e} Charge"};
+
+        p["hotel"] = {"{e} Hostel", "Capsule Hotel {#}", "The {e} Suites"};
+
+        p["motel"] = {"Transit Pods {#}"};
+
+        p["mall"] = {"{e} Concourse", "Promenade {#}"};
+
+        p["market"] = {"{e} Bazaar", "Trade Deck {#}"};
+
+        p["liquor"] = {"Synth Spirits {#}", "{g}'s Still"};
+
+        p["florist"] = {"{e} Botanics"};
+
+        p["jewelry"] = {"{e} Crystal Works"};
+
+        p["optician"] = {"Optics Lab {#}"};
+
+        p["clinic"] = {"Medbay {#}", "{s} Clinic"};
+
+        p["dentist"] = {"Dental Bay {#}"};
+
+        p["vet"] = {"Xenovet {#}"};
+
+        p["gym"] = {"Gravity Gym {#}", "{e} Conditioning"};
+
+        p["cinema"] = {"{e} Holotheatre"};
+
+        p["church"] = {"Chapel of {a}", "Shrine of {a}"};
+
+        p["cathedral"] = {"Sanctum of {a}"};
+
+        p["school"] = {"Learning Center {#}", "{p} Academy"};
+
+        p["university"] = {"{s} Institute", "{e} Polytechnic"};
+
+        p["hospital"] = {"Med Center {#}", "{s} Medical"};
+
+        p["police"] = {"Security Post {#}", "Enforcement Station {#}"};
+
+        p["fireStation"] = {"Fire Control {#}"};
+
+        p["townhall"] = {"Administration", "{e} Council Hall"};
+
+        p["government"] = {"Admin Block {#}", "{s} Directorate"};
+
+        p["courthouse"] = {"Tribunal {#}"};
+
+        p["military"] = {"Garrison {s}", "Outpost {#}"};
+
+        p["postOffice"] = {"Mail Node {#}"};
+
+        p["library"] = {"{p} Archive"};
+
+        p["museum"] = {"{e} Heritage Vault", "{p} Museum"};
+
+        p["theatre"] = {"{e} Stage"};
+
+        p["stadium"] = {"{e} Arena", "Arena {#}"};
+
+        p["sports"] = {"Rec Deck {#}"};
+
+        p["port"] = {"Dock {#}", "{e} Docks"};
+
+        p["ferryTerminal"] = {"Shuttle Terminal {#}"};
+
+        p["marina"] = {"Skiff Berths {#}"};
+
+        p["airport"] = {"{p} Spaceport", "Launch Field {#}"};
+
+        p["airstrip"] = {"Landing Pad {#}"};
+
+        p["busStation"] = {"Transit Hub {#}"};
+
+        p["cemetery"] = {"{e} Memorial Columbarium", "Rest Ring {#}"};
+
+        p["park"] = {"{n}", "{e} Commons"};
+
+        p["office"] = {"{s} Offices", "Office Block {#}"};
+
+        p["warehouse"] = {"Storage Bay {#}", "{s} Logistics"};
+
+        p["factory"] = {"{s} Fabricators", "Fab Plant {#}"};
+
+        p["packingPlant"] = {"Packing Line {#}"};
+
+        p["coldStorage"] = {"Cryo Store {#}"};
+
+        p["truckYard"] = {"Hauler Yard {#}", "{s} Freight"};
+
+        p["farm"] = {"{n} {#}", "Agri Ring {#}"};
+
+        p["greenhouse"] = {"{n} Grow Bay"};
+
+        p["lighthouse"] = {"Beacon {#}"};
+
+        p["shop"] = {"{s} Supply", "{e} Goods"};
+
+        p["building"] = {"Block {#}", "{e} Tower"};
+
+        p["apartments"] = {"Hab Block {#}", "{e} Residences"};
+
+        p["mansion"] = {"{s} Estate", "{e} Penthouse"};
+
+        x.business = {"{s} Supply", "{e} Goods", "{g}'s"};
+
+        auto& k = x.kinds;
+
+        k[Kind::Town] = {"{a} Station", "New {a}", "{e} Colony", "Outpost {e}", "{a} Prime"};
+
+        k[Kind::River] = {"{e} Channel", "Conduit {#}"};
+
+        k[Kind::Stream] = {"Runoff {#}", "{e} Rill"};
+
+        k[Kind::Lake] = {"{e} Basin", "Reservoir {#}"};
+
+        k[Kind::Reservoir] = {"Water Store {#}"};
+
+        k[Kind::Dam] = {"{e} Barrier"};
+
+        k[Kind::Island] = {"{e} Atoll", "Platform {#}"};
+
+        k[Kind::Beach] = {"{e} Shore"};
+
+        k[Kind::Bay] = {"{e} Bay"};
+
+        k[Kind::Mountain] = {"{e} Spire", "Peak {#}"};
+
+        k[Kind::Park] = {"{n}", "{e} Commons"};
+
+        k[Kind::Landmark] = {"{e} Monolith", "{e} Obelisk"};
+
+        return x;
+
+    }();
+
+    return v;
+
+}
+
+
+
 const Vocab& vocab(std::string_view culture)
 {
     const std::string name = vocabularyOf(culture);

@@ -34,6 +34,12 @@ struct InstanceSlots
  */
 LILA_SCENE_API gn::GeometryPtr applyToInstances(const gn::GeometryPtr& in, NodeId publisher, const InstanceSlots& spec);
 
+/**
+ * The same with slots the generator made itself (ids, types, owners, regions, tags and payloads its own), one per
+ * instance in order; each slot's transform is taken from its instance.
+ */
+LILA_SCENE_API gn::GeometryPtr applySlots(const gn::GeometryPtr& in, NodeId publisher, std::vector<Slot> slots);
+
 /** The local path applyToInstances gives instance k. */
 LILA_SCENE_API std::string instancePath(const gn::Instances& in, size_t k, const std::vector<std::string>& pathAttributes);
 } // namespace lila::slots
