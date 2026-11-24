@@ -384,14 +384,15 @@ TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the 
         REQUIRE_FALSE(level.massingImports.empty());
         for (const json& imp : level.massingImports)
             CHECK((imp.contains("materials") && imp["materials"].is_array()));
-        // Landscape roads paint roadSurface over the carriageway and shape the landscape; shoulders paint roadVerge only.
+        // The world's landscape draws in terrain material layers, so landscape roads paint its Road layer over the carriageway
+        // and shape the landscape; no shoulder paint (the material has no verge layer).
         REQUIRE(level.splineParams.count(key + "/roads") == 1);
         const json& roads = level.splineParams[key + "/roads"];
         CHECK(roads["mode"] == "landscape");
         int surface = 0, verge = 0;
         for (const json& sp : roads["splines"])
         {
-            if (sp.value("layer", std::string()) == "roadSurface")
+            if (sp.value("layer", std::string()) == "Road")
             {
                 ++surface;
                 CHECK(sp["deform"] == true);
@@ -399,14 +400,11 @@ TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the 
                 CHECK(sp["layerWidth"].get<double>() <= 1.0);
             }
             else if (sp.value("layer", std::string()) == "roadVerge")
-            {
-                CHECK(surface == 0); // shoulders come before the roads
                 ++verge;
-                CHECK(sp["deform"] == false);
-            }
         }
         CHECK(surface > 0);
-        CHECK(verge > 0);
+        CHECK(verge == 0);
+        CHECK(stepResult(r1, "export.unreal.settlement.Pueblo")["result"].value("roadLayer", std::string()).starts_with("Road: "));
     }
     // Rebuilt unchanged: nothing dropped.
     const json r2 = run("worldBuild", {{"spec", s}, {"replace", true}, {"folder", (cache / "w2").generic_string()}});

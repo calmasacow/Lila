@@ -40,6 +40,38 @@ uint64_t fnv1a(const std::string& s)
 
 json runCmd(const char* cmd, json flags) { return ops::execute(cmd, std::move(flags)); }
 
+/**
+ * The Unreal paint layer of the terrain's road material layer (Road) when the landscape draws through Lila's terrain
+ * material, which samples only its material layers; empty when the spec names its own landscape material or there is none.
+ */
+std::string terrainRoadLayer(const std::string& terrain, const json& ue)
+{
+    if (terrain.empty() || ue.contains("landscapeMaterial"))
+        return {};
+    json rules;
+    try
+    {
+        rules = runCmd("terrainMaterialRules", {{"args", {terrain}}, {"query", true}});
+    }
+    catch (const std::exception&)
+    {
+        return {};
+    }
+    for (const json& l : rules.value("layers", json::array()))
+    {
+        std::string name = l.is_object() ? l.value("name", std::string()) : std::string();
+        std::string lower = name;
+        std::ranges::transform(lower, lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+        if (lower == "road")
+        {
+            // terrainSendToUnreal names a material layer's paint layer after it, first letter up.
+            name[0] = char(std::toupper(static_cast<unsigned char>(name[0])));
+            return name;
+        }
+    }
+    return {};
+}
+
 /** A result cut down for a step report: long lists counted, deep objects summarized. */
 json brief(const json& j, int depth = 0)
 {
@@ -283,6 +315,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
     else
         report["terrainSkipped"] = "the world has no terrain";
 
+    // A landscape drawn in Lila's terrain material layers samples only those: settlement roads paint its road layer.
+    const std::string roadLayer = terrainRoadLayer(terrain, ue);
     // Settlements: streets, lots and lane data; their massing only where Buildings doesn't stand in for it.
     std::set<std::string> withBuildings;
     for (const json& grp : built.value("buildingGroups", json::array()))
@@ -301,6 +335,12 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
             for (const char* k : {"roads", "roadMesh", "pcgGraph", "cell"})
                 if (ue.contains(k))
                     flags[k] = ue[k];
+            const bool paintsLandscape = ue.value("roads", std::string("landscape")) == "landscape";
+            if (paintsLandscape && !roadLayer.empty())
+            {
+                flags["roadLayer"] = roadLayer;
+                flags["shoulderLayer"] = "";
+            }
             const json r = runCmd("settlementSendToUnreal", flags);
             sentSettlements.push_back({{"key", r.value("key", name)}, {"name", name}});
             const json d = r.value("diff", json::object());
@@ -310,6 +350,8 @@ json sendWorldToUnreal(const std::string& world, const json& built, const json& 
                         {"unchanged", d.value("unchanged", 0)},
                         {"cells", r.value("cells", 0)},
                         {"massing", buildings ? "off: Buildings sends the shells" : "on"}};
+            if (paintsLandscape && !roadLayer.empty())
+                out["roadLayer"] = roadLayer + ": the terrain draws in material layers, so roads paint its road layer and no shoulder";
             if (const json& e = r.value("errors", json::array()); !e.empty())
             {
                 out["errors"] = brief(e);
