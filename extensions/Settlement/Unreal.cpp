@@ -710,7 +710,10 @@ json sendCellMesh(link::RpcClient& c, const geo::Mesh& mesh, const std::string& 
     std::string err;
     if (!fbx::writeFbx(scene, file, fbx::ExportOptions{}, &err))
         throw CommandError(std::string(cmd) + ": writing " + file.string() + ": " + err);
-    const json imported = call(c, "importAsset", link::importParams(file, {{"contentPath", folder + "/" + name}, {"kind", "static"}, {"reapplyOptions", true}}), cmd);
+    // Managed materials with no inputs: the Default slot stays on the engine default instead of an imported Default material.
+    const json imported = call(c, "importAsset",
+                               link::importParams(file, {{"contentPath", folder + "/" + name}, {"kind", "static"}, {"reapplyOptions", true}}, json::array()),
+                               cmd);
     std::error_code ec;
     fs::remove(file, ec);
     std::string asset = folder + "/" + name + "." + name;
