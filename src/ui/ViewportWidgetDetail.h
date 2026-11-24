@@ -122,7 +122,8 @@ inline glm::dmat4 shownWorld(const scene::Node& n)
  */
 inline void pushInstanceDraws(render::FrameState& s, const render::MeshDraw& d, const gn::InstanceView& view, bool textured)
 {
-    auto push = [&](const scene::MeshPtr& mesh, std::shared_ptr<const std::vector<glm::mat4>> placements) {
+    auto push = [&](const scene::MeshPtr& mesh, std::shared_ptr<const std::vector<glm::mat4>> placements,
+                    std::shared_ptr<const std::vector<glm::vec4>> colors) {
         const bool tangents = textured && needsTangents(*mesh);
         auto rm = renderMeshFor(mesh, tangents);
         if (!rm)
@@ -138,17 +139,28 @@ inline void pushInstanceDraws(render::FrameState& s, const render::MeshDraw& d, 
                 for (const glm::mat4& p : *placements)
                     both->push_back(copy * p);
             part.instances = std::move(both);
+            if (colors)
+            {
+                auto repeated = std::make_shared<std::vector<glm::vec4>>();
+                repeated->reserve(d.instances->size() * colors->size());
+                for (size_t copy = 0; copy < d.instances->size(); ++copy)
+                    repeated->insert(repeated->end(), colors->begin(), colors->end());
+                part.instanceColors = std::move(repeated);
+            }
         }
         else
+        {
             part.instances = placements ? std::move(placements) : d.instances;
+            part.instanceColors = std::move(colors);
+        }
         if (textured)
             part.materials = drawMaterials(*mesh);
         s.meshes.push_back(std::move(part));
     };
     if (view.base)
-        push(view.base, nullptr);
+        push(view.base, nullptr, nullptr);
     for (const gn::InstancePart& p : view.parts)
-        push(p.mesh, p.transforms);
+        push(p.mesh, p.transforms, p.colors);
 }
 
 /**
