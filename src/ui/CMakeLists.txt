@@ -48,6 +48,7 @@ lila_module(lila_ui UI
     SceneSettingsPanel.cpp SceneSettingsPanel.h
     PointCloudDisplay.cpp PointCloudDisplay.h
     OffsetsPanel.cpp OffsetsPanel.h
+    SlotsUi.cpp SlotsUi.h
     RenamePanel.cpp RenamePanel.h
     RetargetUi.cpp RetargetUi.h
     BatchRunPanel.cpp BatchRunPanel.h
