@@ -370,13 +370,14 @@ lila::geo::Mesh toMesh(const Soup& s, const std::vector<std::string>& materialNa
         fa.add(n, AttrType::Int);
     auto& ca = m.cornerAttrs();
     ca.add(attr::uvName(0), AttrType::Float2);
-    ca.add(attr::kColor, AttrType::Float4);
+    // The first colour set: what exporters write as the vertex colour MF_LilaBuildingVariation reads in Unreal.
+    colors::add(m, "colorSet");
     auto mat = fa.get<int32_t>(attr::kMaterial);
     auto part = fa.get<int32_t>("part");
     auto bay = fa.get<int32_t>("bldBay");
     auto trim = fa.get<int32_t>("trim");
     auto uv = ca.get<glm::vec2>(attr::uvName(0));
-    auto col = ca.get<glm::vec4>(attr::kColor);
+    auto col = colors::values(m, "colorSet");
     for (size_t f = 0; f < nf; ++f)
     {
         mat[f] = s.mat[f];

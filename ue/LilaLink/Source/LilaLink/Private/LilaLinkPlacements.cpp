@@ -762,7 +762,12 @@ TSharedPtr<FJsonValue> PlacementHashes(const TSharedPtr<FJsonObject>& Params, FS
 			continue;
 		}
 		TPair<FString, int32>& Entry = ByGroup.FindOrAdd(Group);
-		const FString Hash = TagValue(*It, HashPrefix);
+		FString Hash = TagValue(*It, HashPrefix);
+		// A mesh that no longer loads (an import never saved) needs the group sent again.
+		if (const UStaticMeshComponent* Mesh = It->FindComponentByClass<UStaticMeshComponent>(); Mesh && !Mesh->GetStaticMesh())
+		{
+			Hash.Reset();
+		}
 		// One actor without the signature (placed by an older send) makes the group's signature unknown.
 		Entry.Key = Entry.Value == 0 || Entry.Key == Hash ? Hash : FString();
 		++Entry.Value;
