@@ -2,6 +2,8 @@
 
 #include "RemixSpec.h"
 
+#include "Landform.h"
+
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -170,6 +172,19 @@ json toJson(const RemixSpec& s)
             j["bbox"] = src.bbox;
         if (src.scale > 0.0)
             j["scale"] = src.scale;
+        if (src.vertical > 0.0)
+            j["vertical"] = scaleText(src.vertical);
+        if (src.extent != "box")
+        {
+            j["extent"] = src.extent;
+            j["margin"] = src.margin;
+        }
+        if (src.seam > 0.0)
+            j["seam"] = src.seam;
+        if (src.seamNoise >= 0.0)
+            j["seamNoise"] = src.seamNoise;
+        if (src.erosion != 1.0)
+            j["erosion"] = src.erosion;
         sources.push_back(j);
     }
     for (const Region& r : s.regions)
@@ -205,6 +220,9 @@ json toJson(const RemixSpec& s)
                 {"seams", {{"width", s.seams.width}, {"maxSlope", s.seams.maxSlope}, {"erosion", s.seams.erosion}, {"detail", s.seams.detail}, {"roads", s.seams.roads},
                            {"roadReach", s.seams.roadReach}, {"rivers", s.seams.rivers}, {"coast", s.seams.coast}, {"seed", s.seams.seed}}},
                 {"view", s.view}};
+    if (s.erosion.on())
+        out["erosion"] = {{"preset", s.erosion.preset}, {"age", s.erosion.age}, {"form", s.erosion.form}, {"detail", s.erosion.detail}, {"detailScale", s.erosion.detailScale},
+                          {"seed", s.erosion.seed}};
     if (s.origin)
         out["origin"] = json::array({s.origin->x, s.origin->y});
     return out;
@@ -214,7 +232,7 @@ RemixSpec specFromJson(const json& j)
 {
     if (!j.is_object())
         throw std::runtime_error("the remix spec is a dict (see lila://schema/remix-spec)");
-    onlyKeys(j, {"version", "scale", "origin", "map", "sources", "regions", "pins", "warp", "seams", "bathymetry", "view"}, "");
+    onlyKeys(j, {"version", "scale", "origin", "map", "sources", "regions", "pins", "warp", "seams", "erosion", "bathymetry", "view"}, "");
     RemixSpec s;
     if (j.contains("scale"))
     {
@@ -259,7 +277,8 @@ RemixSpec specFromJson(const json& j)
             const std::string where = "sources[" + std::to_string(i) + "].";
             if (!e.is_object())
                 throw std::runtime_error(where + " is a dict");
-            onlyKeys(e, {"id", "dem", "osm", "landcover", "bathymetry", "bbox", "at", "angle", "scale"}, where);
+            onlyKeys(e, {"id", "dem", "osm", "landcover", "bathymetry", "bbox", "at", "angle", "scale", "vertical", "extent", "margin", "seam", "seamNoise", "erosion"},
+                     where);
             Source src;
             src.id = str(e, "id", where);
             if (src.id.empty())
@@ -278,6 +297,18 @@ RemixSpec specFromJson(const json& j)
                 src.at = vec2(e["at"], where + "at");
             src.angle = num(e, "angle", 0.0, where);
             src.scale = num(e, "scale", 0.0, where);
+            if (e.contains("vertical") && !e["vertical"].is_null())
+                src.vertical = parseScale(e["vertical"], "vertical");
+            if (e.contains("extent") && !e["extent"].is_null())
+            {
+                src.extent = str(e, "extent", where);
+                if (src.extent != "box" && src.extent != "builtUp")
+                    throw std::runtime_error(where + "extent is box or builtUp");
+            }
+            src.margin = std::max(0.0, num(e, "margin", 0.0, where));
+            src.seam = std::max(0.0, num(e, "seam", 0.0, where));
+            src.seamNoise = num(e, "seamNoise", -1.0, where);
+            src.erosion = std::clamp(num(e, "erosion", 1.0, where), 0.0, 1.0);
             if (s.source(src.id))
                 throw std::runtime_error(where + "id '" + src.id + "' is used twice");
             s.sources.push_back(std::move(src));
@@ -363,6 +394,23 @@ RemixSpec specFromJson(const json& j)
         s.seams.coast = num(m, "coast", s.seams.coast, "seams.");
         s.seams.seed = num(m, "seed", s.seams.seed, "seams.");
     }
+    if (j.contains("erosion") && !j["erosion"].is_null())
+    {
+        const json& m = j["erosion"];
+        if (!m.is_object())
+            throw std::runtime_error("erosion is a dict");
+        onlyKeys(m, {"preset", "age", "form", "detail", "detailScale", "seed"}, "erosion.");
+        RemixSpec::Erosion& er = s.erosion;
+        if (m.contains("preset"))
+            er.preset = str(m, "preset", "erosion.");
+        if (!terrain::isErodePreset(er.preset))
+            throw std::runtime_error("erosion.preset is natural, alpine, desert or hills");
+        er.age = std::clamp(num(m, "age", er.age, "erosion."), 0.0, 2.0);
+        er.form = std::max(100.0, num(m, "form", er.form, "erosion."));
+        er.detail = std::max(0.0, num(m, "detail", er.detail, "erosion."));
+        er.detailScale = std::max(100.0, num(m, "detailScale", er.detailScale, "erosion."));
+        er.seed = num(m, "seed", er.seed, "erosion.");
+    }
     if (j.contains("bathymetry") && !j["bathymetry"].is_null())
     {
         const json& b = j["bathymetry"];
@@ -425,7 +473,13 @@ json remixSpecSchema()
                 {"bbox", {{"type", "array"}, {"description", "[west, south, east, north] degrees: what remixFetch downloads."}}},
                 {"at", point},
                 {"angle", {{"type", "number"}}},
-                {"scale", {{"type", "number"}, {"description", "This source's own horizontal factor; 0 takes the spec's."}}}}}}}}},
+                {"scale", {{"type", "number"}, {"description", "This source's own horizontal factor; 0 takes the spec's."}}},
+                {"vertical", {{"type", {"number", "string"}}, {"description", "This source's own height factor (0.33 or \"1:3\"); default the spec's."}}},
+                {"extent", {{"enum", {"box", "builtUp"}}, {"description", "box: present over its whole bbox (default); builtUp: only over its built-up land, gaps closed, so a city ends where the real one does."}}},
+                {"margin", {{"type", "number"}, {"description", "builtUp: how far past the built-up land it reaches, cm."}}},
+                {"seam", {{"type", "number"}, {"description", "Width of the band where it blends over the sources under it, cm; default the remix's feather."}}},
+                {"seamNoise", {{"type", "number"}, {"description", "How far that band wanders in from its edge, cm, so no straight line shows; default the seam width."}}},
+                {"erosion", {{"type", "number"}, {"description", "Share of the erosion pass its ground takes, 0 (held: a city) to 1 (default)."}}}}}}}}},
           {"regions",
            {{"type", "array"},
             {"items",
@@ -463,6 +517,18 @@ json remixSpecSchema()
               {"roadReach", {{"type", "number"}}},
               {"rivers", {{"type", "boolean"}, {"description", "Re-solve rivers by flow routing so they drain."}}},
               {"coast", {{"type", "boolean"}, {"description", "Re-merge cut coastline along sea level."}}},
+              {"seed", {{"type", "integer"}}}}}}},
+          {"erosion",
+           {{"type", "object"},
+            {"description", "Erosion over the whole map after the seams: gullies down the slopes (erosion filter), then Terrain's Erode preset "
+                            "(stream power, debris, thermal, rills, deposition) so ridges and valleys drain. Sources take their erosion share; the sea "
+                            "is held. Off by default."},
+            {"properties",
+             {{"preset", {{"enum", {"natural", "alpine", "desert", "hills"}}, {"description", "Erode preset. Default natural."}}},
+              {"age", {{"type", "number"}, {"description", "0 off, 1 very old."}}},
+              {"form", {{"type", "number"}, {"description", "Landforms wider than this stay the sources' own, cm. Default 30000."}}},
+              {"detail", {{"type", "number"}, {"description", "Gully depth laid before erosion, fraction of their spacing on a 45 degree slope; 0 none."}}},
+              {"detailScale", {{"type", "number"}, {"description", "Spacing of the largest gullies, cm. Default 12000."}}},
               {"seed", {{"type", "integer"}}}}}}},
           {"bathymetry",
            {{"type", "object"},

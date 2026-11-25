@@ -5,9 +5,13 @@
 
 #include "Coast.h"
 #include "Erosion.h"
+#include "ErosionFilter.h"
+#include "ErosionGpu.h"
 #include "Inputs.h"
 #include "LandCover.h"
+#include "Landform.h"
 #include "Osm.h"
+#include "Shaping.h"
 
 #include <lila/Log.h>
 #include <lila/Paths.h>
@@ -142,6 +146,20 @@ std::vector<float> flatSeaOf(const Heightfield& h, double tolerance)
     for (float v : out)
         any = any || v > 0.0f;
     return any ? out : std::vector<float>();
+}
+
+/** Fractal noise about -1 to 1, featureSize cm. */
+double fbm(Vec2 p, double featureSize, uint32_t seed)
+{
+    double sum = 0.0, amp = 1.0, norm = 0.0, f = 1.0 / featureSize;
+    for (int o = 0; o < 4; ++o)
+    {
+        sum += terrain::gradientNoise(p.x * f, p.y * f, seed + uint32_t(o) * 7919u) * amp;
+        norm += amp;
+        amp *= 0.5;
+        f *= 2.0;
+    }
+    return sum / norm;
 }
 
 /** A bathymetry grid's height at a latitude and longitude, metres; NaN outside it or in a void. */
@@ -310,17 +328,63 @@ Polygon footprintOf(const Source& s, double horizontal, const Heightfield& hf)
 
 namespace detail
 {
+void Work::weights(Vec2 base, double* into, SeamAt* seams) const
+{
+    double under = 0.0;
+    const double wet = dry(base);
+    for (size_t s = 0; s < data.size(); ++s)
+    {
+        into[s] = 0.0;
+        if (seams)
+            seams[s] = SeamAt();
+        if (!data[s])
+            continue;
+        const Heightfield& h = data[s]->hf;
+        const Vec2 l = baseToSource(spec.sources[s], spec.horizontal, base) - h.origin, e = h.extent();
+        if (l.x < 0.0 || l.y < 0.0 || l.x > e.x || l.y > e.y)
+            continue;
+        const SourceEdge* E = s < edges.size() ? &edges[s] : nullptr;
+        double d = 1e300;
+        const double side[4] = {l.x, l.y, e.x - l.x, e.y - l.y};
+        for (int k = 0; k < 4; ++k)
+            if (!E || E->open[k])
+                d = std::min(d, side[k] * scales[s]);
+        if (E && E->inside)
+            d = std::min(d, bilinear(*E->inside, h, l + h.origin));
+        if (d <= 0.0)
+            continue;
+        double wt = d >= 1e299 ? 1.0 : smooth01(d / (E ? E->feather : feather));
+        if (E && E->seam > 0.0 && under > 0.0 && d < 1e299)
+        {
+            // Over the land under it the source blends in across a band that wanders in from its edge.
+            const double wander = E->noise > 0.0 ? E->noise * smooth01(0.5 + 1.2 * fbm(base, 2.0 * (E->noise + E->seam), spec.seams.seed + 31u * uint32_t(s + 1))) : 0.0;
+            const double blend = smooth01((d - wander) / E->seam);
+            if (seams)
+                seams[s] = {d, wander, E->seam, wt, under, wet};
+            wt *= 1.0 - under * (1.0 - blend);
+        }
+        into[s] = wt * wet;
+        under = std::max(under, into[s]);
+    }
+}
+
 double Work::weight(size_t s, Vec2 base) const
 {
     if (!data[s])
         return 0.0;
-    const Heightfield& h = data[s]->hf;
-    const Vec2 l = baseToSource(spec.sources[s], spec.horizontal, base) - h.origin, e = h.extent();
-    if (l.x < 0.0 || l.y < 0.0 || l.x > e.x || l.y > e.y)
-        return 0.0;
-    const double d = std::min({l.x, l.y, e.x - l.x, e.y - l.y}) * scales[s];
-    return smooth01(d / feather) * dry(base);
+    double all[64];
+    std::vector<double> many;
+    double* w = all;
+    if (data.size() > 64)
+    {
+        many.resize(data.size());
+        w = many.data();
+    }
+    weights(base, w);
+    return w[s];
 }
+
+double Work::vertical(size_t s) const { return s < edges.size() ? edges[s].vertical : spec.vertical; }
 
 double Work::dry(Vec2 base) const
 {
@@ -342,8 +406,12 @@ bool Work::owns(size_t s, Vec2 base) const
     const double tol = 1e-6 * std::max(e.x, e.y);
     if (l.x < -tol || l.y < -tol || l.x > e.x + tol || l.y > e.y + tol)
         return false;
+    if (s + 1 >= data.size())
+        return true;
+    std::vector<double> wt(data.size());
+    weights(base, wt.data());
     for (size_t k = s + 1; k < data.size(); ++k)
-        if (weight(k, base) >= 0.5)
+        if (wt[k] >= 0.5)
             return false;
     return true;
 }
@@ -448,6 +516,8 @@ struct Sample
 {
     double height = 0.0;
     double seam = 0.0;
+    /** The sources' erosion shares blended as their heights are. */
+    double erosion = 0.0;
     bool covered = false;
 };
 
@@ -464,20 +534,47 @@ Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
     for (size_t k = 0; k < m.names.size(); ++k)
         masks[k] = int(k) == m.seabed ? float(floorMask) : 0.0f;
     bool under = false;
+    double weightsAt[64];
+    std::vector<double> many;
+    double* W = weightsAt;
+    if (w.data.size() > 64)
+    {
+        many.resize(w.data.size());
+        W = many.data();
+    }
+    SeamAt seamsAt[64];
+    std::vector<SeamAt> manySeams;
+    SeamAt* S = seamsAt;
+    if (w.data.size() > 64)
+    {
+        manySeams.resize(w.data.size());
+        S = manySeams.data();
+    }
+    w.weights(b, W, S);
+    const double grade = w.spec.seams.maxSlope > 0.0 ? w.spec.seams.maxSlope : kSeamGrade;
     for (size_t s = 0; s < w.data.size(); ++s)
     {
-        const double wt = w.weight(s, b);
+        const double wt = W[s];
         if (wt <= 0.0)
             continue;
         const Heightfield& h = w.data[s]->hf;
         const Vec2 l = baseToSource(w.spec.sources[s], w.spec.horizontal, b);
-        double hs = h.heightAt(l.x, l.y) * w.spec.vertical;
+        double hs = h.heightAt(l.x, l.y) * w.vertical(s);
         const double flat = floor && !w.data[s]->flatSea.empty() ? bilinear(w.data[s]->flatSea, h, l) : 0.0;
         if (flat > 0.0)
             // Never shallower than kFlatSeaDepth: where the floor reads as land (a grid cell over a lagoon) the water
             // would otherwise stand as islands at the elevation's own height.
             hs += (std::min({hs, floorHeight, -kFlatSeaDepth}) - hs) * flat;
-        out.height += (hs - out.height) * wt;
+        double wtHeight = wt;
+        if (const SeamAt& sa = S[s]; sa.seam > 0.0 && under)
+        {
+            // A big step between this source and the land under it (a city on its hills over a plain at another scale)
+            // ramps over a band wide enough to keep it under the seam grade, up to four seams.
+            const double band = std::clamp(std::abs(hs - out.height) / grade, sa.seam, 4.0 * sa.seam);
+            wtHeight = sa.base * (1.0 - sa.under * (1.0 - smooth01((sa.d - sa.wander) / band))) * sa.wet;
+        }
+        out.height += (hs - out.height) * wtHeight;
+        out.erosion += ((s < w.edges.size() ? w.edges[s].erosion : 1.0) - out.erosion) * wt;
         for (size_t k = 0; k < m.names.size(); ++k)
         {
             if (int(k) == m.seabed)
@@ -700,20 +797,6 @@ std::vector<float> distanceFrom(const std::vector<uint8_t>& set, int nx, int nz)
     return dist;
 }
 
-/** Fractal noise about -1 to 1, featureSize cm. */
-double fbm(Vec2 p, double featureSize, uint32_t seed)
-{
-    double sum = 0.0, amp = 1.0, norm = 0.0, f = 1.0 / featureSize;
-    for (int o = 0; o < 4; ++o)
-    {
-        sum += terrain::gradientNoise(p.x * f, p.y * f, seed + uint32_t(o) * 7919u) * amp;
-        norm += amp;
-        amp *= 0.5;
-        f *= 2.0;
-    }
-    return sum / norm;
-}
-
 /**
  * Seam bands get detail and Terrain's erosion re-run there, held outside: heights outside the bands are kept exactly.
  * Returns the erosion steps run.
@@ -723,7 +806,9 @@ int erodeSeams(const RemixSpec& spec, Heightfield& h)
     LILA_ZONE();
 
     const std::vector<float>* seam = h.findMask("remixSeam");
-    if (!seam || (spec.seams.erosion <= 0 && spec.seams.detail <= 0.0))
+    // The map's own erosion pass covers the seams too.
+    const int steps = spec.erosion.age > 0.0 ? 0 : spec.seams.erosion;
+    if (!seam || (steps <= 0 && spec.seams.detail <= 0.0))
         return 0;
     int x0 = h.nx, z0 = h.nz, x1 = -1, z1 = -1;
     for (int z = 0; z < h.nz; ++z)
@@ -758,21 +843,31 @@ int erodeSeams(const RemixSpec& spec, Heightfield& h)
             holdHeight[i] = h.heights[j];
         }
     if (spec.seams.detail > 0.0)
-        for (int z = 1; z < c.nz - 1; ++z)
+    {
+        // Gullies running down the slope, so the detail drains with the land instead of standing on it as bumps.
+        terrain::ErosionFilterParams fp;
+        fp.scale = c.cell * 16.0;
+        fp.strength = 0.4 * spec.seams.detail;
+        fp.seed = spec.seams.seed + 101u;
+        std::vector<float> offset(c.size(), 0.0f);
+        tbb::parallel_for(1, c.nz - 1, [&](int z) {
             for (int x = 1; x < c.nx - 1; ++x)
             {
                 const size_t i = c.index(x, z);
                 if (s[i] <= 0.0f)
                     continue;
                 const double gx = (c.heights[i + 1] - c.heights[i - 1]) / (2.0 * c.cell), gz = (c.heights[i + c.nx] - c.heights[i - c.nx]) / (2.0 * c.cell);
-                const double slope = std::sqrt(gx * gx + gz * gz);
-                const double amp = spec.seams.detail * 0.5 * c.cell * (1.0 + 4.0 * slope);
-                c.heights[i] += float(s[i] * amp * fbm(c.samplePos(x, z), c.cell * 8.0, spec.seams.seed + 101u));
+                const Vec2 q = c.samplePos(x, z);
+                offset[i] = float(s[i] * terrain::erosionFilterOffset(fp, q.x, q.y, gx, gz));
             }
-    if (spec.seams.erosion > 0)
+        });
+        for (size_t i = 0; i < c.size(); ++i)
+            c.heights[i] += offset[i];
+    }
+    if (steps > 0)
     {
         terrain::ErosionParams p;
-        p.iterations = spec.seams.erosion;
+        p.iterations = steps;
         p.constraintMask = "remixHold";
         p.constraintHeightMask = "remixHoldHeight";
         terrain::erode(c, p);
@@ -783,9 +878,211 @@ int erodeSeams(const RemixSpec& spec, Heightfield& h)
             const size_t i = c.index(x, z), j = h.index(x + x0, z + z0);
             h.heights[j] = float(h.heights[j] + (c.heights[i] - h.heights[j]) * s[i]);
         }
-    return spec.seams.erosion;
+    return steps;
+}
+
+/**
+ * The whole map eroded: erosion-filter gullies, then Terrain's Erode preset, on a copy of the heights; the change is laid
+ * back by each sample's erosion share (remixErosion), and the sea (below 0) is held. Writes wear and deposit from the
+ * change. Returns the preset's report.
+ */
+json erodeMap(const RemixSpec& spec, Heightfield& h)
+{
+    LILA_ZONE();
+
+    const RemixSpec::Erosion& e = spec.erosion;
+    const std::vector<float>* share = h.findMask("remixErosion");
+    if (!e.on() || !share)
+        return json();
+    Heightfield c;
+    c.nx = h.nx, c.nz = h.nz, c.cell = h.cell, c.origin = h.origin;
+    c.heights = h.heights;
+    json report = json::object();
+    if (e.detail > 0.0)
+    {
+        terrain::ErosionFilterParams fp;
+        fp.scale = e.detailScale;
+        fp.strength = e.detail;
+        fp.seed = e.seed + 7u;
+        terrain::erosionFilter(c, fp);
+        c.masks.clear();
+    }
+    if (e.age > 0.0)
+    {
+        terrain::PresetParams p;
+        p.preset = e.preset;
+        p.age = e.age;
+        p.seed = e.seed;
+        p.keepForm = true;
+        p.formRadius = e.form;
+        p.gpu = terrain::gpuErosionAvailable();
+        terrain::PresetReport r;
+        terrain::erodePreset(c, p, &r);
+        report = r.toJson();
+    }
+    std::vector<float> lost(h.size()), gained(h.size());
+    tbb::parallel_for(0, h.nz, [&](int z) {
+        for (int x = 0; x < h.nx; ++x)
+        {
+            const size_t i = h.index(x, z);
+            // Land only, fading in over the first 2 m above the sea, so the shore and the floor stay where the remix laid them.
+            const double land = smooth01(std::min(h.heights[i], c.heights[i]) / 200.0);
+            const float change = float((c.heights[i] - h.heights[i]) * (*share)[i] * land);
+            h.heights[i] += change;
+            lost[i] = std::max(0.0f, -change);
+            gained[i] = std::max(0.0f, change);
+        }
+    });
+    auto normalised = [](std::vector<float>& v) {
+        float top = 0.0f;
+        for (float a : v)
+            top = std::max(top, a);
+        if (top > 0.0f)
+            for (float& a : v)
+                a /= top;
+    };
+    normalised(lost);
+    normalised(gained);
+    h.masks["wear"] = std::move(lost);
+    h.masks["deposit"] = std::move(gained);
+    return report;
+}
+
+/**
+ * builtUp presence on a source's grid: its built-up land and its water (a harbour, the sea off the front, a river through
+ * town), gaps narrower than twice close (source cm) filled and holes shut (islands off the front), reaching margin past
+ * it; as a signed distance into it in source cm (negative outside).
+ */
+std::vector<float> builtUpInside(const SourceData& d, double close, double margin)
+{
+    const Heightfield& hf = d.hf;
+    const std::vector<float>* urban = hf.findMask("landcover_urban");
+    const std::vector<float>* water = hf.findMask("landcover_water");
+    std::vector<uint8_t> built(hf.size(), 0);
+    for (size_t i = 0; i < hf.size(); ++i)
+        built[i] = (urban && (*urban)[i] >= 0.5f) || (water && (*water)[i] >= 0.5f) || (!d.flatSea.empty() && d.flatSea[i] >= 0.5f);
+    const std::vector<float> out = distanceFrom(built, hf.nx, hf.nz);
+    std::vector<uint8_t> grown(hf.size());
+    for (size_t i = 0; i < hf.size(); ++i)
+        grown[i] = out[i] * hf.cell <= close + margin;
+    // Holes inside the town (parks, a river bend) are the town's: only open land reached from the grid's edge stays out.
+    std::vector<uint8_t> open(hf.size(), 0);
+    std::deque<size_t> q;
+    auto seed = [&](int x, int z) {
+        const size_t i = hf.index(x, z);
+        if (!grown[i] && !open[i])
+            open[i] = 1, q.push_back(i);
+    };
+    for (int x = 0; x < hf.nx; ++x)
+        seed(x, 0), seed(x, hf.nz - 1);
+    for (int z = 0; z < hf.nz; ++z)
+        seed(0, z), seed(hf.nx - 1, z);
+    while (!q.empty())
+    {
+        const size_t i = q.front();
+        q.pop_front();
+        const int x = int(i % size_t(hf.nx)), z = int(i / size_t(hf.nx));
+        if (x > 0)
+            seed(x - 1, z);
+        if (x + 1 < hf.nx)
+            seed(x + 1, z);
+        if (z > 0)
+            seed(x, z - 1);
+        if (z + 1 < hf.nz)
+            seed(x, z + 1);
+    }
+    const std::vector<float> into = distanceFrom(open, hf.nx, hf.nz);
+    std::vector<uint8_t> shut(hf.size());
+    for (size_t i = 0; i < hf.size(); ++i)
+        shut[i] = !open[i];
+    const std::vector<float> outOf = distanceFrom(shut, hf.nx, hf.nz);
+    std::vector<float> inside(hf.size());
+    for (size_t i = 0; i < hf.size(); ++i)
+        inside[i] = float((open[i] ? -outOf[i] : into[i]) * hf.cell - close);
+    return inside;
 }
 } // namespace
+
+namespace detail
+{
+void prepareSources(Work& w, Vec2 lo, Vec2 hi)
+{
+    LILA_ZONE();
+
+    const RemixSpec& spec = w.spec;
+    const bool mapGiven = spec.map.size.x > 0.0 && spec.map.size.y > 0.0;
+    w.edges.assign(w.data.size(), SourceEdge());
+    for (size_t s = 0; s < w.data.size(); ++s)
+    {
+        const Source& src = spec.sources[s];
+        SourceEdge& E = w.edges[s];
+        E.seam = src.seam > 0.0 ? src.seam : 0.0;
+        E.feather = E.seam > 0.0 ? std::min(w.feather, E.seam) : w.feather;
+        E.noise = src.seamNoise >= 0.0 ? src.seamNoise : E.seam;
+        E.vertical = src.vertical > 0.0 ? src.vertical : spec.vertical;
+        E.erosion = src.erosion;
+        if (!w.data[s])
+            continue;
+        const Heightfield& hf = w.data[s]->hf;
+        if (mapGiven)
+        {
+            // An edge the map ends inside of never shows, so it keeps the land full to the map's border.
+            const Vec2 e = hf.extent();
+            for (int k = 0; k < 4; ++k)
+                E.open[k] = false;
+            for (Vec2 c : {lo, Vec2(hi.x, lo.y), hi, Vec2(lo.x, hi.y)})
+            {
+                const Vec2 l = baseToSource(src, spec.horizontal, c) - hf.origin;
+                E.open[0] = E.open[0] || l.x < 0.0;
+                E.open[1] = E.open[1] || l.y < 0.0;
+                E.open[2] = E.open[2] || l.x > e.x;
+                E.open[3] = E.open[3] || l.y > e.y;
+            }
+        }
+        if (src.extent == "builtUp")
+        {
+            const double k = w.scales[s];
+            const double close = 0.5 * std::max(E.seam, E.feather) / k;
+            std::vector<float> inside = builtUpInside(*w.data[s], close, src.margin / k);
+            for (float& v : inside)
+                v = float(v * k);
+            E.inside = std::make_shared<const std::vector<float>>(std::move(inside));
+            if (!hf.findMask("landcover_urban") && w.out)
+                w.out->notes.push_back("source " + src.id + ": extent builtUp but no built-up land cover; the source is left out");
+        }
+    }
+}
+} // namespace detail
+
+/**
+ * Sources placed finer than the map, low-passed to the map's cell before they are sampled: a point sample of a 5 m grid
+ * every 9 m keeps every other ridge crest and gully as spikes, and every other land cover pixel as steps.
+ */
+void prefilterSources(Work& w, double cell, RemixResult& out)
+{
+    LILA_ZONE();
+
+    for (size_t s = 0; s < w.data.size(); ++s)
+    {
+        if (!w.data[s])
+            continue;
+        const Heightfield& hf = w.data[s]->hf;
+        const double ratio = cell / (hf.cell * w.scales[s]);
+        if (ratio <= 1.3)
+            continue;
+        const int r = std::max(1, int(std::ceil((ratio - 1.0) * 0.5)));
+        auto d = std::make_shared<SourceData>(*w.data[s]);
+        d->hf.heights = terrain::boxBlurred(hf.heights, hf.nx, hf.nz, r, 1);
+        for (auto& [name, v] : d->hf.masks)
+            if (name != kCodeMask && v.size() == hf.size())
+                v = terrain::boxBlurred(v, hf.nx, hf.nz, r, 1);
+        if (!d->flatSea.empty())
+            d->flatSea = terrain::boxBlurred(d->flatSea, hf.nx, hf.nz, r, 1);
+        w.data[s] = d;
+        out.notes.push_back("source " + w.spec.sources[s].id + ": " + std::format("{:.1f}", hf.cell * w.scales[s] * 0.01) + " m on the map, filtered to the " +
+                            std::format("{:.1f}", cell * 0.01) + " m cell");
+    }
+}
 
 /**
  * Sea floor depths carried smoothly from the grids into the part of the map no grid reaches, so the floor has no step
@@ -847,14 +1144,16 @@ void layBathymetry(Work& w, RemixResult& out, const Heightfield& grid)
             const Vec2 b = sf.samplePos(x, z);
             const size_t i = sf.index(x, z);
             double height = 0.0;
+            std::vector<double> W(w.data.size());
+            w.weights(b, W.data());
             for (size_t s = 0; s < w.data.size(); ++s)
             {
-                const double wt = w.weight(s, b);
+                const double wt = W[s];
                 if (wt <= 0.0)
                     continue;
                 const Heightfield& h = w.data[s]->hf;
                 const Vec2 l = baseToSource(w.spec.sources[s], w.spec.horizontal, b);
-                double hs = h.heightAt(l.x, l.y) * w.spec.vertical;
+                double hs = h.heightAt(l.x, l.y) * w.vertical(s);
                 if (!w.data[s]->flatSea.empty())
                     hs *= 1.0 - bilinear(w.data[s]->flatSea, h, l);
                 height += (hs - height) * wt;
@@ -872,11 +1171,11 @@ void layBathymetry(Work& w, RemixResult& out, const Heightfield& grid)
                     const double v = gridHeight(*w.data[s]->bathymetry, w.data[s]->geo.toGeographic(l));
                     if (std::isnan(v))
                         continue;
-                    depth = have ? depth + (v - depth) * w.weight(s, b) : v;
+                    depth = have ? depth + (v * w.vertical(s) - depth) * W[s] : v * w.vertical(s);
                     have = true;
                 }
             if (have)
-                g.metres[i] = float(depth * w.spec.vertical);
+                g.metres[i] = float(depth);
         }
     });
     if (anyGrid)
@@ -990,6 +1289,8 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
             w.feather = std::min(w.feather, std::min(std::max(spec.seams.width, 0.1 * std::min(e.x, e.y)), 0.25 * std::min(e.x, e.y)));
         }
     w.feather = std::max(w.feather, cell);
+    prefilterSources(w, cell, out);
+    prepareSources(w, out.lo, out.hi);
 
     // Output georeference: the first readable source's centre (or the spec's origin) at map (0, 0).
     glm::dvec2 ll0(0.0);
@@ -1042,6 +1343,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
     std::vector<std::vector<float>> beforeMasks(nm, std::vector<float>(h.size(), 0.0f));
     std::vector<uint8_t> hole(h.size(), 0);
     std::vector<float> seam(h.size(), 0.0f);
+    std::vector<float> erosionShare(h.size(), 0.0f);
     tbb::parallel_for(0, h.nz, [&](int z) {
         std::vector<float> mk(nm);
         for (int x = 0; x < h.nx; ++x)
@@ -1061,6 +1363,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
             const Sample s = sb.covered && b == q ? sb : baseSample(w, m, b, mk.data());
             h.heights[i] = float(s.height);
             seam[i] = float(s.seam);
+            erosionShare[i] = float(s.erosion);
             for (size_t k = 0; k < nm; ++k)
                 masks[k][i] = mk[k];
         }
@@ -1074,6 +1377,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
     if (holes)
     {
         fillHoles(h.heights, hole, h.nx, h.nz);
+        fillHoles(erosionShare, hole, h.nx, h.nz);
         for (size_t k = 0; k < nm; ++k)
             if (m.code[k])
                 fillNearest(masks[k], hole, h.nx, h.nz);
@@ -1125,6 +1429,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
                 const double wt = smooth01(sd / band);
                 const Sample s = baseSample(w, m, motion.inverse(q), mk.data());
                 h.heights[i] = float(h.heights[i] + (s.height - offset - h.heights[i]) * wt);
+                erosionShare[i] = float(erosionShare[i] + (s.erosion - erosionShare[i]) * wt);
                 for (size_t k = 0; k < nm; ++k)
                     masks[k][i] = m.code[k] ? (wt >= 0.5 ? mk[k] : masks[k][i]) : float(masks[k][i] + (mk[k] - masks[k][i]) * wt);
             }
@@ -1142,11 +1447,31 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
         before.masks[m.names[k]] = std::move(beforeMasks[k]);
     }
     h.masks["remixSeam"] = seam;
+    // Where each builtUp source is, for settlements that keep to it (worldBuild's within).
+    for (size_t s = 0; s < w.data.size(); ++s)
+        if (w.data[s] && spec.sources[s].extent == "builtUp")
+        {
+            std::vector<float>& pm = h.mask("remixPresent_" + spec.sources[s].id);
+            tbb::parallel_for(0, h.nz, [&](int z) {
+                std::vector<double> W(w.data.size());
+                for (int x = 0; x < h.nx; ++x)
+                {
+                    w.weights(w.inverse(h.samplePos(x, z)), W.data());
+                    pm[h.index(x, z)] = float(W[s]);
+                }
+            });
+        }
     std::vector<float>& holeMask = h.mask("remixHole");
     for (size_t i = 0; i < h.size(); ++i)
         holeMask[i] = hole[i] ? 1.0f : 0.0f;
     const int eroded = erodeSeams(spec, h);
     timing["seams"] = ms();
+    if (spec.erosion.on())
+    {
+        h.masks["remixErosion"] = std::move(erosionShare);
+        out.stats["erosion"] = erodeMap(spec, h);
+        timing["erosion"] = ms();
+    }
 
     // Features and their repairs.
     Features f;

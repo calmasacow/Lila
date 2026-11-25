@@ -9,6 +9,31 @@
 /** The state one remix run shares between composing heights, moving features and repairing them. Internal. */
 namespace openworld::detail
 {
+/** How one source meets the map: its edge fade, the seam over the sources under it, where it is present. */
+struct SourceEdge
+{
+    /** Fade toward nothing (the sea floor), cm on the map. */
+    double feather = 1500.0;
+    /** Blend over the sources under it, cm, and how far that band wanders in (noise amplitude, cm). */
+    double seam = 0.0;
+    double noise = 0.0;
+    /** Box edges that fade: west, north, east, south (local -x, -z, +x, +z). An edge the map ends inside of stays full. */
+    bool open[4] = {true, true, true, true};
+    /** builtUp: signed distance into the present land on the source's grid, cm on the map (negative outside); else null. */
+    std::shared_ptr<const std::vector<float>> inside;
+    double vertical = 1.0;
+    double erosion = 1.0;
+};
+
+/** Where a sample sits in one source's seam over the land under it: weights() fills it for heights to widen the band. */
+struct SeamAt
+{
+    /** Distance in from the source's edge, cm, and how far the band wandered in there; seam 0 when not in a seam. */
+    double d = 0.0, wander = 0.0, seam = 0.0;
+    /** The weight before the seam, and the weight of the sources under it. */
+    double base = 0.0, under = 0.0, wet = 1.0;
+};
+
 struct Work
 {
     const RemixSpec& spec;
@@ -16,6 +41,8 @@ struct Work
     std::vector<Polygon> footprints;
     std::vector<double> scales;
     double feather = 1500.0;
+    /** Per source; empty until prepareSources, when every source fades on every edge over feather. */
+    std::vector<SourceEdge> edges;
     std::shared_ptr<Warp> warp;
     InverseGrid inverse;
     /** The sea floor on the base map (output grid, mask seabed), empty with bathymetry off. */
@@ -28,6 +55,10 @@ struct Work
 
     /** 0 outside a source's footprint, 1 a feather inside it; sea regions fade it out. */
     double weight(size_t s, Vec2 base) const;
+    /** Every source's weight at base, in order (each later one's seam reads the ones under it). */
+    void weights(Vec2 base, double* into, SeamAt* seams = nullptr) const;
+    /** The source's height factor. */
+    double vertical(size_t s) const;
     /** 1 on land, falling to 0 across a sea region's seam band inside its outline. */
     double dry(Vec2 base) const;
     /** The source is there and no later source wins the spot. */
@@ -90,6 +121,12 @@ struct Features
         return it == nodeAt.end() ? nullptr : &nodes[it->second];
     }
 };
+
+/**
+ * Fills w.edges from the spec: feathers, seams, open edges against the map [lo, hi] (all open unless the spec gives the
+ * map's size) and builtUp presence on the sources' grids. Needs w.data, w.scales and w.feather.
+ */
+void prepareSources(Work& w, Vec2 lo, Vec2 hi);
 
 void moveFeatures(Work& w, Features& f);
 void reconnectRoads(Work& w, Features& f);

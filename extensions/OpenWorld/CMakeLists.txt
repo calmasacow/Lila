@@ -4,7 +4,8 @@
 set(_terrain ${CMAKE_SOURCE_DIR}/extensions/Terrain)
 set(_terrain_sources ${_terrain}/Core.cpp ${_terrain}/Erosion.cpp ${_terrain}/Inputs.cpp ${_terrain}/Projection.cpp ${_terrain}/Osm.cpp
     ${_terrain}/Fetch.cpp ${_terrain}/LandCover.cpp ${_terrain}/Stamps.cpp ${_terrain}/Brushes.cpp ${_terrain}/Shaping.cpp ${_terrain}/Painted.cpp
-    ${_terrain}/Analysis.cpp ${_terrain}/Bathymetry.cpp ${_terrain}/ErosionGpu.cpp ${_terrain}/Http.cpp)
+    ${_terrain}/Analysis.cpp ${_terrain}/Bathymetry.cpp ${_terrain}/ErosionGpu.cpp ${_terrain}/Http.cpp
+    ${_terrain}/Landform.cpp ${_terrain}/LandformGpu.cpp ${_terrain}/ErosionFilter.cpp)
 set(_clipper ${CMAKE_SOURCE_DIR}/src/curve/third_party/clipper2)
 lila_add_extension(lila_openworld_extension ID OpenWorld MANIFEST extension.json UI
     SOURCES OpenWorld.cpp OpenWorld.h RemixNode.h OsmDoc.cpp OsmDoc.h RemixSpec.cpp RemixSpec.h Warp.cpp Warp.h Remix.cpp Remix.h RemixWork.h

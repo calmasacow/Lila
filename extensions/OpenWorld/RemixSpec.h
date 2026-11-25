@@ -114,6 +114,23 @@ struct Source
     double angle = 0.0;
     /** Its own horizontal scale (a factor); 0 takes the spec's. */
     double scale = 0.0;
+    /** Its own height factor; 0 takes the spec's. */
+    double vertical = 0.0;
+    /**
+     * Where it is present: box (its whole bbox) or builtUp (its built-up land, WorldCover built-up and OSM urban land use,
+     * gaps narrower than its seam closed, reaching margin past it), so a city ends where the real one does.
+     */
+    std::string extent = "box";
+    /** builtUp: how far past the built-up land the source reaches, cm on the map. */
+    double margin = 0.0;
+    /**
+     * Width of the band where it blends over the sources under it, cm, and how far that band wanders in from its edge
+     * (noise, cm) so no straight line shows. 0 width takes the remix's feather; noise below 0 takes the width.
+     */
+    double seam = 0.0;
+    double seamNoise = -1.0;
+    /** Share of the remix's erosion pass its ground takes, 0 (held, a city) to 1. */
+    double erosion = 1.0;
 };
 
 struct RemixSpec
@@ -167,6 +184,24 @@ struct RemixSpec
         bool coast = true;
         uint32_t seed = 0;
     } seams;
+
+    /**
+     * Erosion over the whole composed map, after the seams: gullies laid down the slopes (Terrain's erosion filter), then
+     * Terrain's Erode preset (stream power, debris, thermal, rills, deposition) at an age, so ridges and valleys drain.
+     * Each source's erosion share weights the change; the sea is held. Age 0 is off.
+     */
+    struct Erosion
+    {
+        std::string preset = "natural";
+        double age = 0.0;
+        /** Landforms wider than this (cm) are the sources' own and stay as they are; the erosion works below it. */
+        double form = 30000.0;
+        /** Erosion filter gully depth (fraction of their spacing on a 45 degree slope) and spacing, cm; 0 detail is none. */
+        double detail = 0.0;
+        double detailScale = 12000.0;
+        uint32_t seed = 0;
+        bool on() const { return age > 0.0 || detail > 0.0; }
+    } erosion;
 
     /**
      * The sea floor (Terrain's bathymetry): {enabled (default true), shoreSlope, blendWidth, smoothing, depthScale, shelfDepth,

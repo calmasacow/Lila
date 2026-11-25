@@ -561,6 +561,7 @@ size_t remixExtract(const RemixSpec& spec, const RemixResult& r, std::string_vie
     if (!w.data[si])
         throw std::runtime_error("remixExtract: source '" + std::string(source) + "' could not be read");
     w.feather = r.feather > 0.0 ? r.feather : spec.seams.width;
+    prepareSources(w, r.lo, r.hi);
     w.warp = r.warp;
     for (const Region& reg : spec.regions)
         w.targets.push_back(reg.target());
