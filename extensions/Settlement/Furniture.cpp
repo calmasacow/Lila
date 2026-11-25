@@ -36,7 +36,6 @@ FurnitureRule rule(const char* kind, double spacing, const char* where, const ch
     return {kind, spacing, where, sides, minWidth};
 }
 
-constexpr double kCurb = 15.0;
 } // namespace
 
 std::vector<FurnitureSet> furnitureSets(bool medieval)
@@ -196,24 +195,24 @@ std::vector<FurniturePlacement> placeFurniture(const Layout& l, const RoadNetwor
         for (size_t r = 0; r < set->rules.size(); ++r)
         {
             const FurnitureRule& rule = set->rules[r];
-            double offset = 0.0, up = 0.0;
+            double offset = 0.0, up = kRoadTop;
             bool fits = true;
             if (rule.where == "median")
             {
                 fits = sec.median > 0.0 && sec.median >= rule.minWidth;
-                up = kCurb;
+                up = kSidewalkTop;
             }
             else if (rule.where == "verge")
             {
                 fits = sec.verge >= rule.minWidth;
                 offset = sec.verge > 0.0 ? sec.carriage + sec.sidewalk + 0.5 * sec.verge : sec.half() - 40.0;
-                up = sec.sidewalk > 0.0 ? kCurb : 0.0;
+                up = sec.sidewalk > 0.0 ? kSidewalkTop : kRoadTop;
             }
             else if ((rule.where == "kerb" || rule.where == "back") && sec.sidewalk > 0.0 && sec.carriage > 0.0)
             {
                 fits = sec.sidewalk >= rule.minWidth;
                 offset = rule.where == "kerb" ? sec.carriage + std::min(50.0, 0.5 * sec.sidewalk) : sec.carriage + std::max(0.5 * sec.sidewalk, sec.sidewalk - 50.0);
-                up = kCurb;
+                up = kSidewalkTop;
             }
             else
             {
@@ -282,7 +281,7 @@ std::vector<FurniturePlacement> placeFurniture(const Layout& l, const RoadNetwor
                 // A street running on through the junction comes in from both sides: its approach's own point tells them apart.
                 x.id = furnitureMix(furnitureMix(furnitureMix(jKey, textKey(kind)), line.street), pointKey(planXZ(end.p))) & kStreetscapeIdMask;
                 x.kind = kind;
-                x.p = groundAt(q, sec.sidewalk > 0.0 && !sec.kerbless ? kCurb : 0.0);
+                x.p = groundAt(q, sec.sidewalk > 0.0 && !sec.kerbless ? kSidewalkTop : kRoadTop);
                 x.heading = headingOf(facing);
                 x.junction = int(ji);
                 x.profile = "junction";

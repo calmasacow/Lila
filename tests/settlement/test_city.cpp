@@ -373,6 +373,50 @@ TEST_CASE("settlement furniture: trees in parks and behind houses, none with emp
     CHECK_FALSE(none.count("yardTree"));
 }
 
+TEST_CASE("settlement furniture: street props stand on the street mesh, on the sidewalk or the road")
+{
+    const Layout l = mexicanCity(60000.0, 4);
+    const geo::Mesh streets = toMeshes(l, Ground::plane()).streets;
+    std::vector<std::pair<std::vector<Vec2>, double>> tops;
+    for (geo::Index f = 0; f < geo::Index(streets.numFaces()); ++f)
+    {
+        std::vector<Vec2> ring;
+        double y = 0.0, lo = 1e300, hi = -1e300;
+        for (geo::Index p : streets.facePoints(f))
+        {
+            const glm::dvec3 q = streets.position(p);
+            ring.push_back({q.x, q.z});
+            y = q.y, lo = std::min(lo, q.y), hi = std::max(hi, q.y);
+        }
+        if (hi - lo < 1e-6)
+            tops.push_back({std::move(ring), y});
+    }
+    auto inside = [](const std::vector<Vec2>& r, Vec2 p) {
+        bool in = false;
+        for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
+            if ((r[i].y > p.y) != (r[j].y > p.y) && p.x < (r[j].x - r[i].x) * (p.y - r[i].y) / (r[j].y - r[i].y) + r[i].x)
+                in = !in;
+        return in;
+    };
+    int on = 0, off = 0;
+    for (const FurniturePlacement& p : placeFurniture(l, roadNetwork(l, Ground::plane()), Ground::plane(), furnitureSets(false)))
+    {
+        if (p.street == 0)
+            continue;
+        double top = -1.0;
+        for (const auto& [ring, y] : tops)
+            if (inside(ring, {p.p.x, p.p.z}))
+                top = std::max(top, y);
+        if (top < 0.0)
+            continue;
+        ++on;
+        off += std::abs(p.p.y - top) > 1.0 ? 1 : 0;
+    }
+    CAPTURE(on);
+    CHECK(on > 50);
+    CHECK(off < on / 20);
+}
+
 TEST_CASE("settlement styles: a wealthy house is a mansion only on a large lot")
 {
     Layout l;
