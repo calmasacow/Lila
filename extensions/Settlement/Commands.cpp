@@ -50,7 +50,7 @@ struct Exposed
 };
 
 constexpr Exposed kInputs[] = {
-    {"profile", "string", "Style", 0, 0, "hamlet, streetVillage, medievalTown, usTown, manhattan, europeanCity, modernCity or scifiMegacity."},
+    {"profile", "string", "Style", 0, 0, "hamlet, streetVillage, medievalTown, usTown, mexicanCity, manhattan, europeanCity, modernCity or scifiMegacity."},
     {"pattern", "string", "Style", 0, 0, "Empty for the profile's; else organic, grid, radial, linear, organicGrid, none, tensor, contour, osm or example."},
     {"overrides", "string", "Style", 0, 0, "JSON object of profile fields to change, such as {\"maxFloors\": 6}."},
     {"growth", "float", "Layout", 0, 1, "How far the settlement has grown, 0 to 1."},

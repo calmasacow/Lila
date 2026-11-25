@@ -97,6 +97,27 @@ Profile usTown()
     return p;
 }
 
+/**
+ * A Mexican city: a grid of perimeter blocks, one- and two-storey houses wall to wall along every street with patios
+ * behind, flat roofs, narrow streets, the centre denser and taller.
+ */
+Profile mexicanCity()
+{
+    Profile p;
+    p.name = "mexicanCity";
+    p.pattern = Pattern::Grid;
+    p.era = "modern";
+    p.blockType = "perimeter";
+    p.lotMethod = "skeleton";
+    p.widthArterial = 2000.0, p.widthCollector = 1200.0, p.widthLocal = 900.0, p.widthAlley = 450.0, p.widthPath = 250.0;
+    p.gridWidth = 8000.0, p.gridDepth = 8000.0, p.arterialEvery = 5, p.maxBlock = 20000.0;
+    p.plaza = true, p.maxGrade = 0.12;
+    p.lotWidth = 1500.0, p.lotDepth = 2000.0, p.minLot = 60.0;
+    p.frontSetback = 0.0, p.sideSetback = 0.0, p.buildDepth = 1400.0;
+    p.minFloors = 1, p.maxFloors = 3, p.floorHeight = 330.0, p.roof = "flat", p.commercial = 0.3, p.falloff = 2.5;
+    return p;
+}
+
 /** Manhattan: long thin blocks, avenues every few streets, towers rising to the centre. */
 Profile manhattan()
 {
@@ -165,8 +186,8 @@ struct Builtin
 
 constexpr Builtin kBuiltins[] = {
     {"hamlet", hamlet},           {"streetVillage", streetVillage}, {"medievalTown", medievalTown},
-    {"usTown", usTown},           {"manhattan", manhattan},         {"europeanCity", europeanCity},
-    {"modernCity", modernCity},   {"scifiMegacity", scifiMegacity},
+    {"usTown", usTown},           {"mexicanCity", mexicanCity},     {"manhattan", manhattan},
+    {"europeanCity", europeanCity}, {"modernCity", modernCity},     {"scifiMegacity", scifiMegacity},
 };
 } // namespace
 

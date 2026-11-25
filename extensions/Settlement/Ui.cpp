@@ -217,7 +217,7 @@ void registerUi(ext::Context& ctx)
         o.shown = {"origin"};
         o.labels["origin"] = "Origin Lat, Lon";
         o.choices["profile"] = {{"hamlet", "Hamlet"}, {"streetVillage", "Street Village"}, {"medievalTown", "Medieval Town"}, {"usTown", "US Town"},
-                                {"manhattan", "Manhattan"}, {"europeanCity", "European City"}, {"modernCity", "Modern City"},
+                                {"mexicanCity", "Mexican City"}, {"manhattan", "Manhattan"}, {"europeanCity", "European City"}, {"modernCity", "Modern City"},
                                 {"scifiMegacity", "Sci-fi Megacity"}};
         std::vector<std::pair<std::string, std::string>> cultures = {{"", "From Location"}};
         for (const std::string& c : names::cultures())
