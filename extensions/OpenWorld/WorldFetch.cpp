@@ -5,6 +5,7 @@
 
 #include "Coast.h"
 #include "Osm.h"
+#include "RemixSpec.h"
 
 #include <algorithm>
 #include <chrono>
@@ -44,6 +45,48 @@ GeoBox gebcoBox(GeoBox b)
 {
     const double m = 2.0 / terrain::kGebcoPerDegree;
     return {std::max(-180.0, b.west - m), std::max(-90.0, b.south - m), std::min(180.0, b.east + m), std::min(90.0, b.north + m)};
+}
+
+/**
+ * The latitudes and longitudes a remix map reaches through one source (its box placed, scaled and turned on the map),
+ * so the source's sea floor grid covers the whole map's sea and not only its own box. Nullopt without a map size.
+ */
+std::optional<GeoBox> mapReach(const json& remix, const json& src, const GeoBox& b)
+{
+    const json map = remix.value("map", json::object());
+    const json size = map.is_object() ? map.value("size", json()) : json();
+    if (!size.is_array() || size.size() != 2 || !size[0].is_number() || !size[1].is_number() || size[0].get<double>() <= 0.0)
+        return std::nullopt;
+    const json centre = map.value("center", json::array({0.0, 0.0}));
+    double k = 1.0 / 3.0;
+    try
+    {
+        if (src.contains("scale") && src["scale"].is_number() && src["scale"].get<double>() > 0.0)
+            k = src["scale"].get<double>();
+        else if (const json s = remix.value("scale", json::object()); s.is_object() && s.contains("horizontal"))
+            k = parseScale(s["horizontal"], "horizontal");
+    }
+    catch (const std::exception&)
+    {
+        return std::nullopt;
+    }
+    const json at = src.value("at", json::array({0.0, 0.0}));
+    const double angle = src.value("angle", 0.0) * 3.14159265358979323846 / 180.0;
+    const double clat = 0.5 * (b.south + b.north), clon = 0.5 * (b.west + b.east);
+    const double mLat = 111132.92 - 559.82 * std::cos(2.0 * clat * 0.017453292519943295);
+    const double mLon = 111412.84 * std::cos(clat * 0.017453292519943295) - 93.5 * std::cos(3.0 * clat * 0.017453292519943295);
+    GeoBox r = b;
+    for (int corner = 0; corner < 4; ++corner)
+    {
+        const double x = centre[0].get<double>() + (corner & 1 ? 0.5 : -0.5) * size[0].get<double>() - at[0].get<double>();
+        const double z = centre[1].get<double>() + (corner & 2 ? 0.5 : -0.5) * size[1].get<double>() - at[1].get<double>();
+        // Back through the source's turn (counter-clockwise from above) and scale, cm to metres.
+        const double lx = (x * std::cos(angle) - z * std::sin(angle)) / k * 0.01, lz = (x * std::sin(angle) + z * std::cos(angle)) / k * 0.01;
+        const double lon = clon + lx / mLon, lat = clat - lz / mLat;
+        r = {std::min(r.west, lon), std::min(r.south, lat), std::max(r.east, lon), std::max(r.north, lat)};
+    }
+    r = {std::max(-180.0, r.west), std::max(-90.0, r.south), std::min(180.0, r.east), std::min(90.0, r.north)};
+    return r;
 }
 
 std::string boxKey(const GeoBox& b) { return std::format("{:.5f}_{:.5f}_{:.5f}_{:.5f}", b.west, b.south, b.east, b.north); }
@@ -227,8 +270,15 @@ FetchPlan planFetch(const json& spec, const fs::path& cache, const std::function
             it.kind = kind;
             it.file = pathOf(src[kind].get<std::string>());
             it.boxFrom = "source";
-            if (b)
-                it.box = it.kind == "bathymetry" ? gebcoBox(*b) : *b;
+            if (b && it.kind == "bathymetry")
+            {
+                const std::optional<GeoBox> reach = mapReach(remix, src, *b);
+                it.box = gebcoBox(reach ? *reach : *b);
+                if (reach)
+                    it.boxFrom = "the map, through the source";
+            }
+            else if (b)
+                it.box = *b;
             else
                 it.problem = "source '" + id + "' has no bbox [west, south, east, north] to fetch it for";
             if (it.kind == "bathymetry" && b && !bathymetrySource)

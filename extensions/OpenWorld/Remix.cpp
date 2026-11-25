@@ -771,6 +771,31 @@ int erodeSeams(const RemixSpec& spec, Heightfield& h)
 } // namespace
 
 /**
+ * Sea floor depths carried smoothly from the grids into the part of the map no grid reaches, so the floor has no step
+ * where a grid's box ends. Only depths are carried: grid land would raise the open sea.
+ */
+void extendGrids(terrain::Dem& g, RemixResult& out)
+{
+    std::vector<uint8_t> hole(g.metres.size());
+    size_t depths = 0, outside = 0;
+    for (size_t i = 0; i < g.metres.size(); ++i)
+    {
+        hole[i] = !(g.metres[i] < 0.0f);
+        depths += !hole[i];
+        outside += std::isnan(g.metres[i]);
+    }
+    if (depths == 0 || outside == 0)
+        return;
+    std::vector<float> carried = g.metres;
+    fillHoles(carried, hole, g.width, g.height);
+    for (size_t i = 0; i < g.metres.size(); ++i)
+        if (std::isnan(g.metres[i]))
+            g.metres[i] = std::min(carried[i], 0.0f);
+    out.notes.push_back("bathymetry: depths carried from the grids over the " + std::to_string(int(std::lround(100.0 * double(outside) / double(g.metres.size())))) +
+                        "% of the map no grid reaches");
+}
+
+/**
  * The sea floor on the base map (Terrain's bathymetry): land is what the sources make above sea level, sea the rest; the
  * sources' bathymetry grids, resampled through their placement, are blended in from the shelf profile. Into w.seaFloor.
  */
@@ -820,20 +845,25 @@ void layBathymetry(Work& w, RemixResult& out, const Heightfield& grid)
             sf.heights[i] = float(height);
             if (!anyGrid)
                 continue;
-            // Later sources win, as their elevation does.
-            for (size_t s = w.data.size(); s-- > 0;)
+            // Later sources blend over earlier ones across their feather, as their elevation does.
+            double depth = 0.0;
+            bool have = false;
+            for (size_t s = 0; s < w.data.size(); ++s)
                 if (w.data[s] && w.data[s]->bathymetry)
                 {
                     const Vec2 l = baseToSource(w.spec.sources[s], w.spec.horizontal, b);
                     const double v = gridHeight(*w.data[s]->bathymetry, w.data[s]->geo.toGeographic(l));
-                    if (!std::isnan(v))
-                    {
-                        g.metres[i] = float(v * w.spec.vertical);
-                        break;
-                    }
+                    if (std::isnan(v))
+                        continue;
+                    depth = have ? depth + (v - depth) * w.weight(s, b) : v;
+                    have = true;
                 }
+            if (have)
+                g.metres[i] = float(depth * w.spec.vertical);
         }
     });
+    if (anyGrid)
+        extendGrids(g, out);
     terrain::BathymetrySpec bs = terrain::BathymetrySpec::fromJson(w.spec.bathymetry);
     bs.file.clear();
     bs.seaLevel = 0.0;

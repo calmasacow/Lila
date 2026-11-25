@@ -231,6 +231,20 @@ TEST_CASE("world fetch: the plan lists each missing file with its size, skips pr
     u = planFetch(coastOnly, dir / "cache");
     CHECK(item(u, "terrain.coast.bathymetry")->boxFrom == "sources");
     CHECK(item(u, "terrain.coast.bathymetry")->box.north > 23.32);
+
+    // With a map size, a source's GEBCO reaches the whole map through the source's placement and scale.
+    json mapped = spec;
+    mapped["remix"]["scale"] = {{"horizontal", "1:4"}, {"vertical", 1.0}};
+    mapped["remix"]["map"] = {{"center", {0, 0}}, {"size", {4000000, 3000000}}};
+    const FetchPlan m = planFetch(mapped, dir / "cache");
+    const FetchItem* g = item(m, "coast.bathymetry");
+    REQUIRE(g);
+    CHECK(g->boxFrom == "the map, through the source");
+    // 40 km of map at 1:4 is 160 km of the source: about 0.78 degrees either side of its centre at 23 N.
+    const double centreLon = 0.5 * (-106.52 + -106.30);
+    CHECK(g->box.west == doctest::Approx(centreLon - 80000.0 / (111412.84 * std::cos(23.225 * 0.017453292519943295) - 93.5 * std::cos(3 * 23.225 * 0.017453292519943295)) - 2.0 / terrain::kGebcoPerDegree).epsilon(1e-3));
+    CHECK(g->box.north - g->box.south > 1.0);
+    CHECK(item(m, "coast.dem")->box.west == doctest::Approx(-106.52));
     fs::remove_all(dir);
 }
 
