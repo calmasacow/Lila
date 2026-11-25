@@ -17,6 +17,7 @@
 #include <lila/Node.h>
 #include <lila/Paths.h>
 #include <lila/Profile.h>
+#include <lila/Relocate.h>
 #include <lila/Transform.h>
 #include <lila/UnrealLink.h>
 #include <lila/Workspace.h>
@@ -830,6 +831,15 @@ void registerZoneCommands(ext::Context& ctx)
         };
         scene::types::registerType(ctx, std::move(t));
     }
+
+    // Zones lie on the world plane, not in the set's space, and their masks are world grids: relocating a scene can't carry them yet.
+    scene::relocate::registerHandler(kSetType, {.plan = [](const scene::relocate::Move& move, scene::NodeId node) -> scene::relocate::Edit {
+        const Node* n = move.graph->node(node);
+        std::shared_ptr<const ZoneSpec> spec = n ? specOf(*n) : nullptr;
+        if (!spec || !spec->playArea.empty() || std::any_of(spec->layers.begin(), spec->layers.end(), [](const Layer& l) { return !l.zones.empty(); }))
+            throw CommandError(std::string(n ? n->path() : "a zone set") + ": a zone set with zones can't be relocated, its zones are laid in world space");
+        return {};
+    }});
 
     ctx.registerCommand({
         .name = "zoneTypes",
