@@ -24,3 +24,9 @@ target_compile_definitions(lila_openworld_tests PRIVATE
 add_test(NAME lila_openworld_tests COMMAND lila_openworld_tests)
 # Clipper2 (vendored, from src/curve) trips MSVC unreachable-code warnings when its templates are instantiated.
 target_compile_options(lila_openworld_tests PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4702>)
+# lilabatch builds a small world, saves it and exits, then empty sessions with the Jolt extensions: exit 0, no crash report.
+if(TARGET lilabatch)
+    add_test(NAME lila_openworld_batch_exit COMMAND ${CMAKE_COMMAND} -DLILABATCH=$<TARGET_FILE:lilabatch>
+        -DEXT_DIR=${CMAKE_BINARY_DIR}/bin/$<CONFIG>/extensions -DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/world_exit.py
+        -DWORK=${CMAKE_CURRENT_BINARY_DIR}/batch_exit -P ${CMAKE_CURRENT_SOURCE_DIR}/world_exit.cmake)
+endif()

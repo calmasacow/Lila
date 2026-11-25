@@ -25,6 +25,7 @@
 #include <fstream>
 #include <mutex>
 #include <set>
+#include <thread>
 #include <unordered_map>
 
 #include <zstd.h>
@@ -844,9 +845,33 @@ size_t readCache(const std::filesystem::path& scene)
     return read;
 }
 
+namespace
+{
+/** The cache write that follows a save. Its code is this library's, so it is joined before Buildings unloads. */
+std::mutex gWriterMutex;
+/** Joins on destruction too: a host that never unloads Buildings tears it down with the statics. */
+struct Writer : std::thread
+{
+    using std::thread::operator=;
+    ~Writer()
+    {
+        if (joinable())
+            join();
+    }
+} gWriter;
+
+void joinWriter()
+{
+    std::lock_guard lock(gWriterMutex);
+    if (gWriter.joinable())
+        gWriter.join();
+}
+} // namespace
+
 void registerCache(lila::ext::Context& ctx)
 {
     using T = lila::ArgType;
+    ctx.track("building cache writer", [] { joinWriter(); });
     ctx.registerCommand({
         .name = "buildingCache",
         .doc = "The building cache beside the saved scene (<scene>_cache/buildings.bin): every generated building, written after a "
@@ -906,7 +931,11 @@ void registerCache(lila::ext::Context& ctx)
             if (all.empty() || unchanged(file, hash))
                 return;
             // The results are immutable and shared, so encoding them can run while the user carries on.
-            std::thread([file, all = std::move(all), hash] { writeBuildings(file, all, hash); }).detach();
+            std::lock_guard lock(gWriterMutex);
+            // Two writes of one file never overlap.
+            if (gWriter.joinable())
+                gWriter.join();
+            gWriter = std::thread([file, all = std::move(all), hash] { writeBuildings(file, all, hash); });
         },
         "Buildings");
 }

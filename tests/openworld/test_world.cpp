@@ -443,3 +443,11 @@ TEST_CASE("world: the tiny Sinaloa world builds headless from one spec file, rem
     run("openScene", {{"args", {scene.generic_string()}}});
     looks("reopened");
 }
+
+TEST_CASE("world spec: the remix's bathymetry files, which make worldBuild skip the terrain spec's own")
+{
+    CHECK(remixBathymetryFiles(json::object()).empty());
+    CHECK(remixBathymetryFiles({{"sources", {{{"id", "a"}, {"dem", "a.tif"}}}}}).empty());
+    const json remix = {{"sources", {{{"id", "coast"}, {"bathymetry", "real/gebco.tif"}}, {{"id", "capital"}}, {{"id", "bay"}, {"bathymetry", "b.tif"}}}}};
+    CHECK(remixBathymetryFiles(remix) == "real/gebco.tif, b.tif");
+}

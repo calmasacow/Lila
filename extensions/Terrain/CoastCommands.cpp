@@ -276,7 +276,7 @@ gn::NodeDecl bathyDecl()
     d.category = "Terrain";
     d.doc = "A seabed under the flat sea a land DEM leaves: a GEBCO grid (GeoTIFF or any elevation file) placed by the terrain's "
             "georeference and blended in from a shoreline profile, so the shore stays continuous and the shelf smooth; without a "
-            "grid, the profile alone (shelf, then the drop to deep water). Writes mask seabed. terrainBathymetry sets it; it "
+            "grid, the profile alone (shelf, then the drop to deep water); a grid it can't place leaves the seabed as it was. Writes mask seabed. terrainBathymetry sets it; it "
             "goes right after the source.";
     d.props = {{.id = "settings", .defaultValue = "{}", .doc = "The bathymetry settings, a JSON object (see terrainBathymetry)."}};
     d.sockets = {.inputs = {{.id = "heightfield", .type = gn::SocketType::Geometry}}, .outputs = {{.id = "heightfield", .type = gn::SocketType::Geometry}}};
@@ -292,22 +292,20 @@ gn::NodeDecl bathyDecl()
         BathymetryResult r;
         Georef geo;
         const bool hasGeo = publishedGeoref(c.env.owner, &geo);
-        if (s.file.empty())
-            r = applyBathymetry(h, s, nullptr, nullptr);
-        else if (!hasGeo)
+        // A real grid that can't be placed leaves the seabed as it is: a profile in its place would pass for real depths.
+        std::string unused;
+        std::shared_ptr<const Dem> grid;
+        if (!s.file.empty() && !hasGeo)
+            unused = "the terrain has no georeference (make it with terrainImportDem), so " + s.file + " can't be placed";
+        else if (!s.file.empty() && !(grid = loadGrid(s.file, h, geo, &unused)))
+            unused = "bathymetry grid " + s.file + " not used (" + unused + ")";
+        if (!unused.empty())
         {
-            r = applyBathymetry(h, s, nullptr, nullptr);
-            r.notes.insert(r.notes.begin(), "the terrain has no georeference (make it with terrainImportDem), so " + s.file +
-                                                " can't be placed; the seabed is the profile alone");
+            r.source = "none";
+            r.notes.push_back(unused + "; the seabed is left as it was");
         }
         else
-        {
-            std::string why;
-            const std::shared_ptr<const Dem> grid = loadGrid(s.file, h, geo, &why);
             r = applyBathymetry(h, s, grid.get(), grid ? &geo : nullptr);
-            if (!grid)
-                r.notes.insert(r.notes.begin(), "bathymetry grid not used (" + why + "); the seabed is the profile alone");
-        }
         for (const std::string& n : r.notes)
             log::warn("{}: {}", c.node.name, n);
         publishBathymetry(c.env.owner, c.node.name, std::move(r));
@@ -540,6 +538,35 @@ json finish(Edit& e, const Terrain& t, const std::string& cmd)
     for (const std::string& warning : c.coast.warnings)
         log::warn("{}: {}", cmd, warning);
     return stats(after, c);
+}
+
+/** A spec item placed off the terrain: its command refuses it, and terrainSpec's coast step skips it with a warning. */
+struct OffMapError : CommandError
+{
+    using CommandError::CommandError;
+};
+
+/** "<what> <id>: <part> at x, z lies outside the map (x a to b, z c to d)" for the first point off t; empty when all are on it. */
+std::string offMap(const Terrain& t, const std::string& what, const std::string& id, const std::vector<std::pair<std::string, glm::dvec2>>& points)
+{
+    const Heightfield& h = *t.local;
+    for (const auto& [part, p] : points)
+        if (!h.contains(p.x, p.y))
+        {
+            const glm::dvec3 at = t.world(p.x, 0.0, p.y), lo = t.world(h.origin.x, 0.0, h.origin.y),
+                             hi = t.world(h.origin.x + h.extent().x, 0.0, h.origin.y + h.extent().y);
+            return std::format("{} {}: {} at {:.0f}, {:.0f} lies outside the map (x {:.0f} to {:.0f}, z {:.0f} to {:.0f})", what, id, part, at.x, at.z,
+                               std::min(lo.x, hi.x), std::max(lo.x, hi.x), std::min(lo.z, hi.z), std::max(lo.z, hi.z));
+        }
+    return {};
+}
+
+std::vector<std::pair<std::string, glm::dvec2>> pathPoints(const std::vector<glm::dvec2>& path)
+{
+    std::vector<std::pair<std::string, glm::dvec2>> out;
+    for (size_t i = 0; i < path.size(); ++i)
+        out.emplace_back("point " + std::to_string(i), path[i]);
+    return out;
 }
 
 std::vector<glm::dvec2> localLine(const Terrain& t, const json& list, const std::string& cmd)
@@ -987,6 +1014,8 @@ json runAddChannel(const Args& a)
     s.path = localLine(t, pathList, cmd);
     if (s.path.size() < 2)
         throw CommandError(cmd + ": the path needs at least two points");
+    if (const std::string off = offMap(t, "channel", s.id, pathPoints(s.path)); !off.empty())
+        throw OffMapError(cmd + ": " + off);
     s.craft = boatCraft(a, "craft", "skiff", cmd);
     s.braids = int(std::clamp<int64_t>(a.get<int64_t>("braids", 1), 1, 8));
     s.braidSpread = std::max(0.0, a.get<double>("braidSpread", 0.0)) / ac;
@@ -1103,6 +1132,8 @@ json runAddReservoir(const Args& a)
     DamSpec s;
     s.a = t.local2(worldPoint(a.flags["a"], cmd));
     s.b = t.local2(worldPoint(a.flags["b"], cmd));
+    if (const std::string off = offMap(t, "reservoir", a.get<std::string>("id", "dam"), {{"dam end a", s.a}, {"dam end b", s.b}}); !off.empty())
+        throw OffMapError(cmd + ": " + off);
     if (a.has("crest"))
         s.crest = t.localHeight(a.get<double>("crest", 0.0), (s.a + s.b) * 0.5);
     s.thickness = std::max(100.0, a.get<double>("thickness", 800.0)) / ac;
@@ -1511,12 +1542,24 @@ json runSpecStep(const std::string& target, const json& value)
         steps.push_back({{"step", step}, {"command", command}, {"warnings", r.value("warnings", json::array())}});
     };
     auto on = [&](const char* k) { return value.contains(k) && !(value[k].is_boolean() && !value[k].get<bool>()) && !value[k].is_null(); };
+    json warnings = json::array();
+    auto placed = [&](const char* step, const char* command, const json& flags) {
+        try
+        {
+            call(step, command, flags);
+        }
+        catch (const OffMapError& e)
+        {
+            log::warn("terrainSpec: {}; skipped", e.what());
+            warnings.push_back(std::string(e.what()) + "; skipped");
+        }
+    };
     if (on("bathymetry"))
         call("bathymetry", "terrainBathymetry", value["bathymetry"]);
     for (const json& r : value.value("reservoirs", json::array()))
-        call("reservoirs", "terrainAddReservoir", r);
+        placed("reservoirs", "terrainAddReservoir", r);
     for (const json& c : value.value("channels", json::array()))
-        call("channels", "terrainAddChannel", c);
+        placed("channels", "terrainAddChannel", c);
     if (on("masks"))
         call("masks", "terrainCoastMasks", value["masks"]);
     if (on("mangroves"))
@@ -1539,7 +1582,7 @@ json runSpecStep(const std::string& target, const json& value)
     if (scene)
         call("routeCurves", "terrainRouteCurves", json::object());
     const json check = ops::execute("waterCheck", {{"args", {target}}});
-    return {{"steps", steps}, {"check", check}, {"warnings", json::array()}};
+    return {{"steps", steps}, {"check", check}, {"warnings", warnings}};
 }
 
 // ---------------------------------------------------------------------------------------------------- registration
@@ -1570,9 +1613,10 @@ void registerCoastCommands(ext::Context& ctx)
                "folder) and is applied only when a terrain is found. "
                "The DEM's flat sea (ground at or below sea level plus landTolerance, joined to the edge or deep grid water) takes "
                "the grid's depths blended in from a shoreline profile over blendWidth cm, so the shore is continuous and the shelf "
-               "smooth; with no grid the profile alone (shoreSlope off the beach, shelfDepth at shelfWidth, dropDepth beyond). "
+               "smooth; with no grid the profile alone (shoreSlope off the beach, shelfDepth at shelfWidth, dropDepth beyond); a "
+               "file the terrain can't place (no georeference) leaves the seabed as it was, source none, with a note. "
                "Writes the GEBCO credit into the terrain data's ATTRIBUTION.txt. off=True removes it. Returns the seabed source "
-               "(grid, profile or grid+profile), samples, depths and notes.",
+               "(grid, profile, grid+profile or none), samples, depths and notes.",
         .positionalDoc = "terrain mesh or its modifier",
         .flags = {{"file", "f", T::String, nullptr, "A GEBCO GeoTIFF (or any elevation file); with fetch, where the download is written."},
                   {"fetch", "fe", T::Bool, false, "Download GEBCO for the terrain's area (or bbox) through OpenTopography."},
@@ -2000,7 +2044,24 @@ json coastIssues(const std::string& terrain)
         Graph& g = Graph::current();
         const Terrain t = findTerrain(g, terrain, "terrainCheck");
         const Current c = currentCoast(g, t);
-        return c.hasCoast ? worldIssues(t, routeIssues(*t.local, c.coast)) : json::array();
+        json issues = c.hasCoast ? worldIssues(t, routeIssues(*t.local, c.coast)) : json::array();
+        // Spec items placed off the map (a terrain resized, or a spec written for another map): nothing of them is built.
+        auto off = [&](const std::string& what, const std::string& id, const std::vector<std::pair<std::string, glm::dvec2>>& pts) {
+            if (const std::string msg = offMap(t, what, id, pts); !msg.empty())
+            {
+                const glm::dvec2 p = pts.front().second;
+                issues.push_back({{"type", "outsideMap"}, {"about", id}, {"position", vec3(t.world(p.x, 0.0, p.y))}, {"message", msg}});
+            }
+        };
+        for (const DamSpec& d : c.damSpecs)
+            off("reservoir", d.id, {{"dam end a", d.a}, {"dam end b", d.b}});
+        for (const ChannelSpec& ch : c.spec.channels)
+            off("channel", ch.id, pathPoints(ch.path));
+        for (const LaneSpec& l : c.spec.lanes)
+            off("lane", l.id, l.at ? std::vector<std::pair<std::string, glm::dvec2>>{{"berth", *l.at}} : pathPoints(l.path));
+        for (const AirstripSpec& a : c.spec.airstrips)
+            off("airstrip", a.id, {{"end a", a.a}, {"end b", a.b}});
+        return issues;
     }
     catch (const std::exception&)
     {
