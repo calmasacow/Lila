@@ -1,5 +1,6 @@
 // Terrain: heightfield terrain as geometry nodes, with commands that build and read it and their UI.
 
+#include "Analysis.h"
 #include "CliffScene.h"
 #include "Coast.h"
 #include "ExportEngines.h"
@@ -45,6 +46,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
             [](const lila::events::EventData&) {
                 terrain::cliffs::forgetGoneCliffs();
                 terrain::forgetGoneVolumeResults();
+                terrain::forgetAnalyses();
             },
             "Terrain");
     return 0;

@@ -40,4 +40,6 @@ json envelopeJson(const Evaluated& e, size_t index);
 bool registerSiteNode(lila::ext::Context& ctx);
 /** Forgets what site modifiers no longer in the scene evaluated. */
 void forgetGoneSites();
+/** Forgets the ground grids kept for the last terrains sites were laid on (each holds its terrain mesh). */
+void forgetGrounds();
 } // namespace openworld::sites

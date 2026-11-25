@@ -63,6 +63,7 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
             [](const lila::events::EventData&) {
                 openworld::forgetGoneRemixes();
                 openworld::sites::forgetGoneSites();
+                openworld::sites::forgetGrounds();
             },
             "OpenWorld");
     return 0;

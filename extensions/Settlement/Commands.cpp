@@ -666,16 +666,14 @@ static std::vector<Vec2> generatorRegion(const Args& a)
 
 void registerCommands(ext::Context& ctx)
 {
-    // Layouts rebuilt from a replaced scene hold its terrain meshes (gigabytes): they go once nothing else holds those.
+    // Layouts are keyed by the meshes they read and hold them (gigabytes of terrain): a replaced scene's can never match again.
     for (const lila::events::Event e : {lila::events::Event::SceneNew, lila::events::Event::SceneOpened})
         lila::events::subscribe(
             e,
             [](const lila::events::EventData&) {
                 RebuildCache& c = rebuildCache();
                 std::lock_guard l(c.lock);
-                std::erase_if(c.entries, [](const RebuildCache::Entry& x) {
-                    return std::any_of(x.inputs.begin(), x.inputs.end(), [](const scene::MeshPtr& m) { return m && m.use_count() == 1; });
-                });
+                c.entries.clear();
             },
             "Settlement");
     std::vector<FlagDef> flags = {
