@@ -16,6 +16,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <set>
 
 using namespace lila;
 using namespace terraintest;
@@ -151,6 +152,38 @@ TEST_CASE("materials: layer weights sum to 1 everywhere, match their rules, and 
 
     CHECK_THROWS(terrain::MaterialRules::fromJson(json{{"layers", {{{"name", "a b"}}}}}));
     CHECK_THROWS(terrain::MaterialRules::fromJson(json{{"layers", {{{"name", "a"}}, {{"name", "a"}}}}}));
+}
+
+TEST_CASE("materials: a term's blur softens a class mask so the layer's noise breaks its edge off the grid")
+{
+    // A class mask stepping from 1 to 0 down the middle of the grid, as a land cover import writes one.
+    geo::Heightfield h = geo::makeHeightfield(129, 129, 1000.0, {0.0, 0.0});
+    std::vector<float>& cls = h.mask("landcover_forest");
+    for (int z = 0; z < h.nz; ++z)
+        for (int x = 0; x < h.nx; ++x)
+            cls[h.index(x, z)] = x < 64 ? 1.0f : 0.0f;
+    auto edges = [&](const json& term) {
+        terrain::MaterialRules r = terrain::MaterialRules::fromJson(
+            json{{"layers", {{{"name", "grass"}}, {{"name", "forest"}, {"when", {{"landcover_forest", term}}}, {"noise", {{"amount", 0.6}, {"scale", 4000.0}}}}}}});
+        terrain::applyMaterialRules(h, r);
+        const std::vector<float>& f = *h.findMask("layer_forest");
+        std::set<int> at;
+        for (int z = 0; z < h.nz; ++z)
+        {
+            int x = 0;
+            while (x + 1 < h.nx && !(f[h.index(x, z)] >= 0.5f && f[h.index(x + 1, z)] < 0.5f))
+                ++x;
+            at.insert(x);
+        }
+        return at;
+    };
+    const std::set<int> hard = edges({{"range", {0.5, nullptr}}, {"fade", 0.5}});
+    const std::set<int> soft = edges({{"range", {0.5, nullptr}}, {"fade", 0.5}, {"blur", 6000.0}});
+    MESSAGE("edge columns: hard " << hard.size() << ", blurred " << soft.size());
+    CHECK(hard.size() == 1);
+    CHECK(soft.size() >= 5);
+    CHECK(terrain::MaterialRules::fromJson(json{{"layers", {{{"name", "a"}}, {{"name", "b"}, {"when", {{"x", {{"range", {0, 1}}, {"blur", 500.0}}}}}}}}})
+              .toJson()["layers"][1]["when"]["x"]["blur"] == 500.0);
 }
 
 TEST_CASE("materials: default layers on a low coast with a deep seabed: sand, grass, forest and rock, no snow")

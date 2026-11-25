@@ -453,7 +453,7 @@ CoverResult scatterCover(const Heightfield& h, const CoverSpec& s, const std::ve
         CoverInputs& in = inputs[r];
         for (const Term& t : rule.terms)
         {
-            const std::vector<float>* g = fields.get(t.input);
+            const std::vector<float>* g = t.blur > 0.0 ? fields.blurred(t.input, t.blur) : fields.get(t.input);
             if (!g)
             {
                 missing.insert(t.input);

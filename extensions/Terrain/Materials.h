@@ -25,6 +25,8 @@ struct Term
     double hi = 1e30;
     double fade = 0.0;
     bool invert = false;
+    /** Blur radius over the input before the range is read, cm: class masks from a grid soften into gradients the layer's noise can break up. */
+    double blur = 0.0;
 
     double eval(double v) const;
     nlohmann::json toJson() const;
@@ -96,6 +98,8 @@ public:
     explicit SurfaceFields(const Heightfield& h);
     /** Null when the heightfield has no such mask and it isn't a derived field. */
     const std::vector<float>* get(const std::string& name);
+    /** get(name) blurred over radius cm (box filter, three passes), cached. */
+    const std::vector<float>* blurred(const std::string& name, double radius);
     const Heightfield& heightfield() const { return mH; }
 
 private:

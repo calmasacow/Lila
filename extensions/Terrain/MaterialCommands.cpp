@@ -660,7 +660,7 @@ void registerRuleCommands(ext::Context& ctx)
                "under the ones above it, so the weights (masks layer_<name>) always sum to 1.\n\n"
                "A layer is {name, material (a library id; Meadowlight's by default for the usual names), color ([r, g, b] "
                "linear, else the material's mean colour), roughness, tileSize (cm), opacity, when: {input: [min, max] or "
-               "{range, fade, invert}, biome: name(s)}, noise: {amount, scale (cm)}}. Inputs: height (cm), slope and aspect "
+               "{range, fade, invert, blur (cm)}, biome: name(s)}, noise: {amount, scale (cm)}}. Inputs: height (cm), slope and aspect "
                "(degrees), curvature, nearCliff, temperature (C), moisture, flow, wear, deposit, lakes, wet and every other "
                "mask, painted ones included. With no layers it uses defaults fitted to the terrain (sand only with seaLevel=).\n\n"
                "Adds a Terrain Layers node at the end of the terrain's group, or updates it. Returns each layer's coverage "

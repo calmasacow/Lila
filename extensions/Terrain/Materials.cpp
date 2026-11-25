@@ -4,6 +4,7 @@
 #include "Materials.h"
 
 #include "Analysis.h"
+#include "Shaping.h"
 
 #include <lila/ImageIO.h>
 #include <lila/Profile.h>
@@ -109,6 +110,7 @@ Term termFromJson(const std::string& input, const json& v)
         t.hi = matBound(v.value("below", json(nullptr)), t.hi);
         t.fade = std::max(0.0, v.value("fade", t.fade));
         t.invert = v.value("invert", false);
+        t.blur = std::max(0.0, v.value("blur", 0.0));
     }
     else if (v.is_number())
         t.lo = v.get<double>();
@@ -249,6 +251,8 @@ json Term::toJson() const
     json j = {{"range", r}, {"fade", fade}};
     if (invert)
         j["invert"] = true;
+    if (blur > 0.0)
+        j["blur"] = blur;
     return j;
 }
 
@@ -468,6 +472,18 @@ const std::vector<float>* SurfaceFields::get(const std::string& name)
     return &mDerived.emplace(name, std::move(out)).first->second;
 }
 
+const std::vector<float>* SurfaceFields::blurred(const std::string& name, double radius)
+{
+    const std::vector<float>* v = get(name);
+    const int r = int(std::lround(radius / mH.cell));
+    if (!v || r < 1)
+        return v;
+    const std::string key = name + "#blur" + std::to_string(r);
+    if (auto it = mDerived.find(key); it != mDerived.end())
+        return &it->second;
+    return &mDerived.emplace(key, boxBlurred(*v, mH.nx, mH.nz, r, 3)).first->second;
+}
+
 // ---------------------------------------------------------------------------------------------------- layer weights
 
 namespace
@@ -485,7 +501,7 @@ ResolvedRule resolveRule(SurfaceFields& f, const std::vector<Term>& terms, const
     ResolvedRule r;
     for (const Term& t : terms)
     {
-        const std::vector<float>* g = f.get(t.input);
+        const std::vector<float>* g = t.blur > 0.0 ? f.blurred(t.input, t.blur) : f.get(t.input);
         if (!g)
         {
             missing.insert(t.input);
