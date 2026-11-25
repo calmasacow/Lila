@@ -5,6 +5,7 @@
 
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
+#include <lila/Graph.h>
 #include <lila/Mesh.h>
 #include <lila/Profile.h>
 #include <lila/Slots.h>
@@ -151,6 +152,9 @@ private:
     std::vector<uint32_t> mStart, mItems;
 };
 
+std::mutex gGroundLock;
+std::map<uint64_t, std::shared_ptr<const GroundGrid>> gGrounds;
+
 /**
  * The grid for a ground mesh and its placement, rebuilt only when either changes. Keyed by a sample of the points
  * (a terrain has millions): the counts, every 97th position and the placement.
@@ -171,16 +175,14 @@ std::shared_ptr<const GroundGrid> groundFor(const std::shared_ptr<const lila::ge
     for (int c = 0; c < 4; ++c)
         for (int r = 0; r < 4; ++r)
             mix(xf[c][r]);
-    static std::mutex lock;
-    static std::map<uint64_t, std::shared_ptr<const GroundGrid>> cache;
-    std::lock_guard l(lock);
-    if (auto it = cache.find(h); it != cache.end())
+    std::lock_guard l(gGroundLock);
+    if (auto it = gGrounds.find(h); it != gGrounds.end())
         return it->second;
     // Two: the ground before and after an edit. A changed terrain's older grids are not asked for again.
-    if (cache.size() >= 2)
-        cache.clear();
+    if (gGrounds.size() >= 2)
+        gGrounds.clear();
     auto g = std::make_shared<const GroundGrid>(m, xf);
-    cache[h] = g;
+    gGrounds[h] = g;
     return g;
 }
 
@@ -639,6 +641,19 @@ json envelopeJson(const Evaluated& ev, size_t i)
         if (!out.contains(k))
             out[k] = v;
     return out;
+}
+
+void forgetGrounds()
+{
+    std::lock_guard l(gGroundLock);
+    gGrounds.clear();
+}
+
+void forgetGoneSites()
+{
+    const lila::scene::Graph& g = lila::scene::Graph::current();
+    std::lock_guard l(evalLock());
+    std::erase_if(evaluated(), [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first)); });
 }
 
 bool registerSiteNode(lila::ext::Context& ctx) { return lila::gn::registerDecl(ctx, siteDecl()) != nullptr; }

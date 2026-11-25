@@ -66,6 +66,7 @@ struct State
     bool modified = false;
     bool autosaveDirty = false;
     bool loading = false;
+    bool evaluateOnLoad = false;
     int opening = 0; // load() calls running
     std::filesystem::path loadingPath;
     uint64_t cleanStateId = 0;
@@ -480,6 +481,11 @@ void deserialize(const nlohmann::json& doc, const fs::path& sceneDir, double own
         }
         scene::poses::sceneFromJson(doc.value("poses", json::array()));
         scene::picker::sceneFromJson(doc.value("pickers", json::array()));
+        if (s.evaluateOnLoad)
+        {
+            LILA_ZONE_N("load.evaluate");
+            g.evaluateUpstream(g.nodes());
+        }
     }
     catch (...)
     {
@@ -764,6 +770,8 @@ bool loading()
 {
     return state().loading || state().opening > 0;
 }
+
+void setEvaluateOnLoad(bool on) { state().evaluateOnLoad = on; }
 
 const fs::path& loadingPath()
 {

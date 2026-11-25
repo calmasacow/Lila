@@ -8,6 +8,8 @@ lila_add_extension(lila_buildings_extension ID Buildings MANIFEST extension.json
     SOURCES ${BUILDINGS_CORE_SOURCES} ${BUILDINGS_SCENE_SOURCES} ${_weathering_sources})
 set_source_files_properties(${_weathering_sources} PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 target_include_directories(lila_buildings_extension PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${_weathering})
+find_package(zstd CONFIG REQUIRED)
+target_link_libraries(lila_buildings_extension PRIVATE zstd::libzstd)
 foreach(_host lila lilabatch)
     if(TARGET ${_host})
         add_dependencies(${_host} lila_buildings_extension)

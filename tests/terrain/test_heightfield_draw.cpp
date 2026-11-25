@@ -1,5 +1,6 @@
 #include "TestUtil.h"
 
+#include "core/Release.h"
 #include "geo/Heightfield.h"
 #include "geo/Primitives.h"
 #include "render/HeightfieldRenderer.h"
@@ -716,4 +717,33 @@ TEST_CASE("mesh cache: render and wireless copies built in parallel up front mat
         CHECK(wireless->indices == ui::renderMeshFor(mesh, tangents)->indices);
         CHECK(wireless->edgePoints.empty());
     }
+}
+
+TEST_CASE("mesh cache: the render copies of meshes that are gone go when swept, without anything new cached")
+{
+    geo::SphereOptions o;
+    o.subdivAxis = 24;
+    auto mesh = std::make_shared<const geo::Mesh>(geo::makeSphere(o));
+    auto kept = std::make_shared<const geo::Mesh>(geo::makeSphere(o));
+    std::weak_ptr<const render::RenderMesh> whole = ui::renderMeshFor(mesh), wireless = ui::wirelessMeshFor(mesh);
+    const auto keptCopy = ui::renderMeshFor(kept);
+    // Other layouts after it, so the few kept for deforming meshes to reuse no longer hold its copy.
+    std::vector<std::shared_ptr<const geo::Mesh>> others;
+    for (int i = 0; i < 10; ++i)
+    {
+        geo::SphereOptions other;
+        other.subdivAxis = 30 + i;
+        others.push_back(std::make_shared<const geo::Mesh>(geo::makeSphere(other)));
+        ui::renderMeshFor(others.back());
+    }
+    REQUIRE(!whole.expired());
+    REQUIRE(!wireless.expired());
+    mesh.reset();
+    // The cache holds its copies until it sweeps: nothing else holds them.
+    CHECK(!whole.expired());
+    ui::dropExpiredRenderMeshes();
+    lila::release::drain();
+    CHECK(whole.expired());
+    CHECK(wireless.expired());
+    CHECK(ui::renderMeshFor(kept) == keptCopy);
 }

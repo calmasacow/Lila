@@ -807,7 +807,12 @@ struct Viewport
     bool hasState = false; // nothing is drawn before the first submit
     int retries = 0;       // redraws in a row after an out-of-date swapchain
     int msaaGeneration = -1; // Impl::msaaGeneration the targets were made for
-    FrameState state;
+    /** The last frame submitted; the render thread draws it without copying it, so nothing changes it once submitted. */
+    std::shared_ptr<FrameState> state;
+    /** The frame the render thread draws (it rebases it in place). Changed under the mutex, by the render thread only. */
+    std::shared_ptr<FrameState> drawing;
+    /** Frames the render thread let go of, for the main thread to recycle and free. */
+    std::vector<std::shared_ptr<FrameState>> retired;
     /** The replaced frame's vertex lists, for the main thread's next frame. */
     FrameState spare;
     /** The last frame's mesh draws and their batches, reused while a new frame draws the same list. Render thread only. */
@@ -6314,10 +6319,20 @@ struct Renderer::Impl
         return v.refreshInterval;
     }
 
+    /** Under the mutex: the view draws the last submitted frame from now on, handing the one it drew back to the main thread. */
+    static void takeLatest(Viewport& v)
+    {
+        if (v.drawing == v.state)
+            return;
+        if (v.drawing)
+            v.retired.push_back(std::move(v.drawing));
+        v.drawing = v.state;
+    }
+
     /** The shortest time between two of the view's frames under its frame cap; zero when uncapped. */
     std::chrono::steady_clock::duration frameInterval(Viewport& v)
     {
-        const int cap = v.state.frameCap;
+        const int cap = v.state ? v.state->frameCap : kFrameCapRefresh;
         const std::chrono::duration<double> d = cap == kFrameCapRefresh ? refreshPeriod(v)
                                                 : cap > 0               ? std::chrono::duration<double>(1.0 / cap)
                                                                         : std::chrono::duration<double>(0.0);
@@ -6378,16 +6393,16 @@ struct Renderer::Impl
      * True when the frame could not be shown and should be drawn again straight away. latch runs once the frame's
      * fence and swapchain image are in hand, and may swap in a newer state submitted while the thread was blocked.
      */
-    bool render(Viewport& v, FrameState& s, const std::function<void(FrameState&)>& latch = {})
+    bool render(Viewport& v, std::shared_ptr<FrameState>& held, const std::function<void(std::shared_ptr<FrameState>&)>& latch = {})
     {
         LILA_ZONE();
 
-        applyMsaa(s);
+        applyMsaa(*held);
         if (v.msaaGeneration != msaaGeneration)
             v.needsRecreate = true;
-        if (v.vsync != s.vsync && !v.offscreen)
+        if (v.vsync != held->vsync && !v.offscreen)
         {
-            v.vsync = s.vsync;
+            v.vsync = held->vsync;
             v.needsRecreate = true;
         }
 
@@ -6436,7 +6451,8 @@ struct Renderer::Impl
         vkResetFences(vk.device, 1, &f.fence);
         // Waiting above can take a whole vblank; draw what the user is doing now, not what they did before it.
         if (latch)
-            latch(s);
+            latch(held);
+        FrameState& s = *held;
         if (s.cameraRelative && glm::length(s.eye) > kRebaseBeyond)
             rebaseOnEye(s);
         if (s.externalScene)
@@ -7565,7 +7581,7 @@ struct Renderer::Impl
             {
                 // Timing runs read every frame back, so each one's timestamps are collected.
                 v.readbackWanted = ++drawn == total || job.repeat > 1;
-                FrameState s = frame;
+                auto s = std::make_shared<FrameState>(frame);
                 render(v, s);
                 runs.push_back(v.timing);
             }
@@ -8831,12 +8847,13 @@ struct Renderer::Impl
                     {
                         initFrames(v);
                         // The main thread can be busy for a while after the window shows; until the first frame the window would show white.
-                        fillWindow(v.window, v.state.background.r, v.state.background.g, v.state.background.b);
+                        if (v.state)
+                            fillWindow(v.window, v.state->background.r, v.state->background.g, v.state->background.b);
                     }
                 }
                 if (!v.surface)
                     continue;
-                std::unique_ptr<EnvironmentData> env = pollEnvironment(v.state.envPath);
+                std::unique_ptr<EnvironmentData> env = pollEnvironment(v.state->envPath);
                 // Until the first environment arrives there is nothing to light with; the worker re-queues every viewport.
                 if (!env && !envLoaded)
                 {
@@ -8850,22 +8867,22 @@ struct Renderer::Impl
                         }
                     continue;
                 }
-                FrameState s = v.state;
+                takeLatest(v);
                 v.renderingSerial = v.submitted;
                 lock.unlock();
                 if (env)
                     uploadEnvironment(*env);
-                auto latch = [&](FrameState& latest) {
+                auto latch = [&](std::shared_ptr<FrameState>& latest) {
                     std::scoped_lock relock(mutex);
                     // A new environment or sample count needs the setup that ran before the wait, so it waits a frame.
-                    if (v.pending && v.state.envPath == latest.envPath && v.state.msaaSamples == latest.msaaSamples)
+                    if (v.pending && v.state->envPath == latest->envPath && v.state->msaaSamples == latest->msaaSamples)
                     {
-                        latest = v.state;
+                        takeLatest(v);
                         v.renderingSerial = v.submitted;
                         v.pending = false;
                     }
                 };
-                bool retry = render(v, s, latch);
+                bool retry = render(v, v.drawing, latch);
                 LILA_FRAME_MARK();
                 plotFrame(v.timing);
                 lock.lock();
@@ -9017,24 +9034,37 @@ void Renderer::resize(ViewportId id, int width, int height)
 void Renderer::submit(ViewportId id, FrameState state)
 {
     LILA_ZONE();
-    FrameState previous;
+    auto next = std::make_shared<FrameState>(std::move(state));
+    std::vector<std::shared_ptr<FrameState>> done;
     {
         std::scoped_lock lock(m->mutex);
         LILA_ZONE_N("renderer.submit locked");
         auto it = m->viewports.find(id);
         if (it == m->viewports.end())
             return;
-        previous = std::exchange(it->second->state, std::move(state));
-        render::reuseBuffers(it->second->spare, previous);
-        ++it->second->submitted;
-        it->second->pending = true;
-        it->second->hasState = true;
-        it->second->retries = 0;
+        Viewport& v = *it->second;
+        std::shared_ptr<FrameState> previous = std::exchange(v.state, std::move(next));
+        done.swap(v.retired);
+        // The render thread may still be drawing the replaced frame; it hands it back through retired once it lets go.
+        if (previous && previous != v.drawing)
+            done.push_back(std::move(previous));
+        for (std::shared_ptr<FrameState>& f : done)
+        {
+            render::reuseBuffers(v.spare, *f);
+            // Draws the new frame shares cost nothing to let go; a list of its own can hold a replaced scene's last references.
+            if (f->meshes.sameList(v.state->meshes))
+                f->meshes.clear();
+        }
+        ++v.submitted;
+        v.pending = true;
+        v.hasState = true;
+        v.retries = 0;
     }
     m->cv.notify_all();
-    // The frame before can hold the last references to a replaced scene's draws: gigabytes, freed off the main thread.
-    if (constexpr size_t kOnItsOwn = 1000; previous.meshes.size() >= kOnItsOwn)
-        release::later(std::move(previous));
+    // The frames before can hold the last references to a replaced scene's draws: gigabytes, freed off the main thread.
+    for (std::shared_ptr<FrameState>& f : done)
+        if (constexpr size_t kOnItsOwn = 1000; f->meshes.size() >= kOnItsOwn)
+            release::later(std::move(f));
 }
 
 void Renderer::reuseBuffers(ViewportId id, FrameState& state)

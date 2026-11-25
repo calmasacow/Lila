@@ -3,6 +3,7 @@
 #include "core/ExtensionContext.h"
 #include "core/Log.h"
 #include "core/Profile.h"
+#include "core/Release.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
 #include "scene/Node.h"
@@ -934,6 +935,25 @@ void unpublish(NodeId publisher)
 {
     std::lock_guard lock(tableMutex());
     table().erase(publisher);
+}
+
+void unpublishGone(const scene::Graph& g)
+{
+    LILA_ZONE();
+    std::vector<Published> gone;
+    {
+        std::lock_guard lock(tableMutex());
+        for (auto it = table().begin(); it != table().end();)
+            if (!g.node(it->first))
+            {
+                gone.push_back(std::move(it->second));
+                it = table().erase(it);
+            }
+            else
+                ++it;
+    }
+    // A world's slots run to millions of small allocations.
+    release::laterEach(std::move(gone));
 }
 
 std::vector<Slot> publishedSlots(NodeId publisher)

@@ -4,6 +4,10 @@
 #include "World.h"
 #include "ZoneScene.h"
 
+#include "RemixNode.h"
+#include "SitesNode.h"
+
+#include <lila/Events.h>
 #include <lila/Extension.h>
 #include <lila/Menus.h>
 
@@ -52,6 +56,16 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     openworld::registerSitesUi(ctx);
     openworld::world::registerWorld(ctx);
     openworld::world::registerWorldUi(ctx);
+    // What the replaced scene's remix and site modifiers published goes with it.
+    for (const lila::events::Event e : {lila::events::Event::SceneNew, lila::events::Event::SceneOpened})
+        lila::events::subscribe(
+            e,
+            [](const lila::events::EventData&) {
+                openworld::forgetGoneRemixes();
+                openworld::sites::forgetGoneSites();
+                openworld::sites::forgetGrounds();
+            },
+            "OpenWorld");
     return 0;
 }
 

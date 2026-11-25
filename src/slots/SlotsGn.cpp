@@ -50,23 +50,29 @@ std::mutex& geoMutex()
     static std::mutex m;
     return m;
 }
-/** Mesh -> geometry wrapper, so every instance of one visual shares a reference. */
-std::map<const geo::Mesh*, std::pair<std::weak_ptr<const geo::Mesh>, gn::GeometryPtr>>& geoCache()
+/**
+ * Mesh -> geometry wrapper, so every instance of one visual shares a reference while any uses it. Held weakly: the
+ * wrapper holds its mesh, so a strong entry would keep every visual ever placed alive.
+ */
+std::map<const geo::Mesh*, std::weak_ptr<const gn::Geometry>>& geoCache()
 {
-    static std::map<const geo::Mesh*, std::pair<std::weak_ptr<const geo::Mesh>, gn::GeometryPtr>> c;
+    static std::map<const geo::Mesh*, std::weak_ptr<const gn::Geometry>> c;
     return c;
 }
 
 gn::GeometryPtr geometryOf(const std::shared_ptr<const geo::Mesh>& m)
 {
     std::lock_guard lock(geoMutex());
-    auto& slot = geoCache()[m.get()];
-    if (slot.second && !slot.first.expired())
-        return slot.second;
+    auto& c = geoCache();
+    if (gn::GeometryPtr g = c[m.get()].lock(); g && g->mesh == m)
+        return g;
+    if (c.size() > 1024)
+        std::erase_if(c, [](const auto& e) { return e.second.expired(); });
     gn::Geometry g;
     g.mesh = m;
-    slot = {m, gn::makeGeometry(std::move(g))};
-    return slot.second;
+    gn::GeometryPtr out = gn::makeGeometry(std::move(g));
+    c[m.get()] = out;
+    return out;
 }
 
 bool setsVisual(const Payload& p)

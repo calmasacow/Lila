@@ -10,7 +10,8 @@
 /**
  * Freeing a replaced scene's data (gigabytes) on one background thread that keeps off the frames. The process heap has
  * one lock: a thread freeing gigabytes holds it for most of its run, and a frame being built waits on it at every
- * allocation. The releaser frees a piece at a time and holds off while a Hold lives (a viewport building a frame).
+ * allocation. The releaser frees a piece at a time and holds off while a Hold lives (a viewport building a frame);
+ * with no frame built for a moment (headless, a long command) it frees at normal priority.
  */
 namespace lila::release
 {
@@ -39,6 +40,9 @@ LILA_FOUNDATION_API void drain();
 
 /** Pieces queued or being freed. */
 LILA_FOUNDATION_API size_t pending();
+
+/** Values queued with later() or laterEach() that are entirely freed so far: caches holding weak references can sweep when it moves. */
+LILA_FOUNDATION_API uint64_t finished();
 
 /** Frees value on the releaser thread in one piece. */
 template <class T> void later(T&& value)

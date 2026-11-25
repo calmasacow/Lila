@@ -52,6 +52,7 @@ using namespace viewportDetail;
 
 ViewportWidget::ViewportWidget(QWidget* parent) : QWidget(parent)
 {
+    io::setEvaluateOnLoad(true);
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_PaintOnScreen);
     setAttribute(Qt::WA_NoSystemBackground);

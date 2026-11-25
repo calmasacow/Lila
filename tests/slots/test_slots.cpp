@@ -350,3 +350,20 @@ TEST_CASE("slotPublish writes slots from scripts and slotFind filters them")
     const json sel = run("slotFind", {{"type", "sign"}, {"select", true}});
     CHECK(sel["selected"] == json{"Shops"});
 }
+
+TEST_CASE("a replaced scene's publishers drop what they published")
+{
+    fresh();
+    run("createNode", {{"args", {"transform"}}, {"name", "Kept"}});
+    const scene::NodeId kept = scene::Graph::current().find("Kept")->id();
+    slots::publish(kept, street(1, 3, 0.0));
+    slots::publish(scene::NodeId(kept + 100000), street(2, 4, 0.0));
+    CHECK(slots::publishedSlots(kept).size() == 3);
+    CHECK(slots::publishedSlots(scene::NodeId(kept + 100000)).size() == 4);
+    slots::unpublishGone(scene::Graph::current());
+    CHECK(slots::publishedSlots(kept).size() == 3);
+    CHECK(slots::publishedSlots(scene::NodeId(kept + 100000)).empty());
+    // A new scene deletes no node one by one: its publishers' slots go with the scene.
+    run("newScene");
+    CHECK(slots::publishedSlots(kept).empty());
+}

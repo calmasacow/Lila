@@ -30,6 +30,11 @@ LILA_UI_API std::shared_ptr<const render::RenderMesh> renderMeshFor(const scene:
  * for a frame about to draw thousands of new meshes, which renderMeshFor would otherwise build one at a time.
  */
 LILA_UI_API void prewarmRenderMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes);
+/**
+ * Drops the render copies (whole, static and masked) of meshes that no longer exist. Lookups drop them only when they
+ * cache something new, so after a scene is replaced the old one's copies (gigabytes) would stay until then.
+ */
+LILA_UI_API void dropExpiredRenderMeshes();
 
 /** The mesh subdivided for smooth preview, cached per snapshot and level. Level 0 returns the mesh itself. */
 LILA_UI_API scene::MeshPtr smoothedFor(const scene::MeshPtr& mesh, int level);

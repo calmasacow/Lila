@@ -11,6 +11,7 @@
 #include <lila/Command.h>
 #include <lila/Curves.h>
 #include <lila/Deformer.h>
+#include <lila/Events.h>
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
@@ -665,6 +666,16 @@ static std::vector<Vec2> generatorRegion(const Args& a)
 
 void registerCommands(ext::Context& ctx)
 {
+    // Layouts are keyed by the meshes they read and hold them (gigabytes of terrain): a replaced scene's can never match again.
+    for (const lila::events::Event e : {lila::events::Event::SceneNew, lila::events::Event::SceneOpened})
+        lila::events::subscribe(
+            e,
+            [](const lila::events::EventData&) {
+                RebuildCache& c = rebuildCache();
+                std::lock_guard l(c.lock);
+                c.entries.clear();
+            },
+            "Settlement");
     std::vector<FlagDef> flags = {
         {"outline", "o", T::List, nullptr, "Closed outline, [[x, z], ...] or [[x, y, z], ...] in cm. Omit for a square of size."},
         {"streets", "st", T::List, nullptr, "Streets to keep as they are: a list of polylines."},

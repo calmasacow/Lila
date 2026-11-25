@@ -27,6 +27,8 @@
 #include <set>
 #include <unordered_map>
 
+#include <zstd.h>
+
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -525,6 +527,11 @@ void allPublished(std::vector<std::shared_ptr<const Published>>& out)
             else
                 out.push_back((it++)->second);
     }
+    if (!gone.empty())
+    {
+        std::lock_guard lock(gParseMutex);
+        std::erase_if(gParsed, [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first)); });
+    }
     lila::release::laterEach(std::move(gone));
 }
 
@@ -568,7 +575,11 @@ void clearGenerationCache()
 
 namespace
 {
-constexpr char kCacheMagic[8] = {'L', 'I', 'L', 'A', 'B', 'L', 'D', '1'};
+constexpr char kCacheMagic[8] = {'L', 'I', 'L', 'A', 'B', 'L', 'D', '2'};
+/** Fast enough that a world's buildings compress in under a second on a few cores, a third or less of the raw size. */
+constexpr int kCacheLevel = 3;
+/** No building comes near this: a frame claiming more is damaged. */
+constexpr unsigned long long kMaxBuildingBytes = 1ull << 30;
 
 /** The Buildings module on disk (file, size, time): a cache from any other build of the grammar is not trusted. */
 uint64_t generatorId()
@@ -606,6 +617,27 @@ uint64_t get(std::string_view in, size_t at)
 }
 
 using Buildings = std::map<uint64_t, std::shared_ptr<const Result>>;
+
+std::string compressBlob(const std::string& raw)
+{
+    std::string out(ZSTD_compressBound(raw.size()), '\0');
+    const size_t n = ZSTD_compress(out.data(), out.size(), raw.data(), raw.size(), kCacheLevel);
+    out.resize(ZSTD_isError(n) ? 0 : n);
+    return out;
+}
+
+/** The building in one compressed entry; null when the entry is damaged. */
+std::shared_ptr<const Result> decodeBlob(std::string_view blob)
+{
+    const unsigned long long size = ZSTD_getFrameContentSize(blob.data(), blob.size());
+    if (size == ZSTD_CONTENTSIZE_ERROR || size == ZSTD_CONTENTSIZE_UNKNOWN || size > kMaxBuildingBytes)
+        return nullptr;
+    std::string raw(size_t(size), '\0');
+    const size_t n = ZSTD_decompress(raw.data(), raw.size(), blob.data(), blob.size());
+    if (ZSTD_isError(n) || n != raw.size())
+        return nullptr;
+    return decodeResult(raw);
+}
 
 /** Every building the scene's cells show, by key. */
 Buildings sceneBuildings()
@@ -656,9 +688,14 @@ long long writeBuildings(const std::filesystem::path& file, const Buildings& all
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<std::pair<uint64_t, std::shared_ptr<const Result>>> list(all.begin(), all.end());
     std::vector<std::string> blobs(list.size());
+    std::atomic<uint64_t> raw{0};
     tbb::parallel_for(tbb::blocked_range<size_t>(0, list.size()), [&](const tbb::blocked_range<size_t>& r) {
         for (size_t i = r.begin(); i < r.end(); ++i)
-            blobs[i] = encodeResult(*list[i].second);
+        {
+            const std::string bytes = encodeResult(*list[i].second);
+            raw += bytes.size();
+            blobs[i] = compressBlob(bytes);
+        }
     });
     std::string head(kCacheMagic, sizeof kCacheMagic);
     put(head, generatorId());
@@ -695,7 +732,8 @@ long long writeBuildings(const std::filesystem::path& file, const Buildings& all
         gDiskHash[file] = hash;
     }
     lila::release::laterEach(std::move(blobs));
-    lila::log::info("Buildings: {} buildings cached in {} ({:.0f} MB, {:.1f} s)", list.size(), file.generic_string(), double(offset) / 1048576.0,
+    lila::log::info("Buildings: {} buildings cached in {} ({:.0f} MB, {:.0f} MB uncompressed, {:.1f} s)", list.size(), file.generic_string(),
+                    double(offset) / 1048576.0, double(raw.load()) / 1048576.0,
                     std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count());
     return (long long)list.size();
 }
@@ -775,7 +813,7 @@ size_t readCache(const std::filesystem::path& scene)
             if (have[i])
                 continue;
             const uint64_t at = get(in, 24 + i * 24 + 8), size = get(in, 24 + i * 24 + 16);
-            if (at > in.size() || size > in.size() - at || !(results[i] = decodeResult(in.substr(size_t(at), size_t(size)))))
+            if (at > in.size() || size > in.size() - at || !(results[i] = decodeBlob(in.substr(size_t(at), size_t(size)))))
                 ++damaged;
         }
     });
@@ -854,6 +892,9 @@ void registerCache(lila::ext::Context& ctx)
         if (const std::filesystem::path& p = lila::io::loadingPath(); !p.empty())
             readCache(p);
     });
+    // A replaced scene's cells are gone: what they published goes now, not when something next lists the buildings.
+    for (const lila::events::Event e : {lila::events::Event::SceneNew, lila::events::Event::SceneOpened})
+        lila::events::subscribe(e, [](const lila::events::EventData&) { allPublished(); }, "Buildings");
     lila::events::subscribe(
         lila::events::Event::SceneSaved,
         [](const lila::events::EventData& e) {
