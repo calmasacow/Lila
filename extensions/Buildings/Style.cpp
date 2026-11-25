@@ -88,6 +88,11 @@ Style Style::fromJson(const json& j, std::string* error)
     read(b, "width", s.bayWidth);
     read(b, "min", s.minBay);
     read(b, "cornerWidth", s.cornerWidth);
+    read(b, "rhythm", s.rhythm);
+    read(b, "blank", s.blankBays);
+    read(b, "side", s.sideOpenings);
+    read(b, "blankWithin", s.blankWithin);
+    read(b, "sparseWithin", s.sparseWithin);
     const json op = j.value("openings", json::object());
     const json w = op.value("window", json::object()), d = op.value("door", json::object()), sh = op.value("shopfront", json::object());
     read(w, "width", s.windowW);
@@ -181,7 +186,8 @@ json Style::toJson() const
     j["description"] = description;
     j["tags"] = tags;
     j["floors"] = {{"min", minFloors}, {"max", maxFloors}, {"groundHeight", groundHeight}, {"height", floorHeight}, {"plinth", plinth}};
-    j["bays"] = {{"width", bayWidth}, {"min", minBay}, {"cornerWidth", cornerWidth}};
+    j["bays"] = {{"width", bayWidth}, {"min", minBay}, {"cornerWidth", cornerWidth}, {"rhythm", rhythm}, {"blank", blankBays}, {"side", sideOpenings},
+                 {"blankWithin", blankWithin}, {"sparseWithin", sparseWithin}};
     j["openings"] = {{"window", {{"width", windowW}, {"height", windowH}, {"sill", windowSill}, {"kind", windowKind}}},
                      {"door", {{"width", doorW}, {"height", doorH}, {"kind", doorKind}}},
                      {"shopfront", {{"width", shopW}, {"height", shopH}}},

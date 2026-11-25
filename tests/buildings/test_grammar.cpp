@@ -538,6 +538,45 @@ TEST_CASE("buildings: no two faces of a building, or of neighbours across a part
     }
 }
 
+TEST_CASE("buildings: bay rhythm: blank piers on street fronts, sparser side walls, none facing a neighbour close by")
+{
+    const Style& st = styles().at("residential");
+    // A neighbour 2 m off the left wall; the right wall looks over open ground.
+    std::vector<Spec> specs = {rect(0, 0, 2400, 1200, 3, {0, 2, 2, 2}, 0x61), rect(-1200, 0, 1000, 1200, 2, {0, 2, 2, 2}, 0x62)};
+    measureClearance(specs);
+    CHECK(specs[0].clearance[3] == doctest::Approx(200.0).epsilon(0.01));
+    CHECK(specs[0].clearance[1] == doctest::Approx(2000.0));
+    CHECK(Spec::fromJson(specs[0].toJson()).clearance == specs[0].clearance);
+    const auto r = generate(specs[0], st, {});
+    std::map<std::string, int> openings, bays;
+    for (const Bay& b : r->bays)
+    {
+        const std::string f = b.path.substr(0, b.path.find("/l"));
+        ++bays[f];
+        openings[f] += b.kind != "wall";
+    }
+    CHECK(bays["t0/f3"] > 0);
+    CHECK(openings["t0/f3"] == 0);
+    CHECK(openings["t0/f1"] < bays["t0/f1"]);
+    CHECK(openings["t0/f0"] * 3 >= bays["t0/f0"] * 2);
+    // Without a measured neighbour a side wall still opens a column.
+    CHECK(openings["t0/f1"] > 0);
+
+    // A rhythm in the style lays blank piers mirrored from both ends.
+    Style piers = st;
+    piers.rhythm = "wb";
+    const auto rp = generate(rect(0, 0, 2400, 1200, 2, {0, 2, 2, 2}, 0x63), piers, {});
+    std::vector<std::string> row;
+    for (const Bay& b : rp->bays)
+        if (b.path.rfind("t0/f0/l1/", 0) == 0)
+            row.push_back(b.kind);
+    REQUIRE(row.size() >= 4);
+    CHECK(row[0] == "window");
+    CHECK(row[1] == "wall");
+    CHECK(row[row.size() - 1] == "window");
+    CHECK(row[row.size() - 2] == "wall");
+}
+
 TEST_CASE("buildings: parapets and cornices stop short of a party wall and mitre at corners")
 {
     for (const char* id : {"colonial", "residential"})

@@ -179,6 +179,14 @@ struct Style
     double groundHeight = 420.0, floorHeight = 320.0, plinth = 30.0;
     // Bays
     double bayWidth = 320.0, minBay = 200.0, cornerWidth = 40.0;
+    /**
+     * Bay rhythm: which bay columns of a facade are blank wall. `rhythm` lays letters from both ends of the facade inward
+     * ("w" opening, "b" blank; "wbw" gives window, pier, window... mirrored); without one, street and courtyard columns are
+     * blank by chance `blankBays` and side walls open by chance `sideOpenings` (halved within `sparseWithin` of a
+     * neighbour). Walls within `blankWithin` of a neighbour have no openings.
+     */
+    std::string rhythm;
+    double blankBays = 0.12, sideOpenings = 0.5, blankWithin = 300.0, sparseWithin = 800.0;
     double windowW = 0.45, windowH = 0.55, windowSill = 0.28; // of the bay width / floor height
     double doorW = 0.45, doorH = 0.78;
     double shopW = 0.82, shopH = 0.78;

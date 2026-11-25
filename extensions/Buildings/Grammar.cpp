@@ -719,6 +719,59 @@ std::pair<BandEnd, BandEnd> bandEnds(const Ring& ring, const std::vector<int>& s
     return {end((e + n - 1) % n), end((e + 1) % n)};
 }
 
+/**
+ * Which bay columns of a facade are blank wall, the same on every floor. Street and courtyard facades follow the style's
+ * rhythm, else lose a few columns by chance (never a door's, never more than a third); side walls open fewer columns, fewer
+ * still near a neighbour, and none when one stands within the style's blankWithin.
+ */
+std::vector<char> blankColumns(const Ctx& c, const TierPlan& tier, size_t edge, const std::string& fpath, int nb, int side, bool courtyard, bool tower,
+                               const std::vector<int>& doorBays)
+{
+    std::vector<char> blank(size_t(std::max(nb, 0)), 0);
+    if (nb <= 0 || tower)
+        return blank;
+    const Style& st = c.st;
+    const bool street = side == 0 && !courtyard;
+    const double clear = courtyard || edge >= tier.clear.size() ? 1e9 : tier.clear[edge];
+    if (!street && !courtyard && clear < st.blankWithin)
+    {
+        std::fill(blank.begin(), blank.end(), char(1));
+        return blank;
+    }
+    const auto isDoor = [&](int k) { return std::find(doorBays.begin(), doorBays.end(), k) != doorBays.end(); };
+    // Curtain walls glaze every bay they face the street or open ground with.
+    const double blankChance = st.glassFacade ? 0.0 : st.blankBays;
+    const double sideChance = (st.glassFacade ? 1.0 : st.sideOpenings) * (clear < st.sparseWithin ? 0.5 : 1.0);
+    for (int k = 0; k < nb; ++k)
+    {
+        // Mirrored about the middle, so a facade's piers pair up.
+        const int sym = std::min(k, nb - 1 - k);
+        if (!st.rhythm.empty() && (street || courtyard))
+            blank[size_t(k)] = st.rhythm[size_t(sym) % st.rhythm.size()] == 'b';
+        else if (street || courtyard)
+            blank[size_t(k)] = nb >= 3 && c.rnd(fpath + "/col" + std::to_string(sym)) < blankChance;
+        else
+            blank[size_t(k)] = c.rnd(fpath + "/col" + std::to_string(sym)) >= sideChance;
+        if (isDoor(k))
+            blank[size_t(k)] = 0;
+    }
+    if (street || courtyard)
+    {
+        // At most a third of the columns blank, giving back the middle ones first.
+        int n = int(std::count(blank.begin(), blank.end(), char(1)));
+        for (int d = 0; d <= nb / 2 && n > nb / 3; ++d)
+            for (int k : {nb / 2 - d, (nb - 1) / 2 + d})
+                if (k >= 0 && k < nb && blank[size_t(k)] && n > nb / 3)
+                {
+                    blank[size_t(k)] = 0;
+                    --n;
+                }
+    }
+    else if (std::all_of(blank.begin(), blank.end(), [](char b) { return b != 0; }) && st.sideOpenings > 0.0 && clear >= st.sparseWithin)
+        blank[size_t(nb / 2)] = 0;
+    return blank;
+}
+
 void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool courtyard, int holeIndex, const Ring& ring, int side,
                 const std::string& edgeId)
 {
@@ -803,6 +856,8 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             if (std::find(doorBays.begin(), doorBays.end(), k) == doorBays.end())
                 doorBays.push_back(k);
         }
+
+    const std::vector<char> blank = blankColumns(c, tier, edge, fpath, nb, side, courtyard, tower, doorBays);
 
     const int plinthOwner = [&] {
         if (!baseTier || tower)
@@ -934,6 +989,8 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 kind = "door";
             if (tower)
                 kind = "window";
+            if (blank[size_t(k)] && kind == "window")
+                kind = "wall";
             if (auto it = c.ed.bays.find(bpath); it != c.ed.bays.end())
                 kind = it->second;
             if (kind == "arcade" && !(ground && street))
