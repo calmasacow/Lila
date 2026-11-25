@@ -3,6 +3,8 @@
 #include "core/CrashHandler.h"
 #include "core/Paths.h"
 #include "core/Profiler.h"
+#include "core/Release.h"
+#include "core/SystemMemory.h"
 #include "core/Version.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
@@ -33,6 +35,7 @@
 #include <miniz.h>
 #include <nlohmann/json.hpp>
 
+#include <cmath>
 #include <cstdio>
 #include <functional>
 #include <stdexcept>
@@ -582,6 +585,75 @@ void registerAll(QWidget* mainWindow)
                "error, elevated and systemTracing (call-stack sampling and context switches, only when running as administrator).",
         .undoable = false,
         .run = [](const Args&) -> json { return status(); },
+    });
+    ops::registerCommand({
+        .name = "memoryReport",
+        .doc = "This process's memory in MB: commitMB (private commit), workingSetMB, releasePending (pieces the background "
+               "releaser still has to free). heaps= walks the process heaps (seconds on a big scene) and adds busyMB (allocated), "
+               "freeMB (committed but free), segmentsMB, block counts and busyBySizeMB (allocated MB by block size). drain= "
+               "first waits for the releaser to finish. types=N lists the N most numerous live objects with virtual functions "
+               "by class (shared objects as std::_Ref_count_obj2<T>), to find what holds memory after a scene is replaced. "
+               "holders=<class text> follows references back from samples= such objects depth= levels, naming each holder "
+               "(class, static variable or block size); it stops the whole process while it scans.",
+        .flags = {{"heaps", "h", ArgType::Bool, false, "Walk the process heaps."},
+                  {"drain", "d", ArgType::Bool, false, "Wait for the background releaser first."},
+                  {.name = "types", .shortName = "t", .type = ArgType::Int, .defaultValue = 0, .doc = "List the most numerous live object types.", .min = 0, .max = 1000},
+                  {"holders", "ho", ArgType::String, "", "Trace what holds live objects whose class name contains this text."},
+                  {.name = "samples", .shortName = "sa", .type = ArgType::Int, .defaultValue = 16, .doc = "Objects holders= follows.", .min = 1, .max = 4096},
+                  {.name = "depth", .shortName = "de", .type = ArgType::Int, .defaultValue = 3, .doc = "Levels of holders to follow.", .min = 1, .max = 8}},
+        .undoable = false,
+        .run = [](const Args& a) -> json {
+            constexpr double kMB = 1048576.0;
+            json out = json::object();
+            if (a.get<bool>("drain", false))
+            {
+                QElapsedTimer t;
+                t.start();
+                release::drain();
+                out["drainSeconds"] = double(t.elapsed()) / 1000.0;
+            }
+            const ProcessMemory pm = processMemory();
+            out["commitMB"] = std::round(double(pm.commit) / kMB);
+            out["workingSetMB"] = std::round(double(pm.workingSet) / kMB);
+            out["releasePending"] = release::pending();
+            if (a.get<bool>("heaps", false))
+            {
+                const HeapUse h = heapUse();
+                out["heaps"] = h.heaps;
+                out["busyMB"] = std::round(double(h.busy) / kMB);
+                out["freeMB"] = std::round(double(h.free) / kMB);
+                out["segmentsMB"] = std::round(double(h.committed) / kMB);
+                out["busyBlocks"] = h.busyBlocks;
+                out["freeBlocks"] = h.freeBlocks;
+                json sizes = json::object();
+                for (size_t i = 0; i < h.busyBySize.size(); ++i)
+                    if (h.busyBySize[i] >= size_t(kMB))
+                        sizes[i == 0 ? std::string("<128") : ">=" + std::to_string(size_t(1) << (i + 6))] = std::round(double(h.busyBySize[i]) / kMB);
+                out["busyBySizeMB"] = std::move(sizes);
+            }
+            if (const int top = a.get<int>("types", 0); top > 0)
+            {
+                json types = json::array();
+                for (const HeapType& t : heapTypes(size_t(top)))
+                    types.push_back({{"type", t.name}, {"count", t.count}, {"MB", std::round(double(t.bytes) / kMB * 10.0) / 10.0}});
+                out["types"] = std::move(types);
+            }
+            if (const std::string type = a.get<std::string>("holders", ""); !type.empty())
+            {
+                const HeapHolders h = heapHolders(type, size_t(a.get<int>("samples", 16)), size_t(a.get<int>("depth", 3)));
+                json levels = json::array();
+                for (const auto& level : h.levels)
+                {
+                    json l = json::array();
+                    for (const HeapHolders::Holder& x : level)
+                        l.push_back({{"holder", x.what}, {"count", x.count}});
+                    levels.push_back(std::move(l));
+                }
+                out["holders"] = {{"objects", h.objects}, {"levels", std::move(levels)}};
+            }
+            return out;
+        },
+        .examples = {"lila.ops.memoryReport(heaps=True, drain=True)"},
     });
     ops::registerCommand({
         .name = "perfTraceDialog",
