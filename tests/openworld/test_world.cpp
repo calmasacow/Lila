@@ -371,6 +371,13 @@ TEST_CASE("world: the tiny Sinaloa world builds headless from one spec file, rem
     REQUIRE(r["world"].is_string());
     lila::scene::Graph& g = lila::scene::Graph::current();
     CHECK(fs::exists(fs::path(r["built"]["remixOsm"].get<std::string>())));
+    // The remixed OpenStreetMap lines are hidden in the built world, and the result says so.
+    REQUIRE(r["built"].contains("remixFeatures"));
+    CHECK(run("getAttr", {{"args", {r["built"]["remixFeatures"].get<std::string>() + ".visibility"}}}) == false);
+    bool noted = false;
+    for (const json& n : r["notes"])
+        noted |= n.get<std::string>().find("are hidden") != std::string::npos;
+    CHECK(noted);
     CHECK(fs::exists(out / "settlements" / "Puerto.osm.json"));
     CHECK(g.find("Puerto_Buildings"));
     CHECK(g.find("Capital_Buildings"));

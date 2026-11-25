@@ -664,7 +664,14 @@ json buildWorld(json spec, const BuildOptions& o)
                 built["remixOsm"] = remixOsm;
                 built["origin"] = origin;
                 if (applied.contains("features") && applied["features"].contains("group"))
+                {
                     built["remixFeatures"] = applied["features"]["group"];
+                    // Thousands of source lines (every road, building outline and shore) drawn over the finished map bury
+                    // it; the terrain, settlements and sites already carry them.
+                    run("setAttr", {{"args", {applied["features"]["group"].get<std::string>() + ".visibility", false}}});
+                    notes.push_back("the remixed OpenStreetMap lines (" + applied["features"]["group"].get<std::string>() +
+                                    ") are hidden; show the group to see them");
+                }
                 // The remix overlay is an editing aid that projects every remixed line each frame: a built world
                 // starts with it off (Remix Overlay turns it back on).
                 run("remixView", {{"args", {terrain}}, {"overlay", false}});
