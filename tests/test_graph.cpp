@@ -4,6 +4,7 @@
 
 #include "TestUtil.h"
 
+#include "core/Release.h"
 #include "ops/Command.h"
 #include "ops/Undo.h"
 #include "scene/Graph.h"
@@ -190,6 +191,18 @@ TEST_CASE("scene save/load round trip")
     CHECK(run("getAttr", {{"args", {"B.rotateOrder"}}}) == 2);
     CHECK(ops::execute("undoInfo", json::object())["undo"].get<std::string>().empty());
     CHECK(io::serialize() == doc);
+}
+
+TEST_CASE("the releaser counts the values it has finished freeing")
+{
+    release::drain();
+    const uint64_t before = release::finished();
+    release::later(std::vector<int>(1000, 1));
+    std::vector<std::vector<int>> many(50, std::vector<int>(100, 2));
+    release::laterEach(std::move(many));
+    release::drain();
+    CHECK(release::finished() == before + 2);
+    CHECK(release::pending() == 0);
 }
 
 TEST_CASE("parent chain follows selection order")

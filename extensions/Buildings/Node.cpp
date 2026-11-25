@@ -525,6 +525,11 @@ void allPublished(std::vector<std::shared_ptr<const Published>>& out)
             else
                 out.push_back((it++)->second);
     }
+    if (!gone.empty())
+    {
+        std::lock_guard lock(gParseMutex);
+        std::erase_if(gParsed, [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first)); });
+    }
     lila::release::laterEach(std::move(gone));
 }
 
@@ -854,6 +859,9 @@ void registerCache(lila::ext::Context& ctx)
         if (const std::filesystem::path& p = lila::io::loadingPath(); !p.empty())
             readCache(p);
     });
+    // A replaced scene's cells are gone: what they published goes now, not when something next lists the buildings.
+    for (const lila::events::Event e : {lila::events::Event::SceneNew, lila::events::Event::SceneOpened})
+        lila::events::subscribe(e, [](const lila::events::EventData&) { allPublished(); }, "Buildings");
     lila::events::subscribe(
         lila::events::Event::SceneSaved,
         [](const lila::events::EventData& e) {

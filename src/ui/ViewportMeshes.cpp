@@ -256,6 +256,8 @@ struct EmittedDraw
 struct ViewportWidget::MeshDrawCache
 {
     uint64_t structure = 0;
+    /** release::finished() when render copies of gone meshes were last swept. */
+    uint64_t sweptAt = ~uint64_t(0);
     std::vector<MeshEntry> entries; // parallel to sceneIndex::ofType(g, "mesh")
     MeshSettings settings;
     uint64_t settingsId = 0;
@@ -377,6 +379,7 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
                 cache.entries[i].id = meshes[i]->id();
             }
         cache.structure = g.structure();
+        cache.sweptAt = ~uint64_t(0);
         // A replaced scene leaves thousands of entries holding its draws: freed off the frame.
         if (constexpr size_t kOnItsOwn = 64; old.size() >= kOnItsOwn)
         {
@@ -386,6 +389,13 @@ void ViewportWidget::drawMeshNodes(render::FrameState& s, const RenderView* rv, 
                 dropped.push_back(std::move(e));
             release::laterEach(std::move(dropped));
         }
+    }
+
+    // Meshes die when the releaser frees what held them, long after the frame that let go of them.
+    if (!rv && release::finished() != cache.sweptAt)
+    {
+        cache.sweptAt = release::finished();
+        dropExpiredRenderMeshes();
     }
 
     std::unordered_set<scene::NodeId> hilite;

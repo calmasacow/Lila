@@ -703,6 +703,14 @@ std::shared_ptr<const MaskedMesh> maskedRenderMeshFor(const scene::MeshPtr& mesh
     return out;
 }
 
+void dropExpiredRenderMeshes()
+{
+    LILA_ZONE();
+    dropExpired(cache());
+    dropExpired(staticCopies());
+    dropExpiredMasked();
+}
+
 void prewarmWirelessMeshes(const std::vector<std::pair<scene::MeshPtr, bool>>& meshes)
 {
     LILA_ZONE();

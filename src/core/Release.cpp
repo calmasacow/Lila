@@ -30,6 +30,9 @@ struct State
     std::deque<std::unique_ptr<Piece>> queue;
     size_t busy = 0;
     std::atomic<int> holds{0};
+    std::atomic<uint64_t> finished{0};
+    /** steady_clock ticks when the last Hold ended. */
+    std::atomic<int64_t> heldUntil{0};
     bool started = false;
 };
 
@@ -40,12 +43,28 @@ State& state()
     return *s;
 }
 
+/**
+ * Below normal while viewports draw, so freeing never takes a core from a frame; normal once none has for a moment
+ * (headless, a long command, a build), so a freed world comes back as fast as the heap allows.
+ */
+void keepOutOfFrames(State& s)
+{
+    constexpr auto kQuiet = std::chrono::milliseconds(250);
+    const bool drawing = s.holds.load(std::memory_order_acquire) > 0 ||
+                         std::chrono::steady_clock::now().time_since_epoch().count() - s.heldUntil.load(std::memory_order_acquire) <
+                             std::chrono::duration_cast<std::chrono::steady_clock::duration>(kQuiet).count();
+    static thread_local int was = -1;
+    if (int(drawing) == was)
+        return;
+    was = int(drawing);
+#ifdef _WIN32
+    SetThreadPriority(GetCurrentThread(), drawing ? THREAD_PRIORITY_BELOW_NORMAL : THREAD_PRIORITY_NORMAL);
+#endif
+}
+
 void run()
 {
     LILA_THREAD_NAME("lila releaser");
-#ifdef _WIN32
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
-#endif
     State& s = state();
     for (;;)
     {
@@ -61,10 +80,12 @@ void run()
         {
             while (s.holds.load(std::memory_order_acquire) > 0)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            keepOutOfFrames(s);
             LILA_ZONE_N("release.step");
             more = p->step();
         }
         p.reset();
+        s.finished.fetch_add(1, std::memory_order_release);
         std::scoped_lock lock(s.mutex);
         --s.busy;
         if (s.queue.empty() && s.busy == 0)
@@ -91,7 +112,12 @@ void enqueue(std::unique_ptr<Piece> piece)
 }
 
 Hold::Hold() { state().holds.fetch_add(1, std::memory_order_acq_rel); }
-Hold::~Hold() { state().holds.fetch_sub(1, std::memory_order_acq_rel); }
+Hold::~Hold()
+{
+    State& s = state();
+    s.heldUntil.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_release);
+    s.holds.fetch_sub(1, std::memory_order_acq_rel);
+}
 
 void drain()
 {
@@ -99,6 +125,8 @@ void drain()
     std::unique_lock lock(s.mutex);
     s.idle.wait(lock, [&] { return s.queue.empty() && s.busy == 0; });
 }
+
+uint64_t finished() { return state().finished.load(std::memory_order_acquire); }
 
 size_t pending()
 {

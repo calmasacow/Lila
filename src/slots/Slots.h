@@ -281,6 +281,8 @@ LILA_SCENE_API NodeId publisherOf(scene::Graph& g, std::string_view id);
 /** Publishes slots under a node (a geometry-nodes modifier's id), replacing what it published before. Any thread. */
 LILA_SCENE_API void publish(NodeId publisher, std::vector<Slot> slots);
 LILA_SCENE_API void unpublish(NodeId publisher);
+/** Drops what publishers no longer in g published: a replaced scene's (clearing a graph deletes no node one by one). */
+LILA_SCENE_API void unpublishGone(const scene::Graph& g);
 /** What a publisher published, in its own space, unpinned: the list the "slotIndex" instance attribute indexes. Any thread. */
 LILA_SCENE_API std::vector<Slot> publishedSlots(NodeId publisher);
 /** A slotSet's or a publisher's slots in world space with pins applied (pinned slots it no longer makes included). Main thread. */

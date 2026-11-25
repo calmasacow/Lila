@@ -161,13 +161,17 @@ void registerAll()
     for (events::Event e : {events::Event::SceneOpened, events::Event::SceneNew})
         events::subscribe(e, [](const events::EventData&) {
             LILA_ZONE_N("slots.sceneOpened");
+            unpublishGone(scene::Graph::current());
             clearVisuals();
             detail::clearTagCache();
             refresh();
         });
     // The rules, overrides and pins as soon as the scene's data is read, so publishers evaluated during the rest of the load
     // see them and need no rerun when the scene has opened.
-    scene::data::onLoaded([] { refresh(); });
+    scene::data::onLoaded([] {
+        unpublishGone(scene::Graph::current());
+        refresh();
+    });
     // After the visuals are dropped: library items the opened scene names come in, so its slots draw them straight away.
     events::subscribe(events::Event::SceneOpened, [](const events::EventData&) {
         LILA_ZONE_N("slots.itemLoad");
