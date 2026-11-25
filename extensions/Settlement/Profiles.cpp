@@ -116,7 +116,7 @@ Profile mexicanCity()
     p.lotWidth = 1500.0, p.lotDepth = 2000.0, p.minLot = 60.0;
     p.frontSetback = 0.0, p.sideSetback = 0.0, p.buildDepth = 1400.0;
     p.minFloors = 1, p.maxFloors = 3, p.floorHeight = 330.0, p.roof = "flat", p.commercial = 0.3, p.falloff = 2.5;
-    p.shopHouseFloors = 3;
+    p.shopHouseFloors = 4;
     return p;
 }
 
