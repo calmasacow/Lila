@@ -310,6 +310,18 @@ const LayerDraw& layerDraw(uint64_t set, const ZoneSpec& spec, uint64_t revision
 
 const glm::vec4 kWarn{1.0f, 0.62f, 0.2f, 1.0f};
 
+/** Zones panels on screen; fills show while one is. */
+int gPanelsShown = 0;
+
+/** Someone is working on this set's zones: it is selected, a Zones panel is open or the Zones tool is on. */
+bool editingZones(scene::NodeId set)
+{
+    if (gPanelsShown > 0 || viewportTools::activeId() == kToolId)
+        return true;
+    const auto& sel = Graph::current().selection();
+    return std::find(sel.begin(), sel.end(), set) != sel.end();
+}
+
 /**
  * The one layer a set draws: the layer being worked on in the current set, else the visible layer on top (highest
  * priority). Drawing every layer stacks their fills into an opaque sheet over the map.
@@ -353,9 +365,11 @@ void drawZones(render::FrameState&, OverlayPainter& p, const ViewInfo& view)
         {
             const uint64_t revision = previewing && l->id == ui().layer ? gPreview.revision : 0;
             const LayerDraw& d = layerDraw(id, spec, revision, *l, ground);
-            const float a = float(opacity);
-            for (const LayerDraw::Quad& q : d.quads)
+            // A built world shows its zones as outlines and names; the faint fill only while they are being worked on.
+            const float a = editingZones(id) ? float(opacity) : 0.0f;
+            for (size_t qi = 0; a > 0.0f && qi < d.quads.size(); ++qi)
             {
+                const LayerDraw::Quad& q = d.quads[qi];
                 const glm::vec4 color(glm::vec3(q.color), q.color.a * a);
                 std::optional<QPointF> t0 = view.project(q.top[0]), b0 = view.project(q.bottom[0]);
                 for (size_t k = 1; k < q.top.size(); ++k)
@@ -1140,6 +1154,20 @@ private:
 
 class ZonesPanel final : public QWidget
 {
+protected:
+    void showEvent(QShowEvent* e) override
+    {
+        ++gPanelsShown;
+        viewportTools::requestRedraw();
+        QWidget::showEvent(e);
+    }
+    void hideEvent(QHideEvent* e) override
+    {
+        gPanelsShown = std::max(0, gPanelsShown - 1);
+        viewportTools::requestRedraw();
+        QWidget::hideEvent(e);
+    }
+
 public:
     explicit ZonesPanel(QWidget* parent) : QWidget(parent)
     {

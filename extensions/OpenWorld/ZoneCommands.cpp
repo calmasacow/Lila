@@ -826,7 +826,7 @@ void registerZoneCommands(ext::Context& ctx)
             {.name = kOverlayAttr, .type = scene::PlugType::Bool, .defaultValue = true, .flags = scene::AttrInput | scene::AttrStorable,
              .doc = "Draw the zones over the viewport."},
             {.name = kOpacityAttr, .type = scene::PlugType::Float, .defaultValue = kDefaultFillOpacity, .flags = scene::AttrInput | scene::AttrStorable,
-             .doc = "Opacity of the shown layer's fills.", .minValue = 0.0, .maxValue = 1.0},
+             .doc = "Opacity of the shown layer's fills, drawn while the set is selected, the Zones panel is open or the Zones tool is on.", .minValue = 0.0, .maxValue = 1.0},
         };
         scene::types::registerType(ctx, std::move(t));
     }

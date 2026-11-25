@@ -567,12 +567,19 @@ TEST_CASE("zones overlay: one layer drawn with a faint fill, outlines and names;
     // A pixel inside a zone, clear of every outline and name.
     const ViewInfo top = topView("top");
     const glm::vec2 px(560.0f, 230.0f);
+    lila::scene::Graph& g = lila::scene::Graph::current();
+    g.select({});
+    // Nobody working on the zones: outlines and names over the ground, no fill.
     const ZoneDraw d = drawZonesIn(top, px);
     CHECK(d.tris > 0);
     CHECK(d.textTris > 0);
-    // One layer's fill, faint: never the stacked fills of every layer.
-    CHECK(d.fillAlphaAt > 0.05f);
-    CHECK(d.fillAlphaAt <= 0.16f);
+    CHECK(d.fillAlphaAt == 0.0f);
+    // The set selected: one layer's fill, faint, never the stacked fills of every layer.
+    run("select", {{"args", {run("zoneList")["set"]}}});
+    const ZoneDraw editing = drawZonesIn(top, px);
+    CHECK(editing.fillAlphaAt > 0.05f);
+    CHECK(editing.fillAlphaAt <= 0.16f);
+    g.select({});
 
     // The Show toggle: an action and a row per view, off in one view only.
     bool listed = false;
