@@ -96,12 +96,14 @@ void buildEntry(MeshEntry& e, scene::Graph& g, const MeshSettings& set, const sc
     // Geometry nodes instances draw each referenced mesh once, instanced, unless something needs the flat mesh's own draw.
     const auto cageWire = set.smoothSubdivisions ? nullptr : smoothCageFor(outMesh, smooth);
     // Modifiers that add edges (a bevel) get their added edges drawn apart from the mesh's real ones.
-    const scene::MeshPtr cage = set.render || n.type().isA("lattice") ? nullptr : scene::modifiers::cage(g, id);
-    const bool modified = modifiersAddEdges(cage, outMesh);
     auto part = isolate::masked(iso, id, shown, smooth, tangents, cageWire.get());
     gn::InstanceViewPtr instanced;
-    if (smooth == 0 && !previewed && !hilite && !part && !cageWire && !modified)
+    if (smooth == 0 && !previewed && !hilite && !part && !cageWire)
         instanced = gn::instanceViewFor(g, id);
+    // The flattened output of an instanced result holds only the geometry beside its instances, so its instances
+    // draw even where its modifiers added edges (a generator on an empty mesh always does).
+    const scene::MeshPtr cage = instanced || set.render || n.type().isA("lattice") ? nullptr : scene::modifiers::cage(g, id);
+    const bool modified = modifiersAddEdges(cage, outMesh);
     auto rm = instanced ? nullptr : renderMeshFor(shown, tangents, id);
     if (!rm && !instanced)
     {
@@ -306,20 +308,20 @@ void prewarmRebuilds(scene::Graph& g, Cache& cache, const std::vector<scene::Nod
         if (set.terrain.drawsHeightfields() && heightfieldDisplay::heightfieldOf(g, id))
             continue;
         const scene::MeshPtr& outMesh = n.as<scene::MeshPtr>(scene::MeshNode::kOutMesh);
-        const scene::MeshPtr cage = set.render || n.type().isA("lattice") ? nullptr : scene::modifiers::cage(g, id);
-        if (modifiersAddEdges(cage, outMesh))
-        {
-            // Drawn whole, its surface without the modifier's wire.
-            want(outMesh);
-            wireless.push_back(wanted.back());
-            continue;
-        }
         // An instanced result draws the geometry beside its instances and each referenced mesh.
         if (gn::InstanceViewPtr view = gn::instanceViewFor(g, id))
         {
             want(view->base);
             for (const gn::InstancePart& p : view->parts)
                 want(p.mesh);
+            continue;
+        }
+        const scene::MeshPtr cage = set.render || n.type().isA("lattice") ? nullptr : scene::modifiers::cage(g, id);
+        if (modifiersAddEdges(cage, outMesh))
+        {
+            // Drawn whole, its surface without the modifier's wire.
+            want(outMesh);
+            wireless.push_back(wanted.back());
         }
         else
             want(outMesh);
