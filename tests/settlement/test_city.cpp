@@ -137,6 +137,17 @@ TEST_CASE("settlement meshes: streets are asphalt between sidewalks, junctions p
     CHECK(parts.ground.numFaces() > l.blocks.size());
 }
 
+TEST_CASE("settlement ground: ribbons drape on the quad split the heightfield renderer draws")
+{
+    // A terrain cell whose shorter diagonal is 1-3: the renderer splits it 0-2, and the street must lie on that surface.
+    const std::vector<glm::dvec3> pts = {{0.0, 0.0, 0.0}, {0.0, 50.0, 100.0}, {100.0, 20.0, 100.0}, {100.0, 50.0, 0.0}};
+    const std::vector<geo::Index> sizes = {4}, corners = {0, 1, 2, 3};
+    const geo::Mesh quad = geo::Mesh::fromPolygons(pts, sizes, corners);
+    const Ground g = Ground::fromMesh(quad, 10.0);
+    CHECK(g.surfaceHeight({50.0, 50.0}) == doctest::Approx(10.0));
+    CHECK(g.surfaceHeight({75.0, 25.0}) == doctest::Approx(0.25 * 0.0 + 0.5 * 50.0 + 0.25 * 20.0));
+}
+
 TEST_CASE("settlement furniture: trees in parks and behind houses, none with empty park and yard sets")
 {
     Layout l = mexicanCity(60000.0, 4);
