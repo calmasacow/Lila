@@ -1,4 +1,5 @@
 #include "ui/PointCloudDisplay.h"
+#include "core/Log.h"
 #include "core/Release.h"
 #include "ui/ViewportWidgetDetail.h"
 
@@ -686,6 +687,7 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     drawPreselect(s);
     drawHandlerHover(s);
     OverlayPainter painter(s.overlayTris, devicePixelRatioF());
+    painter.setClip(QRectF(0, 0, width(), height()));
     {
         constexpr int kCols = 8, kRows = 6;
         auto probe = render::Renderer::get().environmentProbe(s.envPath);
@@ -771,6 +773,13 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     else
         cursorBadges::publish(this, {});
     renderPasses::run(renderPasses::Stage::Final, passes);
+    if (painter.capped())
+    {
+        static bool warned = false;
+        if (!std::exchange(warned, true))
+            log::warn("viewport: the overlay passed {} vertices in one frame; the rest is not drawn until there is less of it", OverlayPainter::kMaxVertices);
+        painter.cappedNote(QPointF(12, height() - 16));
+    }
     // The ground grid is edge-on in side views, so they get a grid in the view plane through the origin instead.
     if (s.grid && mCamera.ortho && std::abs(glm::dot(mCamera.forward(), mCamera.up())) < 0.5)
     {
