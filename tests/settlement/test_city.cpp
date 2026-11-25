@@ -10,8 +10,10 @@
 
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <filesystem>
 #include <map>
+#include <set>
 
 using namespace lila;
 using namespace settlement;
@@ -39,7 +41,7 @@ std::map<std::string, int> facesByMaterial(const geo::Mesh& m)
     return out;
 }
 
-/** Faces of the mesh whose Newell normal points down. */
+/** Faces of the mesh whose Newell normal points down (walls such as curbs stand upright and count as neither). */
 int facesFacingDown(const geo::Mesh& m)
 {
     int down = 0;
@@ -54,7 +56,7 @@ int facesFacingDown(const geo::Mesh& m)
             const glm::dvec3 &a = pts[k], &b = pts[(k + 1) % pts.size()];
             n += glm::dvec3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
         }
-        down += n.y < 0.0 ? 1 : 0;
+        down += n.y < -0.01 * glm::length(n) ? 1 : 0;
     }
     return down;
 }
@@ -135,6 +137,103 @@ TEST_CASE("settlement meshes: streets are asphalt between sidewalks, junctions p
     CHECK(facesFacingDown(parts.ground) == 0);
     // Large blocks are laid in pieces no wider than the grid cell, so they follow uneven ground.
     CHECK(parts.ground.numFaces() > l.blocks.size());
+}
+
+TEST_CASE("settlement meshes: sidewalks stand a curb above the road, junctions meet the streets without overlaps")
+{
+    const Layout l = mexicanCity(60000.0, 5);
+    const MeshParts parts = toMeshes(l, Ground::plane());
+    const geo::Mesh& m = parts.streets;
+    const auto mat = m.faceAttrs().get<int32_t>("material");
+    const auto street = m.faceAttrs().get<int32_t>("street");
+    const auto& names = m.materialNames();
+    auto slot = [&](const char* name) { return int32_t(std::find(names.begin(), names.end(), name) - names.begin()); };
+    const int32_t asphalt = slot("Settlement_Asphalt"), sidewalk = slot("Settlement_Sidewalk"), concrete = slot("Settlement_Concrete");
+
+    // Up-facing faces lie flat at one height per surface on flat ground; curbs stand between the two.
+    struct Flat
+    {
+        std::vector<Vec2> ring;
+        Vec2 lo, hi;
+        bool road;
+    };
+    std::vector<Flat> flats;
+    std::set<double> roadY, walkY;
+    int kerbs = 0, junctionKerbs = 0, slanted = 0;
+    for (geo::Index f = 0; f < geo::Index(m.numFaces()); ++f)
+    {
+        std::vector<glm::dvec3> pts;
+        for (geo::Index c : m.faceCorners(f))
+            pts.push_back(m.position(m.cornerPoint(c)));
+        glm::dvec3 n(0.0);
+        for (size_t k = 0; k < pts.size(); ++k)
+        {
+            const glm::dvec3 &a = pts[k], &b = pts[(k + 1) % pts.size()];
+            n += glm::dvec3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
+        }
+        // On flat ground every face is level or upright: anything between is a fold or a sliver standing up.
+        const bool level = n.y > (1.0 - 1e-9) * glm::length(n), upright = std::abs(n.y) < 1e-6 * glm::length(n);
+        slanted += level || upright ? 0 : 1;
+        if (mat[f] == concrete && upright)
+        {
+            ++kerbs;
+            junctionKerbs += street[f] < 0 ? 1 : 0;
+            continue;
+        }
+        if (n.y < 0.5 * glm::length(n) || (mat[f] != asphalt && mat[f] != sidewalk))
+            continue;
+        Flat fl{{}, Vec2(1e300), Vec2(-1e300), mat[f] == asphalt};
+        for (const glm::dvec3& p : pts)
+        {
+            (fl.road ? roadY : walkY).insert(std::round(p.y * 100.0) / 100.0);
+            fl.ring.push_back({p.x, p.z});
+            fl.lo = glm::min(fl.lo, fl.ring.back());
+            fl.hi = glm::max(fl.hi, fl.ring.back());
+        }
+        flats.push_back(std::move(fl));
+    }
+    CHECK(slanted == 0);
+    CHECK(kerbs > 100);
+    CHECK(junctionKerbs > 20);
+    REQUIRE(roadY.size() == 1);
+    REQUIRE(walkY.size() == 1);
+    CHECK(*walkY.begin() - *roadY.begin() == doctest::Approx(12.0));
+
+    // A grid of samples over the town: no point lies under two street surfaces (a junction patch over a sidewalk, or a
+    // sidewalk corner over the road), except on shared edges.
+    Vec2 lo(1e300), hi(-1e300);
+    for (const Flat& f : flats)
+        lo = glm::min(lo, f.lo), hi = glm::max(hi, f.hi);
+    const double cell = 1000.0;
+    const int nx = int((hi.x - lo.x) / cell) + 1, nz = int((hi.y - lo.y) / cell) + 1;
+    std::vector<std::vector<size_t>> bins(size_t(nx * nz));
+    for (size_t i = 0; i < flats.size(); ++i)
+        for (int x = int((flats[i].lo.x - lo.x) / cell); x <= int((flats[i].hi.x - lo.x) / cell); ++x)
+            for (int z = int((flats[i].lo.y - lo.y) / cell); z <= int((flats[i].hi.y - lo.y) / cell); ++z)
+                bins[size_t(z * nx + x)].push_back(i);
+    auto inside = [](const std::vector<Vec2>& r, Vec2 p) {
+        bool in = false;
+        for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
+            if ((r[i].y > p.y) != (r[j].y > p.y) && p.x < (r[j].x - r[i].x) * (p.y - r[i].y) / (r[j].y - r[i].y) + r[i].x)
+                in = !in;
+        return in;
+    };
+    int covered = 0, twice = 0;
+    for (double x = lo.x + 37.1; x < hi.x; x += 113.0)
+        for (double z = lo.y + 41.3; z < hi.y; z += 107.0)
+        {
+            const Vec2 p(x, z);
+            int over = 0;
+            for (size_t i : bins[size_t(int((z - lo.y) / cell) * nx + int((x - lo.x) / cell))])
+                if (p.x >= flats[i].lo.x && p.x <= flats[i].hi.x && p.y >= flats[i].lo.y && p.y <= flats[i].hi.y && inside(flats[i].ring, p))
+                    ++over;
+            covered += over > 0 ? 1 : 0;
+            twice += over > 1 ? 1 : 0;
+        }
+    CAPTURE(covered);
+    CAPTURE(twice);
+    CHECK(covered > 1000);
+    CHECK(twice < covered / 200);
 }
 
 TEST_CASE("settlement ground: ribbons drape on the quad split the heightfield renderer draws")
