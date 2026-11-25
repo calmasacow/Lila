@@ -8,6 +8,8 @@
 #include "slots/Slots.h"
 #include "slots/SlotsGn.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <chrono>
 
 using namespace lila;

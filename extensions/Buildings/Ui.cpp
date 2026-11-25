@@ -7,6 +7,7 @@
 #include <lila/AttributeEditor.h>
 #include <lila/Command.h>
 #include <lila/Controls.h>
+#include <lila/Deformer.h>
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
 #include <lila/Graph.h>
