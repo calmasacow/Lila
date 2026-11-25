@@ -145,12 +145,16 @@ void settlementExec(ExecContext& c)
     {
         throw gn::ExecError(std::string("Settlement: ") + e.what());
     }
-    const Parts parts = toGeometry(l, ground);
+    OutputOptions out;
+    // The ground mesh is the largest part: made only when shown or wired on.
+    out.ground = c.b("showGround") || std::ranges::any_of(c.group.links, [&](const gn::GLink& k) { return k.fromNode == c.node.name && k.fromSocket == "ground"; });
+    const Parts parts = toGeometry(l, ground, out);
     c.out("streets", parts.streets);
     c.out("lots", parts.lots);
     c.out("buildings", parts.buildings);
     c.out("water", parts.water);
     c.out("levels", parts.levels);
+    c.out("ground", parts.ground);
     std::vector<GeometryPtr> shown;
     if (c.b("showStreets"))
     {
@@ -158,6 +162,8 @@ void settlementExec(ExecContext& c)
         shown.push_back(parts.water);
         shown.push_back(parts.levels);
     }
+    if (c.b("showGround"))
+        shown.push_back(parts.ground);
     if (c.b("showLots"))
         shown.push_back(parts.lots);
     if (c.b("showBuildings"))
@@ -180,8 +186,10 @@ gn::NodeDecl settlementDecl()
                "streets and a building envelope on each lot (the space a building may fill: footprint, floors, height, roof). "
                "Exclusions (closed loops with int edge attribute exclude, or in edits) stay clear of all of it; edits add "
                "streets and routes, routed over the ground or across the walkable mesh. "
-               "Streets are ribbons with face attributes street, class (0 arterial, 1 collector, 2 local, 3 alley, 4 path) and "
-               "path (the edit id, -1 when generated); lots are "
+               "Streets are carriageway and sidewalk strips with face attributes street, class (0 arterial, 1 collector, 2 local, "
+               "3 alley, 4 path), path (the edit id, -1 when generated) and material (asphalt, sidewalk, earth, paving or concrete "
+               "slots); ground is each block's yards, park or square and the lots that show their own ground (vacant lots, works "
+               "yards, fields, graveyards), face attributes block and material; lots are "
                "outlines with an edge attribute lot; envelopes are closed volumes with face attributes lot, use (0 residential, "
                "1 commercial, 2 civic), floors and part (0 wall, 1 roof, 2 floor). Curves carry the centrelines, lot outlines "
                "and footprints. Lengths are cm, Y up.",
@@ -211,6 +219,7 @@ gn::NodeDecl settlementDecl()
                                in("showStreets", Socket::Bool, true, "Include streets in geometry."),
                                in("showLots", Socket::Bool, true, "Include lot outlines in geometry."),
                                in("showBuildings", Socket::Bool, true, "Include building envelopes in geometry."),
+                               in("showGround", Socket::Bool, true, "Include the ground of blocks and lots in geometry."),
                                in("generators", Socket::String, "", "Tensor fields, eras, districts, walls, imported streets and levels as "
                                                                "JSON (settlementCreate's generator flags write it).")},
                     .outputs = {geoSocket("geometry", "What the show inputs select, joined."),
@@ -218,6 +227,7 @@ gn::NodeDecl settlementDecl()
                                 geoSocket("lots", "Lot outlines as loose edges and closed curves."),
                                 geoSocket("buildings", "Building envelopes as closed meshes, footprints as closed curves."),
                                 geoSocket("water", "River ribbons."),
+                                geoSocket("ground", "Ground of blocks and lots: yards, parks, squares, vacant lots, works yards."),
                                 geoSocket("levels", "Levels above the ground as curves: deck streets and outlines, elevated roads, ramps, "
                                                     "skybridges and air lanes, with class, layer and kind (0 deck, 1 elevated, 2 ramp, "
                                                     "3 skybridge, 4 air, 5 deck outline).")}},
@@ -390,11 +400,11 @@ Options optionsFrom(const std::function<double(const char*)>& f, const std::func
     return o;
 }
 
-Parts toGeometry(const Layout& l, const Ground& ground)
+Parts toGeometry(const Layout& l, const Ground& ground, const OutputOptions& o)
 {
     LILA_ZONE();
 
-    MeshParts meshes = toMeshes(l, ground);
+    MeshParts meshes = toMeshes(l, ground, o);
     for (const std::string& w : meshes.warnings)
         lila::log::warn("Settlement: {}", w);
 
@@ -467,7 +477,7 @@ Parts toGeometry(const Layout& l, const Ground& ground)
     };
     return {pack(std::move(meshes.streets), std::move(centre)), pack(std::move(meshes.lots), std::move(lotCurves)),
             pack(std::move(meshes.envelopes), std::move(footprints)), pack(std::move(meshes.water), gn::CurveSet()),
-            pack(geo::Mesh(), std::move(levels))};
+            pack(geo::Mesh(), std::move(levels)), pack(std::move(meshes.ground), gn::CurveSet())};
 }
 
 bool registerNodes(ext::Context& ctx) { return gn::registerDecl(ctx, settlementDecl()) != nullptr; }

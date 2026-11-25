@@ -6,9 +6,14 @@
 
 #include <lila/Profile.h>
 
+#include <tbb/parallel_for.h>
+
 #include <algorithm>
+#include <array>
 #include <format>
 #include <cmath>
+#include <functional>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <tuple>
@@ -63,7 +68,192 @@ void setFaceInts(geo::Mesh& m, const std::vector<std::pair<const char*, std::vec
         std::copy(values.begin(), values.begin() + std::min(values.size(), out.size()), out.begin());
     }
 }
+
+enum Surface : int32_t
+{
+    SurfAsphalt,
+    SurfSidewalk,
+    SurfDirt,
+    SurfPaving,
+    SurfConcrete,
+    SurfGrass,
+    SurfYard,
+    SurfField,
+    SurfCemetery,
+};
+
+constexpr SurfaceMaterial kSurfaces[] = {
+    {"Settlement_Asphalt", {0.075f, 0.075f, 0.08f}, 0.9f}, {"Settlement_Sidewalk", {0.36f, 0.34f, 0.31f}, 0.85f},
+    {"Settlement_Dirt", {0.26f, 0.19f, 0.12f}, 0.95f},     {"Settlement_Paving", {0.4f, 0.33f, 0.26f}, 0.85f},
+    {"Settlement_Concrete", {0.3f, 0.29f, 0.27f}, 0.85f},  {"Settlement_Grass", {0.075f, 0.13f, 0.04f}, 0.95f},
+    {"Settlement_Yard", {0.25f, 0.22f, 0.18f}, 0.9f},      {"Settlement_Field", {0.13f, 0.14f, 0.06f}, 0.95f},
+    {"Settlement_Cemetery", {0.2f, 0.19f, 0.15f}, 0.9f},
+};
+
+double townDistance(const Layout& l, Vec2 q) { return std::clamp(glm::length(q - l.center) / std::max(l.radius, 1.0), 0.0, 1.0); }
+
+/**
+ * A street's carriageway paving: paths paved in town and earth beyond, medieval streets cobbled or earth, alleys concrete,
+ * outer residential streets more often earth the further out they lie, the rest asphalt. Stable per street.
+ */
+int32_t streetSurface(const Layout& l, const StreetEdge& x, Vec2 mid, bool medieval)
+{
+    const double dist = townDistance(l, mid);
+    if (x.cls == StreetClass::Path)
+        return dist < 0.5 ? SurfPaving : SurfDirt;
+    if (medieval)
+        return x.cls <= StreetClass::Collector ? SurfPaving : SurfDirt;
+    if (x.cls == StreetClass::Alley)
+        return SurfConcrete;
+    if (x.cls == StreetClass::Local && unitRandom(hash64(x.street ^ 0x51DE5EEDull)) < 0.5 * std::clamp((dist - 0.7) / 0.3, 0.0, 1.0))
+        return SurfDirt;
+    return SurfAsphalt;
+}
+
+/** Width of each sidewalk on a street of this width: its road profile's share, none on alleys, paths and kerbless streets. */
+double walkWidth(const Layout& l, int e, double width, bool medieval)
+{
+    if (medieval || l.graph.edges[size_t(e)].cls >= StreetClass::Alley)
+        return 0.0;
+    const RoadProfile& rp = edgeProfile(l, e);
+    const double full = rp.width();
+    return full > 0.0 ? width * std::clamp((rp.sidewalk + rp.verge) / full, 0.0, 0.3) : 0.0;
+}
+
+/** Convex hull, counter-clockwise. */
+std::vector<Vec2> hull(std::vector<Vec2> pts)
+{
+    std::sort(pts.begin(), pts.end(), [](Vec2 a, Vec2 b) { return a.x != b.x ? a.x < b.x : a.y < b.y; });
+    if (pts.size() < 3)
+        return pts;
+    std::vector<Vec2> h(2 * pts.size());
+    size_t k = 0;
+    for (size_t i = 0; i < pts.size(); ++i)
+    {
+        while (k >= 2 && cross(h[k - 1] - h[k - 2], pts[i] - h[k - 2]) <= 0.0)
+            --k;
+        h[k++] = pts[i];
+    }
+    for (size_t i = pts.size() - 1, t = k + 1; i-- > 0;)
+    {
+        while (k >= t && cross(h[k - 1] - h[k - 2], pts[i] - h[k - 2]) <= 0.0)
+            --k;
+        h[k++] = pts[i];
+    }
+    h.resize(k - 1);
+    return h;
+}
+
+/** Per-face values a Polys carries until it is appended: street, class, path, material (or block, material). */
+using FaceTags = std::array<int32_t, 4>;
+
+/** Polygons made apart from a mesh, so they can be made in parallel and appended in order. */
+struct Polys
+{
+    std::vector<glm::dvec3> pts;
+    std::vector<uint32_t> idx, sizes;
+    std::vector<FaceTags> tags;
+
+    uint32_t point(const glm::dvec3& p)
+    {
+        pts.push_back(p);
+        return uint32_t(pts.size() - 1);
+    }
+    void face(std::initializer_list<uint32_t> ids, const FaceTags& t) { face(std::vector<uint32_t>(ids), t); }
+    void face(const std::vector<uint32_t>& ids, const FaceTags& t)
+    {
+        idx.insert(idx.end(), ids.begin(), ids.end());
+        sizes.push_back(uint32_t(ids.size()));
+        tags.push_back(t);
+    }
+    /** Adds the points and faces to the mesh, calling tag once per face in order. */
+    void appendTo(geo::Mesh& m, const std::function<void(const FaceTags&)>& tag) const
+    {
+        if (sizes.empty())
+            return;
+        std::vector<geo::Index> ids(pts.size());
+        for (size_t k = 0; k < pts.size(); ++k)
+            ids[k] = m.addPoint(pts[k]);
+        std::vector<geo::Index> f;
+        for (size_t k = 0, off = 0; k < sizes.size(); off += sizes[k], ++k)
+        {
+            f.clear();
+            for (uint32_t i = 0; i < sizes[k]; ++i)
+                f.push_back(ids[idx[off + i]]);
+            m.addFace(f);
+            tag(tags[k]);
+        }
+    }
+};
+
+/**
+ * Adds the polygon as faces cut on a grid of cell, every corner draped by at, so a lot or block follows the ground under
+ * it however large it is.
+ */
+void addDraped(Polys& m, const Polygon& p, double cell, const std::function<glm::dvec3(Vec2)>& at, const FaceTags& tags)
+{
+    if (p.size() < 3)
+        return;
+    Vec2 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
+    for (const Vec2& q : p.pts)
+        lo = glm::min(lo, q), hi = glm::max(hi, q);
+    auto add = [&](const Polygon& piece) {
+        if (piece.size() < 3 || area(piece) < 1.0)
+            return;
+        std::vector<uint32_t> ids;
+        // Counter-clockwise in XZ faces down; the face is wound the other way so its normal points up.
+        for (auto it = piece.pts.rbegin(); it != piece.pts.rend(); ++it)
+            ids.push_back(m.point(at(*it)));
+        m.face(ids, tags);
+    };
+    const int nx = std::max(1, int(std::ceil((hi.x - lo.x) / cell))), nz = std::max(1, int(std::ceil((hi.y - lo.y) / cell)));
+    if (nx == 1 && nz == 1)
+    {
+        add(p);
+        return;
+    }
+    const double sx = (hi.x - lo.x) / nx, sz = (hi.y - lo.y) / nz;
+    for (int i = 0; i < nx; ++i)
+    {
+        Polygon col = p;
+        if (i > 0)
+            col = clipHalfPlane(col, {lo.x + i * sx, 0.0}, {1.0, 0.0});
+        if (i + 1 < nx)
+            col = clipHalfPlane(col, {lo.x + (i + 1) * sx, 0.0}, {-1.0, 0.0});
+        if (col.size() < 3)
+            continue;
+        for (int j = 0; j < nz; ++j)
+        {
+            Polygon piece = col;
+            if (j > 0)
+                piece = clipHalfPlane(piece, {0.0, lo.y + j * sz}, {0.0, 1.0});
+            if (j + 1 < nz)
+                piece = clipHalfPlane(piece, {0.0, lo.y + (j + 1) * sz}, {0.0, -1.0});
+            add(piece);
+        }
+    }
+}
+
+/** The ground a lot shows where no building stands, by its use; -1 when the block's own ground is enough. */
+int32_t lotSurface(Use u)
+{
+    switch (u)
+    {
+    case Use::Park: return SurfGrass;
+    case Use::Plaza:
+    case Use::Market:
+    case Use::Civic: return SurfPaving;
+    case Use::Cemetery: return SurfCemetery;
+    case Use::Open: return SurfDirt;
+    case Use::Farm: return SurfField;
+    case Use::Industrial:
+    case Use::Port: return SurfConcrete;
+    default: return -1;
+    }
+}
 } // namespace
+
+std::span<const SurfaceMaterial> surfaceMaterials() { return kSurfaces; }
 
 json metrics(const Layout& l)
 {
@@ -424,45 +614,147 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     const double seg = std::max(std::min(o.segment, ground.isPlane() ? o.segment : std::max(ground.cellSize(), 50.0)), 10.0);
     auto at = [&](Vec2 p, double lift) { return glm::dvec3(p.x, ground.surfaceHeight(p) + lift, p.y); };
 
-    // A ribbon per edge, wound so its normal faces up (clockwise in XZ seen as x, z).
-    std::vector<int32_t> streetId, streetClass, streetPath, waterId;
+    // Strips along each edge (a sidewalk, the carriageway, a sidewalk), wound so their normals face up (clockwise in XZ
+    // seen as x, z). The carriageway lies above the sidewalks, so a street crossing a junction covers the sidewalks there.
+    // Draping is the cost (a raycast per corner), so each edge, junction, block and lot is made apart and appended in order.
+    const bool medieval = medievalStyle(l);
+    const double walkLift = o.lift, roadLift = o.lift + 2.0, patchLift = o.lift + 4.0;
+    struct NodeEnd
+    {
+        Vec2 dir{0.0};
+        double inner = 0.0, half = 0.0;
+        int32_t surface = SurfAsphalt;
+        StreetClass cls = StreetClass::Path;
+    };
+    auto strip = [&](Polys& m, Vec2 a, Vec2 b, double left, double right, double lift, const FaceTags& tags) {
+        const double len = glm::length(b - a);
+        const Vec2 d = (b - a) / len, n(-d.y, d.x);
+        const int steps = std::max(1, int(std::ceil(len / seg)));
+        uint32_t prevL = 0, prevR = 0;
+        for (int s = 0; s <= steps; ++s)
+        {
+            const Vec2 c = a + (b - a) * (double(s) / steps);
+            const uint32_t L = m.point(at(c + n * left, lift)), R = m.point(at(c + n * right, lift));
+            if (s > 0)
+                m.face({prevL, L, R, prevR}, tags);
+            prevL = L;
+            prevR = R;
+        }
+    };
+    std::vector<Polys> edgePolys(g.edges.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, g.edges.size()), [&](const tbb::blocked_range<size_t>& range) {
+        for (size_t e = range.begin(); e < range.end(); ++e)
+        {
+            const StreetEdge& x = g.edges[e];
+            const bool water = x.alive && x.cls == StreetClass::Water;
+            if (!g.isStreet(int(e)) && !water)
+                continue;
+            const Vec2 a = g.nodes[size_t(x.a)].p, b = g.nodes[size_t(x.b)].p;
+            if (glm::length(b - a) < 1e-6)
+                continue;
+            const double half = 0.5 * edgeWidth(l, int(e));
+            if (water)
+            {
+                strip(edgePolys[e], a, b, half, -half, o.lift * 0.5, {int32_t(e), 0, 0, 0});
+                continue;
+            }
+            const double walk = walkWidth(l, int(e), 2.0 * half, medieval), inner = half - walk;
+            const int32_t surface = streetSurface(l, x, (a + b) * 0.5, medieval);
+            strip(edgePolys[e], a, b, inner, -inner, roadLift, {int32_t(e), int32_t(x.cls), int32_t(x.path), surface});
+            if (walk > 0.0)
+            {
+                strip(edgePolys[e], a, b, half, inner, walkLift, {int32_t(e), int32_t(x.cls), int32_t(x.path), SurfSidewalk});
+                strip(edgePolys[e], a, b, -inner, -half, walkLift, {int32_t(e), int32_t(x.cls), int32_t(x.path), SurfSidewalk});
+            }
+        }
+    });
+    std::vector<std::vector<NodeEnd>> ends(g.nodes.size());
     for (size_t e = 0; e < g.edges.size(); ++e)
     {
         const StreetEdge& x = g.edges[e];
-        const bool water = x.alive && x.cls == StreetClass::Water;
-        if (!g.isStreet(int(e)) && !water)
+        if (!g.isStreet(int(e)))
             continue;
-        geo::Mesh& m = water ? out.water : out.streets;
         const Vec2 a = g.nodes[size_t(x.a)].p, b = g.nodes[size_t(x.b)].p;
         const double len = glm::length(b - a);
         if (len < 1e-6)
             continue;
-        const Vec2 d = (b - a) / len, n(-d.y, d.x);
-        const double half = 0.5 * edgeWidth(l, int(e));
-        const double lift = water ? o.lift * 0.5 : o.lift;
-        const int steps = std::max(1, int(std::ceil(len / seg)));
-        geo::Index prevL = 0, prevR = 0;
-        for (int s = 0; s <= steps; ++s)
-        {
-            const Vec2 c = a + (b - a) * (double(s) / steps);
-            const geo::Index L = m.addPoint(at(c + n * half, lift));
-            const geo::Index R = m.addPoint(at(c - n * half, lift));
-            if (s > 0)
-            {
-                m.addFace({prevL, L, R, prevR});
-                if (water)
-                    waterId.push_back(int32_t(e));
-                else
-                {
-                    streetId.push_back(int32_t(e));
-                    streetClass.push_back(int32_t(x.cls));
-                    streetPath.push_back(int32_t(x.path));
-                }
-            }
-            prevL = L;
-            prevR = R;
-        }
+        const double half = 0.5 * edgeWidth(l, int(e)), inner = half - walkWidth(l, int(e), 2.0 * half, medieval);
+        const int32_t surface = streetSurface(l, x, (a + b) * 0.5, medieval);
+        ends[size_t(x.a)].push_back({(b - a) / len, inner, half, surface, x.cls});
+        ends[size_t(x.b)].push_back({(a - b) / len, inner, half, surface, x.cls});
     }
+    // Where streets meet or bend: the carriageways' hull over the junction, and a rounded sidewalk corner under it.
+    std::vector<Polys> nodePolys(g.nodes.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, ends.size()), [&](const tbb::blocked_range<size_t>& range) {
+        for (size_t nd = range.begin(); nd < range.end(); ++nd)
+        {
+            const std::vector<NodeEnd>& es = ends[nd];
+            if (es.empty())
+                continue;
+            if (es.size() == 2 && glm::dot(es[0].dir, -es[1].dir) > std::cos(glm::radians(12.0)) && std::abs(es[0].half - es[1].half) < 1.0)
+                continue;
+            const Vec2 c = g.nodes[nd].p;
+            double reach = 0.0, round = 0.0;
+            const NodeEnd* top = &es[0];
+            for (const NodeEnd& x : es)
+            {
+                reach = std::max(reach, x.inner);
+                round = std::max(round, x.half);
+                if (x.cls < top->cls)
+                    top = &x;
+            }
+            auto patch = [&](const std::vector<Vec2>& ring, double lift, int32_t mat) {
+                std::vector<uint32_t> ids;
+                for (auto it = ring.rbegin(); it != ring.rend(); ++it)
+                    ids.push_back(nodePolys[nd].point(at(*it, lift)));
+                nodePolys[nd].face(ids, {-1, int32_t(top->cls), -1, mat});
+            };
+            if (round > reach + 1.0)
+            {
+                std::vector<Vec2> disk;
+                for (int k = 0; k < 12; ++k)
+                    disk.push_back(c + Vec2(std::cos(k * kPi / 6.0), std::sin(k * kPi / 6.0)) * round);
+                patch(disk, walkLift, SurfSidewalk);
+            }
+            if (es.size() < 2 || reach <= 0.0)
+                continue;
+            std::vector<Vec2> pts;
+            for (const NodeEnd& x : es)
+            {
+                const Vec2 n(-x.dir.y, x.dir.x);
+                for (double s : {0.0, reach})
+                    for (double side : {x.inner, -x.inner})
+                        pts.push_back(c + x.dir * s + n * side);
+            }
+            if (std::vector<Vec2> h = hull(std::move(pts)); h.size() >= 3)
+                patch(h, patchLift, top->surface);
+        }
+    });
+    std::vector<int32_t> streetId, streetClass, streetPath, streetMat, waterId;
+    for (size_t e = 0; e < edgePolys.size(); ++e)
+    {
+        const bool water = g.edges[e].alive && g.edges[e].cls == StreetClass::Water;
+        edgePolys[e].appendTo(water ? out.water : out.streets, [&](const FaceTags& t) {
+            if (water)
+            {
+                waterId.push_back(t[0]);
+                return;
+            }
+            streetId.push_back(t[0]);
+            streetClass.push_back(t[1]);
+            streetPath.push_back(t[2]);
+            streetMat.push_back(t[3]);
+        });
+    }
+    edgePolys = {};
+    for (const Polys& p : nodePolys)
+        p.appendTo(out.streets, [&](const FaceTags& t) {
+            streetId.push_back(t[0]);
+            streetClass.push_back(t[1]);
+            streetPath.push_back(t[2]);
+            streetMat.push_back(t[3]);
+        });
+    nodePolys = {};
     // Surface paths: ribbons on the walkable surface, level with each point, -1 for the street id.
     for (const SurfacePath& s : l.surfacePaths)
     {
@@ -482,13 +774,55 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
                 streetId.push_back(-1);
                 streetClass.push_back(int32_t(s.cls));
                 streetPath.push_back(int32_t(s.path));
+                streetMat.push_back(SurfPaving);
             }
             prevL = L;
             prevR = R;
         }
     }
-    setFaceInts(out.streets, {{"street", streetId}, {"class", streetClass}, {"path", streetPath}});
+    setFaceInts(out.streets, {{"street", streetId}, {"class", streetClass}, {"path", streetPath}, {"material", streetMat}});
     setFaceInts(out.water, {{"water", waterId}});
+    for (const SurfaceMaterial& s : kSurfaces)
+        out.streets.materialNames().push_back(s.name);
+
+    // Ground: each block's yards, park or square, then the lots whose use shows its own ground (vacant lots, parks,
+    // plazas, works yards, fields, graveyards), a little above it.
+    if (o.ground)
+    {
+        const double cell = std::max(4.0 * seg, 1200.0);
+        auto lay = [&](Polys& m, const Polygon& p, double lift, int32_t block, int32_t mat) {
+            addDraped(m, p, cell, [&](Vec2 q) { return at(q, lift); }, {block, mat, 0, 0});
+        };
+        std::vector<Polys> blockPolys(l.blocks.size()), lotPolys(l.lots.size());
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, l.blocks.size()), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t k = range.begin(); k < range.end(); ++k)
+            {
+                const Block& b = l.blocks[k];
+                lay(blockPolys[k], b.outline, o.lift * 0.5, b.id,
+                    b.use == Use::Park ? SurfGrass : b.use == Use::Plaza ? SurfPaving : b.use == Use::Farm ? SurfField : SurfYard);
+            }
+        });
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, l.lots.size()), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t k = range.begin(); k < range.end(); ++k)
+            {
+                const Lot& lot = l.lots[k];
+                if (const int32_t mat = lotSurface(lot.use); mat >= 0 && size_t(lot.block) < l.blocks.size() && lotSurface(l.blocks[size_t(lot.block)].use) != mat)
+                    lay(lotPolys[k], lot.outline, o.lift, lot.block, mat);
+            }
+        });
+        std::vector<int32_t> groundBlock, groundMat;
+        auto tags = [&](const FaceTags& t) {
+            groundBlock.push_back(t[0]);
+            groundMat.push_back(t[1]);
+        };
+        for (const Polys& p : blockPolys)
+            p.appendTo(out.ground, tags);
+        for (const Polys& p : lotPolys)
+            p.appendTo(out.ground, tags);
+        setFaceInts(out.ground, {{"block", groundBlock}, {"material", groundMat}});
+        for (const SurfaceMaterial& s : kSurfaces)
+            out.ground.materialNames().push_back(s.name);
+    }
 
     // Lots: outlines as loose edges draped on the ground.
     std::vector<int32_t> edgeLot;

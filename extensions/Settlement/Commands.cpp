@@ -67,6 +67,7 @@ constexpr Exposed kInputs[] = {
     {"showStreets", "bool", "Display", 0, 0, "Show street ribbons."},
     {"showLots", "bool", "Display", 0, 0, "Show lot outlines."},
     {"showBuildings", "bool", "Display", 0, 0, "Show building envelopes."},
+    {"showGround", "bool", "Display", 0, 0, "Show the ground of blocks and lots: yards, parks, squares."},
     {"generators", "string", "Style", 0, 0, "Tensor fields, eras, districts, walls, imported streets and levels as JSON."},
 };
 
@@ -91,6 +92,7 @@ std::vector<FlagDef> layoutFlags()
         {"showStreets", "ss", T::Bool, true, "Show street ribbons."},
         {"showLots", "sl", T::Bool, true, "Show lot outlines."},
         {"showBuildings", "sb", T::Bool, true, "Show building envelopes."},
+        {"showGround", "sgd", T::Bool, true, "Show the ground of blocks and lots: yards, parks, squares."},
         {"generators", "gen", T::String, "", "Tensor fields, eras, districts, walls, imported streets and levels as JSON."},
     };
 }
@@ -256,11 +258,24 @@ Node* settlementModifier(Graph& g, const std::string& name, const char* cmd)
     throw CommandError(std::string(cmd) + ": " + n->path() + " has no settlement (make one with settlementCreate)");
 }
 
+/** The materials the street and ground meshes name by slot, made where the scene has none of that name. */
+void ensureSurfaceMaterials(Graph& g)
+{
+    for (const SurfaceMaterial& s : surfaceMaterials())
+        if (!scene::materials::find(g, s.name))
+            ops::execute("createMaterial", {{"args", {s.name}}, {"baseColor", {s.color.r, s.color.g, s.color.b}}, {"roughness", s.roughness}});
+}
+
 json modifierValues(const Node& mod)
 {
     json values = json::object();
     for (const Exposed& e : kInputs)
+    {
+        // Settlements made before an input existed leave it out; their node takes its default.
+        if (mod.type().attrIndex(e.name) < 0)
+            continue;
         values[e.name] = ops::execute("getAttr", {{"args", {mod.path() + "." + e.name}}});
+    }
     for (const char* extra : {"ground", "walkable"})
         values[extra] = ops::execute("getAttr", {{"args", {mod.path() + "." + extra}}});
     return values;
@@ -797,6 +812,7 @@ void registerCommands(ext::Context& ctx)
             ops::execute("setAttr", {{"args", {modName + ".walkable", walkName}}});
 
             const json onTerrain = followTerrain(g, modName, groundName, a.get<bool>("terrainWater", true), "settlementCreate");
+            ensureSurfaceMaterials(g);
             Rebuilt r = rebuild(g, host, "settlementCreate");
             json out = stats(r.layout);
             if (!onTerrain.is_null())

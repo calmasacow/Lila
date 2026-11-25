@@ -871,7 +871,8 @@ json toJson(const Layout& l);
 
 struct MeshParts
 {
-    geo::Mesh streets;   // ribbons on the ground, face attrs street, class
+    geo::Mesh streets;   // carriageway and sidewalk strips on the ground, face attrs street, class, material
+    geo::Mesh ground;    // block and lot ground (yards, parks, plazas, vacant lots) draped on the ground, face attrs block, material
     geo::Mesh lots;      // lot outlines as loose edges, edge attr lot
     geo::Mesh envelopes; // closed volumes, face attrs lot, use, floors
     geo::Mesh water;     // river ribbons, face attr water
@@ -882,9 +883,20 @@ struct OutputOptions
 {
     double segment = 500.0; // ribbons and outlines are draped at about this spacing
     double lift = 2.0;      // cm above the ground, so streets do not z-fight it
+    bool ground = true;     // the ground mesh of blocks and lots
 };
 
 MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o = {});
+
+/** A material the street and ground meshes name by slot: its name (Settlement_Asphalt, ...), colour and roughness. */
+struct SurfaceMaterial
+{
+    const char* name;
+    glm::vec3 color;
+    float roughness;
+};
+/** Every slot the street and ground meshes use, in slot order. */
+std::span<const SurfaceMaterial> surfaceMaterials();
 
 /**
  * Street centrelines joined through plain junctions (the same class, profile and path on both sides), then the surface
