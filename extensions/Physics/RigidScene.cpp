@@ -246,7 +246,8 @@ struct Runtime
         jobs.reset();
         serialJobs.reset();
         temp.reset();
-        JPH::UnregisterTypes();
+        // Not JPH::UnregisterTypes: it releases PhysicsMaterial::sDefault, a static Jolt destroys before this one, so
+        // the release would write into the freed default material.
         delete JPH::Factory::sInstance;
         JPH::Factory::sInstance = nullptr;
     }
