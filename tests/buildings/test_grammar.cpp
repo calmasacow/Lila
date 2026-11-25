@@ -373,3 +373,35 @@ TEST_CASE("buildings: a pitched style roof spans a house, a footprint wider than
     CHECK(roofOf(1400, 2400) != "roof.flat");
     CHECK(roofOf(6000, 6000) == "roof.flat");
 }
+
+TEST_CASE("buildings: a sheet roof over an irregular lot stays over its footprint")
+{
+    // A warehouse from the real-data port city: its gabled roof ran ridge points hundreds of metres out over the hills.
+    const json env = json::parse(R"({"base": 2768.25, "corner": "wrap", "floors": 1, "ground": 2818.25, "groundUse": "industrial", "height": 462.0,
+        "footprint": [[262963.1256625021, 635720.4352906728], [264155.073679906, 635104.3110016737], [264694.7368789806, 634825.3562150773],
+                      [264699.35019978386, 635605.5644239584], [264221.1996084282, 635608.3916975568], [264026.8302063728, 635929.7985814123],
+                      [263306.3990770806, 635925.7517459665], [263150.4765349767, 636227.9381590784], [262556.71762608667, 635930.5097728012]],
+        "sides": ["street", "street", "street", "party", "party", "party", "open", "street", "street"],
+        "front": [-0.4591873899126458, -0.8883394289038464], "ridge": [0.8883394289038464, -0.4591873899126458],
+        "entrances": [[263559.09967120405, 635412.3731461733], [264697.0435393822, 635215.4603195179]],
+        "lot": 34342, "lotId": 531092620978046, "roof": "flat", "roofHeight": 0.0, "style": "warehouse", "top": 3390.351312716969,
+        "use": "industrial", "wealth": 1})");
+    const Spec s = Spec::fromEnvelope(env, "Puerto");
+    const auto r = generate(s, styles().at("warehouse"), {});
+    double lo = 1e300, hi = -1e300, x0 = 1e300, x1 = -1e300, z0 = 1e300, z1 = -1e300;
+    for (const Vec3& p : r->shell.pts)
+    {
+        lo = std::min(lo, p.y);
+        hi = std::max(hi, p.y);
+        x0 = std::min(x0, p.x);
+        x1 = std::max(x1, p.x);
+        z0 = std::min(z0, p.z);
+        z1 = std::max(z1, p.z);
+    }
+    CHECK(r->warnings.empty());
+    CHECK(hi < 3390.35 + 400.0);
+    CHECK(x0 > 262556.7 - 200.0);
+    CHECK(x1 < 264699.4 + 200.0);
+    CHECK(z0 > 634825.4 - 200.0);
+    CHECK(z1 < 636227.9 + 200.0);
+}

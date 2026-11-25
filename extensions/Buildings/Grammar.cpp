@@ -1286,6 +1286,7 @@ void pitchedRoof(Ctx& c, const TierPlan& tier, const std::string& kind, int owne
     {
         c.r.warnings.push_back(std::string("roof: ") + e.what());
     }
+    c.r.warnings.insert(c.r.warnings.end(), rr.warnings.begin(), rr.warnings.end());
     if (rr.mesh.numFaces() == 0)
     {
         c.r.warnings.push_back("the " + kind + " roof could not be built on this footprint; a flat roof stands in");
