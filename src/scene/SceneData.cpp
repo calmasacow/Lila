@@ -34,7 +34,8 @@ struct SwapAction final : UndoAction
 
 std::vector<std::function<void()>>& loadedCallbacks()
 {
-    static std::vector<std::function<void()>> c;
+    // Never destroyed: extensions register these, and their code is unloaded before statics are torn down at exit.
+    static auto& c = *new std::vector<std::function<void()>>();
     return c;
 }
 } // namespace
