@@ -474,3 +474,90 @@ TEST_CASE("coast: terrainAddReservoir dams a valley, fills the reservoir and run
     std::error_code ec;
     fs::remove_all(dir, ec);
 }
+
+TEST_CASE("coast: a grid the terrain can't place leaves the seabed; items off the map are refused or skipped")
+{
+    auto groundAt = [](const std::string& mesh) {
+        const json r = run("terrainSample", {{"args", {mesh}}, {"points", {{-15000.0, -15000.0}}}});
+        const json& first = r.is_array() ? r[0] : r["samples"][0];
+        return first["height"].get<double>();
+    };
+    loadTerrain();
+    run("newScene");
+    const fs::path dir = fs::temp_directory_path() / "lila_coast_nogeo";
+    fs::create_directories(dir);
+    // A real grid on disk, and a terrain made from nothing: no georeference to place the grid by.
+    terrain::Dem gebco;
+    gebco.geographic = true;
+    gebco.dx = gebco.dy = 1.0 / terrain::kGebcoPerDegree;
+    gebco.x0 = kLon - 0.1;
+    gebco.y0 = kLat + 0.1;
+    gebco.width = gebco.height = 60;
+    gebco.epsg = 4326;
+    gebco.metres.assign(3600, -400.0f);
+    terrain::writeGeoTiff(dir / "gebco.tif", gebco);
+    const json t = run("terrainCreate", {{"size", {40000.0, 40000.0}}, {"resolution", 129}, {"flat", true}, {"name", "NoGeo"}});
+    const std::string mesh = t["mesh"];
+    run("terrainSeaLevel", {{"args", {mesh}}, {"level", 100.0}});
+    const double before = groundAt(mesh);
+    const json b = run("terrainBathymetry", {{"args", {mesh}}, {"file", (dir / "gebco.tif").string()}, {"credit", false}});
+    CAPTURE(b.dump());
+    REQUIRE(b.contains("bathymetry"));
+    CHECK(b["bathymetry"]["source"] == "none");
+    CHECK(b["bathymetry"]["seaSamples"].get<double>() == 0.0);
+    bool said = false;
+    for (const json& n : b["bathymetry"]["notes"])
+        said = said || n.get<std::string>().find("left as it was") != std::string::npos;
+    CHECK(said);
+    const double after = groundAt(mesh);
+    CHECK(after == doctest::Approx(before));
+
+    // Off the map: the commands refuse with where the map is; the spec's coast step skips them with a warning.
+    std::string why;
+    try
+    {
+        run("terrainAddReservoir", {{"args", {mesh}}, {"id", "far"}, {"a", {90000.0, 0.0}}, {"b", {90000.0, 10000.0}}});
+    }
+    catch (const std::exception& e)
+    {
+        why = e.what();
+    }
+    CHECK(why.find("reservoir far: dam end a") != std::string::npos);
+    CHECK(why.find("outside the map") != std::string::npos);
+    why.clear();
+    try
+    {
+        run("terrainAddChannel", {{"args", {mesh}}, {"id", "out"}, {"path", {{0.0, 0.0}, {0.0, 80000.0}}}});
+    }
+    catch (const std::exception& e)
+    {
+        why = e.what();
+    }
+    CHECK(why.find("channel out: point 1") != std::string::npos);
+
+    const json spec = {{"name", "OffMap"},
+                       {"source", {{"type", "noise"}, {"amplitude", 3000.0}, {"featureSize", 20000.0}}},
+                       {"size", {40000.0, 40000.0}},
+                       {"resolution", 129},
+                       {"water", {{"sea", {{"level", 0.0}}}}},
+                       {"check", false},
+                       {"coast",
+                        {{"reservoirs", {{{"id", "far"}, {"a", {90000.0, 0.0}}, {"b", {90000.0, 10000.0}}}}},
+                         {"channels", {{{"id", "in"}, {"craft", "skiff"}, {"path", {{-15000.0, 0.0}, {15000.0, 0.0}}}}}},
+                         {"sceneObjects", false}}}};
+    const json built = run("terrainSpec", {{"spec", spec}, {"replace", true}});
+    CAPTURE(built.dump());
+    bool coastOk = false, warned = false;
+    for (const json& s : built["steps"])
+        if (s["step"] == "coast")
+        {
+            coastOk = s["ok"].get<bool>();
+            for (const json& w : s.value("warnings", json::array()))
+                warned = warned || (w.is_string() && w.get<std::string>().find("reservoir far") != std::string::npos);
+        }
+    CHECK(coastOk);
+    CHECK(warned);
+    CHECK(run("terrainCoast", {{"args", {built["terrain"]}}})["channels"].size() == 1);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
