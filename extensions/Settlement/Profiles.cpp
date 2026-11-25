@@ -42,6 +42,8 @@ constexpr DoubleField kDoubles[] = {
     {"floorHeight", &Profile::floorHeight},     {"foundation", &Profile::foundation},
     {"commercial", &Profile::commercial},
     {"windAngle", &Profile::windAngle},
+    {"townRadius", &Profile::townRadius},       {"townCentreX", &Profile::townCentreX},
+    {"townCentreZ", &Profile::townCentreZ},
     {"targetEntropyMin", &Profile::targetEntropyMin}, {"targetEntropyMax", &Profile::targetEntropyMax},
     {"targetDeadEndMin", &Profile::targetDeadEndMin}, {"targetDeadEndMax", &Profile::targetDeadEndMax},
     {"targetFourWayMin", &Profile::targetFourWayMin}, {"targetFourWayMax", &Profile::targetFourWayMax},

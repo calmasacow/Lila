@@ -465,6 +465,56 @@ TEST_CASE("settlement styles: a Mexican city's low shops are houses with a shop 
     CHECK(env.style == "modernCommercial");
 }
 
+TEST_CASE("settlement profile: a piece of a town ranks heights and styles from the whole town's centre and radius")
+{
+    Options o;
+    REQUIRE(builtinProfile("mexicanCity", &o.profile));
+    Site s;
+    s.outline = {{135000, -15000}, {165000, -15000}, {165000, 15000}, {135000, 15000}};
+    const Layout own = build(s, Ground::plane(), o);
+    applyJson(o.profile, json{{"townRadius", 600000.0}, {"townCentreX", 0.0}, {"townCentreZ", 0.0}});
+    const Layout piece = build(s, Ground::plane(), o);
+    CHECK(own.radius < 30000.0);
+    CHECK(piece.center.x == doctest::Approx(0.0));
+    CHECK(piece.center.y == doctest::Approx(0.0));
+    CHECK(piece.radius == doctest::Approx(600000.0));
+    CHECK(toJson(piece.profile)["townRadius"] == 600000.0);
+    auto plainHouses = [](const Layout& l) {
+        int n = 0;
+        for (const Envelope& e : l.envelopes)
+            n += e.styleFrom == "residential" ? 1 : 0;
+        return n;
+    };
+    auto oldCentre = [](const Layout& l) {
+        int n = 0;
+        for (const Envelope& e : l.envelopes)
+            n += e.styleFrom == "three floors or fewer in the old centre" ? 1 : 0;
+        return n;
+    };
+    REQUIRE(piece.envelopes.size() > 20);
+    // On its own the piece's edges are its outskirts; within 30% of the town's radius it is all old centre.
+    CHECK(plainHouses(own) > 0);
+    CHECK(plainHouses(piece) == 0);
+    CHECK(oldCentre(piece) > oldCentre(own));
+
+    // Ranked from the piece's own centre over its own radius, the frame changes only the street access heights take:
+    // the piece's busiest streets are not the town's, so no building rises past the profile's three floors times the
+    // lot's own spread of 1.2, plus one for a shop.
+    o.profile.townRadius = 0.0;
+    const Layout plain = build(s, Ground::plane(), o);
+    applyJson(o.profile, json{{"townCentreX", plain.center.x}, {"townCentreZ", plain.center.y}, {"townRadius", plain.radius}});
+    const Layout framed = build(s, Ground::plane(), o);
+    auto tallest = [](const Layout& l, Use use) {
+        int n = 0;
+        for (const Envelope& e : l.envelopes)
+            n = e.groundUse == use ? std::max(n, e.floors) : n;
+        return n;
+    };
+    CHECK(tallest(framed, Use::Residential) <= 4);
+    CHECK(tallest(framed, Use::Commercial) <= 5);
+    CHECK(tallest(plain, Use::Residential) + tallest(plain, Use::Commercial) > tallest(framed, Use::Residential) + tallest(framed, Use::Commercial));
+}
+
 TEST_CASE("settlement osm: the data's town point is the centre, its own squares stand in for a generated one")
 {
     loadCityPackages();

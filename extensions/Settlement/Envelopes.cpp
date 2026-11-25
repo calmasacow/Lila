@@ -239,8 +239,11 @@ Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, con
 
     int floors = env.floors;
     double storey = p.floorHeight;
+    // A piece of a larger town ranks its streets only against each other, so its busiest would rise like the town's
+    // busiest: its heights take average access instead.
+    const double access = p.townRadius > 0.0 ? 0.5 : lot.access;
     if (!pm && lot.use != Use::Religious)
-        floors = std::max(1, int(std::lround(floors * (0.7 + 0.6 * lot.access))));
+        floors = std::max(1, int(std::lround(floors * (0.7 + 0.6 * access))));
     switch (lot.use)
     {
     case Use::Religious: floors = std::max(floors, 2), storey *= 1.6; break;
