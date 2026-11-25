@@ -38,6 +38,7 @@
 #include "ui/Theme.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHooks.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportWidget.h"
 #include "ui/ViewportWidgetDetail.h"
@@ -248,8 +249,11 @@ void drawOverlays(render::FrameState& s, const ViewInfo& view, scene::Graph& g)
                                    : themeLinear("wireframe", glm::vec4(0.02f, 0.02f, 0.02f, 1.0f));
             ov->draw(dc);
         }
-    for (const viewportHooks::Drawer& d : viewportHooks::drawers())
-        d(s, painter, view);
+    const std::vector<viewportHooks::Drawer> drawers = viewportHooks::drawers();
+    const std::vector<std::string> drawerIds = viewportHooks::drawerIds();
+    for (size_t i = 0; i < drawers.size(); ++i)
+        if (i >= drawerIds.size() || viewOverlays::drawerShown(drawerIds[i], view.camera))
+            drawers[i](s, painter, view);
     s.atlas = overlayAtlas();
 }
 

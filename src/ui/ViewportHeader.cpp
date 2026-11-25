@@ -27,6 +27,7 @@
 #include "ui/Theme.h"
 #include "ui/Tools.h"
 #include "ui/UiCommon.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportContext.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHud.h"
@@ -1333,6 +1334,8 @@ void ViewportHeader::fillOverlaysMenu(QMenu* m)
                            "viewport.toggleFilmGate", "viewport.toggleResolutionGate", "viewport.toggleImagePlanes"})
         row(id);
     hdrSubmenu(m, "Image Planes", [this](QMenu* s) { imagePlanes::fillCameraMenu(s, mView->viewName()); });
+    for (const viewOverlays::Overlay& o : viewOverlays::all())
+        row(viewOverlays::actionId(o.id));
     row("viewport.isolate");
     hdrSubmenu(m, "Level of Detail", [this](QMenu* s) { lodDisplay::fillMenu(s, mView); });
 

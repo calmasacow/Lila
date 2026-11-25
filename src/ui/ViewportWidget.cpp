@@ -739,9 +739,11 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     renderPasses::run(renderPasses::Stage::Scene, passes);
     {
         const std::vector<viewportHooks::Drawer> drawers = viewportHooks::drawers();
-        const std::vector<std::string> drawerIds = LILA_PROFILER_CONNECTED() ? viewportHooks::drawerIds() : std::vector<std::string>();
+        const std::vector<std::string> drawerIds = viewportHooks::drawerIds();
         for (size_t i = 0; i < drawers.size(); ++i)
         {
+            if (i < drawerIds.size() && !viewOverlays::drawerShown(drawerIds[i], view.camera))
+                continue;
             LILA_ZONE_N("buildFrame viewport drawer");
             if (i < drawerIds.size())
                 LILA_ZONE_TEXT(drawerIds[i].data(), drawerIds[i].size());

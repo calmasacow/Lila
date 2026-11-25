@@ -825,8 +825,8 @@ void registerZoneCommands(ext::Context& ctx)
              .doc = "Terrain the zones drape over and whose extent is the default play area; empty lays them at height 0."},
             {.name = kOverlayAttr, .type = scene::PlugType::Bool, .defaultValue = true, .flags = scene::AttrInput | scene::AttrStorable,
              .doc = "Draw the zones over the viewport."},
-            {.name = kOpacityAttr, .type = scene::PlugType::Float, .defaultValue = 0.35, .flags = scene::AttrInput | scene::AttrStorable,
-             .doc = "Opacity of the zone fills.", .minValue = 0.0, .maxValue = 1.0},
+            {.name = kOpacityAttr, .type = scene::PlugType::Float, .defaultValue = kDefaultFillOpacity, .flags = scene::AttrInput | scene::AttrStorable,
+             .doc = "Opacity of the shown layer's fills.", .minValue = 0.0, .maxValue = 1.0},
         };
         scene::types::registerType(ctx, std::move(t));
     }

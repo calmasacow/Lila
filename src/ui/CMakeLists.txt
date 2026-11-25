@@ -220,6 +220,7 @@ lila_module(lila_ui UI
     DominantInfluenceUi.cpp DominantInfluenceUi.h
     AnimProxyUi.cpp AnimProxyUi.h
     ViewportHooks.cpp ViewportHooks.h
+    ViewOverlays.cpp ViewOverlays.h
     ViewportRenderers.cpp ViewportRenderers.h
     ViewportDisplay.cpp ViewportDisplay.h
     RandomColors.cpp

@@ -310,6 +310,22 @@ const LayerDraw& layerDraw(uint64_t set, const ZoneSpec& spec, uint64_t revision
 
 const glm::vec4 kWarn{1.0f, 0.62f, 0.2f, 1.0f};
 
+/**
+ * The one layer a set draws: the layer being worked on in the current set, else the visible layer on top (highest
+ * priority). Drawing every layer stacks their fills into an opaque sheet over the map.
+ */
+const Layer* shownLayer(const ZoneSpec& spec, bool current)
+{
+    if (current)
+        if (const Layer* l = spec.layer(ui().layer); l && l->visible)
+            return l;
+    const Layer* top = nullptr;
+    for (const Layer& l : spec.layers)
+        if (l.visible && (!top || l.priority > top->priority))
+            top = &l;
+    return top;
+}
+
 void drawZones(render::FrameState&, OverlayPainter& p, const ViewInfo& view)
 {
     LILA_ZONE();
@@ -329,22 +345,15 @@ void drawZones(render::FrameState&, OverlayPainter& p, const ViewInfo& view)
         const bool previewing = gPreview.spec && gPreview.set == id;
         const ZoneSpec& spec = previewing ? *gPreview.spec : *stored;
         const Ground ground = groundOf(groundPathOf(*n));
-        double opacity = 0.35;
+        double opacity = kDefaultFillOpacity;
         if (const int ai = n->type().attrIndex(kOpacityAttr); ai >= 0)
             if (const double* v = std::get_if<double>(&n->value(ai)))
                 opacity = *v;
-        const bool isCurrent = n == current;
-        std::vector<const Layer*> order;
-        for (const Layer& l : spec.layers)
-            if (l.visible)
-                order.push_back(&l);
-        std::stable_sort(order.begin(), order.end(), [](const Layer* a, const Layer* b) { return a->priority < b->priority; });
-        for (const Layer* l : order)
+        if (const Layer* l = shownLayer(spec, n == current))
         {
-            const bool active = isCurrent && l->id == ui().layer;
-            const uint64_t revision = previewing ? gPreview.revision : 0;
-            const LayerDraw& d = layerDraw(id, spec, previewing && l->id == ui().layer ? revision : 0, *l, ground);
-            const float a = float(opacity) * (active || !isCurrent ? 1.0f : 0.7f);
+            const uint64_t revision = previewing && l->id == ui().layer ? gPreview.revision : 0;
+            const LayerDraw& d = layerDraw(id, spec, revision, *l, ground);
+            const float a = float(opacity);
             for (const LayerDraw::Quad& q : d.quads)
             {
                 const glm::vec4 color(glm::vec3(q.color), q.color.a * a);
@@ -361,8 +370,6 @@ void drawZones(render::FrameState&, OverlayPainter& p, const ViewInfo& view)
                     b0 = b1;
                 }
             }
-            if (!active)
-                continue;
             for (const LayerDraw::Line& line : d.lines)
             {
                 std::vector<QPointF> pts;
@@ -1622,6 +1629,11 @@ void registerZoneUi(ext::Context& ctx)
               {.action = "openworld.zoneRemoveFromUnreal", .text = "Remove from Unreal", .rare = true}});
 
     viewportHooks::addDrawer(ctx, "openworld.zones", drawZones);
+    viewOverlays::add(ctx, {.id = "openworld.zones",
+                            .label = "Zones",
+                            .doc = "Zone sets over the ground: the shown layer's outlines, names and a faint fill.",
+                            .drawers = {"openworld.zones"},
+                            .keywords = {"territory", "jurisdiction", "police", "districts"}});
 
     using ops::options::Override;
     Override layer;

@@ -58,6 +58,7 @@
 #include "ui/Tools.h"
 #include "ui/ViewportDisplay.h"
 #include "ui/ViewportHooks.h"
+#include "ui/ViewOverlays.h"
 #include "ui/ViewportHud.h"
 #include "ui/ViewportRenderers.h"
 #include "ui/ViewportTool.h"

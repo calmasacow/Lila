@@ -7,8 +7,14 @@
 #include "math/MathCore.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
+#include "ui/Actions.h"
+#include "ui/ViewOverlays.h"
+#include "ui/ViewportHooks.h"
+
+#include <QGuiApplication>
 
 #include <chrono>
+#include <glm/gtc/matrix_transform.hpp>
 #include <doctest/doctest.h>
 
 #include <filesystem>
@@ -482,4 +488,105 @@ TEST_CASE("zone commands: on a Z-up scene zones lie on world XY")
     CHECK(run("zoneQuery", {{"point", {5000, 15000, 0}}, {"layer", "district"}})["layers"]["district"]["zone"] == "block");
     CHECK(run("zoneQuery", {{"point", {5000, 0, 15000}}, {"layer", "district"}})["layers"]["district"]["zone"].is_null());
     lila::math::setUpAxis(lila::math::UpAxis::Y);
+}
+
+namespace
+{
+/** A top view of the 100 m square round the origin, 800 px across. */
+lila::ui::ViewInfo topView(const std::string& name)
+{
+    lila::ui::ViewInfo v;
+    v.camera = name;
+    v.eye = {0.0, 100000.0, 0.0};
+    v.view = glm::lookAt(v.eye, glm::dvec3(0.0), glm::dvec3(0.0, 0.0, -1.0));
+    v.proj = glm::ortho(-60000.0, 60000.0, -60000.0, 60000.0, 1.0, 400000.0);
+    v.width = v.height = 800.0;
+    v.ortho = true;
+    return v;
+}
+
+/** The zones drawer's output in a view: summed fill alpha over a pixel, and how many text glyph triangles. */
+struct ZoneDraw
+{
+    float fillAlphaAt = 0.0f;
+    size_t textTris = 0;
+    size_t tris = 0;
+};
+
+ZoneDraw drawZonesIn(const lila::ui::ViewInfo& view, glm::vec2 px)
+{
+    using namespace lila::ui;
+    // Names are drawn from the font atlas, which needs a GUI application.
+    if (!QGuiApplication::instance())
+    {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+        static int argc = 1;
+        static char name[] = "lila_openworld_tests";
+        static char* argv[] = {name, nullptr};
+        static QGuiApplication app(argc, argv);
+    }
+    lila::render::FrameState s;
+    OverlayPainter painter(s.overlayTris, 1.0);
+    const auto drawers = viewportHooks::drawers();
+    const auto ids = viewportHooks::drawerIds();
+    for (size_t i = 0; i < drawers.size(); ++i)
+        if (ids[i] == "openworld.zones" && viewOverlays::drawerShown(ids[i], view.camera))
+            drawers[i](s, painter, view);
+    ZoneDraw d;
+    const auto& t = s.overlayTris;
+    d.tris = t.size() / 3;
+    for (size_t i = 0; i + 2 < t.size(); i += 3)
+    {
+        if (t[i].uv.x >= 0.0f)
+        {
+            ++d.textTris;
+            continue;
+        }
+        const glm::vec2 a = t[i].pos, b = t[i + 1].pos, c = t[i + 2].pos;
+        auto side = [](glm::vec2 p, glm::vec2 q, glm::vec2 r) { return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x); };
+        const float s0 = side(a, b, px), s1 = side(b, c, px), s2 = side(c, a, px);
+        if ((s0 >= 0 && s1 >= 0 && s2 >= 0) || (s0 <= 0 && s1 <= 0 && s2 <= 0))
+            d.fillAlphaAt += t[i].color.a;
+    }
+    return d;
+}
+} // namespace
+
+TEST_CASE("zones overlay: one layer drawn with a faint fill, outlines and names; a per-view Show toggle hides it")
+{
+    using namespace lila::ui;
+    loadPackages();
+    run("newScene");
+    run("terrainCreate", {{"size", {100000.0, 100000.0}}, {"resolution", 65}, {"flat", true}, {"name", "Ground"}});
+    // Three layers stacked over the same ground, as a world build makes them.
+    run("zoneCreate", {{"type", "district"}, {"id", "west"}, {"name", "Barrio Oeste"}, {"polygon", {{-50000, -50000}, {0, -50000}, {0, 50000}, {-50000, 50000}}}});
+    run("zoneCreate", {{"layer", "district"}, {"id", "east"}, {"name", "Barrio Este"}, {"polygon", {{0, -50000}, {50000, -50000}, {50000, 50000}, {0, 50000}}}});
+    run("zoneCreate", {{"type", "police"}, {"id", "all"}, {"name", "Policia del Valle"}, {"polygon", {{-50000, -50000}, {50000, -50000}, {50000, 50000}, {-50000, 50000}}}});
+    run("zoneCreate", {{"type", "wanted"}, {"id", "hot"}, {"name", "Zona Caliente"}, {"polygon", {{-50000, -50000}, {50000, -50000}, {50000, 50000}, {-50000, 50000}}}});
+
+    // A pixel inside a zone, clear of every outline and name.
+    const ViewInfo top = topView("top");
+    const glm::vec2 px(560.0f, 230.0f);
+    const ZoneDraw d = drawZonesIn(top, px);
+    CHECK(d.tris > 0);
+    CHECK(d.textTris > 0);
+    // One layer's fill, faint: never the stacked fills of every layer.
+    CHECK(d.fillAlphaAt > 0.05f);
+    CHECK(d.fillAlphaAt <= 0.16f);
+
+    // The Show toggle: an action and a row per view, off in one view only.
+    bool listed = false;
+    for (const viewOverlays::Overlay& o : viewOverlays::all())
+        listed |= o.id == "openworld.zones" && o.label == "Zones";
+    CHECK(listed);
+    const Action* show = actions::find(viewOverlays::actionId("openworld.zones"));
+    REQUIRE(show);
+    CHECK(show->label == "Show Zones");
+    viewOverlays::setShown("openworld.zones", "top", false);
+    CHECK_FALSE(viewOverlays::shown("openworld.zones", "top"));
+    CHECK(viewOverlays::shown("openworld.zones", "persp"));
+    CHECK(drawZonesIn(top, px).tris == 0);
+    CHECK(drawZonesIn(topView("persp"), px).tris == d.tris);
+    viewOverlays::setShown("openworld.zones", "top", true);
+    CHECK(drawZonesIn(top, px).tris == d.tris);
 }

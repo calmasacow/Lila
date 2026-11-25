@@ -527,6 +527,11 @@ void registerRemixUi(ext::Context& ctx)
               {.action = "openworld.remixOverlay", .text = "Overlay", .rare = true}});
 
     viewportHooks::addDrawer(ctx, "openworld.remix", drawAll);
+    viewOverlays::add(ctx, {.id = "openworld.remix",
+                            .label = "World Remix",
+                            .doc = "A world remix's sources, regions, seams, pins and repairs, for remixes whose Remix Overlay is on.",
+                            .drawers = {"openworld.remix"},
+                            .keywords = {"remix", "regions", "seams"}});
     viewportHooks::setDragHook("openworld.remix", {.press = pressDrag, .move = moveDrag, .release = releaseDrag, .hover = hoverDrag});
     ctx.track("dragHook:openworld.remix", [] { viewportHooks::removeDragHook("openworld.remix"); });
 }

@@ -25,6 +25,8 @@ inline constexpr const char* kSpecAttr = "zones";
 inline constexpr const char* kGroundAttr = "ground";
 inline constexpr const char* kOverlayAttr = "overlay";
 inline constexpr const char* kOpacityAttr = "fillOpacity";
+/** Faint: the fill tints the ground under the outlines and names without hiding it. */
+inline constexpr double kDefaultFillOpacity = 0.15;
 
 /** The scene's ground plane, which zones live on: world XZ in a Y-up scene, world XY in a Z-up one. */
 glm::dvec3 worldOf(Vec2 p, double up);
