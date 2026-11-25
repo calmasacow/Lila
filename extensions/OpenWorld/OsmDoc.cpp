@@ -219,9 +219,12 @@ OsmDoc readOsmDoc(const std::filesystem::path& path, [[maybe_unused]] std::vecto
     std::string ext = path.extension().string();
     for (char& c : ext)
         c = char(std::tolower(static_cast<unsigned char>(c)));
+    // Overpass answers are JSON or XML even when saved under a .pbf name, so text content wins over the extension.
+    const size_t first = bytes.find_first_not_of(" \t\r\n\xEF\xBB\xBF");
+    const bool text = first != std::string::npos && (bytes[first] == '{' || bytes[first] == '<');
     try
     {
-        if (ext == ".pbf")
+        if (ext == ".pbf" && !text)
         {
             const terrain::OsmData od = terrain::parseOsmPbf(bytes);
             OsmDoc d;
@@ -254,7 +257,6 @@ OsmDoc readOsmDoc(const std::filesystem::path& path, [[maybe_unused]] std::vecto
             d.index();
             return d;
         }
-        const size_t first = bytes.find_first_not_of(" \t\r\n\xEF\xBB\xBF");
         if (ext == ".json" || (first != std::string::npos && bytes[first] == '{'))
             return parseOsmDocJson(bytes);
         return parseOsmDocXml(bytes);

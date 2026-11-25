@@ -908,7 +908,10 @@ OsmData readOsm(const std::filesystem::path& path)
     std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return char(std::tolower(c)); });
     try
     {
-        if (ext == ".pbf")
+        // Overpass answers are JSON or XML even when saved under a .pbf name, so text content wins over the extension.
+        const size_t first = bytes.find_first_not_of(" \t\r\n");
+        const bool text = first != std::string::npos && (bytes[first] == '{' || bytes[first] == '<');
+        if (ext == ".pbf" && !text)
             return parseOsmPbf(bytes);
         if (ext == ".json" || ext == ".geojson" || (!bytes.empty() && bytes.find_first_not_of(" \t\r\n") != std::string::npos &&
                                                     bytes[bytes.find_first_not_of(" \t\r\n")] == '{'))
