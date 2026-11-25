@@ -34,6 +34,7 @@
 #include <fstream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 
 using namespace lila;
@@ -634,13 +635,30 @@ json runBathymetry(const Args& a)
 
     const std::string cmd = "terrainBathymetry";
     Graph& g = Graph::current();
-    const Terrain t = oneTerrain(a, cmd);
-    const double ac = t.across(), v = t.vertical();
+    const bool estimate = a.get<bool>("estimate", false), fetch = a.get<bool>("fetch", false);
+    // An area alone is enough to estimate or download: no terrain has to exist yet.
+    const bool areaOnly = (estimate || fetch) && a.has("bbox") && a.positional.empty();
+    std::optional<Terrain> found;
+    if (!areaOnly || (fetch && !estimate))
+    {
+        try
+        {
+            found = oneTerrain(a, cmd);
+        }
+        catch (const CommandError&)
+        {
+            if (!areaOnly)
+                throw;
+        }
+    }
     json fetched = nullptr;
     fs::path attributionFile;
 
     if (a.get<bool>("off", false))
     {
+        if (!found)
+            throw CommandError(cmd + ": off needs a terrain");
+        const Terrain& t = *found;
         Edit e = readGroup(g, t, cmd);
         gn::GNode* n = bathyNode(e.group, false, cmd);
         if (!n)
@@ -664,7 +682,7 @@ json runBathymetry(const Args& a)
     }
 
     std::string file = a.get<std::string>("file", "");
-    if (a.get<bool>("estimate", false) || a.get<bool>("fetch", false))
+    if (estimate || fetch)
     {
         GeoBox box;
         if (a.has("bbox"))
@@ -675,20 +693,27 @@ json runBathymetry(const Args& a)
             box = {b[0].get<double>(), b[1].get<double>(), b[2].get<double>(), b[3].get<double>()};
         }
         else
-            box = terrainBox(t, cmd);
+            box = terrainBox(*found, cmd);
         if (!box.valid())
             throw CommandError(cmd + ": the area is not a valid box in degrees");
-        const json est = estimateJson(box);
-        if (a.get<bool>("estimate", false))
-            return {{"estimate", est}, {"dataset", a.get<std::string>("dataset", "GEBCOIceTopo")}, {"consentNeeded", est["megabytes"].get<double>() > kConsentMB}};
-        if (est["megabytes"].get<double>() > kConsentMB && !a.get<bool>("consent", false))
-            throw CommandError(std::format("{}: the GEBCO download for this area is about {:.0f} MB; pass consent=True to fetch it", cmd, est["megabytes"].get<double>()));
         FetchRequest r;
         r.source = DemSource::OpenTopography;
         r.box = box;
         r.dataset = a.get<std::string>("dataset", "GEBCOIceTopo");
         r.cache = dataDir() / "dem_cache";
         r.offline = a.get<bool>("offline", false);
+        json est = estimateJson(box);
+        const bool cached = fs::exists(openTopographyCacheFile(r));
+        est["cached"] = cached;
+        if (cached)
+        {
+            est["bytes"] = 0;
+            est["megabytes"] = 0.0;
+        }
+        if (estimate)
+            return {{"estimate", est}, {"dataset", r.dataset}, {"consentNeeded", est["megabytes"].get<double>() > kConsentMB}};
+        if (est["megabytes"].get<double>() > kConsentMB && !a.get<bool>("consent", false))
+            throw CommandError(std::format("{}: the GEBCO download for this area is about {:.0f} MB; pass consent=True to fetch it", cmd, est["megabytes"].get<double>()));
         r.apiKey = a.get<std::string>("apiKey", "");
         if (!r.apiKey.empty() && a.get<bool>("saveKey", false))
             PrefStore::get().set(kPrefsFile, kKeyPref, r.apiKey);
@@ -703,7 +728,9 @@ json runBathymetry(const Args& a)
         {
             throw CommandError(cmd + ": " + e.what());
         }
-        const fs::path out = dataDir() / "bathymetry" / std::format("{}_{:.4f}_{:.4f}_{:.4f}_{:.4f}.tif", r.dataset, box.west, box.south, box.east, box.north);
+        // file= with fetch names where the downloaded grid goes.
+        const fs::path out = !file.empty() ? resolved(file)
+                                           : dataDir() / "bathymetry" / std::format("{}_{:.4f}_{:.4f}_{:.4f}_{:.4f}.tif", r.dataset, box.west, box.south, box.east, box.north);
         try
         {
             writeGeoTiff(out, res.dem);
@@ -716,6 +743,9 @@ json runBathymetry(const Args& a)
         file = paths::toUtf8(out);
         fetched = {{"dataset", r.dataset}, {"downloaded", res.downloaded}, {"cached", res.cached}, {"samples", {res.dem.width, res.dem.height}},
                    {"estimate", est}, {"file", file}, {"notes", res.notes}};
+        if (!found)
+            return {{"fetched", fetched}, {"applied", false}, {"attributionFile", paths::toUtf8(attributionFile)},
+                    {"notes", json::array({"no terrain: the grid is written to " + file + ", not applied; terrainBathymetry(<terrain>, file=...) applies it"})}};
     }
     else if (!file.empty())
     {
@@ -734,6 +764,8 @@ json runBathymetry(const Args& a)
             }
     }
 
+    const Terrain& t = *found;
+    const double ac = t.across(), v = t.vertical();
     Edit e = readGroup(g, t, cmd);
     gn::GNode* n = bathyNode(e.group, true, cmd);
     BathymetrySpec s = BathymetrySpec::fromJson(jsonProp(*n, "settings", json::object()));
@@ -1528,13 +1560,15 @@ void registerCoastCommands(ext::Context& ctx)
         .doc = "Lay a seabed under a terrain's sea: from a GEBCO grid (file=, a GeoTIFF tile from gebco.net or any elevation file "
                "readDem reads) placed by the terrain's georeference, or fetched for the terrain's area (fetch=True: GEBCO through "
                "OpenTopography with your API key; estimate=True says the size first, and a download over 25 MB needs consent=True). "
+               "With bbox= no terrain is needed to estimate or fetch: the grid goes to file= (else the terrain data's bathymetry "
+               "folder) and is applied only when a terrain is found. "
                "The DEM's flat sea (ground at or below sea level plus landTolerance, joined to the edge or deep grid water) takes "
                "the grid's depths blended in from a shoreline profile over blendWidth cm, so the shore is continuous and the shelf "
                "smooth; with no grid the profile alone (shoreSlope off the beach, shelfDepth at shelfWidth, dropDepth beyond). "
                "Writes the GEBCO credit into the terrain data's ATTRIBUTION.txt. off=True removes it. Returns the seabed source "
                "(grid, profile or grid+profile), samples, depths and notes.",
         .positionalDoc = "terrain mesh or its modifier",
-        .flags = {{"file", "f", T::String, nullptr, "A GEBCO GeoTIFF (or any elevation file); empty for the profile alone."},
+        .flags = {{"file", "f", T::String, nullptr, "A GEBCO GeoTIFF (or any elevation file); with fetch, where the download is written."},
                   {"fetch", "fe", T::Bool, false, "Download GEBCO for the terrain's area (or bbox) through OpenTopography."},
                   {"estimate", "es", T::Bool, false, "Only say how big the download would be."},
                   {"consent", "cn", T::Bool, false, "Allow a download over 25 MB."},

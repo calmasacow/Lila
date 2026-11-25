@@ -929,26 +929,6 @@ json runImportDem(const Args& a)
     return out;
 }
 
-/** Overpass query for everything terrainImportOsm reads, inside the box. */
-std::string overpassQuery(const GeoBox& b)
-{
-    char box[160];
-    std::snprintf(box, sizeof box, "(%.7f,%.7f,%.7f,%.7f)", b.south, b.west, b.north, b.east);
-    const std::string bb = box;
-    std::string q = "[out:json][timeout:300];(";
-    for (const char* sel : {"way[\"highway\"]", "way[\"waterway\"]", "way[\"natural\"]", "way[\"landuse\"]", "way[\"leisure\"]",
-                            "way[\"building\"]", "way[\"building:part\"]", "way[\"amenity\"]", "way[\"shop\"]", "way[\"tourism\"]",
-                            "way[\"office\"]", "way[\"man_made\"]", "way[\"aeroway\"]", "way[\"harbour\"]", "way[\"place\"]",
-                            "node[\"amenity\"]", "node[\"shop\"]", "node[\"tourism\"]", "node[\"office\"]", "node[\"place\"]",
-                            "node[\"craft\"]", "node[\"man_made\"=\"lighthouse\"]", "node[\"natural\"~\"peak|bay|beach\"]",
-                            "relation[\"type\"=\"multipolygon\"][\"natural\"]", "relation[\"type\"=\"multipolygon\"][\"landuse\"]",
-                            "relation[\"type\"=\"multipolygon\"][\"building\"]", "relation[\"type\"=\"multipolygon\"][\"amenity\"]",
-                            "relation[\"type\"=\"multipolygon\"][\"leisure\"]", "relation[\"type\"=\"multipolygon\"][\"place\"]",
-                            "relation[\"type\"=\"multipolygon\"][\"man_made\"]"})
-        q += std::string(sel) + bb + ";";
-    return q + ");out body;>;out skel qt;";
-}
-
 json runImportOsm(const Args& a)
 {
     LILA_ZONE();
@@ -977,7 +957,7 @@ json runImportOsm(const Args& a)
         file = dataDir / "osm" / (safeName(t.mesh ? t.mesh->name() : std::string("terrain")) + ".json");
         fs::create_directories(file.parent_path());
         std::string why;
-        const int status = httpGet("https://overpass-api.de/api/interpreter?data=" + urlEncode(overpassQuery(b)), file, &why);
+        const int status = httpGet(overpassUrl(b), file, &why);
         if (status != 200)
         {
             std::error_code ec;

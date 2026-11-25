@@ -186,6 +186,47 @@ std::string openTopographyUrl(const GeoBox& b, const std::string& dataset, const
     return "https://portal.opentopography.org/API/globaldem?demtype=" + urlEncode(dataset) + "&" + box + "&outputFormat=GTiff&API_Key=" + urlEncode(apiKey);
 }
 
+std::string redactedUrl(const std::string& url)
+{
+    const size_t at = url.find("API_Key=");
+    if (at == std::string::npos)
+        return url;
+    const size_t from = at + 8, to = url.find('&', from);
+    return url.substr(0, from) + "***" + (to == std::string::npos ? std::string() : url.substr(to));
+}
+
+const char* const kOpenTopographyKeyHelp =
+    "OpenTopography needs your API key (free: sign in at https://portal.opentopography.org, then My Account > Request API Key); "
+    "pass apiKey='...' with saveKey=True once and later fetches use the saved key";
+
+std::string overpassQuery(const GeoBox& b)
+{
+    char box[160];
+    std::snprintf(box, sizeof box, "(%.7f,%.7f,%.7f,%.7f)", b.south, b.west, b.north, b.east);
+    const std::string bb = box;
+    std::string q = "[out:json][timeout:300];(";
+    for (const char* sel : {"way[\"highway\"]", "way[\"waterway\"]", "way[\"natural\"]", "way[\"landuse\"]", "way[\"leisure\"]",
+                            "way[\"building\"]", "way[\"building:part\"]", "way[\"amenity\"]", "way[\"shop\"]", "way[\"tourism\"]",
+                            "way[\"office\"]", "way[\"man_made\"]", "way[\"aeroway\"]", "way[\"harbour\"]", "way[\"place\"]",
+                            "node[\"amenity\"]", "node[\"shop\"]", "node[\"tourism\"]", "node[\"office\"]", "node[\"place\"]",
+                            "node[\"craft\"]", "node[\"man_made\"=\"lighthouse\"]", "node[\"natural\"~\"peak|bay|beach\"]",
+                            "relation[\"type\"=\"multipolygon\"][\"natural\"]", "relation[\"type\"=\"multipolygon\"][\"landuse\"]",
+                            "relation[\"type\"=\"multipolygon\"][\"building\"]", "relation[\"type\"=\"multipolygon\"][\"amenity\"]",
+                            "relation[\"type\"=\"multipolygon\"][\"leisure\"]", "relation[\"type\"=\"multipolygon\"][\"place\"]",
+                            "relation[\"type\"=\"multipolygon\"][\"man_made\"]"})
+        q += std::string(sel) + bb + ";";
+    return q + ");out body;>;out skel qt;";
+}
+
+std::string overpassUrl(const GeoBox& b) { return "https://overpass-api.de/api/interpreter?data=" + urlEncode(overpassQuery(b)); }
+
+std::filesystem::path openTopographyCacheFile(const FetchRequest& r)
+{
+    char name[160];
+    std::snprintf(name, sizeof name, "%s_%.5f_%.5f_%.5f_%.5f.tif", r.dataset.c_str(), r.box.west, r.box.south, r.box.east, r.box.north);
+    return r.cache / "opentopography" / name;
+}
+
 Dem mosaicGeographic(const std::vector<Dem>& tiles, const GeoBox& b, size_t* uncovered)
 {
     LILA_ZONE();
@@ -535,8 +576,9 @@ FetchResult fetchDem(const FetchRequest& r, const Downloader& download)
             ++res.empty;
             return;
         }
-        throw std::runtime_error(status ? "the server answered " + std::to_string(status) + (why.empty() ? std::string() : ": " + why) + " for " + url
-                                        : "can't download " + url + (why.empty() ? std::string() : ": " + why));
+        const std::string shown = redactedUrl(url);
+        throw std::runtime_error(status ? "the server answered " + std::to_string(status) + (why.empty() ? std::string() : ": " + why) + " for " + shown
+                                        : "can't download " + shown + (why.empty() ? std::string() : ": " + why));
     };
 
     size_t uncovered = 0;
@@ -580,11 +622,9 @@ FetchResult fetchDem(const FetchRequest& r, const Downloader& download)
     }
     else
     {
-        if (r.apiKey.empty())
-            throw std::runtime_error("OpenTopography needs your API key (free at opentopography.org): pass apiKey= or save it with saveKey=True");
-        char name[160];
-        std::snprintf(name, sizeof name, "%s_%.5f_%.5f_%.5f_%.5f.tif", r.dataset.c_str(), r.box.west, r.box.south, r.box.east, r.box.north);
-        const fs::path file = r.cache / "opentopography" / name;
+        const fs::path file = openTopographyCacheFile(r);
+        if (r.apiKey.empty() && !r.offline && !fs::exists(file))
+            throw std::runtime_error(kOpenTopographyKeyHelp);
         bool none = false;
         obtain(openTopographyUrl(r.box, r.dataset, r.apiKey), file, &none);
         if (none)
