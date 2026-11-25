@@ -78,8 +78,9 @@ void run()
         }
         for (bool more = true; more;)
         {
-            while (s.holds.load(std::memory_order_acquire) > 0)
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // Woken the moment the last Hold ends, so the gaps between frames are used, however short.
+            for (int h; (h = s.holds.load(std::memory_order_acquire)) > 0;)
+                s.holds.wait(h, std::memory_order_acquire);
             keepOutOfFrames(s);
             LILA_ZONE_N("release.step");
             more = p->step();
@@ -116,7 +117,8 @@ Hold::~Hold()
 {
     State& s = state();
     s.heldUntil.store(std::chrono::steady_clock::now().time_since_epoch().count(), std::memory_order_release);
-    s.holds.fetch_sub(1, std::memory_order_acq_rel);
+    if (s.holds.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        s.holds.notify_all();
 }
 
 void drain()

@@ -9049,7 +9049,12 @@ void Renderer::submit(ViewportId id, FrameState state)
         if (previous && previous != v.drawing)
             done.push_back(std::move(previous));
         for (std::shared_ptr<FrameState>& f : done)
+        {
             render::reuseBuffers(v.spare, *f);
+            // Draws the new frame shares cost nothing to let go; a list of its own can hold a replaced scene's last references.
+            if (f->meshes.sameList(v.state->meshes))
+                f->meshes.clear();
+        }
         ++v.submitted;
         v.pending = true;
         v.hasState = true;
