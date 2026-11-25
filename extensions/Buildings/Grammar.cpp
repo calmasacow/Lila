@@ -59,6 +59,7 @@ struct TierPlan
     std::vector<Floor> floors;
     bool roofed = true; // gets the building's roof (else a terrace or a tower cap)
     std::string cap;    // tower caps: dome, pyramid
+    std::vector<double> clear; // per edge: cm to the nearest neighbour in front of it (huge when unknown)
 };
 
 struct Ctx
@@ -396,7 +397,9 @@ std::vector<TierPlan> planTiers(Ctx& c)
     }
 
     const int podium = c.st.podium;
-    if (podium > 0 && c.floors > podium + 2 && c.st.towerInset > 0.0)
+    if (podium > 0 && c.floors > podium + 2 && c.st.towerInset > 0.0 && !sp.holes.empty())
+        c.r.warnings.push_back("a courtyard lot takes no tower over a podium; built as one block round the courtyard");
+    else if (podium > 0 && c.floors > podium + 2 && c.st.towerInset > 0.0)
     {
         TierPlan base;
         base.ring = ring;
@@ -468,12 +471,13 @@ void addTowers(Ctx& c, std::vector<TierPlan>& tiers)
         if (sq.size() < 4)
             return;
         TierPlan t;
-        t.ring = sq;
+        // A centimetre proud of the walls it rises from, so it never shares their plane (or the parapet's).
+        t.ring = offsetRing(sq, 1.0);
         t.sides.assign(4, 2);
         const int id = int(tiers.size());
         for (int k = 0; k < 4; ++k)
             t.edgeIds.push_back("f" + std::to_string(k));
-        t.bottom = top - 10.0;
+        t.bottom = top;
         t.top = top + rise;
         t.floors.push_back({top, top + rise, 1000 + id});
         t.roofed = false;
@@ -502,9 +506,11 @@ void addTowers(Ctx& c, std::vector<TierPlan>& tiers)
             const Vec2 along = glm::normalize(b - a), in = -outward(a, b);
             const double side = std::clamp(glm::length(b - a) * 0.22, 300.0, 700.0);
             const double rise = std::max(600.0, c.H * 2.5);
-            tower(a, in, along, side, rise, "dome");
+            // Held back from a party wall, so a neighbour's tower at the same corner never meets this one face to face.
+            const double back0 = base.sides[(size_t(front) + n - 1) % n] == 1 ? 3.0 : 0.0, back1 = base.sides[(size_t(front) + 1) % n] == 1 ? 3.0 : 0.0;
+            tower(a + along * back0, in, along, side, rise, "dome");
             if (c.st.bellTowers > 1)
-                tower(b - along * side, in, along, side, rise, "dome");
+                tower(b - along * (side + back1), in, along, side, rise, "dome");
         }
     }
     if (c.spec.corner == "tower")
@@ -527,11 +533,11 @@ void addTowers(Ctx& c, std::vector<TierPlan>& tiers)
             if (sq.size() < 4)
                 continue;
             TierPlan t;
-            t.ring = sq;
+            t.ring = offsetRing(sq, 1.0);
             t.sides.assign(4, 2);
             for (int k = 0; k < 4; ++k)
                 t.edgeIds.push_back("f" + std::to_string(k));
-            t.bottom = top - 10.0;
+            t.bottom = top;
             t.top = top + c.H;
             t.floors.push_back({top, top + c.H, 2000});
             t.roofed = false;
@@ -582,6 +588,137 @@ double acuteMargin(const Ring& ring, size_t edge, bool atEnd, double cw, double 
     return cw + reach * (1.0 / std::tan(interior * 0.5) - 1.0);
 }
 
+/** cm: an open side with another building closer than this is built as a party wall. */
+constexpr double kTouching = 30.0;
+/** cm: party walls stand this far inside their own footprint, and trims stop this far short of a party line, so two
+ *  neighbours' faces never lie in one plane. */
+constexpr double kPartyGap = 1.5;
+/** cm: how far past an opening's module its reveals run to the dark back of a building without rooms. */
+constexpr double kOpeningBack = 12.0;
+
+/** Each edge's clearance from the spec (a tier edge lying on a footprint edge takes that edge's), and open sides with a
+ *  neighbour against them made party walls. */
+void measureTier(const Ctx& c, TierPlan& tier)
+{
+    const Ring& fp = c.spec.footprint;
+    const size_t n = tier.ring.size();
+    tier.clear.assign(n, 1e9);
+    if (c.spec.clearance.size() != fp.size())
+        return;
+    for (size_t e = 0; e < n; ++e)
+    {
+        const Vec2 a = tier.ring[e], b = tier.ring[(e + 1) % n];
+        for (size_t k = 0; k < fp.size(); ++k)
+        {
+            const Vec2 p = fp[k], q = fp[(k + 1) % fp.size()];
+            const Vec2 d = q - p;
+            const double L2 = glm::dot(d, d);
+            if (L2 < 1.0)
+                continue;
+            auto off = [&](Vec2 x) {
+                const double t = glm::dot(x - p, d) / L2;
+                return t < -0.01 || t > 1.01 ? 1e9 : glm::length(p + d * t - x);
+            };
+            if (off(a) < 5.0 && off(b) < 5.0)
+            {
+                tier.clear[e] = c.spec.clearance[k];
+                break;
+            }
+        }
+        if (e < tier.sides.size() && tier.sides[e] == 2 && tier.clear[e] < kTouching)
+            tier.sides[e] = 1;
+    }
+}
+
+/** The point at a ring's corner `v` offset `d` out from both edges meeting there (in when d < 0), mitred. */
+Vec2 mitrePoint(const Ring& ring, size_t v, double d)
+{
+    const size_t n = ring.size();
+    const Vec2 p = ring[(v + n - 1) % n], b = ring[v], q = ring[(v + 1) % n];
+    const Vec2 n0 = outward(p, b), n1 = outward(b, q);
+    Vec2 m = n0 + n1;
+    const double l = glm::length(m);
+    if (l < 1e-9)
+        return b + n0 * d;
+    m /= l;
+    return b + m * (d / std::max(0.25, glm::dot(m, n0)));
+}
+
+/** How a trim running along a ring edge ends at a corner: mitred into the next edge's, or capped `gap` short of it. */
+struct BandEnd
+{
+    bool mitre = false;
+    double gap = 0.0;
+};
+
+/**
+ * A box running along ring edge `e` out of its wall, from depth `in` (negative: into the wall) out to `out`, t0..t1 up.
+ * Ends that meet the next edge's band are mitred into it, so the two never overlap; other ends are capped.
+ */
+void ringBand(Soup& s, const Ring& ring, size_t e, BandEnd start, BandEnd end, double t0, double t1, double in, double out, int m, int trim,
+              int owner, int part, glm::vec4 c, bool top = true, bool bottom = true, bool back = false)
+{
+    const size_t n = ring.size();
+    const Vec2 a = ring[e], b = ring[(e + 1) % n];
+    const double L = glm::length(b - a);
+    if (L < 1.0 || t1 - t0 < 0.5)
+        return;
+    const Vec2 u = (b - a) / L, nn = outward(a, b);
+    auto at = [&](bool atEnd, double d) {
+        const BandEnd& x = atEnd ? end : start;
+        if (x.mitre)
+            return mitrePoint(ring, atEnd ? (e + 1) % n : e, d);
+        return (atEnd ? b - u * x.gap : a + u * x.gap) + nn * d;
+    };
+    const Vec2 A0 = at(false, in), B0 = at(true, in), A1 = at(false, out), B1 = at(true, out);
+    auto P = [](Vec2 p, double y) { return Vec3(p.x, y, p.y); };
+    const double len = glm::length(B1 - A1), depth = out - in;
+    {
+        const glm::vec2 uv[4] = {uvOf(0, t0, t0, trim), uvOf(0, t1, t0, trim), uvOf(len, t1, t0, trim), uvOf(len, t0, t0, trim)};
+        const Vec3 p[4] = {P(A1, t0), P(A1, t1), P(B1, t1), P(B1, t0)};
+        s.poly(p, uv, 4, m, trim, owner, part, -1, c);
+    }
+    const glm::vec2 flat[4] = {uvOf(0, 0, 0, trim), uvOf(L, 0, 0, trim), uvOf(L, depth, 0, trim), uvOf(0, depth, 0, trim)};
+    if (top)
+    {
+        const Vec3 p[4] = {P(A0, t1), P(B0, t1), P(B1, t1), P(A1, t1)};
+        s.poly(p, flat, 4, m, trim, owner, part, -1, c);
+    }
+    if (bottom)
+    {
+        const Vec3 p[4] = {P(A0, t0), P(A1, t0), P(B1, t0), P(B0, t0)};
+        s.poly(p, flat, 4, m, trim, owner, part, -1, c);
+    }
+    const glm::vec2 cap[4] = {uvOf(0, t0, t0, trim), uvOf(0, t1, t0, trim), uvOf(depth, t1, t0, trim), uvOf(depth, t0, t0, trim)};
+    if (!start.mitre)
+    {
+        const Vec3 p[4] = {P(A0, t0), P(A0, t1), P(A1, t1), P(A1, t0)};
+        s.poly(p, cap, 4, m, trim, owner, part, -1, c);
+    }
+    if (!end.mitre)
+    {
+        const Vec3 p[4] = {P(B0, t0), P(B1, t0), P(B1, t1), P(B0, t1)};
+        s.poly(p, cap, 4, m, trim, owner, part, -1, c);
+    }
+    if (back)
+    {
+        const double lb = glm::length(B0 - A0);
+        const glm::vec2 uv[4] = {uvOf(lb, t0, t0, trim), uvOf(lb, t1, t0, trim), uvOf(0, t1, t0, trim), uvOf(0, t0, t0, trim)};
+        const Vec3 p[4] = {P(B0, t0), P(B0, t1), P(A0, t1), P(A0, t0)};
+        s.poly(p, uv, 4, m, trim, owner, part, -1, c);
+    }
+}
+
+/** Ends of a facade trim on edge e of a ring whose sides are given (empty: every edge open): mitred where the
+ *  neighbouring edge carries the same trim, held short of a party wall. */
+std::pair<BandEnd, BandEnd> bandEnds(const Ring& ring, const std::vector<int>& sides, size_t e)
+{
+    const size_t n = ring.size();
+    auto carries = [&](size_t k) { return (sides.empty() || k >= sides.size() || sides[k] != 1) && glm::length(ring[(k + 1) % n] - ring[k]) >= 20.0; };
+    auto end = [&](size_t k) { return carries(k) ? BandEnd{true, 0.0} : BandEnd{false, (k < sides.size() && sides[k] == 1) ? kPartyGap : 0.0}; };
+    return {end((e + n - 1) % n), end((e + 1) % n)};
+}
+
 void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool courtyard, int holeIndex, const Ring& ring, int side,
                 const std::string& edgeId)
 {
@@ -616,10 +753,13 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
     {
         const int owner = c.addModule(wallModule(f, L * 0.5, tier.bottom, 0.0, "wall.party", "wall", fpath + "/wall", {L, tier.top - tier.bottom, st.wallThickness}));
         r.modules[size_t(owner)].shell = true;
-        wallRect(sh, f, 0.0, L, tier.bottom, tier.top, 0.0, tier.bottom, MatRender, TrimRender, owner, PartPartyWall, -1, c.cRender);
+        wallRect(sh, f, 0.0, L, tier.bottom, tier.top, kPartyGap, tier.bottom, MatRender, TrimRender, owner, PartPartyWall, -1, c.cRender);
         r.facades.push_back(fac);
         return;
     }
+    static const std::vector<int> kOpenRing;
+    const std::vector<int>& ringSides = courtyard ? kOpenRing : tier.sides;
+    const auto [bandStart, bandEnd] = bandEnds(ring, ringSides, edge);
 
     // Bays, kept back from the facade's ends by the corner width, and further at an acute corner.
     const double cw = std::min(st.cornerWidth, L * 0.15);
@@ -672,6 +812,21 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
         return c.addModule(std::move(m));
     }();
 
+    // Upright trims end inside the cornice's top course, and quoin blocks skip the string courses, so their tops never
+    // meet another face in a plane.
+    const bool hasCornice = st.cornice != "none" && !courtyard && tier.roofed && !tower;
+    const double stripTop = hasCornice && st.cornice != "vigas" ? tier.top - 2.0 : tier.top;
+    // A tower's corner strips start just inside the cornice it stands on.
+    const double stripBottom = tower ? tier.bottom - 1.0 : tier.bottom;
+    auto onBand = [&](double y0, double y1) {
+        if (!st.bands || tower)
+            return false;
+        for (const TierPlan::Floor& fl : tier.floors)
+            if (fl.index > 0 && fl.y0 > tier.bottom + 1.0 && y0 < fl.y0 + 13.0 && y1 > fl.y0 - 13.0)
+                return true;
+        return false;
+    };
+
     // Corner strips: quoins or pilasters at the facade's start corner when it is convex.
     if (st.corner != "none" && !courtyard)
     {
@@ -686,19 +841,23 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             if (st.corner == "quoin")
             {
                 // Alternating blocks up the corner.
-                for (double y = tier.bottom; y < tier.top - 1.0; y += 60.0)
+                for (double y = stripBottom; y < stripTop - 1.0; y += 60.0)
                 {
-                    const bool wide = int((y - tier.bottom) / 60.0) % 2 == 0;
-                    facadeBox(sh, f, 0.0, wide ? cw * 1.4 : cw, y + 2.0, std::min(tier.top, y + 58.0), 5.0, MatTrim, TrimPilaster, owner, PartPilaster,
-                              c.cTrim);
+                    const bool wide = int((y - stripBottom) / 60.0) % 2 == 0;
+                    const double y1 = std::min(stripTop, y + 58.0);
+                    if (!onBand(y + 2.0, y1) && y1 - y > 10.0)
+                        facadeBox(sh, f, 0.0, wide ? cw * 1.4 : cw, y + 2.0, y1, 5.0, MatTrim, TrimPilaster, owner, PartPilaster, c.cTrim);
                 }
             }
             else
-                facadeBox(sh, f, 0.0, cw, tier.bottom, tier.top, 6.0, MatTrim, TrimPilaster, owner, PartPilaster, c.cTrim);
+                facadeBox(sh, f, 0.0, cw, stripBottom, stripTop, 7.0, MatTrim, TrimPilaster, owner, PartPilaster, c.cTrim);
         }
     }
 
-    // Pilasters at bay boundaries, full tier height.
+    // Pilasters at bay boundaries, full tier height (over the portales, which have their own columns).
+    double pilasterFrom = std::max(tier.bottom, c.floor0);
+    if (arcade && !tier.floors.empty())
+        pilasterFrom = tier.floors.front().y1;
     if (st.pilasters && nb > 1 && !tower)
         for (int k = 1; k < nb; ++k)
         {
@@ -706,7 +865,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             Module m = wallModule(f, s, tier.bottom, 0.0, "pilaster", "pilaster", fpath + "/p" + std::to_string(k), {36.0, tier.top - tier.bottom, 8.0});
             m.shell = true;
             const int owner = c.addModule(std::move(m));
-            facadeBox(sh, f, s - 18.0, s + 18.0, std::max(tier.bottom, c.floor0), tier.top, 8.0, MatTrim, TrimPilaster, owner, PartPilaster, c.cTrim);
+            facadeBox(sh, f, s - 18.0, s + 18.0, pilasterFrom, stripTop, 8.0, MatTrim, TrimPilaster, owner, PartPilaster, c.cTrim);
         }
 
     // Corner margins of the wall (between the facade ends and the first and last bay), per floor.
@@ -899,7 +1058,11 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 wallRect(sh, f, o.s1, s1, y0, y1, d0, fl.y0, MatRender, TrimRender, wallOwner, PartWall, bayIndex, c.cRender);
                 wallRect(sh, f, o.s0, o.s1, y0, o.t0, d0, fl.y0, MatRender, TrimRender, wallOwner, PartWall, bayIndex, c.cRender);
                 wallRect(sh, f, o.s0, o.s1, o.t1, y1, d0, fl.y0, MatRender, TrimRender, wallOwner, PartWall, bayIndex, c.cRender);
-                reveals(sh, f, o.s0, o.s1, o.t0, o.t1, d0, st.reveal, MatRender, wallOwner, bayIndex, c.cRender, o.t0 > y0 + 1.0);
+                // Without rooms behind, the reveals run on past the module to a dark back, so an opening never shows the hollow shell.
+                const double depth = r.enterable ? st.reveal : st.reveal + kOpeningBack;
+                reveals(sh, f, o.s0, o.s1, o.t0, o.t1, d0, depth, MatRender, wallOwner, bayIndex, c.cRender, o.t0 > y0 + 1.0);
+                if (!r.enterable)
+                    wallRect(sh, f, o.s0, o.s1, o.t0, o.t1, d0 + depth, o.t0, MatDark, TrimNone, wallOwner, PartReveal, bayIndex, glm::vec4(0.03f, 0.03f, 0.035f, 0.0f));
                 bay.openS = o.s0 - s0;
                 bay.openT = o.t0 - y0;
                 bay.openW = o.s1 - o.s0;
@@ -913,14 +1076,17 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             // The arcade: column and arch at the facade line, the soffit over the walk, side returns at the ends.
             if (kind == "arcade")
             {
-                Module m = wallModule(f, s0, y0, -2.0, "arcade.bay", "arcade", bpath + "/arcade", {bw, y1 - y0, arcadeD}, 0);
+                // Under the lowest a soffit sits, so the beam's top and a soffit never share a plane.
+                Module m = wallModule(f, s0, y0, -2.0, "arcade.bay", "arcade", bpath + "/arcade", {bw, y1 - y0 - 2.0, arcadeD}, 0);
                 m.data = {{"span", bw}};
                 c.addModule(std::move(m));
                 const glm::vec2 uv[4] = {uvOf(0, 0, 0, -1), uvOf(0, arcadeD, 0, -1), uvOf(bw, arcadeD, 0, -1), uvOf(bw, 0, 0, -1)};
-                // The soffit faces down: along first, then into the wall.
-                quad(sh, f.at(s0, y1, 0.0), f.u * bw, -f.n * arcadeD, uv, MatRender, TrimNone, wallOwner, PartSoffit, bayIndex, c.cTrim);
+                // The soffit faces down: along first, then into the wall. Neighbouring facades' soffits overlap at a corner
+                // both arcades turn, so each edge's sits half a centimetre from the next one's.
+                const double soffitY = y1 - 0.5 * double(edge + 1 == n && n % 2 == 1 ? 2 : edge % 2);
+                quad(sh, f.at(s0, soffitY, 0.0), f.u * bw, -f.n * arcadeD, uv, MatRender, TrimNone, wallOwner, PartSoffit, bayIndex, c.cTrim);
                 if (k == nb - 1)
-                    m = wallModule(f, s1, y0, -2.0, "arcade.bay", "column", bpath + "/arcadeEnd", {40.0, y1 - y0, 40.0});
+                    m = wallModule(f, s1, y0, -2.0, "arcade.bay", "column", bpath + "/arcadeEnd", {40.0, y1 - y0 - 7.0, 40.0});
                 if (k == nb - 1)
                     c.addModule(std::move(m));
                 if (k == 0)
@@ -954,6 +1120,8 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             if (o.any())
             {
                 const double ow = o.s1 - o.s0, oh = o.t1 - o.t0, oc = 0.5 * (o.s0 + o.s1);
+                // Modules sit a centimetre inside their reveals, never in the reveals' planes.
+                const double mw = ow - 2.0, mb = o.t0 + (o.t0 > y0 + 1.0 ? 1.0 : 0.0), mh = o.t1 - 1.0 - mb;
                 Opening op;
                 op.bay = bpath;
                 op.normal = f.n;
@@ -962,14 +1130,15 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 op.origin = f.at(oc, o.t0, d0);
                 if (openKind == "shopfront" || kind == "shopdoor")
                 {
-                    Module m = wallModule(f, oc, o.t0, inset, "shopfront", "shopfront", bpath + "/shopfront", {ow, oh, 15.0}, c.glazing);
+                    Module m = wallModule(f, oc, mb, inset, "shopfront", "shopfront", bpath + "/shopfront", {mw, mh, 15.0}, c.glazing);
                     if (!r.enterable)
                         m.data = {{"interior", "card"}, {"room", fakeRoomKind(c.program, 0)}};
                     c.addModule(std::move(m));
                     if (kind == "shopdoor" || (kind == "arcade" && doorInArcade))
                     {
                         const double dw = std::min(120.0, ow * 0.4);
-                        Module d = wallModule(f, o.s1 - dw * 0.5 - 10.0, o.t0, inset - 2.0, "door.shop", "door", bpath + "/door",
+                        // In front of the shopfront's frame and clear of its end bar, so no face of one lies in a face of the other.
+                        Module d = wallModule(f, o.s1 - dw * 0.5 - 20.0, o.t0, inset - 9.5, "door.shop", "door", bpath + "/door",
                                               {dw, std::min(oh - 10.0, 250.0), 8.0}, 2 + c.glazing);
                         if (r.enterable && !courtyard)
                             d.data = {{"entry", true}, {"interior", c.spec.id}};
@@ -998,7 +1167,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 }
                 else if (openKind == "door" || openKind == "rollup")
                 {
-                    Module m = wallModule(f, oc, o.t0, inset - 4.0, openType, openKind == "rollup" ? "rollup" : "door", bpath + "/door", {ow, oh, 8.0},
+                    Module m = wallModule(f, oc, mb, inset - 4.0, openType, openKind == "rollup" ? "rollup" : "door", bpath + "/door", {mw, mh, 8.0},
                                           openVariant + (openKind == "rollup" ? 0 : c.glazing));
                     if (r.enterable && ground && !courtyard)
                         m.data = {{"entry", true}, {"interior", c.spec.id}};
@@ -1009,7 +1178,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                 }
                 else
                 {
-                    Module m = wallModule(f, oc, o.t0, inset, openType, "window", bpath + "/window", {ow, oh, 12.0}, openVariant + c.glazing);
+                    Module m = wallModule(f, oc, mb, inset, openType, "window", bpath + "/window", {mw, mh, 12.0}, openVariant + c.glazing);
                     // Windows of buildings without rooms show a fake one (Weathering's interior card in Unreal).
                     if (!r.enterable && !tower)
                         m.data = {{"interior", "card"}, {"room", fakeRoomKind(c.program, fl.index)}};
@@ -1027,6 +1196,15 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
                             at = Vec2(oc + std::min(ow * 0.25, 30.0), o.t0 - 70.0);
                         else if (s1 - o.s1 > 105.0)
                             at = Vec2(o.s1 + 55.0, o.t0 + std::max(0.0, (oh - 55.0) * 0.5));
+                        // Clear of the pilasters at the bay's edges.
+                        if (at && st.pilasters && nb > 1)
+                        {
+                            const double lo = s0 + (k > 0 ? 22.0 : 0.0) + 40.0, hi = s1 - (k < nb - 1 ? 22.0 : 0.0) - 40.0;
+                            if (lo > hi)
+                                at.reset();
+                            else
+                                at->x = std::clamp(at->x, lo, hi);
+                        }
                         if (at)
                             c.addModule(wallModule(f, at->x, at->y, -1.0, "ac.unit", "ac", bpath + "/ac", {80.0, 55.0, 30.0}));
                     }
@@ -1052,7 +1230,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
             Module m = wallModule(f, L * 0.5, fl.y0 - 12.0, 0.0, "band", "band", fpath + "/l" + std::to_string(fl.index) + "/band", {L, 24.0, 6.0});
             m.shell = true;
             const int owner = c.addModule(std::move(m));
-            facadeBox(sh, f, 0.0, L, fl.y0 - 12.0, fl.y0 + 12.0, 6.0, MatTrim, TrimBand, owner, PartBand, c.cTrim);
+            ringBand(sh, ring, edge, bandStart, bandEnd, fl.y0 - 12.0, fl.y0 + 12.0, 0.0, 6.0, MatTrim, TrimBand, owner, PartBand, c.cTrim);
         }
     }
 
@@ -1083,7 +1261,7 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
     }
 
     // Cornice at the wall top (not under a pitched roof's eaves).
-    if (st.cornice != "none" && !courtyard && tier.roofed && !tower)
+    if (hasCornice)
     {
         const bool heavy = st.cornice == "heavy";
         const double ch = heavy ? 45.0 : 22.0, out = heavy ? 30.0 : 12.0;
@@ -1097,14 +1275,15 @@ void emitFacade(Ctx& c, const TierPlan& tier, int tierIndex, size_t edge, bool c
         }
         else
         {
-            facadeBox(sh, f, -out * 0.5, L + out * 0.5, tier.top - ch, tier.top - ch * 0.45, out * 0.5, MatTrim, TrimCornice, owner, PartCornice, c.cTrim);
-            facadeBox(sh, f, -out, L + out, tier.top - ch * 0.45, tier.top, out, MatTrim, TrimCornice, owner, PartCornice, c.cTrim);
+            ringBand(sh, ring, edge, bandStart, bandEnd, tier.top - ch, tier.top - ch * 0.45, 0.0, out * 0.5, MatTrim, TrimCornice, owner, PartCornice, c.cTrim,
+                     false);
+            ringBand(sh, ring, edge, bandStart, bandEnd, tier.top - ch * 0.45, tier.top, 0.0, out, MatTrim, TrimCornice, owner, PartCornice, c.cTrim);
         }
     }
 
     // A drainpipe at one end of street facades.
     if (st.drainpipes && street && baseTier && L > 400.0 && !arcade)
-        c.addModule(wallModule(f, L - std::max(cw * 0.5, 8.0), c.groundLo, -6.0, "drainpipe", "drainpipe", fpath + "/drainpipe", {12.0, tier.top - c.groundLo, 12.0}));
+        c.addModule(wallModule(f, L - std::max(cw * 0.5, 8.0), c.groundLo, -7.5, "drainpipe", "drainpipe", fpath + "/drainpipe", {12.0, stripTop - 3.0 - c.groundLo, 12.0}));
 
     r.facades.push_back(fac);
 }
@@ -1127,27 +1306,18 @@ void flatCap(Ctx& c, const Ring& outer, const std::vector<Ring>& holes, double y
     }
 }
 
-void parapet(Ctx& c, const Ring& ring, double y, double h, int owner, bool inner)
+/** A parapet round a roof, mitred at its corners: none along party walls, where it stops short with an end cap. */
+void parapet(Ctx& c, const Ring& ring, const std::vector<int>& sides, double y, double h, int owner)
 {
     const double t = 25.0;
-    const size_t n = ring.size();
-    for (size_t e = 0; e < n; ++e)
+    for (size_t e = 0; e < ring.size(); ++e)
     {
-        const Vec2 a = ring[e], b = ring[(e + 1) % n];
-        const double L = glm::length(b - a);
-        if (L < 1.0)
+        if (e < sides.size() && sides[e] == 1)
             continue;
-        const Frame f = frameOf(a, b, 0.0);
-        // Outer face continues the wall; inner face looks onto the roof; coping on top.
-        wallRect(c.r.shell, f, 0.0, L, y, y + h, 0.0, y, MatRender, TrimRender, owner, PartParapet, -1, c.cRender);
-        if (inner)
-        {
-            const glm::vec2 uv[4] = {uvOf(0, y, y, TrimRender), uvOf(L, y, y, TrimRender), uvOf(L, y + h, y, TrimRender), uvOf(0, y + h, y, TrimRender)};
-            // Facing in (-n): A along, B up.
-            quad(c.r.shell, f.at(0.0, y, t), f.u * L, kUp * h, uv, MatRender, TrimRender, owner, PartParapet, -1, c.cRender);
-        }
-        const glm::vec2 cu[4] = {uvOf(0, 0, 0, TrimCoping), uvOf(0, 25, 0, TrimCoping), uvOf(L, 25, 0, TrimCoping), uvOf(L, 0, 0, TrimCoping)};
-        quad(c.r.shell, f.at(0.0, y + h, -3.0), -f.n * (t + 3.0), f.u * L, cu, MatTrim, TrimCoping, owner, PartParapet, -1, c.cTrim);
+        const auto [start, end] = bandEnds(ring, sides, e);
+        // The wall carried up, then a coping a little wider than it on top.
+        ringBand(c.r.shell, ring, e, start, end, y, y + h - 5.0, -t, 0.0, MatRender, TrimRender, owner, PartParapet, c.cRender, false, false, true);
+        ringBand(c.r.shell, ring, e, start, end, y + h - 5.0, y + h, -t - 2.0, 3.0, MatTrim, TrimCoping, owner, PartParapet, c.cTrim, true, true, true);
     }
 }
 
@@ -1218,9 +1388,38 @@ void pyramidCap(Ctx& c, const Ring& ring, double y, double rise, int owner)
     }
 }
 
+/** The ring with each edge moved in by its own distance (negative: out), corners where the moved edges meet. */
+Ring edgesMovedIn(const Ring& ring, const std::vector<double>& in)
+{
+    const size_t n = ring.size();
+    Ring out(n);
+    for (size_t v = 0; v < n; ++v)
+    {
+        const size_t p = (v + n - 1) % n;
+        const Vec2 np = outward(ring[p], ring[v]), nn = outward(ring[v], ring[(v + 1) % n]);
+        const double dp = in[p], dn = in[v];
+        const double det = np.x * nn.y - np.y * nn.x;
+        if (std::abs(det) < 1e-6)
+            out[v] = ring[v] - np * std::max(dp, dn);
+        else
+            out[v] = ring[v] + Vec2((-dp * nn.y + dn * np.y) / det, (-dn * np.x + dp * nn.x) / det);
+    }
+    return out;
+}
+
 void pitchedRoof(Ctx& c, const TierPlan& tier, const std::string& kind, int owner)
 {
-    const Ring& ring = tier.ring;
+    // Party edges end in a gable at the party wall: pulled in by the overhang the roof adds, so the eaves never reach over
+    // the neighbour's roof.
+    std::vector<double> in(tier.ring.size(), 0.0);
+    bool anyParty = false;
+    for (size_t e = 0; e < in.size() && e < tier.sides.size(); ++e)
+        if (tier.sides[e] == 1)
+        {
+            in[e] = c.st.overhang + kPartyGap + 1.0;
+            anyParty = true;
+        }
+    const Ring ring = anyParty ? edgesMovedIn(tier.ring, in) : tier.ring;
     const double y = tier.top;
     lila::curve::Splines curves;
     {
@@ -1277,6 +1476,9 @@ void pitchedRoof(Ctx& c, const TierPlan& tier, const std::string& kind, int owne
         if (ro.gables.empty())
             ro.gableEnds = true;
     }
+    for (size_t e = 0; e < tier.sides.size() && e < ring.size(); ++e)
+        if (tier.sides[e] == 1 && std::find(ro.gables.begin(), ro.gables.end(), int(e)) == ro.gables.end())
+            ro.gables.push_back(int(e));
     lila::curve::RoofResult rr;
     try
     {
@@ -1290,8 +1492,8 @@ void pitchedRoof(Ctx& c, const TierPlan& tier, const std::string& kind, int owne
     if (rr.mesh.numFaces() == 0)
     {
         c.r.warnings.push_back("the " + kind + " roof could not be built on this footprint; a flat roof stands in");
-        flatCap(c, ring, tier.holes, y, MatRooftop, PartRooftop, owner, c.cRoof);
-        parapet(c, ring, y, std::max(40.0, c.st.parapet), owner, true);
+        flatCap(c, tier.ring, tier.holes, y, MatRooftop, PartRooftop, owner, c.cRoof);
+        parapet(c, tier.ring, tier.sides, y, std::max(40.0, c.st.parapet), owner);
         return;
     }
     const auto* partAttr = rr.mesh.faceAttrs().find("part");
@@ -1489,9 +1691,9 @@ void roofs(Ctx& c, std::vector<TierPlan>& tiers)
             const double ph = tier.roofed ? c.st.parapet : std::max(c.st.parapet, 100.0);
             if (ph > 1.0)
             {
-                parapet(c, tier.ring, tier.top, ph, owner, true);
+                parapet(c, tier.ring, tier.sides, tier.top, ph, owner);
                 for (const Ring& h : tier.holes)
-                    parapet(c, cleanRing(h, false), tier.top, ph, owner, true);
+                    parapet(c, cleanRing(h, false), {}, tier.top, ph, owner);
             }
             if (tier.roofed)
             {
@@ -1573,9 +1775,10 @@ void extras(Ctx& c, const TierPlan& base)
             const Vec2 q = mid + along * (-span * 0.5 + span * k / (n - 1)) + nrm * depth;
             c.addModule(groundModule({q.x, c.floor0, q.y}, nrm, "column", "column", fp + "/portico/c" + std::to_string(k), {50.0, h, 50.0}));
         }
-        // The slab runs from the wall face out past the columns, clear of the roof behind the wall.
-        Module slab = groundModule({mid.x + nrm.x * (depth + 30.0) * 0.5, c.floor0 + h, mid.y + nrm.y * (depth + 30.0) * 0.5}, nrm, "portico", "portico",
-                                   fp + "/portico", {span + 120.0, 70.0, depth + 30.0});
+        // The slab runs from just inside the wall face out past the columns, clear of the roof behind the wall.
+        const double slabMid = (depth + 30.0) * 0.5 - 2.0;
+        Module slab = groundModule({mid.x + nrm.x * slabMid, c.floor0 + h, mid.y + nrm.y * slabMid}, nrm, "portico", "portico", fp + "/portico",
+                                   {span + 120.0, 70.0, depth + 30.0});
         c.addModule(std::move(slab));
         // The porch floor stands on the ground in front of the door, not the building's lowest corner.
         const Vec2 porch = mid + nrm * depth * 0.5;
@@ -1587,36 +1790,55 @@ void extras(Ctx& c, const TierPlan& base)
     // Perimeter wall round the lot, with a gate on the front, and a pool behind the house.
     if (st.perimeterWall > 0.0)
     {
-        const double off = std::clamp(std::max(c.spec.setbackFront, c.spec.setbackSide), 250.0, 900.0);
-        const Ring wall = offsetRing(ring, off);
+        // Clear of a portico's columns; never past half the gap to a neighbour, and short of a party line.
+        const double off = std::max(std::clamp(std::max(c.spec.setbackFront, c.spec.setbackSide), 250.0, 900.0), st.columns > 0 ? 560.0 : 0.0);
+        std::vector<double> in(ring.size(), -off);
+        for (size_t e = 0; e < ring.size(); ++e)
+        {
+            const double clear = e < base.clear.size() ? base.clear[e] : 1e9;
+            if (base.sides[e] == 1)
+                in[e] = kPartyGap;
+            else if (clear < 1e8)
+                in[e] = -std::max(0.0, std::min(off, clear * 0.5 - 20.0));
+        }
+        const Ring wall = edgesMovedIn(ring, in);
         const size_t n = wall.size();
+        std::vector<char> drawn(n, 0);
+        for (size_t e = 0; e < n; ++e)
+            drawn[e] = base.sides[e] != 1 && in[e] <= -30.0 && glm::length(wall[(e + 1) % n] - wall[e]) >= 50.0;
+        // One mitred band round the lot, cut for the gate; each side a shell module rules can swap.
+        auto band = [&](size_t e, BandEnd s0, BandEnd s1, const std::string& id) {
+            const Vec2 p = wall[e], q = wall[(e + 1) % n];
+            const Vec2 m2 = 0.5 * (p + q);
+            const double g = c.spec.groundAt(m2);
+            const double low = std::min({g, c.spec.groundAt(p), c.spec.groundAt(q)}) - 20.0, top = g + st.perimeterWall;
+            Module m = groundModule({m2.x, g, m2.y}, outward(p, q), "wall.perimeter", "perimeter", id, {glm::length(q - p), st.perimeterWall, 30.0});
+            m.shell = true;
+            const int owner = c.addModule(std::move(m));
+            ringBand(c.r.shell, wall, e, s0, s1, low, top - 8.0, -15.0, 15.0, MatRender, TrimRender, owner, PartWall, c.cRender, false, false, true);
+            ringBand(c.r.shell, wall, e, s0, s1, top - 8.0, top, -18.0, 18.0, MatTrim, TrimCoping, owner, PartParapet, c.cTrim, true, true, true);
+        };
         for (size_t e = 0; e < n; ++e)
         {
-            if (base.sides[e] == 1)
-                continue; // neighbours share that side
+            if (!drawn[e])
+                continue;
             const Vec2 p = wall[e], q = wall[(e + 1) % n];
             const double L = glm::length(q - p);
-            if (L < 50.0)
-                continue;
-            const Vec2 dir = (q - p) / L, wn = outward(p, q);
-            const bool gateHere = st.gate && int(e) == fe && L > 600.0;
-            auto segment = [&](double s0, double s1, const std::string& id) {
-                const Vec2 m2 = p + dir * (0.5 * (s0 + s1));
-                Module m = groundModule({m2.x, c.spec.groundAt(m2), m2.y}, wn, "wall.perimeter", "perimeter", id, {s1 - s0, st.perimeterWall, 30.0});
-                c.addModule(std::move(m));
-            };
+            const BandEnd start{drawn[(e + n - 1) % n] != 0, 0.0}, end{drawn[(e + 1) % n] != 0, 0.0};
             const std::string id = "site/w" + std::to_string(e);
-            if (gateHere)
+            if (st.gate && int(e) == fe && L > 600.0)
             {
                 const double gw = 420.0;
-                segment(0.0, L * 0.5 - gw * 0.5, id + "a");
-                segment(L * 0.5 + gw * 0.5, L, id + "b");
-                const Vec2 gq = p + dir * (L * 0.5);
-                Module g = groundModule({gq.x, c.spec.groundAt(gq), gq.y}, wn, "gate", "gate", "site/gate", {gw, st.perimeterWall + 40.0, 20.0});
+                // The walls run into the gate's posts.
+                const double cut = L * 0.5 + gw * 0.5 + 15.0;
+                band(e, start, {false, cut}, id + "a");
+                band(e, {false, cut}, end, id + "b");
+                const Vec2 gq = p + (q - p) * 0.5;
+                Module g = groundModule({gq.x, c.spec.groundAt(gq), gq.y}, outward(p, q), "gate", "gate", "site/gate", {gw, st.perimeterWall + 40.0, 20.0});
                 c.addModule(std::move(g));
             }
             else
-                segment(0.0, L, id);
+                band(e, start, end, id);
         }
         if (st.pool && off >= 400.0)
         {
@@ -1810,6 +2032,8 @@ std::shared_ptr<const Result> generate(const Spec& spec, const Style& style, con
     {
         LILA_ZONE_N("buildings.tiers");
         tiers = planTiers(c);
+        for (TierPlan& tier : tiers)
+            measureTier(c, tier);
         addTowers(c, tiers);
     }
     if (tiers.empty())
@@ -1819,6 +2043,9 @@ std::shared_ptr<const Result> generate(const Spec& spec, const Style& style, con
     }
     {
         LILA_ZONE_N("buildings.facades");
+        for (size_t t = 0; t < tiers.size(); ++t)
+            if (!tiers[t].cap.empty())
+                measureTier(c, tiers[t]);
         for (size_t t = 0; t < tiers.size(); ++t)
         {
             const TierPlan& tier = tiers[t];

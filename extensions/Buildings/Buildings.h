@@ -271,6 +271,8 @@ struct Spec
     std::string source; // settlement, curve, mesh
     Ring footprint;     // counter-clockwise
     std::vector<int> sides; // per edge: 0 street, 1 party, 2 open
+    /** Per edge: cm from the edge to the nearest other building in front of it; empty when not measured. */
+    std::vector<double> clearance;
     std::vector<Ring> holes;
     struct Tier
     {
@@ -311,6 +313,9 @@ struct Spec
 
 /** Whether the building has shops on its ground floor: businesses, or a commercial program or use. */
 bool isBusiness(const Spec& s);
+
+/** Fills each spec's clearance: per footprint edge, the distance out from it to the nearest other footprint (cm, capped at `reach`). */
+void measureClearance(std::vector<Spec>& specs, double reach = 2000.0);
 
 /** A building's edits, kept by its id and applied over the spec and style on every regeneration. */
 struct Edits
@@ -432,6 +437,9 @@ std::string encodeResult(const Result& r);
 /** The building encodeResult wrote; null when the bytes are not a whole Result of this format. */
 std::shared_ptr<const Result> decodeResult(std::string_view bytes);
 
+/** The size a module's placeholder is built at: width and height down to 5 cm steps (never past the module's own size,
+ *  so a frame never reaches into its reveals), depth to the centimetre. Placeholders of one size are shared. */
+Vec3 placeholderSize(const Vec3& size);
 /** The placeholder mesh soup for a module kind at a size (front +Z, bottom centre at the origin), with uv0. */
 const Soup& placeholderSoup(const std::string& kind, const Vec3& size, int variant);
 /** Placeholder kinds, for the docs and the check. */

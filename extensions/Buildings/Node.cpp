@@ -123,7 +123,7 @@ GeometryPtr emptyRef()
 
 GeometryPtr placeholderRef(const Module& m)
 {
-    const Vec3 q{std::round(m.size.x / 5.0) * 5.0, std::round(m.size.y / 5.0) * 5.0, std::round(m.size.z)};
+    const Vec3 q = placeholderSize(m.size);
     const std::string key = m.kind + "/" + std::to_string(int(q.x)) + "/" + std::to_string(int(q.y)) + "/" + std::to_string(int(q.z)) + "/" +
                             std::to_string(m.variant);
     {
@@ -385,9 +385,9 @@ void exec(ExecContext& c)
                     }
                     else
                     {
-                        const std::string key = m.kind + "/" + std::to_string(int(std::round(m.size.x / 5.0))) + "/" +
-                                                std::to_string(int(std::round(m.size.y / 5.0))) + "/" + std::to_string(int(std::round(m.size.z))) +
-                                                "/" + std::to_string(m.variant);
+                        const Vec3 q = placeholderSize(m.size);
+                        const std::string key = m.kind + "/" + std::to_string(int(q.x)) + "/" + std::to_string(int(q.y)) + "/" +
+                                                std::to_string(int(q.z)) + "/" + std::to_string(m.variant);
                         auto it = refIndex.find(key);
                         if (it == refIndex.end())
                         {

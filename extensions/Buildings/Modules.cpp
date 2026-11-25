@@ -189,9 +189,11 @@ Soup build(const std::string& kind, Vec3 sz, int variant)
         const double cs = 45.0, beam = std::min(60.0, h * 0.18);
         box(s, {-cs * 0.5, 0.0, -cs}, {cs * 0.5, h - beam, 0.0}, MatTrim);
         box(s, {-cs * 0.7, 0.0, -cs * 1.2}, {cs * 0.7, 20.0, 0.0}, MatTrim);
-        box(s, {-w, h - beam, -cs}, {0.0, h, 0.0}, MatRender);
-        box(s, {-cs * 0.5 - 50.0, h - beam - 35.0, -cs}, {-cs * 0.5, h - beam, 0.0}, MatRender);
-        box(s, {-w + cs * 0.5, h - beam - 35.0, -cs}, {-w + cs * 0.5 + 50.0, h - beam, 0.0}, MatRender);
+        // The beam stops a centimetre short of both columns' centres, inside them, so neighbouring bays' beams never meet face to face.
+        box(s, {-w + 1.0, h - beam, -cs}, {-1.0, h, 0.0}, MatRender);
+        // Haunches stand just clear of the columns and inside the beam's faces, never in a plane with either.
+        box(s, {-cs * 0.5 - 50.0, h - beam - 35.0, -cs + 1.0}, {-cs * 0.5 - 0.5, h - beam, -1.0}, MatRender);
+        box(s, {-w + cs * 0.5 + 0.5, h - beam - 35.0, -cs + 1.0}, {-w + cs * 0.5 + 50.0, h - beam, -1.0}, MatRender);
     }
     else if (kind == "column")
     {
@@ -351,9 +353,14 @@ std::unordered_map<std::string, std::unique_ptr<Soup>>& cache()
 }
 } // namespace
 
+Vec3 placeholderSize(const Vec3& size)
+{
+    return {std::max(5.0, std::floor(size.x / 5.0 + 1e-6) * 5.0), std::max(5.0, std::floor(size.y / 5.0 + 1e-6) * 5.0), std::round(size.z)};
+}
+
 const Soup& placeholderSoup(const std::string& kind, const Vec3& size, int variant)
 {
-    const Vec3 q{std::round(size.x / 5.0) * 5.0, std::round(size.y / 5.0) * 5.0, std::round(size.z)};
+    const Vec3 q = placeholderSize(size);
     const std::string key = kind + "/" + std::to_string(int(q.x)) + "/" + std::to_string(int(q.y)) + "/" + std::to_string(int(q.z)) + "/" +
                             std::to_string(variant);
     std::lock_guard lock(cacheMutex());

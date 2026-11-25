@@ -330,6 +330,8 @@ json Spec::toJson() const
               {"setbackSide", setbackSide}};
     if (!cornerGround.empty())
         j["cornerGround"] = cornerGround;
+    if (!clearance.empty())
+        j["clearance"] = clearance;
     for (auto [k, v] : {std::pair{"colour", &colour}, std::pair{"roofColour", &roofColour}, std::pair{"material", &material},
                         std::pair{"roofMaterial", &roofMaterial}, std::pair{"osmId", &osmId}})
         if (!v->empty())
@@ -348,6 +350,7 @@ Spec Spec::fromJson(const json& j)
     read(j, "source", s.source);
     s.footprint = ringOf(j.value("footprint", json::array()));
     read(j, "sides", s.sides);
+    read(j, "clearance", s.clearance);
     for (const json& h : j.value("holes", json::array()))
         s.holes.push_back(ringOf(h));
     for (const json& t : j.value("tiers", json::array()))

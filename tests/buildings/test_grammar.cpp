@@ -405,3 +405,155 @@ TEST_CASE("buildings: a sheet roof over an irregular lot stays over its footprin
     CHECK(z0 > 634825.4 - 200.0);
     CHECK(z1 < 636227.9 + 200.0);
 }
+
+namespace
+{
+struct FlatFace
+{
+    std::vector<Vec3> pts;
+    Vec3 n{0.0};
+    double d = 0.0;
+    std::string from; // module path or shell part
+    int building = 0, module = -1;
+};
+
+/** Every face a building draws: its shell and its modules' placeholders where they stand. */
+void facesOf(const Result& r, int building, std::vector<FlatFace>& out)
+{
+    auto add = [&](const Soup& s, const glm::dmat4& m, const std::string& from, int module) {
+        for (size_t f = 0, off = 0; f < s.sizes.size(); off += s.sizes[f], ++f)
+        {
+            FlatFace x;
+            for (uint32_t k = 0; k < s.sizes[f]; ++k)
+                x.pts.push_back(Vec3(m * glm::dvec4(s.pts[off + k], 1.0)));
+            Vec3 n{0.0};
+            for (size_t k = 0; k < x.pts.size(); ++k)
+                n += glm::cross(x.pts[k], x.pts[(k + 1) % x.pts.size()]);
+            if (glm::length(n) < 1e-6)
+                continue;
+            x.n = glm::normalize(n);
+            x.d = glm::dot(x.n, x.pts[0]);
+            x.from = module >= 0 ? from : from + std::to_string(s.part[f]);
+            x.building = building;
+            x.module = module;
+            out.push_back(std::move(x));
+        }
+    };
+    add(r.shell, glm::dmat4(1.0), "shell part ", -1);
+    for (size_t k = 0; k < r.modules.size(); ++k)
+        if (!r.modules[k].shell)
+            add(placeholderSoup(r.modules[k].kind, r.modules[k].size, r.modules[k].variant), r.modules[k].frame(), r.modules[k].path, int(k));
+}
+
+/** Pairs of faces lying in one plane over each other by more than a few square centimetres: what flickers in a view. */
+std::vector<std::string> coplanarOverlaps(const std::vector<FlatFace>& faces)
+{
+    std::map<std::tuple<long, long, long, long>, std::vector<size_t>> buckets;
+    auto key = [](const FlatFace& f, long dd) {
+        const double s = (f.n.x < -1e-9 || (std::abs(f.n.x) <= 1e-9 && (f.n.y < -1e-9 || (std::abs(f.n.y) <= 1e-9 && f.n.z < 0)))) ? -1.0 : 1.0;
+        return std::tuple<long, long, long, long>{std::lround(f.n.x * s * 200), std::lround(f.n.y * s * 200), std::lround(f.n.z * s * 200),
+                                                  long(std::floor(f.d * s / 2.0)) + dd};
+    };
+    for (size_t i = 0; i < faces.size(); ++i)
+        buckets[key(faces[i], 0)].push_back(i);
+    std::vector<std::string> out;
+    for (size_t i = 0; i < faces.size(); ++i)
+        for (long dd : {-1L, 0L, 1L})
+        {
+            auto it = buckets.find(key(faces[i], dd));
+            if (it == buckets.end())
+                continue;
+            for (size_t j : it->second)
+            {
+                if (j <= i)
+                    continue;
+                const FlatFace &a = faces[i], &b = faces[j];
+                if (a.module >= 0 && a.module == b.module && a.building == b.building)
+                    continue;
+                if (std::abs(glm::dot(a.n, b.n)) < 0.99999 || std::abs(a.d - glm::dot(a.n, b.pts[0])) > 0.3)
+                    continue;
+                // A module's bottom is only ever seen from under it: standing on a roof or the ground it hides itself.
+                if ((a.module >= 0 && a.n.y < -0.99) || (b.module >= 0 && b.n.y < -0.99))
+                    continue;
+                // Both into the plane's own 2D frame.
+                const Vec3 u = glm::normalize(std::abs(a.n.y) < 0.9 ? glm::cross(Vec3(0, 1, 0), a.n) : glm::cross(Vec3(1, 0, 0), a.n));
+                const Vec3 v = glm::cross(a.n, u);
+                auto flat = [&](const FlatFace& f) {
+                    Ring r;
+                    for (const Vec3& p : f.pts)
+                        r.push_back({glm::dot(p, u), glm::dot(p, v)});
+                    return cleanRing(r);
+                };
+                const Ring ra = flat(a), rb = flat(b);
+                if (ra.size() < 3 || rb.size() < 3)
+                    continue;
+                if (const double area = overlapArea(ra, rb); area > 4.0)
+                    {
+                    std::string w = "b" + std::to_string(a.building) + "/b" + std::to_string(b.building) + " " + a.from + " / " + b.from + " (" + std::to_string(int(area)) + " cm2) n " + std::to_string(a.n.x) + "," + std::to_string(a.n.y) + "," + std::to_string(a.n.z) + " at";
+                    for (const Vec3& p : a.pts) w += " (" + std::to_string(int(p.x)) + "," + std::to_string(int(p.y)) + "," + std::to_string(int(p.z)) + ")";
+                    w += " vs";
+                    for (const Vec3& p : b.pts) w += " (" + std::to_string(int(p.x)) + "," + std::to_string(int(p.y)) + "," + std::to_string(int(p.z)) + ")";
+                    out.push_back(w);
+                }
+            }
+        }
+    return out;
+}
+} // namespace
+
+TEST_CASE("buildings: no two faces of a building, or of neighbours across a party wall, lie in one plane over each other")
+{
+    for (const auto& [id, st] : styles())
+    {
+        CAPTURE(id);
+        // Two neighbours of different heights sharing a party wall, and a third against the first's open side.
+        Spec a = rect(0, 0, 1400, 1000, 3, {0, 1, 2, 2}, 0x51);
+        a.businesses = {{"Abarrotes La Calandria", "shop", {700, 0}, true}};
+        Spec b = rect(1400, 0, 900, 1000, 2, {0, 2, 2, 1}, 0x52);
+        Spec c = rect(-800, 0, 800, 1000, 2, {0, 2, 2, 2}, 0x53);
+        // The third's right side lies on the first's left: built as a party wall from the measured clearance.
+        std::vector<Spec> specs = {a, b, c};
+        measureClearance(specs);
+        CHECK(specs[0].clearance[3] < 1.0);
+        CHECK(specs[2].clearance[1] < 1.0);
+        std::vector<FlatFace> faces;
+        for (size_t k = 0; k < specs.size(); ++k)
+        {
+            const auto r = generate(specs[k], st, {});
+            facesOf(*r, int(k), faces);
+        }
+        const std::vector<std::string> bad = coplanarOverlaps(faces);
+        for (size_t k = 0; k < std::min<size_t>(bad.size(), 8); ++k)
+            MESSAGE(bad[k]);
+        CHECK(bad.empty());
+
+        Spec yard = rect(0, 0, 3000, 3000, 2, {0, 0, 0, 0}, 0x54);
+        yard.holes = {{{1000, 1000}, {1000, 2000}, {2000, 2000}, {2000, 1000}}};
+        faces.clear();
+        facesOf(*generate(yard, st, {}), 0, faces);
+        const std::vector<std::string> badYard = coplanarOverlaps(faces);
+        for (size_t k = 0; k < std::min<size_t>(badYard.size(), 8); ++k)
+            MESSAGE(badYard[k]);
+        CHECK(badYard.empty());
+    }
+}
+
+TEST_CASE("buildings: parapets and cornices stop short of a party wall and mitre at corners")
+{
+    for (const char* id : {"colonial", "residential"})
+    {
+        CAPTURE(id);
+        const auto r = generate(rect(0, 0, 1400, 1000, 2, {0, 1, 2, 2}, 0x71), styles().at(id), {});
+        int parapets = 0;
+        for (size_t f = 0, off = 0; f < r->shell.sizes.size(); off += r->shell.sizes[f], ++f)
+        {
+            const int part = r->shell.part[f];
+            if (part != PartParapet && part != PartCornice && part != PartBand)
+                continue;
+            parapets += part == PartParapet;
+            for (uint32_t k = 0; k < r->shell.sizes[f]; ++k)
+                CHECK(r->shell.pts[off + k].x <= 1400.0 - 1.0);
+        }
+        CHECK(parapets > 0);
+    }
+}

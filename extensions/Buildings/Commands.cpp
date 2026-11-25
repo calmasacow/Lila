@@ -615,6 +615,7 @@ json layout(std::vector<Spec> specs, const std::string& groupName, const std::st
     else
         group = pathOf(ops::execute("group", {{"empty", true}, {"name", safeName(groupName)}}));
     Existing ex = existingUnder(group);
+    measureClearance(specs);
 
     // Pinned buildings keep the spec they were pinned with.
     int pinnedKept = 0;

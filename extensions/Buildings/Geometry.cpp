@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <unordered_map>
 
 namespace buildings
 {
@@ -467,4 +468,76 @@ double unitRandom(uint64_t key, uint64_t salt)
     x ^= x >> 33;
     return double(x >> 11) / double(1ull << 53);
 }
+void measureClearance(std::vector<Spec>& specs, double reach)
+{
+    struct Seg
+    {
+        Vec2 a, b;
+        size_t owner;
+    };
+    std::vector<Seg> segs;
+    const double cell = std::max(reach, 500.0);
+    std::unordered_map<uint64_t, std::vector<uint32_t>> grid;
+    auto key = [](int64_t x, int64_t z) { return (uint64_t(uint32_t(int32_t(x))) << 32) | uint32_t(int32_t(z)); };
+    for (size_t i = 0; i < specs.size(); ++i)
+    {
+        const Ring& r = specs[i].footprint;
+        for (size_t e = 0; e < r.size(); ++e)
+        {
+            const Seg s{r[e], r[(e + 1) % r.size()], i};
+            const Vec2 lo = glm::min(s.a, s.b), hi = glm::max(s.a, s.b);
+            for (int64_t x = int64_t(std::floor(lo.x / cell)); x <= int64_t(std::floor(hi.x / cell)); ++x)
+                for (int64_t z = int64_t(std::floor(lo.y / cell)); z <= int64_t(std::floor(hi.y / cell)); ++z)
+                    grid[key(x, z)].push_back(uint32_t(segs.size()));
+            segs.push_back(s);
+        }
+    }
+    std::vector<uint32_t> near;
+    for (size_t i = 0; i < specs.size(); ++i)
+    {
+        Spec& sp = specs[i];
+        const Ring& r = sp.footprint;
+        const double sign = signedArea(r) >= 0.0 ? 1.0 : -1.0;
+        sp.clearance.assign(r.size(), reach);
+        for (size_t e = 0; e < r.size(); ++e)
+        {
+            const Vec2 a = r[e], b = r[(e + 1) % r.size()];
+            if (glm::length(b - a) < 1.0)
+                continue;
+            const Vec2 n = outward(a, b) * sign;
+            const Vec2 lo = glm::min(glm::min(a, b), glm::min(a, b) + n * reach), hi = glm::max(glm::max(a, b), glm::max(a, b) + n * reach);
+            near.clear();
+            for (int64_t x = int64_t(std::floor(lo.x / cell)); x <= int64_t(std::floor(hi.x / cell)); ++x)
+                for (int64_t z = int64_t(std::floor(lo.y / cell)); z <= int64_t(std::floor(hi.y / cell)); ++z)
+                    if (auto it = grid.find(key(x, z)); it != grid.end())
+                        near.insert(near.end(), it->second.begin(), it->second.end());
+            std::sort(near.begin(), near.end());
+            near.erase(std::unique(near.begin(), near.end()), near.end());
+            // The most open of three points along the wall: a neighbour has to face the whole wall to close it.
+            double open = 0.0;
+            for (double t : {0.15, 0.5, 0.85})
+            {
+                const Vec2 p = a + (b - a) * t;
+                double hit = reach;
+                for (uint32_t k : near)
+                {
+                    const Seg& s = segs[k];
+                    if (s.owner == i)
+                        continue;
+                    const Vec2 d = s.b - s.a;
+                    const double den = n.x * d.y - n.y * d.x;
+                    if (std::abs(den) < 1e-12)
+                        continue;
+                    const Vec2 w = s.a - p;
+                    const double along = (w.x * d.y - w.y * d.x) / den, u = (w.x * n.y - w.y * n.x) / den;
+                    if (u >= 0.0 && u <= 1.0 && along >= -2.0)
+                        hit = std::min(hit, std::max(0.0, along));
+                }
+                open = std::max(open, hit);
+            }
+            sp.clearance[e] = open;
+        }
+    }
+}
+
 } // namespace buildings
