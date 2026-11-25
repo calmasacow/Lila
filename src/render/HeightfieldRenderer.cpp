@@ -610,6 +610,12 @@ void HeightfieldRenderer::prepare(VulkanContext& vk, VkCommandBuffer cmd, const 
             p.flowMask = d.flowArrows ? mask(vk, cmd, f, d.flow, count, false, frame) : 0;
             uint32_t layers = 0;
             bool skippedMaps = false;
+            if (d.layers.size() > size_t(kHeightfieldMaxLayers) && !mWarnedLayers)
+            {
+                log::warn("render: a terrain has {} paint layers; the viewport draws the first {}, the rest show as none", d.layers.size(),
+                          kHeightfieldMaxLayers);
+                mWarnedLayers = true;
+            }
             for (const HeightfieldLayer& l : d.layers)
             {
                 if (layers == uint32_t(kHeightfieldMaxLayers))
