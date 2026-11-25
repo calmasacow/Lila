@@ -1,6 +1,7 @@
 // Settlement: the plan's verification checks on a layout, and why each part is where it is.
 
 #include "Streetscape.h"
+#include "Generators.h"
 #include "SettlementTerrain.h"
 
 #include <lila/Profile.h>
@@ -121,9 +122,16 @@ const char* useLabel(Use u) { return useName(u); }
 
 bool polygonsShareArea(const Polygon& a, const Polygon& b, double tol) { return shareArea(a, b, tol); }
 
+/**
+ * Lanes that can't reach each other or an exit are errors in a network Settlement laid, warnings in imported streets:
+ * real networks have islands, gated estates and streets clipped at the settlement's edge.
+ */
+static const char* reachSeverity(const Layout& l) { return l.gen && l.gen->imported > 0 ? "warning" : "error"; }
+
 json streetscapeLaneChecks(const Layout& l, const Ground& ground)
 {
     const json r = checkLanes(l, ground);
+    const char* reach = reachSeverity(l);
     json issues = json::array();
     if (!r.is_object())
         return issues;
@@ -134,12 +142,12 @@ json streetscapeLaneChecks(const Layout& l, const Ground& ground)
     for (const auto& [mode, m] : modes.items())
     {
         if (m.value("components", 0) > 1)
-            add("error", nullptr, std::format("{} lanes split into {} groups; {} lanes cannot reach the rest", mode, m.value("components", 0),
-                                              m.value("isolatedCount", 0)));
+            add(reach, nullptr, std::format("{} lanes split into {} groups; {} lanes cannot reach the rest", mode, m.value("components", 0),
+                                            m.value("isolatedCount", 0)));
         for (const json& x : m.value("cannotReachExit", json::array()))
-            add("error", x, std::format("{} lane {} cannot reach an exit", mode, x.dump()));
+            add(reach, x, std::format("{} lane {} cannot reach an exit", mode, x.dump()));
         for (const json& x : m.value("unreachableExits", json::array()))
-            add("error", x, std::format("{} exit lane {} cannot be reached", mode, x.dump()));
+            add(reach, x, std::format("{} exit lane {} cannot be reached", mode, x.dump()));
     }
     for (const json& c : r.contains("conflictingGreens") ? r["conflictingGreens"] : json::array())
     {
@@ -347,7 +355,7 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o, const 
             for (int v = 0; v < n; ++v)
                 if (used[size_t(v)] && sizes[comp[size_t(v)]] < biggest && parts.size() < 8)
                     parts.push_back(at(l.graph.nodes[size_t(v)].p));
-            issue("lanes", "error", std::string("mode:") + mode,
+            issue("lanes", reachSeverity(l), std::string("mode:") + mode,
                   std::format("the {} lane graph splits into {} parts that cannot all reach each other", mode, sizes.size()), parts);
         }
     }
