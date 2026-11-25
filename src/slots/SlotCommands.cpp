@@ -8,6 +8,7 @@
 #include "scene/Node.h"
 
 #include <algorithm>
+#include <functional>
 #include <format>
 #include <map>
 #include <set>
@@ -276,45 +277,16 @@ json report(Graph& g)
     StatePtr st = state();
     json byType = json::object(), byRule = json::object(), byOwner = json::object();
     std::vector<std::string> conflicts;
-    std::map<std::string, int> idCount;
     std::set<std::string> unregistered;
     json publishers = json::array();
-    std::vector<Slot> all;
-    size_t unowned = 0;
-
-    auto take = [&](std::vector<Slot> raw, const std::string& node, const char* kind) {
-        size_t count = 0;
-        for (const Slot& s : raw)
-            ++idCount[s.id];
-        for (Slot& s : detail::withPins(std::move(raw), *st, &conflicts))
-        {
-            ++count;
-            all.push_back(std::move(s));
-        }
-        publishers.push_back({{"node", node}, {"kind", kind}, {"slots", count}});
-    };
-    for (NodeId id : g.nodes())
-        if (const Node* n = g.node(id); n && n->type().isA(kSetType))
-            take(readSet(g, id), g.path(id), "set");
-    for (NodeId pub : detail::publishedNodes())
-        if (g.node(pub))
-            take(detail::publishedBy(pub), g.path(pub), "nodes");
-    std::set<std::string> seen;
-    for (const Slot& s : all)
-        seen.insert(s.id);
-    size_t pinnedOrphans = 0;
-    for (const auto& [k, p] : st->pins)
-        for (const PinnedSlot& ps : p.slots)
-            if (seen.insert(ps.slot.id).second)
-            {
-                all.push_back(ps.slot);
-                ++pinnedOrphans;
-            }
-
+    size_t unowned = 0, total = 0, hidden = 0;
     std::map<std::string, std::string> missingVisuals;
-    size_t hidden = 0;
-    for (const Slot& s : all)
-    {
+    // Each publisher's slots are counted as they are read, never all held at once: a city publishes millions. Ids are
+    // kept as hashes; the few that repeat are named in a second pass.
+    std::vector<uint64_t> idHashes;
+    auto hashOf = [](std::string_view id) { return std::hash<std::string_view>{}(id); };
+    auto look = [&](const Slot& s) {
+        ++total;
         byType[s.type] = byType.value(s.type, 0) + 1;
         if (!resolveType(s.type))
             unregistered.insert(s.type);
@@ -334,26 +306,96 @@ json report(Graph& g)
             if (!v.missing.empty())
                 missingVisuals[v.key] = v.missing;
         }
-    }
+    };
+    std::vector<uint64_t> raw;
+    auto take = [&](std::vector<Slot> slots, const std::string& node, const char* kind, bool count) {
+        size_t n = 0;
+        for (const Slot& x : slots)
+            raw.push_back(hashOf(x.id));
+        for (Slot& x : detail::withPins(std::move(slots), *st, count ? &conflicts : nullptr))
+        {
+            ++n;
+            idHashes.push_back(hashOf(x.id));
+            look(x);
+        }
+        publishers.push_back({{"node", node}, {"kind", kind}, {"slots", n}});
+    };
+    auto forEachPublisher = [&](const std::function<void(std::vector<Slot>, const std::string&, const char*)>& f) {
+        for (NodeId id : g.nodes())
+            if (const Node* n = g.node(id); n && n->type().isA(kSetType))
+                f(readSet(g, id), g.path(id), "set");
+        for (NodeId pub : detail::publishedNodes())
+            if (g.node(pub))
+                f(detail::publishedBy(pub), g.path(pub), "nodes");
+    };
+    forEachPublisher([&](std::vector<Slot> v, const std::string& node, const char* kind) { take(std::move(v), node, kind, true); });
+    std::sort(idHashes.begin(), idHashes.end());
+    idHashes.erase(std::unique(idHashes.begin(), idHashes.end()), idHashes.end());
+    auto seen = [&](std::string_view id) { return std::binary_search(idHashes.begin(), idHashes.end(), hashOf(id)); };
+    size_t pinnedOrphans = 0;
+    std::vector<Slot> orphanPins;
+    for (const auto& [k, p] : st->pins)
+        for (const PinnedSlot& ps : p.slots)
+            if (!seen(ps.slot.id) && std::ranges::none_of(orphanPins, [&](const Slot& o) { return o.id == ps.slot.id; }))
+            {
+                orphanPins.push_back(ps.slot);
+                ++pinnedOrphans;
+                look(ps.slot);
+            }
+
     json orphans = json::array();
     std::set<std::string> overridden;
-    for (const auto& [id, ov] : st->overrides)
+    std::vector<const std::pair<const std::string, Override>*> lost;
+    for (const auto& entry : st->overrides)
     {
-        if (seen.contains(id))
+        if (seen(entry.first) || std::ranges::any_of(orphanPins, [&](const Slot& o) { return o.id == entry.first; }))
+            overridden.insert(entry.first);
+        else
+            lost.push_back(&entry);
+    }
+    if (!lost.empty())
+    {
+        // Only the slots an orphaned override could move to are gathered, to name the nearest.
+        std::set<std::string> types;
+        for (const auto* e : lost)
+            types.insert(e->second.type);
+        std::vector<Slot> candidates;
+        forEachPublisher([&](std::vector<Slot> v, const std::string&, const char*) {
+            for (Slot& x : detail::withPins(std::move(v), *st, nullptr))
+                if (types.contains(x.type))
+                    candidates.push_back(std::move(x));
+        });
+        for (const Slot& o : orphanPins)
+            if (types.contains(o.type))
+                candidates.push_back(o);
+        for (const auto* e : lost)
         {
-            overridden.insert(id);
-            continue;
+            const Override& ov = e->second;
+            json o = {{"id", e->first}, {"type", ov.type}, {"at", vec(ov.at)}};
+            const std::string near = nearestOfType(candidates, ov.type, ov.at, overridden, ov.owner);
+            if (!near.empty())
+                o["nearest"] = near;
+            orphans.push_back(std::move(o));
         }
-        json o = {{"id", id}, {"type", ov.type}, {"at", vec(ov.at)}};
-        const std::string near = nearestOfType(all, ov.type, ov.at, overridden, ov.owner);
-        if (!near.empty())
-            o["nearest"] = near;
-        orphans.push_back(std::move(o));
     }
     json duplicates = json::array();
-    for (const auto& [id, n] : idCount)
-        if (n > 1)
-            duplicates.push_back(id);
+    std::sort(raw.begin(), raw.end());
+    std::set<uint64_t> repeated;
+    for (size_t k = 1; k < raw.size(); ++k)
+        if (raw[k] == raw[k - 1])
+            repeated.insert(raw[k]);
+    if (!repeated.empty())
+    {
+        std::map<std::string, int> idCount;
+        forEachPublisher([&](std::vector<Slot> v, const std::string&, const char*) {
+            for (const Slot& x : v)
+                if (repeated.contains(hashOf(x.id)))
+                    ++idCount[x.id];
+        });
+        for (const auto& [id, n] : idCount)
+            if (n > 1)
+                duplicates.push_back(id);
+    }
     json rules = json::array();
     for (const Rule& r : st->rules)
         rules.push_back({{"id", r.id}, {"name", r.name}, {"level", levelName(r.level)}, {"type", r.type}, {"enabled", r.enabled},
@@ -361,7 +403,7 @@ json report(Graph& g)
     json missing = json::array();
     for (const auto& [k, why] : missingVisuals)
         missing.push_back({{"key", k}, {"why", why}});
-    return {{"total", all.size()},
+    return {{"total", total},
             {"byType", byType},
             {"byRule", byRule},
             {"byOwner", byOwner},

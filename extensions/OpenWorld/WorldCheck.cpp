@@ -435,8 +435,8 @@ json checkWorld(const WorldRef* w, const json& options)
             std::string type, id;
         };
         std::vector<GroundProp> ground;
-        for (const slots::Slot& s : slots::collect(g))
-        {
+        // Every slot is looked at as it is gathered and only ground props are kept: a city holds millions of slots.
+        auto look = [&](const slots::Slot& s) {
             const slots::Resolved r = slots::resolve(s, *st);
             for (const char* k : {"text", "name", "label"})
                 if (r.payload.data.contains(k) && r.payload.data[k].is_string())
@@ -444,13 +444,13 @@ json checkWorld(const WorldRef* w, const json& options)
             if (r.payload.hidden && *r.payload.hidden)
             {
                 ++hidden;
-                continue;
+                return false;
             }
             const slots::SlotType* type = slots::resolveType(s.type);
             if (hasTag(type, "shell"))
             {
                 ++shell;
-                continue;
+                return false;
             }
             json& t = byType[s.type];
             if (t.is_null())
@@ -467,8 +467,10 @@ json checkWorld(const WorldRef* w, const json& options)
             }
             // Ground props only: wall, roof and free parts sit where their building or kit put them, and an interior's
             // furnishing stands on its floor.
-            if (!hf || !type || type->attach != slots::Attach::Ground || s.owner.starts_with("building:") || s.owner.starts_with("interior:"))
-                continue;
+            return hf && type && type->attach == slots::Attach::Ground && !s.owner.starts_with("building:") && !s.owner.starts_with("interior:");
+        };
+        for (const slots::Slot& s : slots::collect(g, look))
+        {
             const glm::dvec3 p(s.transform[3]);
             if (hf->contains(p.x, p.z))
                 ground.push_back({p, s.type, s.id});
