@@ -68,6 +68,41 @@ struct FetchNet
     std::function<void(int)> wait;
 };
 
+/** What runFetch is doing, in order: per item Start, then Bytes as they arrive (and Retry), then Done or Failed. */
+struct FetchEvent
+{
+    enum class Kind
+    {
+        Start,
+        Bytes,
+        Retry,
+        Done,
+        Failed,
+    };
+    Kind kind = Kind::Start;
+    std::string id;
+    /** dem, osm, landcover or bathymetry. */
+    std::string itemKind;
+    /** 1-based among the items to fetch, and how many there are. */
+    int index = 0;
+    int count = 0;
+    /** Received so far (Bytes), written to the spec's path (Done). */
+    uint64_t bytes = 0;
+    /** The best known size: the server's when it gave one for a single download, else the plan's estimate; 0 unknown. */
+    uint64_t expected = 0;
+    /** expected came from the server rather than the estimate. */
+    bool exact = false;
+    /** Start: the download cache holds it, so nothing is downloaded. */
+    bool cached = false;
+    /** Retry: the attempt that failed and the pause before the next, ms. */
+    int attempt = 0;
+    int waitMs = 0;
+    /** Since the item started. */
+    double seconds = 0.0;
+    /** Retry and Failed: why. */
+    std::string why;
+};
+
 struct FetchOptions
 {
     /** Download cache (the workspace's terrain/dem_cache): tiles and whole areas are kept and reused. */
@@ -81,6 +116,12 @@ struct FetchOptions
     /** Tries per download when the server can't be reached or answers 429 or 5xx. */
     int attempts = 3;
     double consentMB = 25.0;
+    /** Why the saved key was ignored (a placeholder); added to the missing-key message. */
+    std::string keyNote;
+    /** Called on the thread running runFetch for every event. */
+    std::function<void(const FetchEvent&)> onEvent;
+    /** Polled during downloads and between attempts; true stops the run (items fetched so far are kept). */
+    std::function<bool()> cancelled;
 };
 
 /** Copernicus GLO-30 tiles are about this size each. */
@@ -100,6 +141,19 @@ std::string fetchSize(uint64_t bytes);
 
 /** One line naming the missing items and the total: "coast.dem 25.0 MB, coast.osm 4.7 MB; about 29.7 MB". */
 std::string planSummary(const FetchPlan& p);
+
+/**
+ * For FetchNet downloads: the bytes so far of the transfer running on this thread (total 0 when unknown), which runFetch
+ * turns into Bytes events. False asks the transfer to stop. True outside runFetch.
+ */
+bool reportFetchBytes(uint64_t received, uint64_t total);
+
+/**
+ * The plan, or a run's outcome, as a table for Script Output: item, kind, size, status (present, cached, to download,
+ * fetched, failed), a total row and the consent and key notes. outcome is a run's items ({id, state fetched|present|failed,
+ * bytes}, as runFetch returns them); without it the table is the plan. One string per line.
+ */
+std::vector<std::string> fetchTable(const FetchPlan& p, const FetchOptions& o, const json* outcome = nullptr);
 
 /**
  * Downloads every missing item to its file. Refuses before any download when an item can't be fetched, when GEBCO is

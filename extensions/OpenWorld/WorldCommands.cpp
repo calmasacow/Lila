@@ -20,11 +20,13 @@
 #include <lila/Paths.h>
 #include <lila/Profile.h>
 #include <lila/Slots.h>
+#include <lila/Tasks.h>
 #include <lila/UnrealLink.h>
 #include <lila/Workspace.h>
 
 #include <algorithm>
 #include <chrono>
+#include <format>
 #include <fstream>
 #include <set>
 
@@ -234,7 +236,8 @@ namespace
 class Steps
 {
 public:
-    explicit Steps(bool stopOnError) : mStop(stopOnError) {}
+    /** scope shows the running step on the progress card, which keeps Script Output painting between steps. */
+    Steps(bool stopOnError, progress::Scope* scope = nullptr) : mStop(stopOnError), mScope(scope) {}
 
     bool stopped() const { return mStopped; }
     bool failed() const { return mFailed; }
@@ -248,6 +251,8 @@ public:
             return false;
         LILA_ZONE_N("world.step");
         LILA_ZONE_TEXT(name.c_str(), name.size());
+        if (mScope)
+            mScope->setStatus(std::format("step {}: {}", mSteps.size() + 1, name));
         const auto t0 = std::chrono::steady_clock::now();
         json step = {{"step", name}};
         bool ok = true;
@@ -307,6 +312,7 @@ public:
 
 private:
     bool mStop = true, mStopped = false, mFailed = false;
+    progress::Scope* mScope = nullptr;
     std::string mFirstError;
     json mSteps = json::array();
 };
@@ -609,7 +615,8 @@ json buildWorld(json spec, const BuildOptions& o)
 
     const auto t0 = std::chrono::steady_clock::now();
     const double mem0 = memoryMB();
-    Steps st(o.stopOnError);
+    progress::Scope buildScope("Building world " + name);
+    Steps st(o.stopOnError, &buildScope);
     json built = {{"nodes", json::array()}, {"settlements", json::array()}, {"sites", json::array()}, {"siteMeshes", json::array()}, {"buildingGroups", json::array()}};
     // Slot rules change first and the roots they would re-send are being rebuilt: the export sends them once they are whole.
     link::SlotSyncPause slotSyncPause;

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <format>
 #include <fstream>
+#include <map>
 #include <set>
 #include <stdexcept>
 
@@ -141,6 +142,26 @@ void writeWhole(const fs::path& file, const std::function<void(const fs::path&)>
 
 bool transient(int status) { return status == 0 || status == 429 || status >= 500; }
 
+thread_local std::function<bool(uint64_t, uint64_t)>* tBytes = nullptr;
+
+/** Routes reportFetchBytes on this thread to fn while it lives. */
+struct ByteSink
+{
+    explicit ByteSink(std::function<bool(uint64_t, uint64_t)> f) : fn(std::move(f)), prev(tBytes) { tBytes = &fn; }
+    ~ByteSink() { tBytes = prev; }
+    ByteSink(const ByteSink&) = delete;
+    ByteSink& operator=(const ByteSink&) = delete;
+    std::function<bool(uint64_t, uint64_t)> fn;
+    std::function<bool(uint64_t, uint64_t)>* prev;
+};
+
+uint64_t sizeOf(const fs::path& f)
+{
+    std::error_code ec;
+    const uint64_t n = fs::file_size(f, ec);
+    return ec ? 0 : n;
+}
+
 /** msg without the key anywhere in it. */
 std::string scrub(std::string msg, const std::string& key)
 {
@@ -150,6 +171,8 @@ std::string scrub(std::string msg, const std::string& key)
     return msg;
 }
 } // namespace
+
+bool reportFetchBytes(uint64_t received, uint64_t total) { return !tBytes || (*tBytes)(received, total); }
 
 std::string fetchSize(uint64_t bytes)
 {
@@ -290,6 +313,89 @@ std::string planSummary(const FetchPlan& p)
     return out + "; about " + mb(p.bytes);
 }
 
+std::vector<std::string> fetchTable(const FetchPlan& p, const FetchOptions& o, const json* outcome)
+{
+    std::map<std::string, json> ran;
+    if (outcome && outcome->is_array())
+        for (const json& j : *outcome)
+            ran[j.value("id", std::string())] = j;
+    struct Row
+    {
+        std::string item, kind, size, status;
+    };
+    std::vector<Row> rows;
+    std::vector<std::string> order;
+    std::map<std::string, int> counts;
+    uint64_t total = 0;
+    for (const FetchItem& it : p.items)
+    {
+        Row r{it.id, it.kind, "-", ""};
+        const auto found = ran.find(it.id);
+        const std::string state = found != ran.end() ? found->second.value("state", std::string()) : std::string();
+        if (state == "fetched" || state == "failed")
+        {
+            r.status = state == "failed" ? "failed" : found->second.value("cached", false) ? "cached" : "fetched";
+            const uint64_t b = found->second.value("bytes", uint64_t(0));
+            if (state == "fetched")
+            {
+                r.size = fetchSize(b);
+                total += b;
+            }
+        }
+        else if (it.present)
+            r.status = "present";
+        else if (!it.problem.empty())
+            r.status = "no bbox";
+        else if (it.cached)
+            r.status = "cached";
+        else
+        {
+            r.status = "to download";
+            r.size = fetchSize(it.bytes);
+            if (!outcome)
+                total += it.bytes;
+        }
+        if (!counts.contains(r.status))
+            order.push_back(r.status);
+        ++counts[r.status];
+        rows.push_back(std::move(r));
+    }
+    std::string tally;
+    for (const std::string& s : order)
+        tally += (tally.empty() ? "" : ", ") + std::to_string(counts[s]) + " " + s;
+    rows.push_back({"total", "", total == 0 ? std::string("-") : (outcome ? "" : "about ") + fetchSize(total), tally});
+
+    size_t w[3] = {4, 4, 4};
+    for (const Row& r : rows)
+    {
+        w[0] = std::max(w[0], r.item.size());
+        w[1] = std::max(w[1], r.kind.size());
+        w[2] = std::max(w[2], r.size.size());
+    }
+    std::vector<std::string> lines;
+    auto line = [&](const Row& r) {
+        std::string s = std::format("{:<{}}  {:<{}}  {:>{}}  {}", r.item, w[0], r.kind, w[1], r.size, w[2], r.status);
+        while (!s.empty() && s.back() == ' ')
+            s.pop_back();
+        lines.push_back(std::move(s));
+    };
+    line({"item", "kind", "size", "status"});
+    for (const Row& r : rows)
+        line(r);
+    if (!outcome && p.missing > 0)
+    {
+        const double mbTotal = double(p.bytes) / 1048576.0;
+        if (mbTotal > o.consentMB)
+            lines.push_back(std::format("over {:.0f} MB: needs consent=True", o.consentMB));
+        else if (p.bytes > 0)
+            lines.push_back(std::format("under {:.0f} MB: no consent needed", o.consentMB));
+        if (p.keyNeeded && o.apiKey.empty())
+            lines.push_back("GEBCO needs an OpenTopography key: apiKey='...', saveKey=True (portal.opentopography.org)" +
+                            (o.keyNote.empty() ? std::string() : "; " + o.keyNote));
+    }
+    return lines;
+}
+
 json runFetch(const FetchPlan& p, const FetchOptions& o, const FetchNet& net)
 {
     for (const FetchItem& it : p.items)
@@ -305,7 +411,8 @@ json runFetch(const FetchPlan& p, const FetchOptions& o, const FetchNet& net)
     {
         for (const FetchItem& it : p.items)
             if (!it.present && it.kind == "bathymetry" && !it.cached)
-                throw std::runtime_error(it.id + " (" + utf8(it.file) + "): GEBCO bathymetry downloads through OpenTopography. " + terrain::kOpenTopographyKeyHelp);
+                throw std::runtime_error(it.id + " (" + utf8(it.file) + "): GEBCO bathymetry downloads through OpenTopography. " + terrain::kOpenTopographyKeyHelp +
+                                         (o.keyNote.empty() ? std::string() : "; " + o.keyNote));
     }
     const double total = double(p.bytes) / 1048576.0;
     if (!o.offline && total > o.consentMB && !o.consent)
@@ -320,6 +427,8 @@ json runFetch(const FetchPlan& p, const FetchOptions& o, const FetchNet& net)
     std::vector<std::string> fetchedIds;
     std::map<fs::path, std::map<std::string, std::string>> credits;
     uint64_t written = 0;
+    const auto stopRequested = [&] { return o.cancelled && o.cancelled(); };
+    int index = 0;
     for (const FetchItem& it : p.items)
     {
         json j = {{"id", it.id}, {"kind", it.kind}, {"file", utf8(it.file)}};
@@ -329,19 +438,75 @@ json runFetch(const FetchPlan& p, const FetchOptions& o, const FetchNet& net)
             items.push_back(std::move(j));
             continue;
         }
+        ++index;
         const auto start = std::chrono::steady_clock::now();
+        auto emit = [&](FetchEvent e) {
+            if (!o.onEvent)
+                return;
+            e.id = it.id;
+            e.itemKind = it.kind;
+            e.index = index;
+            e.count = p.missing;
+            e.seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            o.onEvent(e);
+        };
+        // Bytes over the item's transfers: base is what finished transfers brought, cur the running one's.
+        uint64_t base = 0, cur = 0, curTotal = 0;
+        auto emitBytes = [&] {
+            FetchEvent e{.kind = FetchEvent::Kind::Bytes, .bytes = base + cur};
+            // A server's size is the item's only for a single download; tiles and ranged reads are summed against the estimate.
+            e.exact = curTotal > 0 && base == 0 && (it.kind == "osm" || it.kind == "bathymetry");
+            e.expected = e.exact ? curTotal : std::max(it.bytes, base + curTotal);
+            emit(e);
+        };
+        const ByteSink sink([&](uint64_t received, uint64_t total) {
+            if (received < cur)
+                base += cur;
+            cur = received;
+            curTotal = total;
+            emitBytes();
+            return !stopRequested();
+        });
+        emit({.kind = FetchEvent::Kind::Start, .expected = it.bytes, .cached = it.cached});
         int attempts = 0;
+        auto pause = [&](int n, const std::string& why) {
+            // One short line: Qt's reasons carry the whole URL and servers' error pages follow it.
+            std::string brief = scrub(why.substr(0, why.find('\n')), o.apiKey);
+            if (const size_t url = brief.find("http"); url != std::string::npos)
+                brief = brief.substr(0, url) + "the server" + (brief.find(' ', url) == std::string::npos ? "" : brief.substr(brief.find(' ', url)));
+            if (brief.size() > 120)
+                brief = brief.substr(0, 117) + "...";
+            emit({.kind = FetchEvent::Kind::Retry, .attempt = n, .waitMs = 2000 * n, .why = brief});
+            if (net.wait)
+                net.wait(2000 * n);
+            if (stopRequested())
+                throw std::runtime_error("stopped");
+        };
         // One download with retries on unreachable, 429 and 5xx; other answers return at once.
         const terrain::Downloader get = [&](const std::string& url, const fs::path& dest, std::string* why) {
             int status = 0;
             for (int n = 1; n <= std::max(1, o.attempts); ++n)
             {
+                if (stopRequested())
+                    throw std::runtime_error("stopped");
                 ++attempts;
+                cur = curTotal = 0;
                 status = net.get ? net.get(url, dest, why) : 0;
+                if (stopRequested())
+                {
+                    std::error_code ec;
+                    fs::remove(dest, ec);
+                    throw std::runtime_error("stopped");
+                }
+                if (status == 200 || status == 206)
+                {
+                    base += std::max(cur, sizeOf(dest));
+                    cur = curTotal = 0;
+                    emitBytes();
+                }
                 if (!transient(status) || n == o.attempts)
                     break;
-                if (net.wait)
-                    net.wait(2000 * n);
+                pause(n, status ? "the server answered " + std::to_string(status) : why && !why->empty() ? *why : std::string("no answer"));
             }
             return status;
         };
@@ -401,21 +566,28 @@ json runFetch(const FetchPlan& p, const FetchOptions& o, const FetchNet& net)
                     for (int n = 1;; ++n)
                     {
                         ++attempts;
+                        base = cur = curTotal = 0;
+                        std::string why;
                         try
                         {
                             if (!net.landcover)
                                 throw std::runtime_error("no land cover download available");
                             res = net.landcover(it.box);
+                            if (stopRequested())
+                                throw std::runtime_error("stopped");
                             break;
                         }
-                        catch (const std::exception&)
+                        catch (const std::exception& e)
                         {
-                            if (n >= o.attempts)
+                            if (n >= o.attempts || stopRequested())
                                 throw;
-                            if (net.wait)
-                                net.wait(2000 * n);
+                            why = e.what();
                         }
+                        pause(n, why);
                     }
+                    base = std::max<uint64_t>(base + cur, res.bytes);
+                    cur = curTotal = 0;
+                    emitBytes();
                     writeWhole(cached, [&](const fs::path& part) { terrain::writeGeoTiff(part, res.codes, true); });
                     j["downloadedBytes"] = res.bytes;
                 }
@@ -430,6 +602,7 @@ json runFetch(const FetchPlan& p, const FetchOptions& o, const FetchNet& net)
         }
         catch (const std::exception& e)
         {
+            emit({.kind = FetchEvent::Kind::Failed, .bytes = base + cur, .attempt = attempts, .why = scrub(e.what(), o.apiKey)});
             std::string msg = it.id + " (" + utf8(it.file) + "): " + scrub(e.what(), o.apiKey);
             if (attempts > 1)
                 msg += std::format(" (after {} attempts)", attempts);
@@ -446,11 +619,13 @@ json runFetch(const FetchPlan& p, const FetchOptions& o, const FetchNet& net)
         const uint64_t bytes = fs::file_size(it.file, ec);
         written += ec ? 0 : bytes;
         j["state"] = "fetched";
+        j["cached"] = it.cached;
         j["bytes"] = ec ? 0 : bytes;
         j["attempts"] = attempts;
         j["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
         if (!notes.empty())
             j["notes"] = notes;
+        emit({.kind = FetchEvent::Kind::Done, .bytes = ec ? 0 : bytes, .expected = it.bytes, .cached = it.cached, .attempt = attempts});
         fetchedIds.push_back(it.id);
         items.push_back(std::move(j));
     }

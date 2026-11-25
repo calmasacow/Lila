@@ -6,8 +6,11 @@
 #include "WorldFetch.h"
 
 #include "Coast.h"
+#include "Fetch.h"
 #include "OsmDoc.h"
 
+#include "core/Log.h"
+#include "core/PrefStore.h"
 #include "extensions/ExtensionManager.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
@@ -90,6 +93,8 @@ struct StandIn
     std::optional<bool> metered = false;
     std::vector<std::string> urls;
     std::vector<int> waits;
+    /** Overpass reports its bytes as a real transfer does: half, then all of it. */
+    bool reportBytes = false;
 
     FetchNet net()
     {
@@ -109,7 +114,13 @@ struct StandIn
                     *why = "connection refused";
                     return 0;
                 }
-                std::ofstream(dest) << R"({"version": 0.6, "elements": [{"type": "node", "id": 1, "lat": 23.14, "lon": -106.51, "tags": {"place": "village", "name": "Aldea"}}]})";
+                const std::string body = R"({"version": 0.6, "elements": [{"type": "node", "id": 1, "lat": 23.14, "lon": -106.51, "tags": {"place": "village", "name": "Aldea"}}]})";
+                if (reportBytes)
+                {
+                    reportFetchBytes(body.size() / 2, body.size());
+                    reportFetchBytes(body.size(), body.size());
+                }
+                std::ofstream(dest) << body;
                 return 200;
             }
             if (url.find("opentopography") != std::string::npos)
@@ -402,4 +413,248 @@ TEST_CASE("world fetch: commands estimate and refuse without a terrain or the ne
     std::error_code ec;
     fs::remove(cacheFile, ec);
     fs::remove_all(dir, ec);
+}
+
+namespace
+{
+using Kind = FetchEvent::Kind;
+
+std::vector<FetchEvent> eventsFor(const std::vector<FetchEvent>& all, const std::string& id)
+{
+    std::vector<FetchEvent> out;
+    for (const FetchEvent& e : all)
+        if (e.id == id)
+            out.push_back(e);
+    return out;
+}
+
+const std::string* lineStarting(const std::vector<std::string>& lines, const std::string& start)
+{
+    for (const std::string& l : lines)
+        if (l.starts_with(start))
+            return &l;
+    return nullptr;
+}
+
+uint64_t logSeq()
+{
+    uint64_t seq = 0;
+    for (const lila::LogEntry& e : lila::log::since(0, 100000))
+        seq = std::max(seq, e.seq);
+    return seq;
+}
+
+/** Script Output lines logged after seq. */
+std::vector<std::string> loggedSince(uint64_t seq)
+{
+    std::vector<std::string> out;
+    for (const lila::LogEntry& e : lila::log::since(seq, 5000))
+        out.push_back(e.text);
+    return out;
+}
+} // namespace
+
+TEST_CASE("world fetch: progress events per item in order, with byte counts, retries, and a stop that keeps what came before")
+{
+    const fs::path dir = scratch("events");
+    const fs::path specFile = writeSpec(dir);
+    StandIn s;
+    s.reportBytes = true;
+    s.overpassFailures = 1;
+    FetchOptions o;
+    o.cache = dir / "cache";
+    o.consent = true;
+    o.apiKey = kKey;
+    std::vector<FetchEvent> events;
+    o.onEvent = [&](const FetchEvent& e) { events.push_back(e); };
+    const FetchPlan p = planFetch(loadResolved(specFile), o.cache);
+    const json r = runFetch(p, o, s.net());
+    CHECK(r["fetched"] == 4);
+    std::map<std::string, uint64_t> written;
+    for (const json& it : r["items"])
+        written[it["id"].get<std::string>()] = it.value("bytes", uint64_t(0));
+
+    // Items run in plan order, numbered among the four missing; each starts, then ends with Done and the bytes written.
+    std::vector<std::string> started;
+    for (const FetchEvent& e : events)
+        if (e.kind == Kind::Start)
+            started.push_back(e.id);
+    CHECK(started == std::vector<std::string>{"coast.dem", "coast.osm", "coast.landcover", "coast.bathymetry"});
+    for (const std::string& id : started)
+    {
+        CAPTURE(id);
+        const std::vector<FetchEvent> ev = eventsFor(events, id);
+        REQUIRE(ev.size() >= 2);
+        CHECK(ev.front().kind == Kind::Start);
+        CHECK(ev.back().kind == Kind::Done);
+        CHECK(ev.front().count == 4);
+        CHECK(ev.back().bytes == written[id]);
+        CHECK(ev.back().bytes > 0);
+        uint64_t last = 0;
+        for (const FetchEvent& e : ev)
+            if (e.kind == Kind::Bytes)
+            {
+                CHECK(e.bytes >= last);
+                last = e.bytes;
+            }
+    }
+    CHECK(eventsFor(events, "coast.osm").front().index == 2);
+
+    // Overpass: unreachable once (a retry naming why and the pause), then its bytes as they arrived, then done.
+    const std::vector<FetchEvent> osm = eventsFor(events, "coast.osm");
+    std::vector<Kind> kinds;
+    for (const FetchEvent& e : osm)
+        kinds.push_back(e.kind);
+    REQUIRE(kinds == std::vector<Kind>{Kind::Start, Kind::Retry, Kind::Bytes, Kind::Bytes, Kind::Bytes, Kind::Done});
+    CHECK(osm[1].attempt == 1);
+    CHECK(osm[1].waitMs == 2000);
+    CHECK(osm[1].why == "connection refused");
+    const uint64_t body = fs::file_size(dir / "real" / "coast.osm.pbf");
+    CHECK(osm[2].bytes == body / 2);
+    CHECK(osm[2].expected == body);
+    CHECK(osm[2].exact);
+    CHECK(osm[3].bytes == body);
+    CHECK(osm[4].bytes == body);
+    CHECK(osm[5].bytes == body);
+    CHECK(osm[5].attempt == 2);
+    // Land cover reports the bytes its reads brought.
+    bool landcoverBytes = false;
+    for (const FetchEvent& e : eventsFor(events, "coast.landcover"))
+        landcoverBytes |= e.kind == Kind::Bytes && e.bytes == 1234;
+    CHECK(landcoverBytes);
+    fs::remove_all(dir);
+
+    // Stop asked while Overpass sends: it fails as stopped, nothing of it is written, the elevation before it stays.
+    const fs::path dir2 = scratch("events_stop");
+    const fs::path spec2 = writeSpec(dir2);
+    StandIn s2;
+    s2.reportBytes = true;
+    events.clear();
+    bool stop = false;
+    o.cache = dir2 / "cache";
+    o.onEvent = [&](const FetchEvent& e) {
+        events.push_back(e);
+        if (e.kind == Kind::Bytes && e.id == "coast.osm")
+            stop = true;
+    };
+    o.cancelled = [&] { return stop; };
+    const std::string stopped = message([&] { runFetch(planFetch(loadResolved(spec2), o.cache), o, s2.net()); });
+    CHECK(stopped.find("coast.osm") != std::string::npos);
+    CHECK(stopped.find("stopped") != std::string::npos);
+    CHECK(stopped.find("fetched before it and kept: coast.dem") != std::string::npos);
+    REQUIRE_FALSE(events.empty());
+    CHECK(events.back().kind == Kind::Failed);
+    CHECK(events.back().id == "coast.osm");
+    CHECK(events.back().why == "stopped");
+    CHECK(fs::exists(dir2 / "real" / "coast_dem.tif"));
+    CHECK_FALSE(fs::exists(dir2 / "real" / "coast.osm.pbf"));
+    fs::remove_all(dir2);
+}
+
+TEST_CASE("world fetch: the estimate and the run's outcome print as tables")
+{
+    const fs::path dir = scratch("table");
+    const fs::path specFile = writeSpec(dir);
+    FetchOptions o;
+    o.cache = dir / "cache";
+    const FetchPlan p = planFetch(loadResolved(specFile), o.cache);
+
+    const std::vector<std::string> plan = fetchTable(p, o);
+    REQUIRE(plan.size() >= 8);
+    CHECK(plan[0].starts_with("item"));
+    const std::string* dem = lineStarting(plan, "coast.dem");
+    REQUIRE(dem);
+    CHECK(dem->find("25.0 MB") != std::string::npos);
+    CHECK(dem->ends_with("to download"));
+    // Sizes right-aligned under "size", statuses left-aligned under "status".
+    CHECK(dem->find("25.0 MB") + 7 == plan[0].find("size") + 4);
+    CHECK(dem->find("to download") == plan[0].find("status"));
+    const std::string* capital = lineStarting(plan, "capital.dem");
+    REQUIRE(capital);
+    CHECK(capital->ends_with("present"));
+    const std::string* total = lineStarting(plan, "total");
+    REQUIRE(total);
+    CHECK(total->find("about ") != std::string::npos);
+    CHECK(total->ends_with("4 to download, 1 present"));
+    CHECK(lineStarting(plan, "over 25 MB: needs consent=True"));
+    REQUIRE(lineStarting(plan, "GEBCO needs an OpenTopography key"));
+    CHECK(lineStarting(plan, "GEBCO needs an OpenTopography key")->find("saveKey=True") != std::string::npos);
+
+    // After a run: what was written, present ones as they were, and the total of what came down.
+    StandIn s;
+    o.consent = true;
+    o.apiKey = kKey;
+    const json r = runFetch(p, o, s.net());
+    const std::vector<std::string> done = fetchTable(p, o, &r["items"]);
+    REQUIRE(lineStarting(done, "coast.osm"));
+    CHECK(lineStarting(done, "coast.osm")->ends_with("fetched"));
+    CHECK(lineStarting(done, "capital.dem")->ends_with("present"));
+    CHECK(lineStarting(done, "total")->ends_with("4 fetched, 1 present"));
+    CHECK(lineStarting(done, "total")->find(fetchSize(r["bytes"].get<uint64_t>())) != std::string::npos);
+    CHECK_FALSE(lineStarting(done, "over 25 MB"));
+
+    // A run stopped at the OSM: what came before fetched, the OSM failed, the rest still to download.
+    const json partial = json::array({{{"id", "coast.dem"}, {"state", "fetched"}, {"bytes", 2048}}, {{"id", "coast.osm"}, {"state", "failed"}}});
+    const std::vector<std::string> failed = fetchTable(p, o, &partial);
+    CHECK(lineStarting(failed, "coast.dem")->ends_with("fetched"));
+    CHECK(lineStarting(failed, "coast.osm")->ends_with("failed"));
+    CHECK(lineStarting(failed, "coast.landcover")->ends_with("to download"));
+    CHECK(lineStarting(failed, "total")->ends_with("1 fetched, 1 failed, 2 to download, 1 present"));
+    fs::remove_all(dir);
+
+    // The commands log the table, and tell Python to show nothing more than it at the prompt.
+    loadPackages();
+    const fs::path dir2 = scratch("table_cmd");
+    const fs::path spec2 = writeSpec(dir2);
+    const uint64_t seq = logSeq();
+    const json e = run("worldFetch", {{"file", spec2.generic_string()}, {"estimate", true}});
+    CHECK(e["_echo"] == "");
+    bool header = false, row = false;
+    for (const std::string& l : loggedSince(seq))
+    {
+        header |= l.starts_with("  item") && l.find("status") != std::string::npos;
+        row |= l.starts_with("  capital.dem") && l.ends_with("present");
+    }
+    CHECK(header);
+    CHECK(row);
+    fs::remove_all(dir2);
+}
+
+TEST_CASE("world fetch: a placeholder API key is refused and never saved; a saved placeholder counts as no key")
+{
+    CHECK_FALSE(terrain::apiKeyProblem("").empty());
+    CHECK_FALSE(terrain::apiKeyProblem("<your OpenTopography key>").empty());
+    CHECK_FALSE(terrain::apiKeyProblem("YOUR_API_KEY").empty());
+    CHECK_FALSE(terrain::apiKeyProblem("...").empty());
+    CHECK(terrain::apiKeyProblem("0123456789abcdef0123456789abcdef").empty());
+
+    loadPackages();
+    run("newScene");
+    lila::PrefStore& prefs = lila::PrefStore::get();
+    prefs.remove("terrain", "/openTopography/apiKey");
+    const fs::path dir = scratch("placeholder");
+    const std::string file = writeSpec(dir).generic_string();
+    const std::string placeholder = "<your OpenTopography key>";
+
+    // Passed: refused before anything downloads, and not saved.
+    const std::string passed = message([&] { run("worldFetch", {{"file", file}, {"consent", true}, {"apiKey", placeholder}, {"saveKey", true}}); });
+    CHECK(passed.find("placeholder") != std::string::npos);
+    CHECK(passed.find("nothing was downloaded or saved") != std::string::npos);
+    CHECK(prefs.value("terrain", "/openTopography/apiKey").is_null());
+    CHECK(message([&] { run("worldBuild", {{"file", file}, {"fetch", true}, {"consent", true}, {"apiKey", "..."}}); }).find("placeholder") != std::string::npos);
+    const json box = {-106.53, 23.12, -106.49, 23.16};
+    CHECK(message([&] { run("terrainBathymetry", {{"bbox", box}, {"fetch", true}, {"apiKey", placeholder}, {"saveKey", true}}); }).find("placeholder") != std::string::npos);
+    CHECK(prefs.value("terrain", "/openTopography/apiKey").is_null());
+
+    // Saved earlier: ignored as no key, and the messages say why.
+    prefs.set("terrain", "/openTopography/apiKey", placeholder);
+    const json e = run("worldFetch", {{"file", file}, {"estimate", true}})["estimate"];
+    CHECK(e["keyMissing"] == true);
+    CHECK(e.value("keyNote", std::string()).find("saved OpenTopography key is a placeholder") != std::string::npos);
+    const std::string saved = message([&] { run("worldFetch", {{"file", file}, {"consent", true}}); });
+    CHECK(saved.find("coast.bathymetry") != std::string::npos);
+    CHECK(saved.find("saved OpenTopography key is a placeholder") != std::string::npos);
+    CHECK(message([&] { run("terrainBathymetry", {{"bbox", box}, {"fetch", true}}); }).find("saved OpenTopography key is a placeholder") != std::string::npos);
+    prefs.remove("terrain", "/openTopography/apiKey");
+    fs::remove_all(dir);
 }
