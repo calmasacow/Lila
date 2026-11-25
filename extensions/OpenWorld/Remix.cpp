@@ -304,7 +304,17 @@ double Work::weight(size_t s, Vec2 base) const
     if (l.x < 0.0 || l.y < 0.0 || l.x > e.x || l.y > e.y)
         return 0.0;
     const double d = std::min({l.x, l.y, e.x - l.x, e.y - l.y}) * scales[s];
-    return smooth01(d / feather);
+    return smooth01(d / feather) * dry(base);
+}
+
+double Work::dry(Vec2 base) const
+{
+    double land = 1.0;
+    for (const Region& r : spec.regions)
+        if (r.op == RegionOp::Sea)
+            if (const double sd = signedDistance(r.polygon, base); sd > 0.0)
+                land *= 1.0 - smooth01(sd / std::max(spec.seamOf(r), 1.0));
+    return land;
 }
 
 bool Work::owns(size_t s, Vec2 base) const
@@ -327,6 +337,22 @@ bool Work::punched(Vec2 base) const
 {
     for (const Region& r : spec.regions)
         if (punches(r.op) && inside(r.polygon, base))
+            return true;
+    return false;
+}
+
+bool Work::holed(Vec2 base) const
+{
+    for (const Region& r : spec.regions)
+        if (fills(r.op) && inside(r.polygon, base))
+            return true;
+    return false;
+}
+
+bool Work::onSeaEdge(Vec2 base) const
+{
+    for (const Region& r : spec.regions)
+        if (r.op == RegionOp::Sea && distanceTo(r.polygon, base) < 100.0)
             return true;
     return false;
 }
@@ -458,6 +484,31 @@ Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
         out.covered = true;
     }
     return out;
+}
+
+/** Sea regions' seam bands, where the land meets the sea they make: detail and erosion shape the new shore. */
+void markSeaSeams(const Work& w, const Heightfield& h, std::vector<float>& seam)
+{
+    for (const Region& reg : w.spec.regions)
+    {
+        if (reg.op != RegionOp::Sea)
+            continue;
+        const double band = std::max(w.spec.seamOf(reg), h.cell);
+        Vec2 lo(1e300), hi(-1e300);
+        for (Vec2 p : reg.polygon)
+            lo = glm::min(lo, p), hi = glm::max(hi, p);
+        lo -= Vec2(band), hi += Vec2(band);
+        const int xa = std::max(0, int(std::floor((lo.x - h.origin.x) / h.cell))), xb = std::min(h.nx - 1, int(std::ceil((hi.x - h.origin.x) / h.cell)));
+        const int za = std::max(0, int(std::floor((lo.y - h.origin.y) / h.cell))), zb = std::min(h.nz - 1, int(std::ceil((hi.y - h.origin.y) / h.cell)));
+        tbb::parallel_for(za, zb + 1, [&](int z) {
+            for (int x = xa; x <= xb; ++x)
+                if (const double sd = std::abs(signedDistance(reg.polygon, h.samplePos(x, z))); sd < band)
+                {
+                    float& v = seam[h.index(x, z)];
+                    v = std::max(v, float(1.0 - sd / band));
+                }
+        });
+    }
 }
 
 /** How a pasted region meets the ground round it: the median height step along its edge, the step left, the band it needs. */
@@ -955,7 +1006,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
             for (size_t k = 0; k < nm; ++k)
                 beforeMasks[k][i] = mk[k];
             const Vec2 b = w.inverse(q);
-            if (w.punched(b))
+            if (w.holed(b))
             {
                 hole[i] = 1;
                 continue;
@@ -1034,6 +1085,7 @@ std::shared_ptr<RemixResult> runRemix(const RemixSpec& spec, const RunOptions& o
         ++pasted;
     }
     timing["paste"] = ms();
+    markSeaSeams(w, h, seam);
     if (!regionLevels.empty())
         out.stats["regionLevels"] = regionLevels;
 

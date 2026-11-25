@@ -87,6 +87,7 @@ struct Run
     double endAt = 0.0;
     int piece = 0;
     size_t way = 0;
+    Vec2 baseStart{0.0};
     Vec2 baseEnd{0.0};
 };
 } // namespace
@@ -358,6 +359,7 @@ void moveFeatures(Work& w, Features& f)
                                 const Vec2 c = P.boundary(p, b, base.at(refs[i - 1]));
                                 run.ids.push_back(cutNode(p, c));
                                 run.startCut = true;
+                                run.baseStart = c;
                                 run.startAt = double(i) - glm::length(b - c) / std::max(1e-9, glm::length(b - base.at(refs[i - 1])));
                             }
                             else
@@ -397,6 +399,7 @@ void moveFeatures(Work& w, Features& f)
                                 const Vec2 entry = P.boundary(p, nb, b + (nb - b) * lastOut);
                                 run.ids.push_back(cutNode(p, entry));
                                 run.startCut = true;
+                                run.baseStart = entry;
                                 run.startAt = double(i) + lastOut;
                             }
                         }
@@ -445,12 +448,14 @@ void moveFeatures(Work& w, Features& f)
                 if (kind != WayKind::Road && kind != WayKind::Coastline)
                     continue;
                 size_t startEnd = SIZE_MAX, endEnd = SIZE_MAX;
-                if (r.startCut)
+                // A road running into a sea region ends at the new shore: nothing to join it to.
+                const bool road = kind == WayKind::Road;
+                if (r.startCut && !(road && w.onSeaEdge(r.baseStart)))
                 {
                     startEnd = f.ends.size();
                     f.ends.push_back({r.ids.front(), r.way, true, kind, cls});
                 }
-                if (r.endCut)
+                if (r.endCut && !(road && w.onSeaEdge(r.baseEnd)))
                 {
                     endEnd = f.ends.size();
                     f.ends.push_back({r.ids.back(), r.way, false, kind, cls});

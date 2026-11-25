@@ -74,7 +74,7 @@ Vec2 Rigid::inverse(Vec2 p) const { return rotated(p - translate - pivot, -angle
 
 const std::vector<std::string>& regionOpNames()
 {
-    static const std::vector<std::string> n = {"move", "keep", "cut", "duplicate", "delete"};
+    static const std::vector<std::string> n = {"move", "keep", "cut", "duplicate", "delete", "sea"};
     return n;
 }
 
@@ -92,7 +92,7 @@ bool parseRegionOp(std::string_view name, RegionOp* out)
 
 Rigid Region::rigid() const
 {
-    if (op == RegionOp::Keep || op == RegionOp::Delete)
+    if (stays(op))
         return {};
     return {angle, pivot ? *pivot : centroid(polygon), translate};
 }
@@ -178,7 +178,7 @@ json toJson(const RemixSpec& s)
         for (Vec2 p : r.polygon)
             poly.push_back(vecJson(p));
         json j = {{"id", r.id}, {"op", regionOpNames()[size_t(r.op)]}, {"polygon", poly}};
-        if (r.op != RegionOp::Keep && r.op != RegionOp::Delete)
+        if (!stays(r.op))
         {
             j["translate"] = vecJson(r.translate);
             j["angle"] = r.angle;
@@ -433,7 +433,7 @@ json remixSpecSchema()
               {"required", {"polygon"}},
               {"properties",
                {{"id", {{"type", "string"}}},
-                {"op", {{"enum", regionOpNames()}, {"description", "move (land around stretches), keep (held rigid), cut (lifted and placed, hole filled), duplicate, delete."}}},
+                {"op", {{"enum", regionOpNames()}, {"description", "move (land around stretches), keep (held rigid), cut (lifted and placed, hole filled), duplicate, delete, sea (land sunk to the sea floor over the seam band)."}}},
                 {"polygon", {{"type", "array"}, {"items", point}, {"description", "On the base map."}}},
                 {"translate", point},
                 {"angle", {{"type", "number"}}},

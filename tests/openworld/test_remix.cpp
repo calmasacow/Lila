@@ -379,3 +379,51 @@ TEST_CASE("remix: a pasted region is levelled to the ground round it, its seam w
     CHECK(steepestAcrossEdge(*matched) < steepestAcrossEdge(*raw));
     CHECK(toJson(specFromJson(j))["regions"][0]["matchHeight"] == false);
 }
+
+TEST_CASE("remix: a sea region sinks the land inside it to the floor over its seam band and ends the roads at the new shore")
+{
+    json j = base();
+    j["seams"]["width"] = 3000;
+    const RemixSpec land = specFromJson(j);
+    const std::shared_ptr<RemixResult> before = runRemix(land);
+    // A channel across the whole map over the ridge and its roads, open to the sea at the map edge.
+    const json poly = box(20000, -400000, 70000, 400000);
+    j["regions"] = json::array({{{"id", "bay"}, {"op", "sea"}, {"polygon", poly}}});
+    // The same grid as the land-only run, so samples compare one to one.
+    const Vec2 centre = before->after.origin + before->after.extent() * 0.5;
+    j["map"] = {{"center", {centre.x, centre.y}}, {"size", {before->after.extent().x, before->after.extent().y}}, {"cell", before->after.cell}};
+    const RemixSpec s = specFromJson(j);
+    CHECK(toJson(s)["regions"][0]["op"] == "sea");
+    CHECK_FALSE(toJson(s)["regions"][0].contains("translate"));
+    const std::shared_ptr<RemixResult> r = runRemix(s);
+    CHECK(r->errors.empty());
+    const Polygon p = {{20000, -400000}, {70000, -400000}, {70000, 400000}, {20000, 400000}};
+    int inner = 0, outer = 0;
+    REQUIRE(r->after.nx == before->after.nx);
+    REQUIRE(r->after.nz == before->after.nz);
+    for (int z = 0; z < r->after.nz; z += 3)
+        for (int x = 0; x < r->after.nx; x += 3)
+        {
+            const Vec2 q = r->after.samplePos(x, z);
+            const double sd = signedDistance(p, q);
+            if (sd > 3500.0)
+            {
+                // Past the band: sea floor, under sea level.
+                CHECK(r->after.at(x, z) < 0.0f);
+                ++inner;
+            }
+            else if (sd < -6000.0 && before->after.at(x, z) > 100.0f)
+            {
+                CHECK(r->after.at(x, z) == doctest::Approx(before->after.at(x, z)).epsilon(1e-3));
+                ++outer;
+            }
+        }
+    CHECK(inner > 20);
+    CHECK(outer > 100);
+    // Nothing is left inside, and the roads cut at its edge stop there: no reconnection through the water, nothing dangling.
+    for (const OsmDoc::Node& n : r->osm.nodes)
+        CHECK(signedDistance(p, r->geo.toLocal(n.at)) < 1.0);
+    for (const OsmDoc::Way& w : r->osm.ways)
+        CHECK(tagOf(w.tags, "remix") != "reconnect");
+    CHECK(countKind(checkRemix(s, *r), "danglingRoad") == 0);
+}

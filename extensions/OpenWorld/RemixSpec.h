@@ -49,13 +49,19 @@ enum class RegionOp : uint8_t
     Duplicate,
     /** Removed; the hole is filled as land. */
     Delete,
+    /** Turned to sea: every source fades out over the seam band inside the outline, leaving the sea floor; features inside go. */
+    Sea,
 };
 const std::vector<std::string>& regionOpNames();
 bool parseRegionOp(std::string_view name, RegionOp* out);
 /** Moves and keeps shape the warp field; cuts, duplicates and deletes paste or punch. */
 inline bool warps(RegionOp op) { return op == RegionOp::Move || op == RegionOp::Keep; }
 inline bool pastes(RegionOp op) { return op == RegionOp::Cut || op == RegionOp::Duplicate; }
-inline bool punches(RegionOp op) { return op == RegionOp::Cut || op == RegionOp::Delete; }
+inline bool punches(RegionOp op) { return op == RegionOp::Cut || op == RegionOp::Delete || op == RegionOp::Sea; }
+/** Leaves a hole filled from the land round it (sea regions sink theirs instead). */
+inline bool fills(RegionOp op) { return op == RegionOp::Cut || op == RegionOp::Delete; }
+/** Stays where it is: no move or turn. */
+inline bool stays(RegionOp op) { return op == RegionOp::Keep || op == RegionOp::Delete || op == RegionOp::Sea; }
 
 /** The steepest a pasted region's seam is left, rise over run, when it matches its height to the ground round it. */
 inline constexpr double kSeamGrade = 0.08;

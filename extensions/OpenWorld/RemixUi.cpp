@@ -160,12 +160,13 @@ void drawRemix(OverlayPainter& p, const ViewInfo& view, const Placed& r)
     {
         const Region reg = dragged(reg0);
         const Polygon target = reg.target();
-        const bool moved = !(reg.translate == Vec2(0.0) && reg.angle == 0.0) && reg.op != RegionOp::Keep && reg.op != RegionOp::Delete;
-        if (moved || reg.op == RegionOp::Delete)
+        const bool gone = reg.op == RegionOp::Delete || reg.op == RegionOp::Sea;
+        const bool moved = !(reg.translate == Vec2(0.0) && reg.angle == 0.0) && !stays(reg.op);
+        if (moved || gone)
             p.dashedPolyline(project(r, reg.polygon, view, step), 1.5f, 6.0f, kDim, true);
         if (r.p.before)
             continue;
-        if (reg.op != RegionOp::Delete)
+        if (!gone)
             p.polyline(project(r, target, view, step), 2.0f, kBright, true);
         if (pastes(reg.op) || punches(reg.op))
         {

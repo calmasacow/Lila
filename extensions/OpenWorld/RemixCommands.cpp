@@ -454,7 +454,7 @@ void registerRemix(ext::Context& ctx)
         .doc = "Add or change a remix region (the same id replaces): a polygon on the base map and what happens to it. op cut lifts "
                "it out and places it translated and turned (the hole is filled as land, both edges become seams); move carries it "
                "rigidly while the land around stretches and compresses; keep holds it rigid while pins warp the land around; "
-               "duplicate copies it; delete removes it. The polygon comes from polygon=, a closed curve, or latLon= in a source's "
+               "duplicate copies it; delete removes it (filled as land); sea sinks it to the sea floor, fading over the seam band inside the outline, to shape a coast where a source's box ends on land. The polygon comes from polygon=, a closed curve, or latLon= in a source's "
                "own latitude and longitude. remove= drops a region. Returns the region, where it ends up and the remix's stats.",
         .positionalDoc = "remix mesh or modifier (optional)",
         .flags = {{"op", "op", T::String, "cut", "What happens to it.", regionOpNames()},

@@ -26,12 +26,18 @@ struct Work
 
     explicit Work(const RemixSpec& s) : spec(s) {}
 
-    /** 0 outside a source's footprint, 1 a feather inside it. */
+    /** 0 outside a source's footprint, 1 a feather inside it; sea regions fade it out. */
     double weight(size_t s, Vec2 base) const;
+    /** 1 on land, falling to 0 across a sea region's seam band inside its outline. */
+    double dry(Vec2 base) const;
     /** The source is there and no later source wins the spot. */
     bool owns(size_t s, Vec2 base) const;
-    /** Inside a cut or delete region's polygon, so gone from the background. */
+    /** Inside a cut, delete or sea region's polygon, so gone from the background. */
     bool punched(Vec2 base) const;
+    /** Inside a cut or delete region's polygon: a hole filled from the land round it. */
+    bool holed(Vec2 base) const;
+    /** On the outline of a sea region (where a feature crossing into it was cut). */
+    bool onSeaEdge(Vec2 base) const;
     /** Inside a pasted target later than region above (-1: the background, under every paste). */
     bool covered(Vec2 out, int above) const;
 };
