@@ -59,7 +59,8 @@ struct HeapHolders
 };
 /**
  * Follows references back from up to `samples` live objects whose vtable's class contains `type` (as heapTypes names it),
- * `depth` levels: each heap block or global that points into a target is described by its class (when it starts with a
+ * `depth` levels (type "size>=N" follows blocks of N bytes or more instead, to find who owns big arrays): each heap
+ * block or global that points into a target is described by its class (when it starts with a
  * vtable), the static variable it is (when it lies in a module), or its size; untyped blocks become the next level's
  * targets. Holds every heap lock while it scans, so the whole process stops for tens of seconds on a big scene.
  */

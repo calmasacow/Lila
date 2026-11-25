@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cstdlib>
 #include <new>
 #include <unordered_map>
 #else
@@ -142,6 +143,23 @@ template <class T> struct ScratchAlloc
 };
 template <class T> using ScratchVector = std::vector<T, ScratchAlloc<T>>;
 template <class K, class V> using ScratchMap = std::unordered_map<K, V, std::hash<K>, std::equal_to<K>, ScratchAlloc<std::pair<const K, V>>>;
+
+/** module!symbol+offset for an address in a loaded module, as far as the symbols tell. */
+template <class Symbols> std::string codeAddress(Symbols& symbols, uintptr_t addr)
+{
+    std::string module = "?";
+    HMODULE m = nullptr;
+    char file[MAX_PATH] = {};
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCSTR>(addr), &m) &&
+        GetModuleFileNameA(m, file, MAX_PATH))
+    {
+        module = file;
+        module = module.substr(module.find_last_of("\\/") + 1);
+    }
+    uint64_t d = 0;
+    const std::string name = symbols.name(addr, &d);
+    return module + "!" + (name.empty() ? "?" : name) + "+" + std::to_string(d);
+}
 
 /** The first word in [lo, hi) that points into one of the sorted target ranges; 0 when none or the memory went away. */
 uintptr_t firstPointerInto(uintptr_t lo, uintptr_t hi, const std::pair<uintptr_t, uintptr_t>* targets, size_t count)
@@ -314,6 +332,16 @@ HeapHolders heapHolders(const std::string& type, size_t samples, size_t depth)
     });
     for (auto& [addr, hit] : isType)
         hit = symbols.vtable(addr).find(type) != std::string::npos ? 1 : 0;
+    // "size>=N" follows big blocks (arrays) instead of objects of a class.
+    size_t minSize = 0;
+    if (type.starts_with("size>="))
+        minSize = size_t(std::strtoull(type.c_str() + 6, nullptr, 10));
+    auto matches = [&](uintptr_t first, size_t size) {
+        if (minSize)
+            return size >= minSize;
+        auto it = isType.find(first);
+        return it != isType.end() && it->second != 0;
+    };
 
     // Writable data in the modules, where static containers keep their roots.
     std::vector<std::pair<uintptr_t, uintptr_t>> globals;
@@ -356,9 +384,8 @@ HeapHolders heapHolders(const std::string& type, size_t samples, size_t depth)
                     if (e.cbData >= (size_t(1) << 19))
                         heapRanges.push_back({uintptr_t(e.lpData), uintptr_t(e.lpData) + e.cbData});
                     const uintptr_t first = *static_cast<const uintptr_t*>(e.lpData);
-                    if (h != gScratch)
-                        if (auto it = isType.find(first); it != isType.end() && it->second)
-                            ++matching;
+                    if (h != gScratch && matches(first, e.cbData))
+                        ++matching;
                 }
         }
         std::sort(heapRanges.begin(), heapRanges.end());
@@ -381,7 +408,7 @@ HeapHolders heapHolders(const std::string& type, size_t samples, size_t depth)
         ScratchVector<std::pair<uintptr_t, uintptr_t>> targets;
         size_t seen = 0;
         forEachBusyBlock(heaps, false, [&](const uintptr_t* data, size_t size) {
-            if (auto it = isType.find(data[0]); it != isType.end() && it->second && seen++ % stride == 0 && targets.size() < samples)
+            if (matches(data[0], size) && seen++ % stride == 0 && targets.size() < samples)
                 targets.push_back({uintptr_t(data), uintptr_t(data) + size});
         });
         out.objects = targets.size();
@@ -393,9 +420,17 @@ HeapHolders heapHolders(const std::string& type, size_t samples, size_t depth)
             std::sort(targets.begin(), targets.end());
             const uintptr_t lo = targets.front().first, hi = targets.back().second;
             ScratchVector<Found> found;
+            // Arrays are held by their first element (a little past the block's start when over-aligned); any word inside a
+            // block of hundreds of megabytes would match by chance.
+            const bool nearStart = minSize > 0 && level == 0;
             auto hit = [&](uintptr_t w) {
                 if (w < lo || w >= hi)
                     return false;
+                if (nearStart)
+                {
+                    auto it = std::upper_bound(targets.begin(), targets.end(), std::make_pair(w, UINTPTR_MAX));
+                    return it != targets.begin() && w - std::prev(it)->first < 256;
+                }
                 return inRanges(targets, w);
             };
             forEachBusyBlock(heaps, false, [&](const uintptr_t* data, size_t size) {
@@ -448,7 +483,7 @@ HeapHolders heapHolders(const std::string& type, size_t samples, size_t depth)
             {
                 what = symbols.vtable(f.first);
                 if (what.empty())
-                    what = "block starting with a code pointer";
+                    what = "block starting with " + codeAddress(symbols, f.first);
                 what += " (+" + std::to_string(f.at - f.block) + ")";
             }
             else
