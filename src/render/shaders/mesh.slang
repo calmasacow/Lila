@@ -907,9 +907,24 @@ void aerialAt(GpuFrame fr, int3 cell, out float3 light, out float3 transmit)
     transmit = fr.aerial[i + 1].rgb;
 }
 
-/** The sky's haze between the camera and P: the froxels at P's place on screen and distance, trilinear. */
+/**
+ * The sky's haze between the camera and P: the froxels at P's place on screen and distance, trilinear. From above the
+ * atmosphere it is marched per pixel instead: a planet seen from orbit spans few froxels, and their edges show at the limb.
+ */
 float3 applyAerialPerspective(GpuFrame fr, float3 c, float3 eye, float3 P)
 {
+    GpuAtmosphere* a = fr.atmosphere;
+    float3 dir = normalize(P - eye);
+    float origin = atmAerialOrigin(a, dir);
+    if (origin < 0.0)
+        return c;
+    if (origin > 0.0)
+    {
+        float reach = origin + (length(P - eye) * 1e-5 - origin) * a->skyFactor.w;
+        float3 T;
+        float3 L = atmIntegrate(a, a->camera.xyz, dir, a->sunDir.xyz, origin, max(reach, origin), 12, false, T);
+        return c * T + L * a->sunRadiance.rgb;
+    }
     float4 clip = mul(pc.viewProj, float4(P, 1.0));
     if (clip.w <= 0.0)
         return c;
