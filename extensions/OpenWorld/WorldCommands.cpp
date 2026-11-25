@@ -905,6 +905,10 @@ json buildWorld(json spec, const BuildOptions& o)
             }
             json r = run("settlementBuildings", call);
             json out = r.value("buildings", r);
+            // The buildings stand on the lots: their outlines and the envelopes' footprints would only draw under them.
+            if (const std::string mod = made1.value("modifier", json()).is_string() ? made1["modifier"].get<std::string>() : std::string(); !mod.empty())
+                for (const char* attr : {"showLots", "showBuildings"})
+                    run("setAttr", {{"args", {mod + "." + attr, false}}});
             if (b.is_object() && b.contains("districts") && b["districts"].is_object() && !b["districts"].empty())
             {
                 const json names = run("settlementNames", {{"args", {mesh}}});
