@@ -13,7 +13,7 @@ import time
 MAX_LINES = 40
 
 BUILD_ERROR = re.compile(r"\berror\b|: fatal error|\bLNK\d{4}\b|^FAILED:|CMake Error|ninja: build stopped", re.I)
-TEST_DETAIL = re.compile(r"ERROR:|FATAL|REQUIRE|CHECK|TEST CASE:|SUBCASE:|Exception|\*\*\*|values:|Timeout|Failed|SEGFAULT")
+TEST_DETAIL = re.compile(r"ERROR:|FATAL|logged:|REQUIRE|CHECK|TEST CASE:|SUBCASE:|Exception|\*\*\*|values:|Timeout|Failed|SEGFAULT")
 TEST_SUMMARY = re.compile(r"tests passed|The following tests FAILED|^\s*\d+ - .*\((Failed|Timeout|SEGFAULT|Exception|Not Run)|Total Test time")
 
 

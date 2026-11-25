@@ -404,6 +404,16 @@ SliderField::SliderField(QWidget* parent) : QDoubleSpinBox(parent)
     connect(this, &QDoubleSpinBox::valueChanged, this, qOverload<>(&QWidget::update));
 }
 
+void SliderField::setFillRange(double lo, double hi)
+{
+    mFill = std::pair{lo, hi};
+    update();
+}
+
+double SliderField::fillMin() const { return mFill ? std::max(mFill->first, minimum()) : minimum(); }
+
+double SliderField::fillMax() const { return mFill ? std::min(mFill->second, maximum()) : maximum(); }
+
 void SliderField::paintEvent(QPaintEvent* e)
 {
     {
@@ -414,8 +424,8 @@ void SliderField::paintEvent(QPaintEvent* e)
         clip.addRoundedRect(r, 4, 4);
         p.setClipPath(clip);
         p.fillRect(rect(), underMouse() ? themeColor("hover") : themeColor("input"));
-        const double span = maximum() - minimum();
-        const double f = span > 0 ? std::clamp((value() - minimum()) / span, 0.0, 1.0) : 0.0;
+        const double span = fillMax() - fillMin();
+        const double f = span > 0 ? std::clamp((value() - fillMin()) / span, 0.0, 1.0) : 0.0;
         p.fillRect(QRectF(0, 0, width() * f, height()), themeColor("sliderFill"));
     }
     QDoubleSpinBox::paintEvent(e);

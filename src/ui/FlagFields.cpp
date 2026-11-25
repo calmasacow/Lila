@@ -107,9 +107,12 @@ QDoubleSpinBox* flagNumber(const opt::Field& f, int decimals, double lo, double 
     QDoubleSpinBox* spin = nullptr;
     if (flagBounded(f))
     {
-        spin = new controls::SliderField(parent);
-        spin->setDecimals(decimals);
-        spin->setRange(f.min, f.max);
+        auto* slider = new controls::SliderField(parent);
+        slider->setDecimals(decimals);
+        slider->setRange(f.min, f.max);
+        if (!std::isnan(f.softMin) || !std::isnan(f.softMax))
+            slider->setFillRange(std::isnan(f.softMin) ? f.min : f.softMin, std::isnan(f.softMax) ? f.max : f.softMax);
+        spin = slider;
     }
     else
         spin = controls::valueField(lo, hi, decimals, {}, parent);

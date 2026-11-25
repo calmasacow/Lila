@@ -138,7 +138,7 @@ Graph zone(int passes, double start = 0.0)
     return g;
 }
 
-float centre(const image::Image& img) { return texel(img, img.width / 2, img.height / 2)[0]; }
+float centreTexel(const image::Image& img) { return texel(img, img.width / 2, img.height / 2)[0]; }
 } // namespace
 
 TEST_CASE("repeat: the body runs Iterations times, each pass reading the last")
@@ -147,10 +147,10 @@ TEST_CASE("repeat: the body runs Iterations times, each pass reading the last")
     add(g, "Add", "math", {{"operation", "add"}, {"b", 0.1}});
     textest::link(g, "In.gray", "Add.a");
     textest::link(g, "Add.out", "Out.gray");
-    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(0.5f).epsilon(1e-4));
+    CHECK(centreTexel(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(0.5f).epsilon(1e-4));
 
     g.node("In")->values["iterations"] = 0;
-    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(0.0f));
+    CHECK(centreTexel(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(0.0f));
 
     // The iteration index: 0 + 1 + 2 + 3.
     Graph h = zone(4);
@@ -158,7 +158,7 @@ TEST_CASE("repeat: the body runs Iterations times, each pass reading the last")
     textest::link(h, "In.gray", "Add.a");
     textest::link(h, "In.iteration", "Add.b");
     textest::link(h, "Add.out", "Out.gray");
-    CHECK(centre(eval(h, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(6.0f));
+    CHECK(centreTexel(eval(h, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(6.0f));
 }
 
 TEST_CASE("repeat: an unlinked lane carries through; nodes outside the body run once")
@@ -217,7 +217,7 @@ TEST_CASE("repeat: zones nest, and passes stop at the limit")
     textest::link(g, "In2.gray", "Add.a");
     textest::link(g, "Add.out", "Out2.gray");
     textest::link(g, "Out2.gray", "Out.gray");
-    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(6.0f));
+    CHECK(centreTexel(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(6.0f));
 
     Graph big = zone(500);
     add(big, "Add", "math", {{"operation", "add"}, {"b", 1.0}});
@@ -226,7 +226,7 @@ TEST_CASE("repeat: zones nest, and passes stop at the limit")
     const Plan p = plan(big, "Out", "gray", 8, PortType::Gray);
     REQUIRE_MESSAGE(p.error.empty(), p.error);
     CHECK_FALSE(p.warnings.empty());
-    CHECK(centre(evaluateCpu(p).outputs.at("out")) == doctest::Approx(float(kMaxRepeatIterations)));
+    CHECK(centreTexel(evaluateCpu(p).outputs.at("out")) == doctest::Approx(float(kMaxRepeatIterations)));
 
     Graph orphan;
     add(orphan, "Out", kRepeatOutputType);
@@ -263,9 +263,9 @@ Graph sum(const std::string& expression, double a = 0.25)
 
 TEST_CASE("expressions: read other nodes, the graph's inputs and time, as values only")
 {
-    CHECK(centre(eval(sum("Src.b * 2"), "N", "out", 8, PortType::Gray)) == doctest::Approx(0.85f));
-    CHECK(centre(eval(sum("= clamp(Src.b * 10, 0, 1) + N.a"), "N", "out", 8, PortType::Gray)) == doctest::Approx(1.5f));
-    CHECK(centre(eval(sum("0.5 if Src.b > 0.2 else 0.1"), "N", "out", 8, PortType::Gray)) == doctest::Approx(0.75f));
+    CHECK(centreTexel(eval(sum("Src.b * 2"), "N", "out", 8, PortType::Gray)) == doctest::Approx(0.85f));
+    CHECK(centreTexel(eval(sum("= clamp(Src.b * 10, 0, 1) + N.a"), "N", "out", 8, PortType::Gray)) == doctest::Approx(1.5f));
+    CHECK(centreTexel(eval(sum("0.5 if Src.b > 0.2 else 0.1"), "N", "out", 8, PortType::Gray)) == doctest::Approx(0.75f));
 
     Graph in = sum("input.wear * 2");
     GraphInput wear;
@@ -273,17 +273,17 @@ TEST_CASE("expressions: read other nodes, the graph's inputs and time, as values
     wear.param = true;
     wear.defaultValue = 0.125;
     in.inputs.push_back(wear);
-    CHECK(centre(eval(in, "N", "out", 8, PortType::Gray)) == doctest::Approx(0.5f));
+    CHECK(centreTexel(eval(in, "N", "out", 8, PortType::Gray)) == doctest::Approx(0.5f));
 
     Graph t = sum("time * 0.25");
     CHECK(sequence::animated(t));
     CHECK_FALSE(sequence::animated(sum("Src.b")));
     t.time = 2.0;
-    CHECK(centre(eval(t, "N", "out", 8, PortType::Gray)) == doctest::Approx(0.75f));
+    CHECK(centreTexel(eval(t, "N", "out", 8, PortType::Gray)) == doctest::Approx(0.75f));
     Graph later = t;
     later.time = 3.0;
     CHECK(plan(t, "N", "out", 8, PortType::Gray).structureHash == plan(later, "N", "out", 8, PortType::Gray).structureHash);
-    CHECK(centre(eval(later, "N", "out", 8, PortType::Gray)) == doctest::Approx(1.0f));
+    CHECK(centreTexel(eval(later, "N", "out", 8, PortType::Gray)) == doctest::Approx(1.0f));
 }
 
 TEST_CASE("expressions: a broken one warns and keeps the stored value; int params round")
@@ -294,7 +294,7 @@ TEST_CASE("expressions: a broken one warns and keeps the stored value; int param
         const Plan p = plan(sum(bad), "N", "out", 8, PortType::Gray);
         REQUIRE_MESSAGE(p.error.empty(), p.error);
         CHECK_FALSE(p.warnings.empty());
-        CHECK(centre(evaluateCpu(p).outputs.at("out")) == doctest::Approx(0.25f));
+        CHECK(centreTexel(evaluateCpu(p).outputs.at("out")) == doctest::Approx(0.25f));
     }
 
     Graph g = zone(1);
@@ -302,7 +302,7 @@ TEST_CASE("expressions: a broken one warns and keeps the stored value; int param
     add(g, "Add", "math", {{"operation", "add"}, {"b", 1.0}});
     textest::link(g, "In.gray", "Add.a");
     textest::link(g, "Add.out", "Out.gray");
-    CHECK(centre(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(3.0f));
+    CHECK(centreTexel(eval(g, "Out", "gray", 8, PortType::Gray)) == doctest::Approx(3.0f));
 }
 
 TEST_CASE("expressions: texSetExpression sets, shows and removes one")
