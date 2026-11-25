@@ -2,11 +2,15 @@ lila_module(lila_tex Scene
     BrushPresets.cpp
     Commands.cpp
     Evaluate.cpp
+    Expressions.cpp
     Generators.cpp
     Graph.cpp
     Natives.cpp
     GraphFiles.cpp
     GraphGroups.cpp
+    GraphParams.cpp
+    GraphProfile.cpp
+    GraphProfile.h
     Interop.cpp
     Interop.h
     LayerCommands.cpp
@@ -37,6 +41,7 @@ lila_module(lila_tex Scene
     SlangRt.cpp
     SmartMaterial.cpp
     TextImage.cpp
+    TextRaster.cpp
     TextureSet.cpp
     Types.cpp)
 
@@ -47,7 +52,7 @@ set(_lila_ptex Ptex::Ptex_dynamic)
 if(NOT TARGET Ptex::Ptex_dynamic)
     set(_lila_ptex Ptex::Ptex_static)
 endif()
-target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd ${_lila_ptex} lila_uv lila_curve)
+target_link_libraries(lila_tex PUBLIC lila_scene lila_geo PRIVATE slang::slang zstd::libzstd ${_lila_ptex} lila_uv lila_curve lila_rigmath)
 
 # The CPU evaluator JIT-compiles through slang-llvm, which Slang loads at runtime (so app-local deployment misses it),
 # along with its standard modules. Copy them beside the binaries.
