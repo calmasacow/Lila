@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <fstream>
@@ -198,6 +199,43 @@ std::string redactedUrl(const std::string& url)
 const char* const kOpenTopographyKeyHelp =
     "OpenTopography needs your API key (free: sign in at https://portal.opentopography.org, then My Account > Request API Key); "
     "pass apiKey='...' with saveKey=True once and later fetches use the saved key";
+
+std::string apiKeyProblem(const std::string& key)
+{
+    std::string lower;
+    for (char c : key)
+        if (!std::isspace(static_cast<unsigned char>(c)))
+            lower += char(std::tolower(static_cast<unsigned char>(c)));
+    if (lower.empty())
+        return "it is empty";
+    if (lower.find_first_of("<>") != std::string::npos)
+        return "it contains < or >";
+    if (lower.find("your") != std::string::npos)
+        return "it contains \"your\"";
+    if (lower.find_first_not_of(".*") == std::string::npos)
+        return "it is only dots or stars";
+    return {};
+}
+
+std::string chooseApiKey(const std::string& passed, const std::string& saved, std::string* note)
+{
+    if (!passed.empty())
+    {
+        if (const std::string why = apiKeyProblem(passed); !why.empty())
+            throw std::runtime_error("apiKey looks like a placeholder, not an OpenTopography key (" + why +
+                                     "); nothing was downloaded or saved. Get your key at https://portal.opentopography.org (My Account > Request API Key)");
+        return passed;
+    }
+    if (saved.empty())
+        return {};
+    if (const std::string why = apiKeyProblem(saved); !why.empty())
+    {
+        if (note)
+            *note = "the saved OpenTopography key is a placeholder (" + why + "), so it was ignored; pass your real key as apiKey= with saveKey=True to replace it";
+        return {};
+    }
+    return saved;
+}
 
 std::string overpassQuery(const GeoBox& b)
 {

@@ -68,6 +68,15 @@ std::string openTopographyUrl(const GeoBox& b, const std::string& dataset, const
 std::string redactedUrl(const std::string& url);
 /** What to tell someone who has no OpenTopography API key: where to get one and how to pass and save it. */
 extern const char* const kOpenTopographyKeyHelp;
+
+/** Why key can't be a real OpenTopography key (empty, or a placeholder such as "<your key>", "YOUR_KEY" or "..."), else empty. */
+std::string apiKeyProblem(const std::string& key);
+
+/**
+ * The OpenTopography key a command uses: the passed one (a placeholder throws, before anything downloads), else the
+ * saved one (a saved placeholder counts as no key and *note says so). Save only a passed key that got through here.
+ */
+std::string chooseApiKey(const std::string& passed, const std::string& saved, std::string* note);
 /** Overpass query for everything terrainImportOsm reads, inside the box (JSON output). */
 std::string overpassQuery(const GeoBox& b);
 /** The Overpass API endpoint taking overpassQuery as data=. */

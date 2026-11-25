@@ -714,11 +714,17 @@ json runBathymetry(const Args& a)
             return {{"estimate", est}, {"dataset", r.dataset}, {"consentNeeded", est["megabytes"].get<double>() > kConsentMB}};
         if (est["megabytes"].get<double>() > kConsentMB && !a.get<bool>("consent", false))
             throw CommandError(std::format("{}: the GEBCO download for this area is about {:.0f} MB; pass consent=True to fetch it", cmd, est["megabytes"].get<double>()));
-        r.apiKey = a.get<std::string>("apiKey", "");
-        if (!r.apiKey.empty() && a.get<bool>("saveKey", false))
+        std::string keyNote;
+        try
+        {
+            r.apiKey = chooseApiKey(a.get<std::string>("apiKey", ""), PrefStore::get().value<std::string>(kPrefsFile, kKeyPref, std::string()), &keyNote);
+        }
+        catch (const std::exception& e)
+        {
+            throw CommandError(cmd + ": " + e.what());
+        }
+        if (a.has("apiKey") && !r.apiKey.empty() && a.get<bool>("saveKey", false))
             PrefStore::get().set(kPrefsFile, kKeyPref, r.apiKey);
-        if (r.apiKey.empty())
-            r.apiKey = PrefStore::get().value<std::string>(kPrefsFile, kKeyPref, std::string());
         FetchResult res;
         try
         {
@@ -726,7 +732,7 @@ json runBathymetry(const Args& a)
         }
         catch (const std::exception& e)
         {
-            throw CommandError(cmd + ": " + e.what());
+            throw CommandError(cmd + ": " + e.what() + (r.apiKey.empty() && !keyNote.empty() ? "; " + keyNote : std::string()));
         }
         // file= with fetch names where the downloaded grid goes.
         const fs::path out = !file.empty() ? resolved(file)

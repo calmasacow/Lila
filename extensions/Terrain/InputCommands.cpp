@@ -838,11 +838,17 @@ json runImportDem(const Args& a)
         r.dataset = a.get<std::string>("dataset", "COP30");
         r.cache = cacheDir;
         r.offline = offline;
-        r.apiKey = a.get<std::string>("apiKey", "");
-        if (!r.apiKey.empty() && a.get<bool>("saveKey", false))
+        std::string keyNote;
+        try
+        {
+            r.apiKey = chooseApiKey(a.get<std::string>("apiKey", ""), PrefStore::get().value<std::string>(kPrefsFile, kKeyPref, std::string()), &keyNote);
+        }
+        catch (const std::exception& e)
+        {
+            throw CommandError(cmd + ": " + e.what());
+        }
+        if (a.has("apiKey") && !r.apiKey.empty() && a.get<bool>("saveKey", false))
             PrefStore::get().set(kPrefsFile, kKeyPref, r.apiKey);
-        if (r.apiKey.empty())
-            r.apiKey = PrefStore::get().value<std::string>(kPrefsFile, kKeyPref, std::string());
         FetchResult res;
         try
         {
@@ -850,7 +856,7 @@ json runImportDem(const Args& a)
         }
         catch (const std::exception& e)
         {
-            throw CommandError(cmd + ": " + e.what());
+            throw CommandError(cmd + ": " + e.what() + (r.apiKey.empty() && !keyNote.empty() ? "; " + keyNote : std::string()));
         }
         notes = res.notes;
         for (const std::string& n : notes)
