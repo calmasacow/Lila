@@ -241,6 +241,35 @@ TEST_CASE("world: worldBuild on a tiny world, read back, rebuilt the same, mappe
     CHECK_THROWS(run("worldBuild", {{"spec", spec}}));
 }
 
+TEST_CASE("world: the spec's own material layers are laid last, over the finished ground")
+{
+    loadWorldPackages();
+    run("newScene");
+    json spec = tinySpec();
+    spec.erase("zones");
+    spec["check"] = false;
+    spec["terrain"]["materials"] = json::parse(R"({"layers": [{"name": "ground", "color": [0.1, 0.1, 0.05]},
+        {"name": "steep", "color": [0.2, 0.16, 0.12], "when": {"slope": {"range": [30, null], "fade": 5}}}]})");
+    const json r = run("worldBuild", {{"spec", spec}});
+    INFO(failedSteps(r));
+    std::vector<std::string> steps;
+    for (const json& s : r["steps"])
+    {
+        CHECK_MESSAGE(s.value("ok", false), s.dump().substr(0, 300));
+        steps.push_back(s["step"].get<std::string>());
+    }
+    const auto at = [&](const std::string& name) { return std::find(steps.begin(), steps.end(), name) - steps.begin(); };
+    REQUIRE(at("terrain.materials") < std::ptrdiff_t(steps.size()));
+    CHECK(at("terrain.materials") > at("sites.grade"));
+    CHECK(at("terrain.materials") > at("buildings.sites"));
+    for (const json& n : r["notes"])
+        CHECK(n.get<std::string>().find("default layers") == std::string::npos);
+    const json layers = run("terrainMaterialRules", {{"args", {r["built"]["terrain"]}}, {"query", true}})["layers"];
+    REQUIRE(layers.size() == 2);
+    CHECK(layers[0]["name"] == "ground");
+    CHECK(layers[1]["name"] == "steep");
+}
+
 TEST_CASE("world: worldCheck catches each issue kind, reports to Validation, and worldMap writes the overview")
 {
     loadWorldPackages();

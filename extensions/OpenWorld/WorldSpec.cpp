@@ -111,7 +111,8 @@ const json& worldSpecSchema()
               {"remix", obj("A World Remix spec (lila://schema/remix-spec). Its terrain is the world's; its remixed OSM feeds settlements with osm: 'remix'.")},
               {"terrain", obj("A terrain spec (lila://schema/terrain-spec). With a remix, its steps (water, coast, biomes, groundCover, roads, stamps, ...) "
                               "run on the remix terrain and source is ignored; without one it makes the terrain. Coast and water live here: "
-                              "water {sea, rivers, lakes} and coast {bathymetry, masks, mangroves, reservoirs, channels, routes, lanes, airstrips, stash}.")},
+                              "water {sea, rivers, lakes} and coast {bathymetry, masks, mangroves, reservoirs, channels, routes, lanes, airstrips, stash}. "
+                              "materials (terrainMaterialRules flags) are laid last, over the finished ground; without them defaults fitted to it.")},
               {"settlements", {{"type", "array"}, {"items", settlement}}},
               {"buildings", obj("Buildings across the world.",
                                 {{"edits", obj("{group name: {building id: edit}}: Buildings edits (style, floors, bays, palette, enterable, ...) by "

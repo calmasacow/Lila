@@ -673,6 +673,7 @@ json buildWorld(json spec, const BuildOptions& o)
         if (!terrain.empty() && spec.contains("terrain") && spec["terrain"].is_object() && !skipped("terrain"))
             st.run("terrain", [&] {
                 json t = spec["terrain"];
+                t.erase("materials");
                 t["name"] = g.find(terrain)->name();
                 t["source"] = {{"type", "existing"}, {"mesh", terrain}};
                 if (!t.contains("check"))
@@ -688,6 +689,7 @@ json buildWorld(json spec, const BuildOptions& o)
         json r;
         if (st.run("terrain", [&] {
                 json t = spec["terrain"];
+                t.erase("materials");
                 if (!t.contains("name"))
                     t["name"] = name;
                 if (!t.contains("check"))
@@ -948,16 +950,19 @@ json buildWorld(json spec, const BuildOptions& o)
                 return brief;
             });
 
-    // Material layers fitted to the finished ground when the terrain spec names none: without them the terrain and its
-    // seabed draw in one flat white.
-    if (const json ts = spec.value("terrain", json::object()); !terrain.empty() && !skipped("terrain") && !(ts.is_object() && ts.contains("materials")))
+    // Material layers last, over the finished ground (site pads, roads, settlements): the spec's own, else defaults fitted
+    // to the terrain; without them the terrain and its seabed draw in one flat white.
+    if (const json ts = spec.value("terrain", json::object()); !terrain.empty() && !skipped("terrain"))
         st.run("terrain.materials", [&] {
-            json call = {{"args", {terrain}}, {"layers", "default"}};
+            const bool own = ts.is_object() && ts.contains("materials") && ts["materials"].is_object();
+            json call = own ? ts["materials"] : json{{"layers", "default"}};
+            call["args"] = {terrain};
             const json sea = ts.is_object() ? ts.value("water", json::object()).value("sea", json::object()) : json::object();
-            if (sea.contains("level") && sea["level"].is_number())
+            if (!own && sea.contains("level") && sea["level"].is_number())
                 call["seaLevel"] = sea["level"];
             json r = run("terrainMaterialRules", call);
-            notes.push_back("terrain materials: default layers fitted to the terrain (terrain.materials in the spec sets your own)");
+            if (!own)
+                notes.push_back("terrain materials: default layers fitted to the terrain (terrain.materials in the spec sets your own)");
             return r;
         });
 
