@@ -1176,6 +1176,97 @@ TEST_CASE("instance colours: geometry nodes instances send their colour as custo
     fs::remove_all(dir);
 }
 
+TEST_CASE("instance colours: a second tone follows the colour as custom data 4-7, declared slots after it")
+{
+    setupPlacementTest();
+    if (!ops::find("gnAddNode"))
+    {
+        gn::registerTypes();
+        gn::registerCommands();
+    }
+    buildScatter();
+    // Only the second tone is stored: the colour's four stay (zero) so the second tone is always at 4.
+    const std::string store = gnAdd("Boulders", "StoreNamedAttribute");
+    gnSet("Boulders", store + ".dataType", "color");
+    gnSet("Boulders", store + ".domain", "instance");
+    gnSet("Boulders", store + ".name", "color2");
+    gnSet("Boulders", store + ".value", json::array({0.1, 0.2, 0.3, 1.0}));
+    run("gnDisconnect", {{"args", {"Boulders", "GroupOutput.geometry"}}});
+    gnLink("Boulders", "JoinGeometry.geometry", store + ".geometry");
+    gnLink("Boulders", store + ".geometry", "GroupOutput.geometry");
+    run("unrealCustomData", {{"args", {"Ground"}}, {"data", {"random"}}});
+
+    scene::Graph& g = scene::Graph::current();
+    json plan = placementPlan(g, {g.find("Ground")->id()}, PlacementOptions{});
+    REQUIRE(plan["groups"].size() == 3);
+    const json& part = plan["groups"][1];
+    CHECK(part["customData"] ==
+          json::parse(R"([{"name":"color","slot":0,"width":4},{"name":"color2","slot":4,"width":4},{"name":"random","slot":8,"width":1}])"));
+    CHECK(part["instanceColor"] == true);
+    CHECK(part["instanceColor2"] == true);
+    const json& c = part["placements"][0]["customData"];
+    REQUIRE(c.size() == 9);
+    for (int k = 0; k < 4; ++k)
+        CHECK(c[k].get<double>() == 0.0);
+    CHECK(c[4].get<double>() == doctest::Approx(0.1));
+    CHECK(c[5].get<double>() == doctest::Approx(0.2));
+    CHECK(c[6].get<double>() == doctest::Approx(0.3));
+    CHECK(c[7].get<double>() == doctest::Approx(1.0));
+
+    // Both tones: the colour keeps 0-3.
+    const std::string store1 = gnAdd("Boulders", "StoreNamedAttribute");
+    gnSet("Boulders", store1 + ".dataType", "color");
+    gnSet("Boulders", store1 + ".domain", "instance");
+    gnSet("Boulders", store1 + ".name", "color");
+    gnSet("Boulders", store1 + ".value", json::array({0.9, 0.8, 0.7, 0.5}));
+    run("gnDisconnect", {{"args", {"Boulders", "GroupOutput.geometry"}}});
+    gnLink("Boulders", store + ".geometry", store1 + ".geometry");
+    gnLink("Boulders", store1 + ".geometry", "GroupOutput.geometry");
+    plan = placementPlan(g, {g.find("Ground")->id()}, PlacementOptions{});
+    const json& both = plan["groups"][1]["placements"][0]["customData"];
+    REQUIRE(both.size() == 9);
+    CHECK(both[0].get<double>() == doctest::Approx(0.9));
+    CHECK(both[3].get<double>() == doctest::Approx(0.5));
+    CHECK(both[4].get<double>() == doctest::Approx(0.1));
+
+    fs::path dir = fs::temp_directory_path() / "lila_link_instance_color2";
+    fs::remove_all(dir);
+    PrefStore::get().set("unreal", "/cacheDir", dir.generic_string());
+    registerExporter("fbx:instanceSource", [](const std::vector<scene::NodeId>&, const fs::path& path, std::string*) {
+        std::ofstream(path) << "fbx";
+        return true;
+    });
+    for (const bool feature : {true, false})
+    {
+        FakeServer server([feature](const json& req) -> std::optional<json> {
+            const std::string m = req["method"];
+            if (m == "hello")
+                return FakeServer::reply(req, {{"project", "TestGame"},
+                                               {"features", feature ? json{"progress", "placements", "instanceColor", "instanceColor2"}
+                                                                    : json{"progress", "placements", "instanceColor"}}});
+            if (m == "importAsset")
+                return FakeServer::reply(req, {{"assets", {req["params"]["contentPath"]}}, {"warnings", json::array()}, {"errors", json::array()}});
+            if (m == "placeInstances")
+                return FakeServer::reply(req, {{"spawned", req["params"]["placements"].size()}, {"updated", 0}, {"removed", 0}});
+            if (m == "removePlacements")
+                return FakeServer::reply(req, {{"removed", 0}});
+            if (m == "instanceColorMaterials")
+                return FakeServer::reply(req, {{"assigned", req["params"]["assets"].size()}});
+            return std::nullopt;
+        });
+        Link::ConnectOptions o;
+        o.port = server.port();
+        Link::get().connect(o);
+        json done = run("unrealPlaceInstances", {{"args", {"Ground"}}, {"wait", true}, {"resend", true}});
+        REQUIRE(done.contains("instanceColor"));
+        CHECK(done["instanceColor"]["secondToneGroups"] == 2);
+        CHECK(done["instanceColor"].contains("secondToneNote") == !feature);
+        Link::get().disconnect();
+    }
+    unregisterExporter("fbx:instanceSource");
+    fs::remove_all(dir);
+}
+
 TEST_CASE("instanced groups: the holder takes the components every member shares, each instance keeps its own")
 {
     setupPlacementTest();

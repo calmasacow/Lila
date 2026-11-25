@@ -37,7 +37,7 @@
 
 namespace
 {
-constexpr int32 Version = 4;
+constexpr int32 Version = 5;
 const TCHAR* VersionTag = TEXT("Lila Building v");
 const TCHAR* InstanceFolder = TEXT("/Game/LilaLink/Buildings");
 
@@ -80,8 +80,9 @@ UMaterialExpressionCustom* Custom(LilaLink::FFunctionGraph& G, const FString& De
 }
 
 /**
- * MF_LilaBuildingVariation: the building's painted colour (the instance colour Lila sent with shared module meshes, else
- * vertex colour RGB: one colour per building and part as Lila's palette picked it) multiplied into a grey base such as
+ * MF_LilaBuildingVariation: the building's painted colour (the instance colour Lila sent with shared module meshes, or
+ * with SecondTone 1 its second tone for the trim and frame slots of two-tone modules, else vertex colour RGB: one colour
+ * per building and part as Lila's palette picked it) multiplied into a grey base such as
  * the LilaBuilding trim sheet's albedo, and dirt (vertex alpha)
  * laid over it, broken up by smooth world-space noise (two octaves at DirtScale). Drop it into your own material between the base colour
  * and the output; the generated M_LilaBuilding does exactly that.
@@ -90,14 +91,22 @@ void BuildVariation(UMaterialFunction* Function)
 {
 	LilaLink::FFunctionGraph G(Function, TEXT("Lila Building Variation: per-building painted colour and dirt from Lila's Buildings, over your "
 											  "base colour or the LilaBuilding trim sheet. The colour is the instance colour Lila sent (custom data "
-											  "0-3, on shared module meshes), else the vertex colour (RGB colour); dirt is vertex alpha."));
+											  "0-3, on shared module meshes; the second tone in 4-7 with SecondTone 1), else the vertex colour (RGB colour); dirt is vertex alpha."));
 	UMaterialExpression* Base = G.VectorInput(TEXT("BaseColor"), FLinearColor(0.8f, 0.8f, 0.8f), TEXT("Surface"),
 		TEXT("The surface's own colour, grey where the palette should show (a trim sheet's albedo)."));
 	UMaterialExpression* BaseRough = G.ScalarInput(TEXT("BaseRoughness"), 0.85f, TEXT("Surface"), TEXT("The surface's own roughness."));
+	UMaterialExpression* SecondTone = G.ScalarInput(TEXT("SecondTone"), 0.0f, TEXT("Palette"),
+		TEXT("1 paints with the instance's second tone (custom data 4-7): the trim and frames of two-tone modules."));
+	UMaterialExpression* SecondToneBase = G.VectorInput(TEXT("SecondToneBase"), FLinearColor(0.85f, 0.85f, 0.82f), TEXT("Palette"),
+		TEXT("With SecondTone 1, the colour of instances that carry no second tone (window frames keeping their own colour)."));
 	auto* VC = G.New<UMaterialExpressionVertexColor>(-1600);
-	// Modules are shared meshes across buildings: their instance colour (custom data 0-3) is the building's palette.
+	// Modules are shared meshes across buildings: their instance colour (custom data 0-3, or the second tone 4-7) is the
+	// building's palette.
+	UMaterialExpression* Tone = LilaLink::InstanceToneData(G, -1800, SecondTone);
 	UMaterialExpression* VCDefault = Custom(G, TEXT("vertex colour"), TEXT("return float4(lerp(VC, I.rgb, saturate(I.a)), VA);"), CMOT_Float4,
-		{Wire(TEXT("VC"), VC), Wire(TEXT("VA"), VC, TEXT("A")), Wire(TEXT("I"), LilaLink::InstanceColorData(G, -1800))}, -1400);
+		{Wire(TEXT("VC"), VC), Wire(TEXT("VA"), VC, TEXT("A")), Wire(TEXT("I"), Tone)}, -1400);
+	UMaterialExpression* Untoned = Custom(G, TEXT("untoned"), TEXT("return T > 0.5 ? 1.0 - saturate(I.a) : 0.0;"), CMOT_Float1,
+		{Wire(TEXT("I"), Tone), Wire(TEXT("T"), SecondTone)}, -1400);
 	UMaterialExpression* Palette = G.Input(TEXT("BuildingPalette"), FunctionInput_Vector4, VCDefault,
 		TEXT("Painted colour (RGB, linear) and dirt (A): the instance colour Lila sent, else vertex colour, when unconnected."));
 	UMaterialExpression* Strength = G.ScalarInput(TEXT("PaletteStrength"), 1.0f, TEXT("Palette"), TEXT("0 keeps the base colour, 1 paints it fully."));
@@ -106,7 +115,7 @@ void BuildVariation(UMaterialFunction* Function)
 	UMaterialExpression* DirtScale = G.ScalarInput(TEXT("DirtScale"), 150.0f, TEXT("Dirt"), TEXT("World size of the dirt breakup, cm."));
 	auto* World = G.New<UMaterialExpressionWorldPosition>(-1600);
 	UMaterialExpression* Result = Custom(G, TEXT("palette and dirt"),
-		TEXT("float3 painted = lerp(Base, Base * P.rgb * 1.25, saturate(S));\n"
+		TEXT("float3 painted = lerp(lerp(Base, Base * P.rgb * 1.25, saturate(S)), Own, U);\n"
 			 "float3 q = W / max(Scale, 1.0);\n"
 			 "float n = 0.0;\n"
 			 "for (int o = 0; o < 2; ++o)\n"
@@ -124,7 +133,7 @@ void BuildVariation(UMaterialFunction* Function)
 			 "return float4(lerp(painted, Dirt, d), d);"),
 		CMOT_Float4,
 		{Wire(TEXT("Base"), Base), Wire(TEXT("P"), Palette), Wire(TEXT("S"), Strength), Wire(TEXT("Dirt"), DirtColor), Wire(TEXT("A"), DirtAmount),
-			Wire(TEXT("Scale"), DirtScale), Wire(TEXT("W"), World)});
+			Wire(TEXT("Scale"), DirtScale), Wire(TEXT("W"), World), Wire(TEXT("Own"), SecondToneBase), Wire(TEXT("U"), Untoned)});
 	UMaterialExpression* Color = Custom(G, TEXT("colour"), TEXT("return R.rgb;"), CMOT_Float3, {Wire(TEXT("R"), Result)}, -200);
 	UMaterialExpression* Rough = Custom(G, TEXT("roughness"), TEXT("return saturate(Rough + R.a * 0.1);"), CMOT_Float1,
 		{Wire(TEXT("R"), Result), Wire(TEXT("Rough"), BaseRough)}, -200);
@@ -163,18 +172,32 @@ void Master(UMaterial* Material,UMaterialFunction* Function, TArray<FString>& Ou
 	Material->MarkPackageDirty();
 }
 
-/** A Buildings module slot that takes its building's palette colour: bld_render, bld_trim, bld_roof (Interchange may number them). */
+/** Slot is Name, or Name numbered by Interchange (Name_1). */
+bool IsSlotNamed(const FString& Slot, const FString& Name)
+{
+	return Slot.Equals(Name, ESearchCase::IgnoreCase) || (Slot.StartsWith(Name, ESearchCase::IgnoreCase) && Slot.Mid(Name.Len()).StartsWith(TEXT("_")));
+}
+
+/** A Buildings module slot that takes its building's palette colour: bld_render, bld_trim, bld_roof. */
 bool IsModulePaletteSlot(const FString& Slot)
 {
 	for (const TCHAR* Name : {TEXT("bld_render"), TEXT("bld_trim"), TEXT("bld_roof")})
 	{
-		if (Slot.Equals(Name, ESearchCase::IgnoreCase) || (Slot.StartsWith(Name, ESearchCase::IgnoreCase) && Slot.Mid(FCString::Strlen(Name)).StartsWith(TEXT("_"))))
+		if (IsSlotNamed(Slot, Name))
 		{
 			return true;
 		}
 	}
 	return false;
 }
+
+/** A module slot whose Lila material has Second Tone on, with that material's own colour. */
+struct FSecondToneSlot
+{
+	FString Name;
+	FLinearColor Color = FLinearColor(0.85f, 0.85f, 0.82f);
+	UMaterialInterface* Instance = nullptr;
+};
 
 UMaterialInstanceConstant* InstanceFor(const FString& Name, UMaterialInterface* Parent, TArray<FString>& OutCreated, TArray<FString>& OutWarnings)
 {
@@ -201,9 +224,11 @@ UMaterialInstanceConstant* InstanceFor(const FString& Name, UMaterialInterface* 
 }
 
 /**
- * buildingMaterials {regenerate?, instances?: [{name, scalars {name: v}, vectors {name: [r, g, b]}}]}: builds
- * MF_LilaBuildingVariation and M_LilaBuilding when missing or older, then one instance per entry. Returns {function,
- * material, instances, created, warnings}.
+ * buildingMaterials {regenerate?, instances?: [{name, scalars {name: v}, vectors {name: [r, g, b]}}], assets?,
+ * secondToneSlots?: [{name, color: [r, g, b]}]}: builds MF_LilaBuildingVariation and M_LilaBuilding when missing or
+ * older, then one instance per entry. Module slots of the assets take MI_Bld_Modules, the second-tone slots (Lila
+ * materials with Second Tone on; bld_trim and bld_frame when not given) MI_Bld_Tone_<slot>, which reads the second tone
+ * and shows color where an instance carries none. Returns {function, material, instances, created, warnings}.
  */
 TSharedPtr<FJsonValue> BuildingMaterials(const TSharedPtr<FJsonObject>& Params, FString& OutError)
 {
@@ -271,7 +296,31 @@ TSharedPtr<FJsonValue> BuildingMaterials(const TSharedPtr<FJsonObject>& Params, 
 	}
 	// Shell assets: slots named Bld_<style>_<part><k> take their style's instance, Bld_c<hex> (a given colour) the material.
 	// Module slots bld_render, bld_trim and bld_roof take MI_Bld_Modules: modules are shared across styles and get their
-	// building's palette colour per instance (custom data), which the variation function reads.
+	// building's palette colour per instance (custom data), which the variation function reads. Second-tone slots take
+	// MI_Bld_Tone_<slot>, the same with SecondTone 1 and the slot's own colour for instances without a second tone.
+	TArray<FSecondToneSlot> SecondTone;
+	SecondTone.Add({TEXT("bld_trim"), FLinearColor(0.85f, 0.83f, 0.78f)});
+	SecondTone.Add({TEXT("bld_frame")});
+	const TArray<TSharedPtr<FJsonValue>>* SecondToneList = nullptr;
+	if (Params->TryGetArrayField(TEXT("secondToneSlots"), SecondToneList))
+	{
+		SecondTone.Reset();
+		for (const TSharedPtr<FJsonValue>& V : *SecondToneList)
+		{
+			const TSharedPtr<FJsonObject>* In = nullptr;
+			if (!V->TryGetObject(In))
+			{
+				continue;
+			}
+			FSecondToneSlot& S = SecondTone.AddDefaulted_GetRef();
+			S.Name = (*In)->GetStringField(TEXT("name"));
+			const TArray<TSharedPtr<FJsonValue>>* C = nullptr;
+			if ((*In)->TryGetArrayField(TEXT("color"), C) && C->Num() >= 3)
+			{
+				S.Color = FLinearColor(float((*C)[0]->AsNumber()), float((*C)[1]->AsNumber()), float((*C)[2]->AsNumber()));
+			}
+		}
+	}
 	UMaterialInterface* ModuleInstance = nullptr;
 	const TArray<TSharedPtr<FJsonValue>>* Assets = nullptr;
 	if (Params->TryGetArrayField(TEXT("assets"), Assets))
@@ -289,15 +338,27 @@ TSharedPtr<FJsonValue> BuildingMaterials(const TSharedPtr<FJsonObject>& Params, 
 			for (int32 K = 0; K < Slots.Num(); ++K)
 			{
 				const FString Slot = Slots[K].MaterialSlotName.ToString();
-				if (IsModulePaletteSlot(Slot))
+				FSecondToneSlot* Second = SecondTone.FindByPredicate([&Slot](const FSecondToneSlot& S) { return IsSlotNamed(Slot, S.Name); });
+				if (Second || IsModulePaletteSlot(Slot))
 				{
-					if (!ModuleInstance)
+					UMaterialInterface*& Use = Second ? Second->Instance : ModuleInstance;
+					if (!Use)
 					{
-						ModuleInstance = InstanceFor(TEXT("MI_Bld_Modules"), Pair.Material, Created, Warnings);
+						UMaterialInstanceConstant* MI = InstanceFor(Second ? TEXT("MI_Bld_Tone_") + Second->Name : FString(TEXT("MI_Bld_Modules")), Pair.Material, Created, Warnings);
+						if (MI)
+						{
+							UMaterialEditingLibrary::SetMaterialInstanceScalarParameterValue(MI, TEXT("SecondTone"), Second ? 1.0f : 0.0f);
+							if (Second)
+							{
+								UMaterialEditingLibrary::SetMaterialInstanceVectorParameterValue(MI, TEXT("SecondToneBase"), Second->Color);
+							}
+							UMaterialEditingLibrary::UpdateMaterialInstance(MI);
+						}
+						Use = MI;
 					}
-					if (ModuleInstance && Slots[K].MaterialInterface != ModuleInstance)
+					if (Use && Slots[K].MaterialInterface != Use)
 					{
-						Slots[K].MaterialInterface = ModuleInstance;
+						Slots[K].MaterialInterface = Use;
 						bChanged = true;
 					}
 					continue;

@@ -310,20 +310,32 @@ int attrWidth(const scene::Node& n, const std::string& name)
 /**
  * The group's custom data slots: the declared names, each as wide as its attribute, in order from slot 0. Instances that
  * carry an instance colour put it first, undeclared, as four floats (linear rgb, amount): what MF_LilaInstanceColor reads.
+ * A second tone (color2) follows in 4-7, with the colour's four kept (zero) when only the second tone is set, so the
+ * functions read fixed indices: colour 0-3, second tone 4-7, declared names after. A declared colour makes the layout
+ * the user's: the second tone then goes only where it is declared too.
  */
 std::vector<DataSlot> dataSlots(const scene::Node& source, const gn::Instances* inst)
 {
     std::vector<DataSlot> out;
     int slot = 0;
     const std::vector<std::string> names = customDataNames(source);
-    if (inst && inst->attrs.has(gn::kInstanceColorAttr) && std::ranges::find(names, gn::kInstanceColorAttr) == names.end())
+    auto undeclared = [&](const char* name) { return inst && inst->attrs.has(name) && std::ranges::find(names, name) == names.end(); };
+    const bool colorDeclared = std::ranges::find(names, gn::kInstanceColorAttr) != names.end();
+    const bool tone2 = !colorDeclared && undeclared(gn::kInstanceColor2Attr);
+    if (tone2 || undeclared(gn::kInstanceColorAttr))
     {
         out.push_back({gn::kInstanceColorAttr, 0, 4});
         slot = 4;
     }
+    if (tone2)
+    {
+        out.push_back({gn::kInstanceColor2Attr, slot, 4});
+        slot += 4;
+    }
     for (const std::string& name : names)
     {
-        int width = name == kRandomData ? 1 : name == gn::kInstanceColorAttr && inst && inst->attrs.has(name) ? 4 : 0;
+        const bool tone = name == gn::kInstanceColorAttr || name == gn::kInstanceColor2Attr;
+        int width = name == kRandomData ? 1 : tone && inst && inst->attrs.has(name) ? 4 : 0;
         if (const geo::Attribute* a = inst && width == 0 ? inst->attrs.find(name) : nullptr)
             width = geo::attrTypeComponents(a->type());
         if (width == 0)
@@ -398,9 +410,9 @@ json customData(scene::Graph& g, const std::vector<DataSlot>& slots, scene::Node
     {
         if (d.name == kRandomData)
             out.push_back(stableRandom(key));
-        else if (d.name == gn::kInstanceColorAttr && inst && inst->attrs.has(d.name))
+        else if ((d.name == gn::kInstanceColorAttr || d.name == gn::kInstanceColor2Attr) && inst)
         {
-            const glm::vec4 c = gn::instanceColor(*inst, top);
+            const glm::vec4 c = d.name == gn::kInstanceColorAttr ? gn::instanceColor(*inst, top) : gn::instanceColor2(*inst, top);
             for (int k = 0; k < 4; ++k)
                 out.push_back(c[k]);
         }
@@ -479,12 +491,13 @@ bool hasFeature(const char* feature)
 void sendInstanceColorMaterials(RpcClient& client, json& plan)
 {
     json assets = json::array();
-    int groups = 0;
+    int groups = 0, toned = 0;
     for (const json& grp : plan["groups"])
     {
         if (!grp.value("instanceColor", false))
             continue;
         ++groups;
+        toned += grp.value("instanceColor2", false) ? 1 : 0;
         const json& imported = grp.value("import", json());
         if (!grp.value("instanceColorMaterial", false) || !imported.is_object() || imported.contains("error") || imported.value("shared", false))
             continue;
@@ -496,7 +509,16 @@ void sendInstanceColorMaterials(RpcClient& client, json& plan)
     if (groups == 0)
         return;
     json& out = plan["instanceColor"];
-    out = {{"groups", groups}, {"customData", "slots 0-3: linear rgb, amount"}};
+    out = {{"groups", groups}, {"customData", toned ? "slots 0-3: linear rgb, amount; 4-7: second tone" : "slots 0-3: linear rgb, amount"}};
+    if (toned)
+    {
+        out["secondToneGroups"] = toned;
+        if (!hasFeature("instanceColor2"))
+        {
+            out["secondToneNote"] = "this LilaLink has no instanceColor2: second tones went as custom data 4-7 but its materials read only the colour; update LilaLink";
+            log::warn("unrealPlaceInstances: {}", out["secondToneNote"].get<std::string>());
+        }
+    }
     if (!hasFeature("instanceColor"))
     {
         out["note"] = "this LilaLink has no instanceColor: colours went as custom data, no M_LilaInstanceColor assigned; update LilaLink";
@@ -777,12 +799,18 @@ json slotRow(const slots::Slot& s, const slots::Resolved& r, const std::string& 
 }
 
 /**
- * Marks a group whose placements carry the instance colour as custom data slots 0-3; a mesh with no Lila material gets
- * M_LilaInstanceColor in Unreal (instanceColorMaterial) so the colour shows without a material of the user's.
+ * Marks a group whose placements carry the instance colour as custom data slots 0-3 (and the second tone as 4-7 when
+ * tone2); a mesh with no Lila material gets M_LilaInstanceColor in Unreal (instanceColorMaterial) so the colour shows
+ * without a material of the user's.
  */
-void markInstanceColor(scene::Graph& g, json& group, const geo::Mesh& mesh)
+void markInstanceColor(scene::Graph& g, json& group, const geo::Mesh& mesh, bool tone2)
 {
     group["customData"] = json::array({{{"name", gn::kInstanceColorAttr}, {"slot", 0}, {"width", 4}}});
+    if (tone2)
+    {
+        group["customData"].push_back({{"name", gn::kInstanceColor2Attr}, {"slot", 4}, {"width", 4}});
+        group["instanceColor2"] = true;
+    }
     group["instanceColor"] = true;
     group["instanceColorMaterial"] = meshMaterials(g, mesh).empty();
 }
@@ -839,9 +867,13 @@ void addSlotSetGroups(scene::Graph& g, scene::NodeId set, const std::string& set
     const std::string prefix = setKey + ":slot:";
     std::map<std::string, json> classes, unrealMeshes, visuals;
     std::map<std::string, scene::MeshPtr> visualMesh;
-    bool colored = false;
+    bool colored = false, colored2 = false;
     for (const slots::Slot& s : slots::slotsOf(g, set))
-        colored = colored || slots::dataColor(slots::resolve(s).payload.data).has_value();
+    {
+        const json& data = slots::resolve(s).payload.data;
+        colored2 = colored2 || slots::dataColor(data, gn::kInstanceColor2Attr).has_value();
+        colored = colored || colored2 || slots::dataColor(data).has_value();
+    }
     for (const slots::Slot& s : slots::slotsOf(g, set))
     {
         const slots::Resolved r = slots::resolve(s);
@@ -853,6 +885,12 @@ void addSlotSetGroups(scene::Graph& g, scene::NodeId set, const std::string& set
         {
             const glm::vec4 c = slots::dataColor(r.payload.data).value_or(glm::vec4(0.0f));
             p["customData"] = {c.r, c.g, c.b, c.a};
+            if (colored2)
+            {
+                const glm::vec4 c2 = slots::dataColor(r.payload.data, gn::kInstanceColor2Attr).value_or(glm::vec4(0.0f));
+                for (int k = 0; k < 4; ++k)
+                    p["customData"].push_back(c2[k]);
+            }
         }
         std::string group;
         if (!r.payload.unrealClass.empty())
@@ -897,7 +935,7 @@ void addSlotSetGroups(scene::Graph& g, scene::NodeId set, const std::string& set
                           {"gnMesh", meshes.size()},
                           {"placements", std::move(list)}});
         if (colored)
-            markInstanceColor(g, groups.back(), *visualMesh[vkey]);
+            markInstanceColor(g, groups.back(), *visualMesh[vkey], colored2);
         meshes.push_back(visualMesh[vkey]);
         keep.push_back(key);
     }
@@ -1114,6 +1152,8 @@ json buildPlan(scene::Graph& g, const std::vector<scene::NodeId>& roots, const P
             {
                 pg["instanceColor"] = true;
                 pg["instanceColorMaterial"] = meshMaterials(g, *part.mesh).empty();
+                if (gnSlots.size() > 1 && gnSlots[1].name == gn::kInstanceColor2Attr)
+                    pg["instanceColor2"] = true;
             }
             pg["gnMesh"] = meshes.size();
             meshes.push_back(part.mesh);

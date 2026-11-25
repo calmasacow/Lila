@@ -20,7 +20,7 @@
 namespace
 {
 /** Raised when the graph changes; an older function is rebuilt on the next call. */
-constexpr int32 Version = 1;
+constexpr int32 Version = 2;
 const TCHAR* VersionTag = TEXT("Lila Instance Color v");
 const TCHAR* FunctionName = TEXT("MF_LilaInstanceColor");
 const TCHAR* MaterialName = TEXT("M_LilaInstanceColor");
@@ -42,17 +42,20 @@ int32 VersionOf(const UMaterialFunction* Function)
 /**
  * MF_LilaInstanceColor: the colour each instance carries from Lila (container liveries, building palettes, any slot or
  * geometry nodes instance with a colour) over your base colour: replaced where the amount is 1, or multiplied in with
- * InstanceColorMultiply 1 (keeps a texture's detail). Drop it between your base colour and the output.
+ * InstanceColorMultiply 1 (keeps a texture's detail). SecondTone 1 takes the instance's second tone instead (the
+ * material Lila marks Second Tone: trim and frames of two-tone pieces). Drop it between your base colour and the output.
  */
 void BuildFunction(UMaterialFunction* Function)
 {
-	LilaLink::FFunctionGraph G(Function, TEXT("Lila Instance Color: the colour Lila sends per instance (custom data 0-3: linear RGB, amount) "
-											  "over your base colour."));
+	LilaLink::FFunctionGraph G(Function, TEXT("Lila Instance Color: the colour Lila sends per instance (custom data 0-3: linear RGB, amount; "
+											  "the second tone in 4-7) over your base colour."));
 	UMaterialExpression* Base = G.VectorInput(TEXT("BaseColor"), FLinearColor(0.5f, 0.5f, 0.5f), TEXT("Surface"), TEXT("Your base colour."));
 	UMaterialExpression* Multiply = G.ScalarInput(TEXT("InstanceColorMultiply"), 0.0f, TEXT("Instance Color"),
 		TEXT("0 replaces the base colour with the instance colour, 1 multiplies it in (for textured bases)."));
 	UMaterialExpression* Strength = G.ScalarInput(TEXT("InstanceColorStrength"), 1.0f, TEXT("Instance Color"), TEXT("Scales the amount Lila sent."));
-	UMaterialExpression* Data = LilaLink::InstanceColorData(G, -1200);
+	UMaterialExpression* SecondTone = G.ScalarInput(TEXT("SecondTone"), 0.0f, TEXT("Instance Color"),
+		TEXT("1 takes the second tone (custom data 4-7), for the second part of a two-tone piece (Lila's Second Tone material)."));
+	UMaterialExpression* Data = LilaLink::InstanceToneData(G, -1200, SecondTone);
 	auto* Mix = G.New<UMaterialExpressionCustom>(-400);
 	Mix->Description = FString::Printf(TEXT("%s%d mix"), VersionTag, Version);
 	Mix->Code = TEXT("float a = saturate(C.a * S);\n"
@@ -69,7 +72,7 @@ void BuildFunction(UMaterialFunction* Function)
 	UMaterialEditingLibrary::ConnectMaterialExpressions(Multiply, FString(), Mix, TEXT("M"));
 	UMaterialEditingLibrary::ConnectMaterialExpressions(Strength, FString(), Mix, TEXT("S"));
 	G.Output(Mix, TEXT("BaseColor"), TEXT("The base colour with the instance colour over it."));
-	G.Output(Data, TEXT("InstanceColor"), TEXT("The instance colour as sent: RGB linear, A the amount (0 where none was sent)."));
+	G.Output(Data, TEXT("InstanceColor"), TEXT("The instance colour (or second tone) as sent: RGB linear, A the amount (0 where none was sent)."));
 	G.Finish();
 }
 
@@ -156,25 +159,49 @@ TSharedPtr<FJsonValue> InstanceColorMaterials(const TSharedPtr<FJsonObject>& Par
 }
 } // namespace
 
-UMaterialExpression* LilaLink::InstanceColorData(FFunctionGraph& G, int32 X)
+UMaterialExpression* LilaLink::InstanceColorData(FFunctionGraph& G, int32 X, bool bSecondTone)
 {
+	const int32 First = bSecondTone ? 4 : 0;
 	// Actors carry the colour as custom primitive data, which the parameter reads; instances read their own custom data and
 	// fall back to it outside an instanced component.
 	auto* Primitive = G.New<UMaterialExpressionVectorParameter>(X - 400);
-	Primitive->ParameterName = TEXT("LilaInstanceColor");
+	Primitive->ParameterName = bSecondTone ? TEXT("LilaInstanceColor2") : TEXT("LilaInstanceColor");
 	Primitive->DefaultValue = FLinearColor(0.0f, 0.0f, 0.0f, 0.0f);
 	Primitive->bUseCustomPrimitiveData = true;
-	Primitive->PrimitiveDataIndex = 0;
+	Primitive->PrimitiveDataIndex = First;
 	auto* Rgb = G.New<UMaterialExpressionPerInstanceCustomData3Vector>(X - 200);
-	Rgb->DataIndex = 0;
+	Rgb->DataIndex = First;
 	Rgb->DefaultValue.Connect(0, Primitive);
 	auto* Amount = G.New<UMaterialExpressionPerInstanceCustomData>(X - 200);
-	Amount->DataIndex = 3;
+	Amount->DataIndex = First + 3;
 	Amount->DefaultValue.Connect(4, Primitive);
 	auto* Rgba = G.New<UMaterialExpressionAppendVector>(X);
 	Rgba->A.Connect(0, Rgb);
 	Rgba->B.Connect(0, Amount);
 	return Rgba;
+}
+
+UMaterialExpression* LilaLink::InstanceToneData(FFunctionGraph& G, int32 X, UMaterialExpression* SecondTone)
+{
+	UMaterialExpression* First = InstanceColorData(G, X - 200);
+	if (!SecondTone)
+	{
+		return First;
+	}
+	UMaterialExpression* Second = InstanceColorData(G, X - 200, true);
+	auto* Pick = G.New<UMaterialExpressionCustom>(X);
+	Pick->Description = TEXT("Lila instance tone");
+	Pick->Code = TEXT("return T > 0.5 ? C2 : C1;");
+	Pick->OutputType = CMOT_Float4;
+	Pick->Inputs.Reset();
+	for (const TCHAR* Name : {TEXT("C1"), TEXT("C2"), TEXT("T")})
+	{
+		Pick->Inputs.AddDefaulted_GetRef().InputName = FName(Name);
+	}
+	UMaterialEditingLibrary::ConnectMaterialExpressions(First, FString(), Pick, TEXT("C1"));
+	UMaterialEditingLibrary::ConnectMaterialExpressions(Second, FString(), Pick, TEXT("C2"));
+	UMaterialEditingLibrary::ConnectMaterialExpressions(SecondTone, FString(), Pick, TEXT("T"));
+	return Pick;
 }
 
 void LilaLink::AddInstanceColorMethods(TMap<FString, FLilaLinkMethod>& Methods)

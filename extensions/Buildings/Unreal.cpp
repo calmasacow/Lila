@@ -13,6 +13,7 @@
 #include <lila/Extension.h>
 #include <lila/Graph.h>
 #include <lila/GeometryNodes.h>
+#include <lila/Mesh.h>
 #include <lila/Node.h>
 #include <lila/Profile.h>
 #include <lila/UnrealLink.h>
@@ -27,6 +28,24 @@ namespace buildings
 {
 namespace
 {
+/**
+ * The module material slots whose Lila material has Second Tone on (bld_trim, bld_frame as shipped), each with its own
+ * colour: in Unreal they take MI_Bld_Tone_<slot>, which reads the second tone (custom data 4-7) instead of the colour and
+ * shows the material's own colour on instances that carry none.
+ */
+json secondToneSlots(scene::Graph& g)
+{
+    json out = json::array();
+    for (scene::Node* m : scene::materials::all(g))
+    {
+        const std::string& name = m->name();
+        const int tone2 = m->type().attrIndex("instanceColor2");
+        if (name.starts_with("bld_") && !name.starts_with("bld_int_") && tone2 >= 0 && m->as<bool>(tone2))
+            out.push_back({{"name", name}, {"color", link::materialInputs(g, name).value("baseColor", json::array({0.85, 0.85, 0.82}))}});
+    }
+    return out;
+}
+
 /** The material instance for a style's shells. */
 json styleInstance(const Style& s)
 {
@@ -191,7 +210,8 @@ void registerUnreal(ext::Context& ctx)
             for (const std::string& path : paths)
                 assets.push_back(path);
             auto client = link::Link::get().client();
-            link::RpcResult r = client->call("buildingMaterials", {{"instances", instances}, {"assets", assets}}, link::importCallOptions());
+            link::RpcResult r = client->call("buildingMaterials", {{"instances", instances}, {"assets", assets}, {"secondToneSlots", secondToneSlots(g)}},
+                                             link::importCallOptions());
             if (!r.ok)
                 throw CommandError("buildingSend: buildingMaterials: " + r.error);
             out["materials"] = r.result;
