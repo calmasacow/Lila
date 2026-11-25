@@ -39,11 +39,11 @@ namespace
 {
 using sites::P2;
 using sites::Ring;
-using T = ArgType;
+using AT = ArgType;
 using scene::Graph;
 using scene::Node;
 
-constexpr const char* kSpecAttr = "siteSpec";
+constexpr const char* kSiteSpecAttr = "siteSpec";
 constexpr const char* kGroundAttr = "siteGround";
 /** Terrain layers for the site's stamps and its roads (a group can't hold a stamp and a road layer of one name). */
 constexpr const char* kLayer = "Sites";
@@ -57,7 +57,7 @@ struct SiteRef
     json ground = json::object();
 };
 
-bool isSiteModifier(const Node& n) { return gn::isGnModifier(n) && n.type().attrIndex(kSpecAttr) >= 0; }
+bool isSiteModifier(const Node& n) { return gn::isGnModifier(n) && n.type().attrIndex(kSiteSpecAttr) >= 0; }
 
 json attrText(const std::string& plug)
 {
@@ -80,7 +80,7 @@ SiteRef readSite(Graph& g, Node& mod, const std::string& cmd)
         r.group = grp->name();
     try
     {
-        r.spec = sites::specFromJson(attrText(r.modifier + "." + kSpecAttr));
+        r.spec = sites::specFromJson(attrText(r.modifier + "." + kSiteSpecAttr));
         r.ground = attrText(r.modifier + "." + kGroundAttr);
     }
     catch (const std::exception& e)
@@ -153,7 +153,7 @@ SiteRef findSite(const std::string& name, const std::string& cmd)
 
 std::string siteArg(const Args& a) { return a.positional.empty() || !a.positional[0].is_string() ? std::string() : a.positional[0].get<std::string>(); }
 
-void storeSpec(const SiteRef& r, const sites::Spec& s) { ops::execute("setAttr", {{"args", {r.modifier + "." + kSpecAttr, s.toJson().dump()}}}); }
+void storeSpec(const SiteRef& r, const sites::Spec& s) { ops::execute("setAttr", {{"args", {r.modifier + "." + kSiteSpecAttr, s.toJson().dump()}}}); }
 
 /**
  * Folds a move or turn of the site mesh's own transform into the spec's origin and heading and puts the transform back
@@ -662,10 +662,10 @@ std::vector<FlagDef> paramFlags()
     {
         FlagDef f;
         f.name = p.name;
-        f.type = p.type == sites::Param::Type::Int     ? T::Int
-                 : p.type == sites::Param::Type::Float ? T::Float
-                 : p.type == sites::Param::Type::Bool  ? T::Bool
-                                                       : T::String;
+        f.type = p.type == sites::Param::Type::Int     ? AT::Int
+                 : p.type == sites::Param::Type::Float ? AT::Float
+                 : p.type == sites::Param::Type::Bool  ? AT::Bool
+                                                       : AT::String;
         f.defaultValue = nullptr;
         f.shownDefault = p.def;
         std::string kinds;
@@ -744,7 +744,7 @@ std::string nameFor(const sites::Spec& s, const std::string& given, const std::s
     throw CommandError(cmd + ": every name tried matched a real name in the scene; give one");
 }
 
-std::string uniqueId(const std::string& kind)
+std::string newSiteId(const std::string& kind)
 {
     std::set<std::string> taken;
     for (const SiteRef& r : allSites("siteCreate"))
@@ -1226,18 +1226,18 @@ void registerSites(ext::Context& ctx)
     for (const sites::Kind& k : sites::kinds())
         kindIds.push_back(k.id);
     std::vector<FlagDef> createFlags = {
-        {"kind", "k", T::String, "port", "What to build: " + sites::kindList() + ".", kindIds},
-        {"name", "n", T::String, nullptr, "The site's fictional name; left out, one is generated (never a real name)."},
-        {"id", "id", T::String, nullptr, "Stable id: slot ids and terrain ids start with site:<id>. Default <kind><n>."},
-        {"culture", "cu", T::String, "mexican", "Naming culture for every name in the site.", names::cultures()},
-        {"seed", "sd", T::Int, int64_t(0), "Variation seed."},
-        nodeFlag({"terrain", "tr", T::String, nullptr, "Terrain it stands on and grades; default the selected or only terrain, '' for none."}, "mesh"),
-        {"at", "at", T::List, nullptr, "Where its origin stands, [x, z] cm; default the selected object's position, else the origin."},
-        {"heading", "hd", T::Float, 0.0, "Turn about up, degrees: its x axis (quay, runway, farm road) turned this far from world x."},
-        {"ground", "gr", T::Bool, true, "Grade the terrain: pads, quays, roads, canals, the airstrip."},
-        {"waterLevel", "wl", T::Float, nullptr, "Water level its quays, docks and ships sit at, cm; default the terrain's sea level, else 0."},
-        {"params", "pm", T::Any, nullptr, "Kit settings as one object, as the flags below take them."},
-        {"buildings", "bl", T::Bool, false, "Build its buildings with the Buildings generator (styles, slots, edits) instead of greybox massing."},
+        {"kind", "k", AT::String, "port", "What to build: " + sites::kindList() + ".", kindIds},
+        {"name", "n", AT::String, nullptr, "The site's fictional name; left out, one is generated (never a real name)."},
+        {"id", "id", AT::String, nullptr, "Stable id: slot ids and terrain ids start with site:<id>. Default <kind><n>."},
+        {"culture", "cu", AT::String, "mexican", "Naming culture for every name in the site.", names::cultures()},
+        {"seed", "sd", AT::Int, int64_t(0), "Variation seed."},
+        nodeFlag({"terrain", "tr", AT::String, nullptr, "Terrain it stands on and grades; default the selected or only terrain, '' for none."}, "mesh"),
+        {"at", "at", AT::List, nullptr, "Where its origin stands, [x, z] cm; default the selected object's position, else the origin."},
+        {"heading", "hd", AT::Float, 0.0, "Turn about up, degrees: its x axis (quay, runway, farm road) turned this far from world x."},
+        {"ground", "gr", AT::Bool, true, "Grade the terrain: pads, quays, roads, canals, the airstrip."},
+        {"waterLevel", "wl", AT::Float, nullptr, "Water level its quays, docks and ships sit at, cm; default the terrain's sea level, else 0."},
+        {"params", "pm", AT::Any, nullptr, "Kit settings as one object, as the flags below take them."},
+        {"buildings", "bl", AT::Bool, false, "Build its buildings with the Buildings generator (styles, slots, edits) instead of greybox massing."},
     };
     for (FlagDef& f : paramFlags())
         createFlags.push_back(std::move(f));
@@ -1268,7 +1268,7 @@ void registerSites(ext::Context& ctx)
 
             sites::Spec s;
             s.kind = kind->id;
-            s.id = a.has("id") ? a.get<std::string>("id") : uniqueId(kind->id);
+            s.id = a.has("id") ? a.get<std::string>("id") : newSiteId(kind->id);
             for (const SiteRef& r : allSites(cmd))
                 if (r.spec.id == s.id)
                     throw CommandError(cmd + ": a site with id " + s.id + " exists (" + r.mesh + ")");
@@ -1333,13 +1333,13 @@ void registerSites(ext::Context& ctx)
             const json gspec = {
                 {"name", group},
                 {"description", "A site kit (" + kind->label + "): its layout from the siteSpec input on the terrain Ground names."},
-                {"inputs", json::array({{{"name", kSpecAttr}, {"type", "string"}, {"default", s.toJson().dump()}, {"panel", "Site"}, {"description", "The site spec, JSON."}},
+                {"inputs", json::array({{{"name", kSiteSpecAttr}, {"type", "string"}, {"default", s.toJson().dump()}, {"panel", "Site"}, {"description", "The site spec, JSON."}},
                                         {{"name", kGroundAttr}, {"type", "string"}, {"default", "{}"}, {"panel", "Site"},
                                          {"description", "What the site put on its terrain (ids by command), for siteGround and siteRemove."}},
                                         {{"name", "massing"}, {"type", "bool"}, {"default", true}, {"panel", "Site"}, {"description", "Draw the buildings as greybox massing."}}})},
                 {"nodes", json::array({{{"name", "Ground"}, {"type", "ObjectInfo"}, {"props", {{"object", terrain}, {"transformSpace", "instance"}}}},
                                        {{"name", "Site"}, {"type", "SiteKit"}}})},
-                {"links", json::array({std::string("GroupInput.") + kSpecAttr + " -> Site.spec", "GroupInput.massing -> Site.massing", "Ground.geometry -> Site.ground",
+                {"links", json::array({std::string("GroupInput.") + kSiteSpecAttr + " -> Site.spec", "GroupInput.massing -> Site.massing", "Ground.geometry -> Site.ground",
                                        "Site.geometry -> GroupOutput.geometry"})}};
             ops::execute("gnBuildGroup", {{"args", {gspec}}, {"replace", false}});
             ops::execute("gnApply", {{"args", {host, group}}});
@@ -1374,15 +1374,15 @@ void registerSites(ext::Context& ctx)
     });
 
     std::vector<FlagDef> editFlags = {
-        {"name", "n", T::String, nullptr, "A new fictional name."},
-        {"culture", "cu", T::String, nullptr, "Naming culture.", names::cultures()},
-        {"seed", "sd", T::Int, nullptr, "Variation seed."},
-        nodeFlag({"terrain", "tr", T::String, nullptr, "Move it onto another terrain ('' for none); its grading moves with it."}, "mesh"),
-        {"at", "at", T::List, nullptr, "New origin [x, z], cm."},
-        {"heading", "hd", T::Float, nullptr, "New turn, degrees."},
-        {"waterLevel", "wl", T::Float, nullptr, "Water level, cm."},
-        {"ground", "gr", T::Bool, true, "Re-grade the terrain after the edit."},
-        {"params", "pm", T::Any, nullptr, "Kit settings as one object."},
+        {"name", "n", AT::String, nullptr, "A new fictional name."},
+        {"culture", "cu", AT::String, nullptr, "Naming culture.", names::cultures()},
+        {"seed", "sd", AT::Int, nullptr, "Variation seed."},
+        nodeFlag({"terrain", "tr", AT::String, nullptr, "Move it onto another terrain ('' for none); its grading moves with it."}, "mesh"),
+        {"at", "at", AT::List, nullptr, "New origin [x, z], cm."},
+        {"heading", "hd", AT::Float, nullptr, "New turn, degrees."},
+        {"waterLevel", "wl", AT::Float, nullptr, "Water level, cm."},
+        {"ground", "gr", AT::Bool, true, "Re-grade the terrain after the edit."},
+        {"params", "pm", AT::Any, nullptr, "Kit settings as one object."},
     };
     for (FlagDef& f : paramFlags())
         editFlags.push_back(std::move(f));
@@ -1467,9 +1467,9 @@ void registerSites(ext::Context& ctx)
         .doc = "Grade the terrain under a site again from its spec (after editing the terrain, or with ground=False edits), or take "
                "everything the site put on the terrain off it with remove=True. Lays a culvert where one of its pads stands across a stream. Returns what was sent and removed and the culverts laid.",
         .positionalDoc = "site mesh, modifier or id",
-        .flags = {{"remove", "rm", T::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."},
-                  {"sites", "s", T::List, nullptr, "Several sites graded in one terrain change (ids or meshes); every site with all=True."},
-                  {"all", "a", T::Bool, false, "Every site in the scene, in one terrain change."}},
+        .flags = {{"remove", "rm", AT::Bool, false, "Take the site's stamps, roads, canals and airstrip off the terrain."},
+                  {"sites", "s", AT::List, nullptr, "Several sites graded in one terrain change (ids or meshes); every site with all=True."},
+                  {"all", "a", AT::Bool, false, "Every site in the scene, in one terrain change."}},
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteGround";
             refreshAvoid();
@@ -1530,7 +1530,7 @@ void registerSites(ext::Context& ctx)
                "slot id, type and position), its envelopes in world space with style tags, stats, notes and whether the terrain grading is "
                "stale.",
         .positionalDoc = "site mesh, modifier or id",
-        .flags = {{"slots", "sl", T::Bool, false, "List every slot."}},
+        .flags = {{"slots", "sl", AT::Bool, false, "List every slot."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             refreshAvoid();
@@ -1547,7 +1547,7 @@ void registerSites(ext::Context& ctx)
                "mansion, civic, warehouse, packingPlant, portShed, adobe, ruralShack, church, mausoleum, hangar, lighthouse, "
                "terminal) and a stable id under site:<id>. This is what a building generator builds from; until one does they draw as "
                "greybox massing. sites= limits it to some sites.",
-        .flags = {{"sites", "s", T::List, nullptr, "Site ids or meshes; default every site."}},
+        .flags = {{"sites", "s", AT::List, nullptr, "Site ids or meshes; default every site."}},
         .undoable = false,
         .run = [](const Args& a) -> json {
             const std::string cmd = "siteEnvelopes";
@@ -1583,7 +1583,7 @@ void registerSites(ext::Context& ctx)
                "the layout changes. remove=True turns massing back on and drops those buildings. Returns the group, building count, "
                "styles and slots.",
         .positionalDoc = "sites (ids or meshes; default every site)",
-        .flags = {{"remove", "rm", T::Bool, false, "Back to greybox massing."}},
+        .flags = {{"remove", "rm", AT::Bool, false, "Back to greybox massing."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const std::string cmd = "siteBuildings";

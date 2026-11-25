@@ -4,6 +4,7 @@
 #include "Remix.h"
 
 #include "Fetch.h"
+#include "OpenWorldTest.h"
 
 #include <doctest/doctest.h>
 
@@ -17,8 +18,7 @@ using json = nlohmann::json;
 
 namespace
 {
-std::string data(const char* f) { return std::string(LILA_TEST_OPENWORLD_DATA) + "/" + f; }
-
+using owtest::data;
 json coast() { return {{"id", "coast"}, {"dem", data("coast.asc")}, {"osm", data("coast.json")}}; }
 json inland(Vec2 at) { return {{"id", "inland"}, {"dem", data("inland.asc")}, {"osm", data("inland.json")}, {"at", {at.x, at.y}}}; }
 

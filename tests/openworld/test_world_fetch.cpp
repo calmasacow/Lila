@@ -14,6 +14,7 @@
 #include "extensions/ExtensionManager.h"
 #include "io/SceneFile.h"
 #include "ops/Command.h"
+#include "OpenWorldTest.h"
 
 #include <doctest/doctest.h>
 
@@ -26,6 +27,7 @@ using namespace openworld::world;
 
 namespace
 {
+using owtest::run;
 constexpr const char* kKey = "SECRETKEY12345";
 
 fs::path scratch(const std::string& name)
@@ -164,19 +166,6 @@ std::string message(const std::function<void()>& fn)
     return {};
 }
 
-void loadPackages()
-{
-    if (!lila::ops::find("terrainCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_TERRAIN_PACKAGE) == "Terrain");
-    if (!lila::ops::find("settlementCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_SETTLEMENT_PACKAGE) == "Settlement");
-    if (!lila::ops::find("buildingCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_BUILDINGS_PACKAGE) == "Buildings");
-    if (!lila::ops::find("worldBuild"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_OPENWORLD_PACKAGE) == "OpenWorld");
-}
-
-json run(const char* cmd, json call = json::object()) { return lila::ops::execute(cmd, call); }
 } // namespace
 
 TEST_CASE("world fetch: the plan lists each missing file with its size, skips present ones, and paths are the spec's own")
@@ -375,7 +364,7 @@ TEST_CASE("world fetch: downloads go straight to the spec's paths, retry, resume
 
 TEST_CASE("world fetch: commands estimate and refuse without a terrain or the network; GEBCO from a bbox alone")
 {
-    loadPackages();
+    owtest::loadPackages(true, true);
     run("newScene");
     const fs::path dir = scratch("commands");
     const fs::path withBathy = writeSpec(dir);
@@ -617,7 +606,7 @@ TEST_CASE("world fetch: the estimate and the run's outcome print as tables")
     fs::remove_all(dir);
 
     // The commands log the table, and tell Python to show nothing more than it at the prompt.
-    loadPackages();
+    owtest::loadPackages(true, true);
     const fs::path dir2 = scratch("table_cmd");
     const fs::path spec2 = writeSpec(dir2);
     const uint64_t seq = logSeq();
@@ -642,7 +631,7 @@ TEST_CASE("world fetch: a placeholder API key is refused and never saved; a save
     CHECK_FALSE(terrain::apiKeyProblem("...").empty());
     CHECK(terrain::apiKeyProblem("0123456789abcdef0123456789abcdef").empty());
 
-    loadPackages();
+    owtest::loadPackages(true, true);
     run("newScene");
     lila::PrefStore& prefs = lila::PrefStore::get();
     prefs.remove("terrain", "/openTopography/apiKey");

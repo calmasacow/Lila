@@ -44,17 +44,17 @@ namespace
 {
 constexpr const char* kSlotsDock = "slots";
 constexpr const char* kPrefs = "slotsPanel";
-constexpr int kIdRole = Qt::UserRole;
+constexpr int kSlotIdRole = Qt::UserRole;
 
 QString qs(const std::string& s) { return QString::fromStdString(s); }
-std::string ss(const QString& s) { return s.trimmed().toStdString(); }
+std::string trimmedStd(const QString& s) { return s.trimmed().toStdString(); }
 
 json listOf(const QString& text)
 {
     json out = json::array();
     for (const QString& part : text.split(',', Qt::SkipEmptyParts))
         if (!part.trimmed().isEmpty())
-            out.push_back(ss(part));
+            out.push_back(trimmedStd(part));
     return out;
 }
 
@@ -114,7 +114,7 @@ public:
 
         mTypes = makeTree(this, {"Type", "Slots"}, "No slots. Set Dressing arrangements, Settlement furniture and Terrain ground cover publish them.");
         mTypes->setMinimumHeight(130);
-        connect(mTypes, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* it) { mFindType->setText(it->data(0, kIdRole).toString()); });
+        connect(mTypes, &QTreeWidget::itemClicked, this, [this](QTreeWidgetItem* it) { mFindType->setText(it->data(0, kSlotIdRole).toString()); });
         v->addWidget(controls::section("Types", mTypes, this, kPrefs));
 
         v->addWidget(controls::section("Rules", buildRules(), this, kPrefs));
@@ -146,8 +146,8 @@ private:
         bar->setSpacing(2);
         QToolButton* add = toolButton(box, "plus", "Add Rule\nA rule for the type picked in Types (every type when none is)");
         connect(add, &QToolButton::clicked, this, [this] {
-            QString type = mTypes->currentItem() ? mTypes->currentItem()->data(0, kIdRole).toString() : QString("*");
-            const json r = runUi("slotRule", {{"args", {"add"}}, {"type", ss(type)}, {"name", ss(type) + " swap"}});
+            QString type = mTypes->currentItem() ? mTypes->currentItem()->data(0, kSlotIdRole).toString() : QString("*");
+            const json r = runUi("slotRule", {{"args", {"add"}}, {"type", trimmedStd(type)}, {"name", trimmedStd(type) + " swap"}});
             if (r.is_object())
                 mSelectRule = r.value("id", std::string());
             mSeen = {};
@@ -161,7 +161,7 @@ private:
             const int row = mRules->indexOfTopLevelItem(it) + by;
             if (row < 0 || row >= mRules->topLevelItemCount())
                 return;
-            mSelectRule = ss(it->data(0, kIdRole).toString());
+            mSelectRule = trimmedStd(it->data(0, kSlotIdRole).toString());
             runUi("slotRule", {{"args", {"move"}}, {"id", mSelectRule}, {"index", row}});
         };
         connect(up, &QToolButton::clicked, this, [move] { move(-1); });
@@ -169,7 +169,7 @@ private:
         QToolButton* trash = toolButton(box, "trash", "Remove Rule");
         connect(trash, &QToolButton::clicked, this, [this] {
             if (QTreeWidgetItem* it = mRules->currentItem())
-                runUi("slotRule", {{"args", {"remove"}}, {"id", ss(it->data(0, kIdRole).toString())}});
+                runUi("slotRule", {{"args", {"remove"}}, {"id", trimmedStd(it->data(0, kSlotIdRole).toString())}});
         });
         bar->addWidget(add);
         bar->addStretch(1);
@@ -184,7 +184,7 @@ private:
         connect(mRules, &QTreeWidget::itemChanged, this, [this](QTreeWidgetItem* it, int col) {
             if (mFilling || col != 0)
                 return;
-            runUi("slotRule", {{"args", {"edit"}}, {"id", ss(it->data(0, kIdRole).toString())}, {"enabled", it->checkState(0) == Qt::Checked}});
+            runUi("slotRule", {{"args", {"edit"}}, {"id", trimmedStd(it->data(0, kSlotIdRole).toString())}, {"enabled", it->checkState(0) == Qt::Checked}});
         });
         v->addWidget(mRules);
 
@@ -270,9 +270,9 @@ private:
         connect(select, &QToolButton::clicked, this, [this] {
             json call = {{"select", true}, {"limit", 0}};
             if (!mFindType->text().trimmed().isEmpty())
-                call["type"] = ss(mFindType->text());
+                call["type"] = trimmedStd(mFindType->text());
             if (!mFindRegion->text().trimmed().isEmpty())
-                call["region"] = ss(mFindRegion->text());
+                call["region"] = trimmedStd(mFindRegion->text());
             if (!mFindTag->text().trimmed().isEmpty())
                 call["tag"] = listOf(mFindTag->text());
             const json r = runUi("slotFind", call);
@@ -296,7 +296,7 @@ private:
         QTreeWidgetItem* it = mRules->currentItem();
         if (!it)
             return nullptr;
-        const std::string id = ss(it->data(0, kIdRole).toString());
+        const std::string id = trimmedStd(it->data(0, kSlotIdRole).toString());
         for (const json& r : mRuleJson)
             if (r.value("id", "") == id)
                 return r;
@@ -346,14 +346,14 @@ private:
         if (!r.is_object())
             return;
         const int level = mLevel->current();
-        json call = {{"args", {"edit"}}, {"id", r["id"]}, {"replacePayload", true}, {"name", ss(mName->text())},
-                     {"level", level == 2 ? "owner" : level == 1 ? "region" : "global"}, {"type", ss(mType->currentText())},
+        json call = {{"args", {"edit"}}, {"id", r["id"]}, {"replacePayload", true}, {"name", trimmedStd(mName->text())},
+                     {"level", level == 2 ? "owner" : level == 1 ? "region" : "global"}, {"type", trimmedStd(mType->currentText())},
                      {"tag", listOf(mTags->text())}};
         if (level == 1)
-            call["region"] = ss(mScope->text());
+            call["region"] = trimmedStd(mScope->text());
         if (level == 2)
-            call["owner"] = ss(mScope->text());
-        const std::string value = ss(mShowValue->text());
+            call["owner"] = trimmedStd(mScope->text());
+        const std::string value = trimmedStd(mShowValue->text());
         switch (mShow->currentIndex())
         {
         case kItem: call["item"] = value; break;
@@ -364,12 +364,12 @@ private:
         default: break;
         }
         if (!mUeMesh->text().trimmed().isEmpty())
-            call["unrealMesh"] = ss(mUeMesh->text());
+            call["unrealMesh"] = trimmedStd(mUeMesh->text());
         if (!mUeClass->text().trimmed().isEmpty())
-            call["unrealClass"] = ss(mUeClass->text());
+            call["unrealClass"] = trimmedStd(mUeClass->text());
         if (!mData->text().trimmed().isEmpty())
         {
-            const json d = json::parse(ss(mData->text()), nullptr, false);
+            const json d = json::parse(trimmedStd(mData->text()), nullptr, false);
             if (!d.is_object())
             {
                 controls::setWarning(mBanner, "Data is a JSON object: {\"key\": value}");
@@ -400,14 +400,14 @@ private:
             warn << QString("%1 payloads drawn as placeholders").arg(rep["missingVisuals"].size());
         controls::setWarning(mBanner, warn.join(", "));
 
-        const QString pickedType = mTypes->currentItem() ? mTypes->currentItem()->data(0, kIdRole).toString() : QString();
+        const QString pickedType = mTypes->currentItem() ? mTypes->currentItem()->data(0, kSlotIdRole).toString() : QString();
         mTypes->clear();
         for (auto it = rep["byType"].begin(); it != rep["byType"].end(); ++it)
         {
             auto* item = new QTreeWidgetItem(mTypes);
             const slots::SlotType* t = slots::resolveType(it.key());
             item->setText(0, qs(it.key()));
-            item->setData(0, kIdRole, qs(it.key()));
+            item->setData(0, kSlotIdRole, qs(it.key()));
             item->setToolTip(0, t ? qs(t->label + ": " + t->doc) : "Unregistered type");
             item->setText(1, QString::number(it->get<int64_t>()));
             item->setTextAlignment(1, Qt::AlignRight | Qt::AlignVCenter);
@@ -417,7 +417,7 @@ private:
 
         mFilling = true;
         const std::string picked = !mSelectRule.empty() ? mSelectRule
-                                   : mRules->currentItem()  ? ss(mRules->currentItem()->data(0, kIdRole).toString())
+                                   : mRules->currentItem()  ? trimmedStd(mRules->currentItem()->data(0, kSlotIdRole).toString())
                                                             : std::string();
         mSelectRule.clear();
         mRuleJson = ops::execute("slotRule", {{"args", {"list"}}}, CallSource::Script);
@@ -432,7 +432,7 @@ private:
             const std::string id = r["id"];
             const std::string name = r.value("name", "");
             item->setText(0, qs(name.empty() ? r.value("type", "*") : name));
-            item->setData(0, kIdRole, qs(id));
+            item->setData(0, kSlotIdRole, qs(id));
             item->setCheckState(0, r.value("enabled", true) ? Qt::Checked : Qt::Unchecked);
             item->setToolTip(0, qs(r.value("type", "*") + ": " + slots::Payload::fromJson(r.value("payload", json())).describe()));
             const std::string level = r.value("level", "global");

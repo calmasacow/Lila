@@ -12,6 +12,7 @@
 #include "link/UnrealLink.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
+#include "OpenWorldTest.h"
 
 #include <doctest/doctest.h>
 
@@ -27,20 +28,8 @@ namespace fs = std::filesystem;
 
 namespace
 {
-json run(const char* cmd, json call = json::object()) { return lila::ops::execute(cmd, call); }
-
-void loadPackages()
-{
-    if (!lila::ops::find("terrainCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_TERRAIN_PACKAGE) == "Terrain");
-    if (!lila::ops::find("settlementCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_SETTLEMENT_PACKAGE) == "Settlement");
-    if (!lila::ops::find("buildingCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_BUILDINGS_PACKAGE) == "Buildings");
-    if (!lila::ops::find("worldBuild"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_OPENWORLD_PACKAGE) == "OpenWorld");
-}
-
+using owtest::failedSteps;
+using owtest::run;
 /** A level as LilaLink keeps it: placement groups with their signature and actor count, the landscape's hash, imports. */
 struct FakeLevel
 {
@@ -229,15 +218,6 @@ json stepResult(const json& build, const std::string& name)
     return json();
 }
 
-std::string failedSteps(const json& r)
-{
-    std::string out;
-    for (const json& s : r["steps"])
-        if (!s.value("ok", true))
-            out += s["step"].get<std::string>() + ": " + s.value("error", std::string()) + "\n";
-    return out;
-}
-
 json spec(bool withCemetery, const std::string& ruleType)
 {
     json s = json::parse(R"({
@@ -262,7 +242,7 @@ json spec(bool withCemetery, const std::string& ruleType)
 
 TEST_CASE("world: Unreal export sends a rebuild's changes only and removes what the world no longer makes")
 {
-    loadPackages();
+    owtest::loadPackages(true, true);
     if (!lila::ops::find("unrealPlaceInstances"))
         lila::link::registerCommands();
     lila::link::registerExporter("fbx:instanceSource", [](const std::vector<lila::scene::NodeId>&, const fs::path& path, std::string*) {
@@ -366,7 +346,7 @@ TEST_CASE("world: Unreal export sends a rebuild's changes only and removes what 
 
 TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the Unreal level whole")
 {
-    loadPackages();
+    owtest::loadPackages(true, true);
     if (!lila::ops::find("unrealPlaceInstances"))
         lila::link::registerCommands();
     lila::link::registerExporter("fbx:instanceSource", [](const std::vector<lila::scene::NodeId>&, const fs::path& path, std::string*) {
@@ -473,7 +453,7 @@ TEST_CASE("world: a settlement or the zone set taken out of the spec leaves the 
 
 TEST_CASE("world: a level deleted and made again under the same path gets everything again")
 {
-    loadPackages();
+    owtest::loadPackages(true, true);
     if (!lila::ops::find("unrealPlaceInstances"))
         lila::link::registerCommands();
     lila::link::registerExporter("fbx:instanceSource", [](const std::vector<lila::scene::NodeId>&, const fs::path& path, std::string*) {

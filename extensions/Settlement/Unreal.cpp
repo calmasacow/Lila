@@ -743,7 +743,7 @@ std::vector<glm::dvec3> trimmed(const std::vector<glm::dvec3>& pts, double from,
 }
 
 /** The polyline moved sideways by d in the ground plane, mitred at the corners. */
-std::vector<glm::dvec3> offsetLine(const std::vector<glm::dvec3>& pts, double d)
+std::vector<glm::dvec3> offsetSplineLine(const std::vector<glm::dvec3>& pts, double d)
 {
     auto side = [](const glm::dvec3& p, const glm::dvec3& q) {
         const glm::dvec2 t(q.x - p.x, q.z - p.z);
@@ -819,7 +819,7 @@ json landscapeRoadSplines(const Rebuilt& r, const std::string& layer, const std:
         if (cut.empty())
             continue;
         for (double sideSign : {-1.0, 1.0})
-            if (json j = entry(smoothSpline(offsetLine(cut, sideSign * (carriage + 0.5 * strip)), 0.5 * strip / 100.0), shoulderLayer, 1.0, false);
+            if (json j = entry(smoothSpline(offsetSplineLine(cut, sideSign * (carriage + 0.5 * strip)), 0.5 * strip / 100.0), shoulderLayer, 1.0, false);
                 !j.is_null())
                 shoulders.push_back(std::move(j));
     }

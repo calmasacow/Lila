@@ -6,6 +6,7 @@
 #include "math/MathCore.h"
 #include "ops/Command.h"
 #include "scene/Graph.h"
+#include "OpenWorldTest.h"
 
 #include <doctest/doctest.h>
 
@@ -17,20 +18,12 @@ using json = nlohmann::json;
 
 namespace
 {
-std::string data(const char* f) { return std::string(LILA_TEST_OPENWORLD_DATA) + "/" + f; }
-
-void loadPackages()
-{
-    if (!ops::find("terrainImportOsm"))
-        REQUIRE(extensions::ExtensionManager::get().load(LILA_TEST_TERRAIN_PACKAGE) == "Terrain");
-    if (!ops::find("remixCreate"))
-        REQUIRE(extensions::ExtensionManager::get().load(LILA_TEST_OPENWORLD_PACKAGE) == "OpenWorld");
-}
+using owtest::data;
 } // namespace
 
 TEST_CASE("remix commands: create, region, pin, apply, check, undo")
 {
-    loadPackages();
+    owtest::loadPackages(false, false);
     ops::execute("newScene", json::object());
     const json made = ops::execute("remixCreate", {{"name", "World"},
                                                    {"sources", json::array({{{"id", "coast"}, {"dem", data("coast.asc")}, {"osm", data("coast.json")}}})},
@@ -86,7 +79,7 @@ TEST_CASE("remix commands: create, region, pin, apply, check, undo")
 
 TEST_CASE("remix commands: on a Z-up scene the remix stands on the ground and curves map onto it")
 {
-    loadPackages();
+    owtest::loadPackages(false, false);
     ops::execute("newScene", json::object());
     math::setUpAxis(math::UpAxis::Z);
     const json made = ops::execute("remixCreate", {{"name", "WorldZ"}, {"sources", json::array({{{"id", "coast"}, {"dem", data("coast.asc")}}})}});

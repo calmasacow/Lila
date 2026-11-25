@@ -10,6 +10,7 @@
 #include "ui/Actions.h"
 #include "ui/ViewOverlays.h"
 #include "ui/ViewportHooks.h"
+#include "OpenWorldTest.h"
 
 #include <QGuiApplication>
 
@@ -26,6 +27,7 @@ using json = nlohmann::json;
 
 namespace
 {
+using owtest::run;
 Polygon square(double x0, double z0, double x1, double z1) { return {{x0, z0}, {x1, z0}, {x1, z1}, {x0, z1}}; }
 
 Zone zoneOf(std::string id, Polygon p, int priority = 0, json attrs = json::object())
@@ -48,17 +50,6 @@ const LayerType& builtIn(const std::string& id)
     return builtInTypes()[0];
 }
 
-void loadPackages()
-{
-    if (!lila::ops::find("terrainCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_TERRAIN_PACKAGE) == "Terrain");
-    if (!lila::ops::find("settlementCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_SETTLEMENT_PACKAGE) == "Settlement");
-    if (!lila::ops::find("zoneCreate"))
-        REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_OPENWORLD_PACKAGE) == "OpenWorld");
-}
-
-json run(const char* cmd, json call = json::object()) { return lila::ops::execute(cmd, call); }
 } // namespace
 
 TEST_CASE("zones: point query takes the highest priority, then the later zone, with defaults filled in")
@@ -371,7 +362,7 @@ TEST_CASE("zones: engine JSON round trip keeps every answer")
 
 TEST_CASE("zone commands: create, paint, query, list, check, undo, districts, terrain masks, export and import")
 {
-    loadPackages();
+    owtest::loadPackages(true, false);
     run("newScene");
 
     // A terrain to drape over, with a painted mask.
@@ -470,7 +461,7 @@ TEST_CASE("zone commands: create, paint, query, list, check, undo, districts, te
 
 TEST_CASE("zone commands: on a Z-up scene zones lie on world XY")
 {
-    loadPackages();
+    owtest::loadPackages(true, false);
     run("newScene");
     lila::math::setUpAxis(lila::math::UpAxis::Z);
     run("terrainCreate", {{"size", {100000.0, 100000.0}}, {"resolution", 129}, {"flat", true}, {"name", "Ground"}});
@@ -555,7 +546,7 @@ ZoneDraw drawZonesIn(const lila::ui::ViewInfo& view, glm::vec2 px)
 TEST_CASE("zones overlay: one layer drawn with a faint fill, outlines and names; a per-view Show toggle hides it")
 {
     using namespace lila::ui;
-    loadPackages();
+    owtest::loadPackages(true, false);
     run("newScene");
     run("terrainCreate", {{"size", {100000.0, 100000.0}}, {"resolution", 65}, {"flat", true}, {"name", "Ground"}});
     // Three layers stacked over the same ground, as a world build makes them.

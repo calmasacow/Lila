@@ -9,6 +9,7 @@
 #include "scene/Graph.h"
 #include "scene/Modifiers.h"
 #include "scene/Node.h"
+#include "OpenWorldTest.h"
 
 #include <doctest/doctest.h>
 
@@ -23,6 +24,8 @@ using namespace openworld::world;
 
 namespace
 {
+using owtest::failedSteps;
+using owtest::run;
 void loadWorldPackages()
 {
     if (!lila::ops::find("terrainCreate"))
@@ -34,8 +37,6 @@ void loadWorldPackages()
     if (!lila::ops::find("worldBuild"))
         REQUIRE(lila::extensions::ExtensionManager::get().load(LILA_TEST_OPENWORLD_PACKAGE) == "OpenWorld");
 }
-
-json run(const char* cmd, json call = json::object()) { return lila::ops::execute(cmd, call); }
 
 json tinySpec()
 {
@@ -65,14 +66,6 @@ std::set<std::string> issueKinds(const json& c)
     return k;
 }
 
-std::string failedSteps(const json& r)
-{
-    std::string out;
-    for (const json& s : r["steps"])
-        if (!s.value("ok", true))
-            out += s["step"].get<std::string>() + ": " + s.value("error", std::string()) + "\n";
-    return out;
-}
 } // namespace
 
 TEST_CASE("world spec: schema and shape checks name the bad field")

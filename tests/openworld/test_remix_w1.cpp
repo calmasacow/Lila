@@ -5,6 +5,7 @@
 #include "Fetch.h"
 #include "Inputs.h"
 #include "Remix.h"
+#include "OpenWorldTest.h"
 
 #include <doctest/doctest.h>
 
@@ -17,8 +18,7 @@ using json = nlohmann::json;
 
 namespace
 {
-std::string data(const char* f) { return std::string(LILA_TEST_OPENWORLD_DATA) + "/" + f; }
-
+using owtest::data;
 constexpr double kX0 = -107.0, kY0 = 24.0, kSpan = 0.0005 * 120;
 
 /** Latitude and longitude of the coast fixture's (u east, v north) in 0..1. */

@@ -83,7 +83,7 @@ std::string fetchNote(const json& values)
 }
 
 /** Build World with the option box's settings: the spec file (asked for when none is set), then the fetch, then the build. */
-void buildWorld()
+void buildWorldFromUi()
 {
     const json v = ops::options::values("worldBuild");
     std::string file = flagText(v, "file");
@@ -167,7 +167,7 @@ void registerWorldUi(ext::Context& ctx)
     actions::add(ctx, {.id = "openworld.worldBuild",
                        .label = "Build World",
                        .category = "Open World",
-                       .run = buildWorld,
+                       .run = buildWorldFromUi,
                        .doc = "Build a whole open-world map from a world spec file: remix, terrain, settlements, buildings, sites, slots, zones. "
                               "Fetch Missing Data downloads the real data the spec names first, after showing the size.",
                        .python = "worldBuild(file='worlds/sinaloa.json', replace=True)",
