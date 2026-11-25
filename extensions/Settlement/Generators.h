@@ -344,7 +344,7 @@ struct GenLayout
     std::shared_ptr<const GenSpec> spec;
     std::vector<OsmSite> osmSites;
     /** OSM buildings made lots, lots Settlement cut beside them, blocks taken whole (dense) or filled (sparse), buildings off every block. */
-    int osmLots = 0, osmFillLots = 0, osmDenseBlocks = 0, osmSparseBlocks = 0, osmOutside = 0, osmParts = 0;
+    int osmLots = 0, osmFillLots = 0, osmDenseBlocks = 0, osmSparseBlocks = 0, osmOutside = 0, osmParts = 0, osmOverlapping = 0;
     std::shared_ptr<OsmIndex> osmIndex;
 };
 

@@ -473,7 +473,7 @@ json genSummary(const Rebuilt& r)
     out["statistics"] = toJson(streetStats(l.graph, l.blocks));
     if (hasOsmBuildings(l))
         out["osm"] = {{"buildingLots", gen.osmLots}, {"fillLots", gen.osmFillLots}, {"denseBlocks", gen.osmDenseBlocks},
-                      {"sparseBlocks", gen.osmSparseBlocks}, {"outside", gen.osmOutside}, {"parts", gen.osmParts}, {"sites", osmSitesJson(l)}};
+                      {"sparseBlocks", gen.osmSparseBlocks}, {"outside", gen.osmOutside}, {"overlapping", gen.osmOverlapping}, {"parts", gen.osmParts}, {"sites", osmSitesJson(l)}};
     return out;
 }
 } // namespace

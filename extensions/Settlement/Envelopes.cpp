@@ -166,6 +166,9 @@ Polygon chamfer(const Polygon& fp, double size)
 }
 
 const char* sideName2(int tag) { return tag == 0 ? "street" : tag == 1 ? "party" : "open"; }
+
+/** cm: the widest footprint a pitched roof spans. */
+constexpr double kWidestPitched = 4000.0;
 } // namespace
 
 Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, const Ground& g, const Options& o, const Site& site)
@@ -307,6 +310,9 @@ Envelope parcelEnvelope(const Lot& lot, const Block& block, const Layout& l, con
         env.ridge = along;
     double across = 0.0, ridgeLen = 0.0;
     spans(tierFp, env.ridge, across, ridgeLen);
+    // A pitched roof over a footprint wider than a house would stand as a hill: wide buildings have flat roofs.
+    if ((env.roof == "gable" || env.roof == "hip" || env.roof == "mansard") && across > kWidestPitched)
+        env.roof = "flat";
     if (env.roof == "gable" || env.roof == "hip")
         env.roofHeight = 0.5 * across * std::tan(pitch * kPi / 180.0);
     else if (env.roof == "mansard")

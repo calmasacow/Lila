@@ -18,6 +18,8 @@ namespace settlement
 namespace
 {
 constexpr uint64_t kOsmKey52 = (1ull << 52) - 1;
+/** Blocks smaller than this (m2) inside imported farmland are town blocks, not fields. */
+constexpr double kFarmBlockM2 = 10000.0;
 
 const GenSpec* osmSpecOf(const Layout& l) { return l.gen && l.gen->spec ? l.gen->spec.get() : nullptr; }
 
@@ -322,12 +324,15 @@ void placeOsmBuildings(Layout& l, const Site& site, const Ground& g, const Optio
         }
         // Any footprint reaching into the lot takes it, the block's own and one whose centre lies in the next block.
         const OsmBox lb = osmBoxOf(lot.outline);
-        for (const auto& f : fps)
-            if (f.box.meets(lb) && polygonsShareArea(lot.outline, f.poly, 50.0))
-            {
-                drop[k] = 1;
-                break;
-            }
+        for (int64_t y = int64_t(std::floor(lb.lo.y / fpBins.cell)); y <= int64_t(std::floor(lb.hi.y / fpBins.cell)) && !drop[k]; ++y)
+            for (int64_t x = int64_t(std::floor(lb.lo.x / fpBins.cell)); x <= int64_t(std::floor(lb.hi.x / fpBins.cell)) && !drop[k]; ++x)
+                if (auto it = fpBins.at.find(OsmBins::key(x, y)); it != fpBins.at.end())
+                    for (int i : it->second)
+                        if (fps[size_t(i)].box.meets(lb) && polygonsShareArea(lot.outline, fps[size_t(i)].poly, 2.0))
+                        {
+                            drop[k] = 1;
+                            break;
+                        }
     }
     {
         size_t w = 0;
@@ -349,6 +354,21 @@ void placeOsmBuildings(Layout& l, const Site& site, const Ground& g, const Optio
         l.lots.resize(w);
         if (fresh)
             fresh->resize(w);
+    }
+
+    // Footprints the data draws over each other: the larger stands, the smaller is left out (counted in overlapping).
+    for (size_t b = firstBlock; b < l.blocks.size(); ++b)
+    {
+        std::vector<int>& in = inBlock[b];
+        std::stable_sort(in.begin(), in.end(), [&](int x, int y) { return fps[size_t(x)].area > fps[size_t(y)].area; });
+        std::vector<int> kept;
+        for (int i : in)
+            if (std::ranges::none_of(kept, [&](int k) { return fps[size_t(k)].box.meets(fps[size_t(i)].box) && polygonsShareArea(fps[size_t(k)].poly, fps[size_t(i)].poly, 2.0); }))
+                kept.push_back(i);
+            else
+                ++gen.osmOverlapping;
+        std::sort(kept.begin(), kept.end());
+        in = std::move(kept);
     }
 
     // A lot per building: its sides facing the block's street sides are its frontages.
@@ -503,10 +523,20 @@ void placeOsmBuildings(Layout& l, const Site& site, const Ground& g, const Optio
         const Use areaUse = osmUseOf(pl.program, pl.kind);
         const std::string landmark = osmLandmarkOf(pl.program, pl.kind);
         Lot* largest = nullptr;
-        for (size_t k = 0; k < l.lots.size(); ++k)
+        std::vector<int> near;
+        for (int64_t y = int64_t(std::floor(area.lo.y / lotBins.cell)); y <= int64_t(std::floor(area.hi.y / lotBins.cell)); ++y)
+            for (int64_t x = int64_t(std::floor(area.lo.x / lotBins.cell)); x <= int64_t(std::floor(area.hi.x / lotBins.cell)); ++x)
+                if (auto it = lotBins.at.find(OsmBins::key(x, y)); it != lotBins.at.end())
+                    near.insert(near.end(), it->second.begin(), it->second.end());
+        std::sort(near.begin(), near.end());
+        near.erase(std::unique(near.begin(), near.end()), near.end());
+        for (const int k : near)
         {
-            Lot& lot = l.lots[k];
-            if (size_t(lot.block) < firstBlock || !area.meets(lotBox[k]) || !inside(centroid(lot.outline)))
+            Lot& lot = l.lots[size_t(k)];
+            if (size_t(lot.block) < firstBlock || !area.meets(lotBox[size_t(k)]) || !inside(centroid(lot.outline)))
+                continue;
+            // Farmland the streets have cut into town blocks is the data lagging the town: those blocks are built on.
+            if (areaUse == Use::Farm && lot.osmId.empty() && size_t(lot.block) < l.blocks.size() && l.blocks[size_t(lot.block)].area < kFarmBlockM2)
                 continue;
             made.lots.push_back(lot.key);
             if (lot.osmId.empty())
@@ -545,6 +575,8 @@ void placeOsmBuildings(Layout& l, const Site& site, const Ground& g, const Optio
                 if (!given && !named)
                     dist.name = s.name;
             }
+    if (gen.osmOverlapping > 0 && firstBlock == 0)
+        gen.warnings.push_back("osm: " + std::to_string(gen.osmOverlapping) + " imported buildings overlap a larger one and were left out");
     if (gen.osmOutside > 0 && firstBlock == 0)
         gen.warnings.push_back("osm: " + std::to_string(gen.osmOutside) + " imported buildings stand on no block (on a street, by water or outside the outline) and were left out");
 }
@@ -804,14 +836,14 @@ void finishProgram(Envelope& env, const Lot& lot, const Layout& l)
         set("portShed", env.use == Use::Port ? "port use" : "industry within 150 m of water");
     else if (env.use == Use::Industrial)
         set("warehouse", "industrial use");
-    else if (pg == "mansion" || (env.use == Use::Residential && env.wealth >= 2 && env.floors <= 3))
-        set("mansion", pg == "mansion" ? "mansion or villa" : "wealthy and low");
+    else if (pg == "mansion" || (env.use == Use::Residential && env.wealth >= 2 && env.floors <= 3 && lot.area >= 400.0))
+        set("mansion", pg == "mansion" ? "mansion or villa" : "wealthy, low and on a lot of 400 m2 or more");
     else if ((pg == "hotel" || pg == "apartments") && env.floors >= 6)
         set("resortTower", "hotel or apartments of 6 floors or more");
     else if (water < 6000.0 && env.floors <= 4 && dist < 0.8)
         set("seafront", "within 60 m of water");
-    else if (old || (dist < 0.3 && env.floors <= 2))
-        set("colonial", old ? "built " + env.eraName : "low building in the old centre");
+    else if (old || (dist < 0.3 && env.floors <= 3))
+        set("colonial", old ? "built " + env.eraName : "three floors or fewer in the old centre");
     else if (env.use == Use::Farm || (dist > 0.85 && env.floors <= 1))
         set(env.eraName == "modern" ? "ruralShack" : "adobe", env.use == Use::Farm ? "farm use" : "single storey at the edge");
     else if (env.groundUse == Use::Commercial || env.use == Use::Commercial)

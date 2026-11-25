@@ -210,7 +210,7 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o, const 
 
     for (const Lot& lot : l.lots)
         // Imported buildings stand where they stand: a back building off the street is real.
-        if (lot.frontages == 0 && lot.use != Use::Plaza && lot.use != Use::Open && lot.osmId.empty())
+        if (lot.frontages == 0 && lot.use != Use::Plaza && lot.use != Use::Open && lot.use != Use::Park && lot.osmId.empty())
             issue("frontage", "error", "lot:" + std::to_string(lot.id), std::format("{} lot {} has no street frontage", useLabel(lot.use), lot.id),
                   at(centroid(lot.outline)));
 
