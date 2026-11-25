@@ -1520,14 +1520,45 @@
     1056103
    ],
    "within": "remixPresent_puerto",
-   "profile": "usTown",
+   "profile": "mexicanCity",
    "fill": "sparse",
    "buildings": {
-    "cell": 6400,
+    "cell": 25600,
     "districts": {
      "0": "colonialCentro",
      "1": "malecon"
+    },
+    "lod": "hlod"
+   },
+   "coverage": 0.7,
+   "furniture": {
+    "sets": {
+     "avenue": [
+      {
+       "kind": "tree",
+       "spacing": 1200,
+       "where": "kerb",
+       "sides": "both"
+      }
+     ],
+     "street": [
+      {
+       "kind": "tree",
+       "spacing": 1600,
+       "where": "kerb",
+       "sides": "alternate"
+      }
+     ],
+     "lane": [],
+     "alley": [],
+     "footpath": [],
+     "stairs": [],
+     "parkedStreet": [],
+     "serviceRoad": []
     }
+   },
+   "overrides": {
+    "lotWidth": 1800
    }
   },
   {
@@ -1540,13 +1571,44 @@
     -20785
    ],
    "within": "remixPresent_capital",
-   "profile": "usTown",
+   "profile": "mexicanCity",
    "fill": "sparse",
    "buildings": {
-    "lod": "near",
+    "lod": "hlod",
     "districts": {
      "0": "colonialCentro"
+    },
+    "cell": 25600
+   },
+   "coverage": 0.7,
+   "furniture": {
+    "sets": {
+     "avenue": [
+      {
+       "kind": "tree",
+       "spacing": 1200,
+       "where": "kerb",
+       "sides": "both"
+      }
+     ],
+     "street": [
+      {
+       "kind": "tree",
+       "spacing": 1600,
+       "where": "kerb",
+       "sides": "alternate"
+      }
+     ],
+     "lane": [],
+     "alley": [],
+     "footpath": [],
+     "stairs": [],
+     "parkedStreet": [],
+     "serviceRoad": []
     }
+   },
+   "overrides": {
+    "lotWidth": 1800
    }
   }
  ],
