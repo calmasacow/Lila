@@ -56,6 +56,9 @@ json resolvePaths(json spec, const std::string& dir, const std::function<bool(co
 OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2 lo, glm::dvec2 hi);
 
 /** Commands worldBuild, worldSpec, worldCheck, worldMap; resources and the make_open_world prompt. */
+/** The bathymetry files a remix spec's sources blend into its seabed, comma separated; empty when none. worldBuild skips the terrain spec's own bathymetry then. */
+std::string remixBathymetryFiles(const json& remix);
+
 void registerWorld(lila::ext::Context& ctx);
 /** Level > Open World entries and the toolkit's World group. */
 void registerWorldUi(lila::ext::Context& ctx);

@@ -677,9 +677,22 @@ json buildWorld(json spec, const BuildOptions& o)
                 t["source"] = {{"type", "existing"}, {"mesh", terrain}};
                 if (!t.contains("check"))
                     t["check"] = false;
+                if (const std::string blended = remixBathymetryFiles(spec["remix"]); !blended.empty() && t.contains("coast") && t["coast"].is_object() &&
+                                                                                 t["coast"].contains("bathymetry"))
+                {
+                    t["coast"].erase("bathymetry");
+                    notes.push_back("terrain.coast.bathymetry skipped: the remix already blended " + blended +
+                                    " into the seabed, and the remixed map has no single georeference to place a grid by");
+                }
                 json r = run("terrainSpec", {{"spec", t}, {"stopOnError", o.stopOnError}});
                 if (!r.value("ok", false) && r.contains("failed"))
                     throw std::runtime_error(r["failed"].dump());
+                // The coast step's warnings name spec items it could not build (a reservoir off the map): the world's notes carry them.
+                for (const json& step : r.value("steps", json::array()))
+                    if (step.value("step", std::string()) == "coast")
+                        for (const json& w : step.value("warnings", json::array()))
+                            if (w.is_string())
+                                notes.push_back("terrain.coast: " + w.get<std::string>());
                 return r;
             });
     }

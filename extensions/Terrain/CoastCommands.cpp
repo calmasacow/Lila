@@ -276,7 +276,7 @@ gn::NodeDecl bathyDecl()
     d.category = "Terrain";
     d.doc = "A seabed under the flat sea a land DEM leaves: a GEBCO grid (GeoTIFF or any elevation file) placed by the terrain's "
             "georeference and blended in from a shoreline profile, so the shore stays continuous and the shelf smooth; without a "
-            "grid, the profile alone (shelf, then the drop to deep water). Writes mask seabed. terrainBathymetry sets it; it "
+            "grid, the profile alone (shelf, then the drop to deep water); a grid it can't place leaves the seabed as it was. Writes mask seabed. terrainBathymetry sets it; it "
             "goes right after the source.";
     d.props = {{.id = "settings", .defaultValue = "{}", .doc = "The bathymetry settings, a JSON object (see terrainBathymetry)."}};
     d.sockets = {.inputs = {{.id = "heightfield", .type = gn::SocketType::Geometry}}, .outputs = {{.id = "heightfield", .type = gn::SocketType::Geometry}}};
@@ -292,22 +292,20 @@ gn::NodeDecl bathyDecl()
         BathymetryResult r;
         Georef geo;
         const bool hasGeo = publishedGeoref(c.env.owner, &geo);
-        if (s.file.empty())
-            r = applyBathymetry(h, s, nullptr, nullptr);
-        else if (!hasGeo)
+        // A real grid that can't be placed leaves the seabed as it is: a profile in its place would pass for real depths.
+        std::string unused;
+        std::shared_ptr<const Dem> grid;
+        if (!s.file.empty() && !hasGeo)
+            unused = "the terrain has no georeference (make it with terrainImportDem), so " + s.file + " can't be placed";
+        else if (!s.file.empty() && !(grid = loadGrid(s.file, h, geo, &unused)))
+            unused = "bathymetry grid " + s.file + " not used (" + unused + ")";
+        if (!unused.empty())
         {
-            r = applyBathymetry(h, s, nullptr, nullptr);
-            r.notes.insert(r.notes.begin(), "the terrain has no georeference (make it with terrainImportDem), so " + s.file +
-                                                " can't be placed; the seabed is the profile alone");
+            r.source = "none";
+            r.notes.push_back(unused + "; the seabed is left as it was");
         }
         else
-        {
-            std::string why;
-            const std::shared_ptr<const Dem> grid = loadGrid(s.file, h, geo, &why);
             r = applyBathymetry(h, s, grid.get(), grid ? &geo : nullptr);
-            if (!grid)
-                r.notes.insert(r.notes.begin(), "bathymetry grid not used (" + why + "); the seabed is the profile alone");
-        }
         for (const std::string& n : r.notes)
             log::warn("{}: {}", c.node.name, n);
         publishBathymetry(c.env.owner, c.node.name, std::move(r));
@@ -1570,9 +1568,10 @@ void registerCoastCommands(ext::Context& ctx)
                "folder) and is applied only when a terrain is found. "
                "The DEM's flat sea (ground at or below sea level plus landTolerance, joined to the edge or deep grid water) takes "
                "the grid's depths blended in from a shoreline profile over blendWidth cm, so the shore is continuous and the shelf "
-               "smooth; with no grid the profile alone (shoreSlope off the beach, shelfDepth at shelfWidth, dropDepth beyond). "
+               "smooth; with no grid the profile alone (shoreSlope off the beach, shelfDepth at shelfWidth, dropDepth beyond); a "
+               "file the terrain can't place (no georeference) leaves the seabed as it was, source none, with a note. "
                "Writes the GEBCO credit into the terrain data's ATTRIBUTION.txt. off=True removes it. Returns the seabed source "
-               "(grid, profile or grid+profile), samples, depths and notes.",
+               "(grid, profile, grid+profile or none), samples, depths and notes.",
         .positionalDoc = "terrain mesh or its modifier",
         .flags = {{"file", "f", T::String, nullptr, "A GEBCO GeoTIFF (or any elevation file); with fetch, where the download is written."},
                   {"fetch", "fe", T::Bool, false, "Download GEBCO for the terrain's area (or bbox) through OpenTopography."},

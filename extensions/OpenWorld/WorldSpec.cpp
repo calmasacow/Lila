@@ -410,4 +410,13 @@ OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2
     out.index();
     return out;
 }
+std::string remixBathymetryFiles(const json& remix)
+{
+    std::string files;
+    for (const json& src : remix.value("sources", json::array()))
+        if (src.is_object() && src.contains("bathymetry") && src["bathymetry"].is_string() && !src["bathymetry"].get<std::string>().empty())
+            files += (files.empty() ? "" : ", ") + src["bathymetry"].get<std::string>();
+    return files;
+}
+
 } // namespace openworld::world
