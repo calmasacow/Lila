@@ -3,6 +3,8 @@
 
 #include "Remix.h"
 
+#include "Fetch.h"
+
 #include <doctest/doctest.h>
 
 #include <cmath>
@@ -426,4 +428,45 @@ TEST_CASE("remix: a sea region sinks the land inside it to the floor over its se
     for (const OsmDoc::Way& w : r->osm.ways)
         CHECK(tagOf(w.tags, "remix") != "reconnect");
     CHECK(countKind(checkRemix(s, *r), "danglingRoad") == 0);
+}
+
+TEST_CASE("remix: a lagoon the elevation holds above sea level joins the sea where the land cover says water")
+{
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("lila_remix_lagoon_" + std::to_string(std::rand()));
+    fs::create_directories(dir);
+    auto raster = [](int n, auto value) {
+        terrain::Dem d;
+        d.width = d.height = n;
+        d.geographic = true;
+        d.dx = d.dy = 0.02 / (n - 1);
+        d.x0 = -106.5;
+        d.y0 = 23.02;
+        d.epsg = 4326;
+        d.metres.resize(size_t(n) * size_t(n));
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < n; ++x)
+                d.metres[size_t(y) * n + x] = value(double(x) / (n - 1), double(y) / (n - 1));
+        return d;
+    };
+    // Open sea along the west edge; a lagoon behind it held at 1.5 m; land at 10 m.
+    auto lagoon = [](double u, double v) { return u > 0.12 && u < 0.5 && v > 0.35 && v < 0.65; };
+    terrain::writeGeoTiff(dir / "dem.tif", raster(81, [&](double u, double v) { return u <= 0.12 ? 0.0f : lagoon(u, v) ? 1.5f : 10.0f; }));
+    terrain::writeGeoTiff(dir / "cover.tif", raster(241, [&](double u, double v) { return u <= 0.12 || lagoon(u, v) ? 80.0f : 40.0f; }), true);
+
+    json j = {{"scale", {{"horizontal", 1.0}, {"vertical", 1.0}}}, {"seams", {{"erosion", 0}, {"detail", 0.0}}},
+              {"sources", json::array({{{"id", "lagoon"}, {"dem", (dir / "dem.tif").generic_string()}}})}};
+    const std::shared_ptr<RemixResult> bare = runRemix(specFromJson(j));
+    j["sources"][0]["landcover"] = (dir / "cover.tif").generic_string();
+    const std::shared_ptr<RemixResult> covered = runRemix(specFromJson(j));
+    REQUIRE(bare->errors.empty());
+    REQUIRE(covered->errors.empty());
+    // The middle of the lagoon: an island of 1.5 m ground without land cover, sea floor with it.
+    const Vec2 mid = bare->after.origin + Vec2(0.31 * bare->after.extent().x, 0.5 * bare->after.extent().y);
+    CHECK(bare->after.heightAt(mid.x, mid.y) > 100.0);
+    CHECK(covered->after.heightAt(mid.x, mid.y) < 0.0);
+    // Dry land stays where it was.
+    const Vec2 land = bare->after.origin + Vec2(0.8 * bare->after.extent().x, 0.2 * bare->after.extent().y);
+    CHECK(covered->after.heightAt(land.x, land.y) == doctest::Approx(bare->after.heightAt(land.x, land.y)).epsilon(1e-3));
+    fs::remove_all(dir);
 }

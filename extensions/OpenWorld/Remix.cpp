@@ -94,14 +94,24 @@ terrain::Dem cropDem(const terrain::Dem& d, const std::vector<double>& bbox)
     return c;
 }
 
-/** Ground within tolerance of sea level and joined to the data's edge through such ground: sea a land DEM leaves flat. */
+/** WorldCover's permanent water class (the code mask holds code / 255). */
+constexpr long kWaterCode = 80;
+
+/**
+ * Ground within tolerance of sea level and joined to the data's edge through such ground: sea a land DEM leaves flat.
+ * Land cover that says water counts up to a few metres: elevation models hold lagoons and estuaries at their own small
+ * heights, which would otherwise stand out of the sea as blocks.
+ */
 std::vector<float> flatSeaOf(const Heightfield& h, double tolerance)
 {
     std::vector<float> out(h.size(), 0.0f);
+    const std::vector<float>* code = h.findMask(kCodeMask);
+    const double waterTolerance = std::max(tolerance, 300.0);
     std::deque<size_t> open;
     auto push = [&](int x, int z) {
         const size_t i = h.index(x, z);
-        if (out[i] == 0.0f && std::abs(h.heights[i]) <= tolerance)
+        const bool water = code && std::lround((*code)[i] * 255.0f) == kWaterCode && std::abs(h.heights[i]) <= waterTolerance;
+        if (out[i] == 0.0f && (std::abs(h.heights[i]) <= tolerance || water))
         {
             out[i] = 1.0f;
             open.push_back(i);
@@ -209,7 +219,6 @@ std::shared_ptr<const SourceData> loadSource(const Source& s, double landToleran
         terrain::DemOptions o;
         out->hf = terrain::demToTerrain(std::move(dem), o, terrain::ProjectionKind::Local, 0, true, &out->geo);
         out->hasDem = true;
-        out->flatSea = flatSeaOf(out->hf, landTolerance);
     }
     else
     {
@@ -261,6 +270,9 @@ std::shared_ptr<const SourceData> loadSource(const Source& s, double landToleran
         if (!x.areas.empty())
             terrain::rasterizeLandcover(out->hf, x.areas, out->geo);
     }
+    // After the land cover, which tells water the elevation holds above sea level.
+    if (out->hasDem)
+        out->flatSea = flatSeaOf(out->hf, landTolerance);
 
     std::lock_guard l(lock);
     cache[{key}] = out;
