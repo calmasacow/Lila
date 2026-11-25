@@ -889,6 +889,11 @@ struct OutputOptions
     bool envelopes = true;  // envelope volumes and footprints
 };
 
+/** cm: the street mesh's carriageway stands this far over the lift, and its sidewalks a curb higher. */
+inline constexpr double kRoadRise = 6.0, kCurbHeight = 12.0;
+/** cm over the ground of the default street mesh's carriageway and sidewalk tops, where street props stand. */
+inline constexpr double kRoadTop = OutputOptions{}.lift + kRoadRise, kSidewalkTop = kRoadTop + kCurbHeight;
+
 MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o = {});
 
 /** A material the street and ground meshes name by slot: its name (Settlement_Asphalt, ...), colour and roughness. */

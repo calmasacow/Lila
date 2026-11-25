@@ -17,6 +17,7 @@
 #include <map>
 #include <numeric>
 #include <tuple>
+#include <unordered_map>
 
 namespace settlement
 {
@@ -110,8 +111,6 @@ int32_t streetSurface(const Layout& l, const StreetEdge& x, Vec2 mid, bool medie
     return SurfAsphalt;
 }
 
-/** cm: how far a sidewalk stands above the carriageway. */
-constexpr double kCurbHeight = 12.0;
 /** Corners turning less than this get a curb return; wider ones, and bends, are joined round the junction's centre. */
 constexpr double kFilletGap = 160.0 * kPi / 180.0;
 /** Corners up to this have curb lines that meet; past it they are taken as the outside of a bend. */
@@ -677,7 +676,7 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     // Draping is the cost (a raycast per corner), so each edge, junction, block and lot is made apart and appended in order.
     const bool medieval = medievalStyle(l);
     // The road stands a few cm clear of the ground: between draped points a curved terrain can rise over a flat face.
-    const double skirtLift = o.lift * 0.25, roadLift = o.lift + 6.0, walkLift = roadLift + kCurbHeight;
+    const double skirtLift = o.lift * 0.25, roadLift = o.lift + kRoadRise, walkLift = roadLift + kCurbHeight;
     auto strip = [&](Polys& m, Vec2 a, Vec2 b, double left, double right, double lift, const FaceTags& tags) {
         const double len = glm::length(b - a);
         const Vec2 d = (b - a) / len, n(-d.y, d.x);
@@ -699,31 +698,40 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
         int side = 0; // 0: the edge starts here, 1: it ends here
         Vec2 dir{0.0};
         double inner = 0.0, half = 0.0;
+        double left = 0.0, right = 0.0; // how far out the sidewalk reaches on each side: inner where it has none
         int32_t surface = SurfAsphalt;
         StreetClass cls = StreetClass::Path;
     };
+    // Per street, whether each side (0 left of its direction, 1 right) has a sidewalk.
+    std::vector<std::array<bool, 2>> walkSides(g.edges.size(), {true, true});
     std::vector<std::vector<NodeEnd>> ends(g.nodes.size());
-    for (size_t e = 0; e < g.edges.size(); ++e)
-    {
-        const StreetEdge& x = g.edges[e];
-        if (!g.isStreet(int(e)))
-            continue;
-        const Vec2 a = g.nodes[size_t(x.a)].p, b = g.nodes[size_t(x.b)].p;
-        const double len = glm::length(b - a);
-        if (len < 1e-6)
-            continue;
-        const double half = 0.5 * edgeWidth(l, int(e)), inner = half - walkWidth(l, int(e), 2.0 * half, medieval);
-        const int32_t surface = streetSurface(l, x, (a + b) * 0.5, medieval);
-        ends[size_t(x.a)].push_back({int(e), 0, (b - a) / len, inner, half, surface, x.cls});
-        ends[size_t(x.b)].push_back({int(e), 1, (a - b) / len, inner, half, surface, x.cls});
-    }
+    auto makeEnds = [&] {
+        for (std::vector<NodeEnd>& es : ends)
+            es.clear();
+        for (size_t e = 0; e < g.edges.size(); ++e)
+        {
+            const StreetEdge& x = g.edges[e];
+            if (!g.isStreet(int(e)))
+                continue;
+            const Vec2 a = g.nodes[size_t(x.a)].p, b = g.nodes[size_t(x.b)].p;
+            const double len = glm::length(b - a);
+            if (len < 1e-6)
+                continue;
+            const double half = 0.5 * edgeWidth(l, int(e)), inner = half - walkWidth(l, int(e), 2.0 * half, medieval);
+            const double out0 = walkSides[e][0] ? half : inner, out1 = walkSides[e][1] ? half : inner;
+            const int32_t surface = streetSurface(l, x, (a + b) * 0.5, medieval);
+            ends[size_t(x.a)].push_back({int(e), 0, (b - a) / len, inner, half, out0, out1, surface, x.cls});
+            ends[size_t(x.b)].push_back({int(e), 1, (a - b) / len, inner, half, out1, out0, surface, x.cls});
+        }
+        for (std::vector<NodeEnd>& es : ends)
+            std::sort(es.begin(), es.end(), [](const NodeEnd& p, const NodeEnd& q) { return std::atan2(p.dir.y, p.dir.x) < std::atan2(q.dir.y, q.dir.x); });
+    };
     // A straight run of one width needs no patch: its strips meet end to end.
     auto plain = [](const std::vector<NodeEnd>& es) {
-        return es.size() < 2 ||
-               (es.size() == 2 && glm::dot(es[0].dir, -es[1].dir) > std::cos(glm::radians(2.0)) && std::abs(es[0].half - es[1].half) < 1.0);
+        return es.size() < 2 || (es.size() == 2 && glm::dot(es[0].dir, -es[1].dir) > std::cos(glm::radians(2.0)) &&
+                                 std::abs(es[0].half - es[1].half) < 1.0 && std::abs(es[0].left - es[1].right) < 1.0 &&
+                                 std::abs(es[0].right - es[1].left) < 1.0);
     };
-    for (std::vector<NodeEnd>& es : ends)
-        std::sort(es.begin(), es.end(), [](const NodeEnd& p, const NodeEnd& q) { return std::atan2(p.dir.y, p.dir.x) < std::atan2(q.dir.y, q.dir.x); });
 
     /** The corner from end a to the next end b counter-clockwise: where a's left curb and sidewalk lines meet b's right ones. */
     struct Corner
@@ -735,14 +743,14 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     auto corner = [&](Vec2 c, const NodeEnd& a, const NodeEnd& b, double gap) {
         Corner k;
         k.gap = gap;
-        k.walks = a.half - a.inner > 1.0 || b.half - b.inner > 1.0;
+        k.walks = a.left - a.inner > 1.0 || b.right - b.inner > 1.0;
         k.lines = gap < kArcGap && cross(a.dir, b.dir) > 1e-3;
         if (k.lines)
         {
             const Vec2 na(-a.dir.y, a.dir.x), nb(-b.dir.y, b.dir.x);
             auto meet = [](Vec2 p, Vec2 u, Vec2 q, Vec2 v) { return p + u * (cross(q - p, v) / cross(u, v)); };
             k.curb = meet(c + na * a.inner, a.dir, c - nb * b.inner, b.dir);
-            k.outer = meet(c + na * a.half, a.dir, c - nb * b.half, b.dir);
+            k.outer = meet(c + na * a.left, a.dir, c - nb * b.right, b.dir);
         }
         k.radius = k.lines && gap < kFilletGap && k.walks ? std::clamp(0.5 * std::min(a.inner, b.inner), 100.0, 600.0) : 0.0;
         return k;
@@ -756,35 +764,288 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     };
     // How far each street's strips stop short of its ends: past its curb returns and sidewalk corners.
     std::vector<std::array<double, 2>> trims(g.edges.size(), {0.0, 0.0});
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, ends.size()), [&](const tbb::blocked_range<size_t>& range) {
-        for (size_t nd = range.begin(); nd < range.end(); ++nd)
-        {
-            const std::vector<NodeEnd>& es = ends[nd];
-            if (plain(es))
-                continue;
-            const Vec2 c = g.nodes[nd].p;
-            std::vector<double> trim(es.size(), 0.0);
-            for (size_t k = 0; k < es.size(); ++k)
+    auto makeTrims = [&] {
+        std::fill(trims.begin(), trims.end(), std::array<double, 2>{0.0, 0.0});
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, ends.size()), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t nd = range.begin(); nd < range.end(); ++nd)
             {
-                const size_t k1 = (k + 1) % es.size();
-                const Corner cr = corner(c, es[k], es[k1], gapAfter(es, k));
-                if (!cr.lines)
+                const std::vector<NodeEnd>& es = ends[nd];
+                if (plain(es))
                     continue;
-                const double tangent = cr.radius > 0.0 ? cr.radius / std::tan(0.5 * cr.gap) : 0.0;
-                trim[k] = std::max({trim[k], glm::dot(cr.curb - c, es[k].dir) + tangent, glm::dot(cr.outer - c, es[k].dir)});
-                trim[k1] = std::max({trim[k1], glm::dot(cr.curb - c, es[k1].dir) + tangent, glm::dot(cr.outer - c, es[k1].dir)});
+                const Vec2 c = g.nodes[nd].p;
+                std::vector<double> trim(es.size(), 0.0);
+                for (size_t k = 0; k < es.size(); ++k)
+                {
+                    const size_t k1 = (k + 1) % es.size();
+                    const Corner cr = corner(c, es[k], es[k1], gapAfter(es, k));
+                    if (!cr.lines)
+                        continue;
+                    const double tangent = cr.radius > 0.0 ? cr.radius / std::tan(0.5 * cr.gap) : 0.0;
+                    trim[k] = std::max({trim[k], glm::dot(cr.curb - c, es[k].dir) + tangent, glm::dot(cr.outer - c, es[k].dir)});
+                    trim[k1] = std::max({trim[k1], glm::dot(cr.curb - c, es[k1].dir) + tangent, glm::dot(cr.outer - c, es[k1].dir)});
+                }
+                for (size_t k = 0; k < es.size(); ++k)
+                    trims[size_t(es[k].edge)][size_t(es[k].side)] = std::clamp(trim[k], 0.0, 3.0 * es[k].half + 600.0);
             }
-            for (size_t k = 0; k < es.size(); ++k)
-                trims[size_t(es[k].edge)][size_t(es[k].side)] = std::clamp(trim[k], 0.0, 3.0 * es[k].half + 600.0);
+        });
+        // A street too short for both ends' trims gives each its share.
+        for (size_t e = 0; e < g.edges.size(); ++e)
+        {
+            const StreetEdge& x = g.edges[e];
+            const double len = glm::length(g.nodes[size_t(x.b)].p - g.nodes[size_t(x.a)].p), sum = trims[e][0] + trims[e][1];
+            if (sum > len && sum > 0.0)
+                trims[e] = {trims[e][0] * len / sum, trims[e][1] * len / sum};
         }
-    });
-    // A street too short for both ends' trims gives each its share.
+    };
+
+    /** n + 1 points along a polyline, evenly by length. */
+    auto resample = [](const std::vector<Vec2>& line, int n) {
+        std::vector<double> at(line.size(), 0.0);
+        for (size_t k = 1; k < line.size(); ++k)
+            at[k] = at[k - 1] + glm::length(line[k] - line[k - 1]);
+        std::vector<Vec2> out;
+        size_t piece = 0;
+        for (int i = 0; i <= n; ++i)
+        {
+            const double t = at.back() * i / n;
+            while (piece + 2 < line.size() && at[piece + 1] < t)
+                ++piece;
+            const double span = at[piece + 1] - at[piece];
+            out.push_back(span > 1e-9 ? glm::mix(line[piece], line[piece + 1], std::clamp((t - at[piece]) / span, 0.0, 1.0)) : line[piece]);
+        }
+        return out;
+    };
+    /** n + 1 points turning counter-clockwise round c from p to q (straight across when q is not ahead of p). */
+    auto around = [](Vec2 c, Vec2 p, Vec2 q, int n) {
+        const double a0 = std::atan2(p.y - c.y, p.x - c.x), r0 = glm::length(p - c), r1 = glm::length(q - c);
+        double turn = std::atan2(q.y - c.y, q.x - c.x) - a0;
+        while (turn > kPi)
+            turn -= 2.0 * kPi;
+        while (turn <= -kPi)
+            turn += 2.0 * kPi;
+        std::vector<Vec2> out;
+        for (int i = 0; i <= n; ++i)
+        {
+            const double t = double(i) / n;
+            out.push_back(turn > 1e-6 ? c + Vec2(std::cos(a0 + turn * t), std::sin(a0 + turn * t)) * glm::mix(r0, r1, t) : glm::mix(p, q, t));
+        }
+        return out;
+    };
+    /** A junction's plan: the carriageway outline, and per corner its curb and the sidewalk's outer edge, point for point. */
+    struct NodeShape
+    {
+        std::vector<Vec2> outline;
+        std::vector<size_t> startOf, curbStart;
+        std::vector<std::vector<Vec2>> curbs, outers;
+        std::vector<bool> walks;
+    };
+    auto shape = [&](size_t nd) {
+        NodeShape s;
+        const std::vector<NodeEnd>& es = ends[nd];
+        const Vec2 c = g.nodes[nd].p;
+        const size_t count = es.size();
+        // Each street's mouth: its curb points right and left of its direction, and its sidewalks' outer edges.
+        std::vector<Vec2> R(count), L(count), oR(count), oL(count);
+        std::vector<double> trim(count);
+        for (size_t k = 0; k < count; ++k)
+        {
+            const NodeEnd& x = es[k];
+            trim[k] = trims[size_t(x.edge)][size_t(x.side)];
+            const Vec2 n(-x.dir.y, x.dir.x), mouth = c + x.dir * trim[k];
+            R[k] = mouth - n * x.inner;
+            L[k] = mouth + n * x.inner;
+            oR[k] = mouth - n * x.right;
+            oL[k] = mouth + n * x.left;
+        }
+        s.curbs.resize(count);
+        s.outers.resize(count);
+        s.walks.resize(count);
+        for (size_t k = 0; k < count; ++k)
+        {
+            const size_t k1 = (k + 1) % count;
+            const Corner cr = corner(c, es[k], es[k1], gapAfter(es, k));
+            s.walks[k] = cr.walks;
+            if (!cr.lines)
+            {
+                const int n = std::clamp(int(std::ceil(glm::length(oR[k1] - oL[k]) / kCornerStep)), 1, 16);
+                s.curbs[k] = around(c, L[k], R[k1], n);
+                s.outers[k] = around(c, oL[k], oR[k1], n);
+                continue;
+            }
+            std::vector<Vec2> line{L[k]};
+            const double pk = glm::dot(cr.curb - c, es[k].dir), pk1 = glm::dot(cr.curb - c, es[k1].dir);
+            const double tangent = cr.radius > 0.0 ? std::min({cr.radius / std::tan(0.5 * cr.gap), trim[k] - pk, trim[k1] - pk1}) : 0.0;
+            if (tangent > 1.0)
+            {
+                const double r = tangent * std::tan(0.5 * cr.gap);
+                const Vec2 ti = cr.curb + es[k].dir * tangent, tj = cr.curb + es[k1].dir * tangent;
+                const Vec2 centre = cr.curb + glm::normalize(es[k].dir + es[k1].dir) * (r / std::sin(0.5 * cr.gap));
+                const double a0 = std::atan2(ti.y - centre.y, ti.x - centre.x);
+                double turn = std::atan2(tj.y - centre.y, tj.x - centre.x) - a0;
+                while (turn > kPi)
+                    turn -= 2.0 * kPi;
+                while (turn <= -kPi)
+                    turn += 2.0 * kPi;
+                const int n = std::clamp(int(std::ceil(std::abs(turn) * r / kCornerStep)), 2, 12);
+                for (int i = 0; i <= n; ++i)
+                    line.push_back(centre + Vec2(std::cos(a0 + turn * i / n), std::sin(a0 + turn * i / n)) * r);
+            }
+            else if (pk < trim[k] && pk1 < trim[k1])
+                line.push_back(cr.curb);
+            line.push_back(R[k1]);
+            double length = 0.0;
+            for (size_t i = 1; i < line.size(); ++i)
+                length += glm::length(line[i] - line[i - 1]);
+            const int n = 2 * std::clamp(int(std::ceil(length / (2.0 * kCornerStep))), 1, 8);
+            s.curbs[k] = resample(line, n);
+            // The outer corner pairs with the middle of the curb, so the sidewalk keeps its width round the turn.
+            if (glm::dot(cr.outer - c, es[k].dir) <= trim[k] + 1.0 && glm::dot(cr.outer - c, es[k1].dir) <= trim[k1] + 1.0)
+            {
+                s.outers[k] = resample({oL[k], cr.outer}, n / 2);
+                const std::vector<Vec2> back = resample({cr.outer, oR[k1]}, n / 2);
+                s.outers[k].insert(s.outers[k].end(), back.begin() + 1, back.end());
+            }
+            else
+                s.outers[k] = resample({oL[k], oR[k1]}, n);
+        }
+        s.startOf.resize(count);
+        s.curbStart.resize(count);
+        for (size_t k = 0; k < count; ++k)
+        {
+            s.startOf[k] = s.outline.size();
+            s.outline.push_back(R[k]);
+            // The mouth takes the points the street's strip is cut across at, so the two share every edge.
+            const int across = std::clamp(int(std::ceil(2.0 * es[k].inner / seg)), 1, 8);
+            for (int j = across - 1; j >= 1; --j)
+                s.outline.push_back(glm::mix(L[k], R[k], double(j) / across));
+            s.curbStart[k] = s.outline.size();
+            s.outline.insert(s.outline.end(), s.curbs[k].begin(), s.curbs[k].end() - 1);
+        }
+        return s;
+    };
+
+    // Where the carriageways lie: each street's strip and each junction's outline, binned for point tests.
+    struct Area
+    {
+        std::vector<Vec2> ring;
+        Vec2 lo{0.0}, hi{0.0};
+    };
+    std::vector<Area> areas;
+    std::unordered_map<int64_t, std::vector<uint32_t>> areaBins;
+    constexpr double kAreaCell = 2000.0;
+    auto areaKey = [](int x, int z) { return (int64_t(x) << 32) ^ int64_t(uint32_t(z)); };
+    auto makeAreas = [&](const std::vector<NodeShape>& shapes) {
+        areas.clear();
+        areaBins.clear();
+        for (size_t e = 0; e < g.edges.size(); ++e)
+        {
+            const StreetEdge& x = g.edges[e];
+            if (!g.isStreet(int(e)))
+                continue;
+            Vec2 a = g.nodes[size_t(x.a)].p, b = g.nodes[size_t(x.b)].p;
+            const double len = glm::length(b - a);
+            if (len < 1e-6 || len - trims[e][0] - trims[e][1] < 1.0)
+                continue;
+            const Vec2 d = (b - a) / len, n(-d.y, d.x);
+            a += d * trims[e][0];
+            b -= d * trims[e][1];
+            const double half = 0.5 * edgeWidth(l, int(e)), inner = half - walkWidth(l, int(e), 2.0 * half, medieval);
+            areas.push_back({{a + n * inner, b + n * inner, b - n * inner, a - n * inner}});
+        }
+        for (const NodeShape& s : shapes)
+            if (s.outline.size() >= 3)
+                areas.push_back({s.outline});
+        for (size_t i = 0; i < areas.size(); ++i)
+        {
+            Area& ar = areas[i];
+            ar.lo = Vec2(std::numeric_limits<double>::max());
+            ar.hi = Vec2(-std::numeric_limits<double>::max());
+            for (const Vec2& p : ar.ring)
+                ar.lo = glm::min(ar.lo, p), ar.hi = glm::max(ar.hi, p);
+            for (int x = int(std::floor(ar.lo.x / kAreaCell)); x <= int(std::floor(ar.hi.x / kAreaCell)); ++x)
+                for (int z = int(std::floor(ar.lo.y / kAreaCell)); z <= int(std::floor(ar.hi.y / kAreaCell)); ++z)
+                    areaBins[areaKey(x, z)].push_back(uint32_t(i));
+        }
+    };
+    auto onRoad = [&](Vec2 p) {
+        const auto it = areaBins.find(areaKey(int(std::floor(p.x / kAreaCell)), int(std::floor(p.y / kAreaCell))));
+        if (it == areaBins.end())
+            return false;
+        for (uint32_t i : it->second)
+        {
+            const Area& ar = areas[i];
+            if (p.x < ar.lo.x || p.x > ar.hi.x || p.y < ar.lo.y || p.y > ar.hi.y)
+                continue;
+            bool in = false;
+            for (size_t a = 0, b = ar.ring.size() - 1; a < ar.ring.size(); b = a++)
+                if ((ar.ring[a].y > p.y) != (ar.ring[b].y > p.y) &&
+                    p.x < (ar.ring[b].x - ar.ring[a].x) * (p.y - ar.ring[a].y) / (ar.ring[b].y - ar.ring[a].y) + ar.ring[a].x)
+                    in = !in;
+            if (in)
+                return true;
+        }
+        return false;
+    };
+    /** Whether a piece of sidewalk reaches into a carriageway: its centre or a point halfway to any corner lies on one. */
+    auto pieceOnRoad = [&](std::initializer_list<Vec2> corners) {
+        Vec2 c(0.0);
+        for (const Vec2& p : corners)
+            c += p / double(corners.size());
+        if (onRoad(c))
+            return true;
+        for (const Vec2& p : corners)
+            if (onRoad(glm::mix(c, p, 0.5)))
+                return true;
+        return false;
+    };
+    std::vector<NodeShape> shapes(g.nodes.size());
+    auto makeShapes = [&] {
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, ends.size()), [&](const tbb::blocked_range<size_t>& range) {
+            for (size_t nd = range.begin(); nd < range.end(); ++nd)
+                shapes[nd] = plain(ends[nd]) ? NodeShape{} : shape(nd);
+        });
+        makeAreas(shapes);
+    };
+    makeEnds();
+    makeTrims();
+    makeShapes();
+    // A side whose sidewalk would lie on another carriageway (a divided road's inner sides, a sliver between streets) has none.
+    bool dropped = false;
     for (size_t e = 0; e < g.edges.size(); ++e)
     {
         const StreetEdge& x = g.edges[e];
-        const double len = glm::length(g.nodes[size_t(x.b)].p - g.nodes[size_t(x.a)].p), sum = trims[e][0] + trims[e][1];
-        if (sum > len && sum > 0.0)
-            trims[e] = {trims[e][0] * len / sum, trims[e][1] * len / sum};
+        if (!g.isStreet(int(e)))
+            continue;
+        Vec2 a = g.nodes[size_t(x.a)].p, b = g.nodes[size_t(x.b)].p;
+        const double len = glm::length(b - a);
+        const double half = 0.5 * edgeWidth(l, int(e)), inner = half - walkWidth(l, int(e), 2.0 * half, medieval);
+        if (len < 1e-6 || half - inner < 1e-6 || len - trims[e][0] - trims[e][1] < 1.0)
+            continue;
+        const Vec2 d = (b - a) / len, n(-d.y, d.x);
+        a += d * trims[e][0];
+        b -= d * trims[e][1];
+        const int samples = std::max(3, int(glm::length(b - a) / 200.0));
+        for (int s = 0; s < 2; ++s)
+        {
+            int hit = 0;
+            for (int i = 0; i < samples; ++i)
+            {
+                const Vec2 c = glm::mix(a, b, (i + 0.5) / samples);
+                for (double off : {0.5 * (inner + half), half - 0.1 * (half - inner)})
+                    hit += onRoad(c + n * (s == 0 ? off : -off)) ? 1 : 0;
+            }
+            if (hit > samples / 2)
+            {
+                walkSides[e][size_t(s)] = false;
+                dropped = true;
+            }
+        }
+    }
+    if (dropped)
+    {
+        makeEnds();
+        makeTrims();
+        makeShapes();
     }
 
     /** Adds a face wound so its normal points along want (up when want is zero); slivers are dropped. */
@@ -836,6 +1097,7 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             std::array<uint32_t, 8> prev{}, cur{};
             std::vector<uint32_t> prevRoad(size_t(across) + 1), curRoad(size_t(across) + 1);
             auto pt = [&](Vec2 p, double h) { return m.point(glm::dvec3(p.x, h, p.y)); };
+            Vec2 prevC = a;
             for (int s = 0; s <= steps; ++s)
             {
                 const Vec2 c = a + (b - a) * (double(s) / steps);
@@ -858,54 +1120,25 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
                 {
                     for (size_t j = 0; j < size_t(across); ++j)
                         m.face({prevRoad[j], curRoad[j], curRoad[j + 1], prevRoad[j + 1]}, road);
-                    if (walk)
+                    if (walk && walkSides[e][0] && !pieceOnRoad({prevC + n * inner, c + n * inner, c + n * half, prevC + n * half}))
                     {
                         m.face({prev[3], cur[3], cur[2], prev[2]}, side);
-                        m.face({prev[5], cur[5], cur[6], prev[6]}, side);
                         orient(m, {prev[0], cur[0], cur[2], prev[2]}, -n, curb);
-                        orient(m, {prev[1], cur[1], cur[5], prev[5]}, n, curb);
                         orient(m, {prev[3], cur[3], cur[4], prev[4]}, n, side);
+                    }
+                    if (walk && walkSides[e][1] && !pieceOnRoad({prevC - n * inner, c - n * inner, c - n * half, prevC - n * half}))
+                    {
+                        m.face({prev[5], cur[5], cur[6], prev[6]}, side);
+                        orient(m, {prev[1], cur[1], cur[5], prev[5]}, n, curb);
                         orient(m, {prev[6], cur[6], cur[7], prev[7]}, -n, side);
                     }
                 }
                 prev = cur;
+                prevC = c;
                 std::swap(prevRoad, curRoad);
             }
         }
     });
-    /** n + 1 points along a polyline, evenly by length. */
-    auto resample = [](const std::vector<Vec2>& line, int n) {
-        std::vector<double> at(line.size(), 0.0);
-        for (size_t k = 1; k < line.size(); ++k)
-            at[k] = at[k - 1] + glm::length(line[k] - line[k - 1]);
-        std::vector<Vec2> out;
-        size_t piece = 0;
-        for (int i = 0; i <= n; ++i)
-        {
-            const double t = at.back() * i / n;
-            while (piece + 2 < line.size() && at[piece + 1] < t)
-                ++piece;
-            const double span = at[piece + 1] - at[piece];
-            out.push_back(span > 1e-9 ? glm::mix(line[piece], line[piece + 1], std::clamp((t - at[piece]) / span, 0.0, 1.0)) : line[piece]);
-        }
-        return out;
-    };
-    /** n + 1 points turning counter-clockwise round c from p to q (straight across when q is not ahead of p). */
-    auto around = [](Vec2 c, Vec2 p, Vec2 q, int n) {
-        const double a0 = std::atan2(p.y - c.y, p.x - c.x), r0 = glm::length(p - c), r1 = glm::length(q - c);
-        double turn = std::atan2(q.y - c.y, q.x - c.x) - a0;
-        while (turn > kPi)
-            turn -= 2.0 * kPi;
-        while (turn <= -kPi)
-            turn += 2.0 * kPi;
-        std::vector<Vec2> out;
-        for (int i = 0; i <= n; ++i)
-        {
-            const double t = double(i) / n;
-            out.push_back(turn > 1e-6 ? c + Vec2(std::cos(a0 + turn * t), std::sin(a0 + turn * t)) * glm::mix(r0, r1, t) : glm::mix(p, q, t));
-        }
-        return out;
-    };
     std::vector<Polys> nodePolys(g.nodes.size());
     tbb::parallel_for(tbb::blocked_range<size_t>(0, ends.size()), [&](const tbb::blocked_range<size_t>& range) {
         for (size_t nd = range.begin(); nd < range.end(); ++nd)
@@ -913,6 +1146,7 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             const std::vector<NodeEnd>& es = ends[nd];
             if (plain(es))
                 continue;
+            const NodeShape& s = shapes[nd];
             const Vec2 c = g.nodes[nd].p;
             const NodeEnd* top = &es[0];
             for (const NodeEnd& x : es)
@@ -921,88 +1155,11 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             const FaceTags road{-1, int32_t(top->cls), -1, top->surface}, side{-1, int32_t(top->cls), -1, SurfSidewalk},
                 curb{-1, int32_t(top->cls), -1, SurfConcrete};
             const size_t count = es.size();
-            // Each street's mouth: its curb points right and left of its direction, and its sidewalks' outer edges.
-            std::vector<Vec2> R(count), L(count), oR(count), oL(count);
-            std::vector<double> trim(count);
-            for (size_t k = 0; k < count; ++k)
-            {
-                const NodeEnd& x = es[k];
-                trim[k] = trims[size_t(x.edge)][size_t(x.side)];
-                const Vec2 n(-x.dir.y, x.dir.x), mouth = c + x.dir * trim[k];
-                R[k] = mouth - n * x.inner;
-                L[k] = mouth + n * x.inner;
-                oR[k] = mouth - n * x.half;
-                oL[k] = mouth + n * x.half;
-            }
-            // Each corner's curb from L[k] to R[k + 1] and the sidewalk's outer edge beside it, point for point.
-            std::vector<std::vector<Vec2>> curbs(count), outers(count);
-            std::vector<bool> walks(count);
-            for (size_t k = 0; k < count; ++k)
-            {
-                const size_t k1 = (k + 1) % count;
-                const Corner cr = corner(c, es[k], es[k1], gapAfter(es, k));
-                walks[k] = cr.walks;
-                if (!cr.lines)
-                {
-                    const int n = std::clamp(int(std::ceil(glm::length(oR[k1] - oL[k]) / kCornerStep)), 1, 16);
-                    curbs[k] = around(c, L[k], R[k1], n);
-                    outers[k] = around(c, oL[k], oR[k1], n);
-                    continue;
-                }
-                std::vector<Vec2> line{L[k]};
-                const double pk = glm::dot(cr.curb - c, es[k].dir), pk1 = glm::dot(cr.curb - c, es[k1].dir);
-                const double tangent = cr.radius > 0.0 ? std::min({cr.radius / std::tan(0.5 * cr.gap), trim[k] - pk, trim[k1] - pk1}) : 0.0;
-                if (tangent > 1.0)
-                {
-                    const double r = tangent * std::tan(0.5 * cr.gap);
-                    const Vec2 ti = cr.curb + es[k].dir * tangent, tj = cr.curb + es[k1].dir * tangent;
-                    const Vec2 centre = cr.curb + glm::normalize(es[k].dir + es[k1].dir) * (r / std::sin(0.5 * cr.gap));
-                    const double a0 = std::atan2(ti.y - centre.y, ti.x - centre.x);
-                    double turn = std::atan2(tj.y - centre.y, tj.x - centre.x) - a0;
-                    while (turn > kPi)
-                        turn -= 2.0 * kPi;
-                    while (turn <= -kPi)
-                        turn += 2.0 * kPi;
-                    const int n = std::clamp(int(std::ceil(std::abs(turn) * r / kCornerStep)), 2, 12);
-                    for (int i = 0; i <= n; ++i)
-                        line.push_back(centre + Vec2(std::cos(a0 + turn * i / n), std::sin(a0 + turn * i / n)) * r);
-                }
-                else if (pk < trim[k] && pk1 < trim[k1])
-                    line.push_back(cr.curb);
-                line.push_back(R[k1]);
-                double length = 0.0;
-                for (size_t i = 1; i < line.size(); ++i)
-                    length += glm::length(line[i] - line[i - 1]);
-                const int n = 2 * std::clamp(int(std::ceil(length / (2.0 * kCornerStep))), 1, 8);
-                curbs[k] = resample(line, n);
-                // The outer corner pairs with the middle of the curb, so the sidewalk keeps its width round the turn.
-                if (glm::dot(cr.outer - c, es[k].dir) <= trim[k] + 1.0 && glm::dot(cr.outer - c, es[k1].dir) <= trim[k1] + 1.0)
-                {
-                    outers[k] = resample({oL[k], cr.outer}, n / 2);
-                    const std::vector<Vec2> back = resample({cr.outer, oR[k1]}, n / 2);
-                    outers[k].insert(outers[k].end(), back.begin() + 1, back.end());
-                }
-                else
-                    outers[k] = resample({oL[k], oR[k1]}, n);
-            }
             Polys& m = nodePolys[nd];
             // The carriageway: a fan from the centre over its outline, cut in rings so it follows the ground.
-            std::vector<Vec2> outline;
-            std::vector<size_t> startOf(count), curbStart(count);
-            for (size_t k = 0; k < count; ++k)
-            {
-                startOf[k] = outline.size();
-                outline.push_back(R[k]);
-                // The mouth takes the points the street's strip is cut across at, so the two share every edge.
-                const int across = std::clamp(int(std::ceil(2.0 * es[k].inner / seg)), 1, 8);
-                for (int j = across - 1; j >= 1; --j)
-                    outline.push_back(glm::mix(L[k], R[k], double(j) / across));
-                curbStart[k] = outline.size();
-                outline.insert(outline.end(), curbs[k].begin(), curbs[k].end() - 1);
-            }
             std::vector<uint32_t> outlineIds;
             double reach = 0.0;
-            for (const Vec2& p : outline)
+            for (const Vec2& p : s.outline)
             {
                 outlineIds.push_back(m.point(at(p, roadLift)));
                 reach = std::max(reach, glm::length(p - c));
@@ -1010,33 +1167,34 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             std::vector<std::vector<uint32_t>> curbIds(count);
             for (size_t k = 0; k < count; ++k)
             {
-                for (size_t i = 0; i + 1 < curbs[k].size(); ++i)
-                    curbIds[k].push_back(outlineIds[curbStart[k] + i]);
-                curbIds[k].push_back(outlineIds[startOf[(k + 1) % count]]);
+                for (size_t i = 0; i + 1 < s.curbs[k].size(); ++i)
+                    curbIds[k].push_back(outlineIds[s.curbStart[k] + i]);
+                curbIds[k].push_back(outlineIds[s.startOf[(k + 1) % count]]);
             }
             const int rings = std::clamp(int(std::ceil(reach / seg)), 1, 8);
             const uint32_t centre = m.point(at(c, roadLift));
-            std::vector<std::vector<uint32_t>> spokes(outline.size());
-            for (size_t i = 0; i < outline.size(); ++i)
+            std::vector<std::vector<uint32_t>> spokes(s.outline.size());
+            for (size_t i = 0; i < s.outline.size(); ++i)
             {
                 spokes[i].push_back(centre);
                 for (int r = 1; r < rings; ++r)
-                    spokes[i].push_back(m.point(at(glm::mix(c, outline[i], double(r) / rings), roadLift)));
+                    spokes[i].push_back(m.point(at(glm::mix(c, s.outline[i], double(r) / rings), roadLift)));
                 spokes[i].push_back(outlineIds[i]);
             }
-            for (size_t i = 0; i < outline.size(); ++i)
+            for (size_t i = 0; i < s.outline.size(); ++i)
             {
-                const std::vector<uint32_t>&p = spokes[i], &q = spokes[(i + 1) % outline.size()];
+                const std::vector<uint32_t>&p = spokes[i], &q = spokes[(i + 1) % s.outline.size()];
                 orient(m, {p[0], p[1], q[1]}, Vec2(0.0), road);
                 for (size_t r = 1; r < size_t(rings); ++r)
                     orient(m, {p[r], p[r + 1], q[r + 1], q[r]}, Vec2(0.0), road);
             }
-            // Sidewalk corners: the paving between curb and outer edge, the curb face and the outer skirt.
+            // Sidewalk corners: the paving between curb and outer edge, the curb face and the outer skirt; a piece that
+            // would reach into a carriageway (a sharp corner's point, an island narrower than its sidewalks) is left out.
             for (size_t k = 0; k < count; ++k)
             {
-                if (!walks[k])
+                if (!s.walks[k])
                     continue;
-                const std::vector<Vec2>&in = curbs[k], &out = outers[k];
+                const std::vector<Vec2>&in = s.curbs[k], &out = s.outers[k];
                 std::vector<uint32_t> walkIn, walkOut, foot;
                 for (size_t i = 0; i < in.size(); ++i)
                 {
@@ -1047,6 +1205,8 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
                 }
                 for (size_t i = 0; i + 1 < in.size(); ++i)
                 {
+                    if (pieceOnRoad({in[i], out[i], out[i + 1], in[i + 1]}))
+                        continue;
                     orient(m, {walkIn[i], walkOut[i], walkOut[i + 1], walkIn[i + 1]}, Vec2(0.0), side);
                     const Vec2 along = in[i + 1] - in[i], ahead = out[i + 1] - out[i];
                     orient(m, {curbIds[k][i], curbIds[k][i + 1], walkIn[i + 1], walkIn[i]}, Vec2(-along.y, along.x), curb);

@@ -236,6 +236,107 @@ TEST_CASE("settlement meshes: sidewalks stand a curb above the road, junctions m
     CHECK(twice < covered / 200);
 }
 
+namespace
+{
+/** Up-facing sidewalk faces with a point inside an up-facing carriageway face: the centre and halfway to each corner. */
+int sidewalkOnRoad(const geo::Mesh& m, int* sidewalks)
+{
+    const auto mat = m.faceAttrs().get<int32_t>("material");
+    const auto& names = m.materialNames();
+    auto slot = [&](const char* name) { return int32_t(std::find(names.begin(), names.end(), name) - names.begin()); };
+    const int32_t walk = slot("Settlement_Sidewalk");
+    std::vector<std::vector<Vec2>> roads, walks;
+    for (geo::Index f = 0; f < geo::Index(m.numFaces()); ++f)
+    {
+        std::vector<Vec2> ring;
+        glm::dvec3 n(0.0);
+        const std::vector<geo::Index> pts = m.facePoints(f);
+        for (size_t k = 0; k < pts.size(); ++k)
+        {
+            const glm::dvec3 a = m.position(pts[k]), b = m.position(pts[(k + 1) % pts.size()]);
+            n += glm::dvec3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
+            ring.push_back({a.x, a.z});
+        }
+        if (n.y < 0.5 * glm::length(n))
+            continue;
+        (mat[f] == walk ? walks : roads).push_back(std::move(ring));
+    }
+    auto inside = [](const std::vector<Vec2>& r, Vec2 p) {
+        bool in = false;
+        for (size_t i = 0, j = r.size() - 1; i < r.size(); j = i++)
+            if ((r[i].y > p.y) != (r[j].y > p.y) && p.x < (r[j].x - r[i].x) * (p.y - r[i].y) / (r[j].y - r[i].y) + r[i].x)
+                in = !in;
+        return in;
+    };
+    int bad = 0;
+    for (const std::vector<Vec2>& w : walks)
+    {
+        Vec2 c(0.0);
+        for (const Vec2& p : w)
+            c += p / double(w.size());
+        std::vector<Vec2> probes{c};
+        for (const Vec2& p : w)
+            probes.push_back(glm::mix(c, p, 0.5));
+        bool on = false;
+        for (const Vec2& p : probes)
+            for (const std::vector<Vec2>& r : roads)
+                on = on || inside(r, p);
+        bad += on ? 1 : 0;
+    }
+    *sidewalks = int(walks.size());
+    return bad;
+}
+
+Layout junctionLayout()
+{
+    Layout l{StreetGraph(150.0, 2000.0)};
+    for (StreetClass c : {StreetClass::Arterial, StreetClass::Collector, StreetClass::Local, StreetClass::Alley, StreetClass::Path})
+    {
+        RoadProfile r;
+        builtinRoadProfile(defaultRoadProfile(c), &r);
+        l.roads.push_back(r);
+    }
+    REQUIRE(builtinProfile("mexicanCity", &l.profile));
+    l.radius = 100000.0;
+    return l;
+}
+} // namespace
+
+TEST_CASE("settlement meshes: no sidewalk or island lies in the carriageway at skewed junctions of 3 to 6 legs")
+{
+    // Junctions of 3 to 6 legs at uneven angles, mixed classes.
+    const StreetClass classes[] = {StreetClass::Local, StreetClass::Collector, StreetClass::Arterial, StreetClass::Local, StreetClass::Alley, StreetClass::Local};
+    for (int legs = 3; legs <= 6; ++legs)
+    {
+        Layout l = junctionLayout();
+        const Vec2 c(0.0, 0.0);
+        double a = 0.3;
+        for (int k = 0; k < legs; ++k)
+        {
+            a += 2.0 * kPi / legs * (k % 2 ? 0.6 : 1.4);
+            l.graph.addStreet(c, c + Vec2(std::cos(a), std::sin(a)) * 6000.0, classes[k]);
+        }
+        int walks = 0;
+        const int bad = sidewalkOnRoad(toMeshes(l, Ground::plane()).streets, &walks);
+        CAPTURE(legs);
+        CHECK(walks > 10);
+        CHECK(bad == 0);
+    }
+    // A divided road closer than two sidewalks, joined by a short cross street, and a fork at 20 degrees.
+    Layout l = junctionLayout();
+    l.graph.addStreet({-8000.0, 0.0}, {8000.0, 0.0}, StreetClass::Collector);
+    l.graph.addStreet({-8000.0, 700.0}, {8000.0, 700.0}, StreetClass::Collector);
+    l.graph.addStreet({0.0, 0.0}, {0.0, 700.0}, StreetClass::Local);
+    l.graph.addStreet({0.0, 700.0}, {0.0, 6000.0}, StreetClass::Local);
+    l.graph.addStreet({0.0, 0.0}, {0.0, -6000.0}, StreetClass::Local);
+    l.graph.addStreet({0.0, -6000.0}, {-1700.0, -10800.0}, StreetClass::Local);
+    l.graph.addStreet({0.0, -6000.0}, {1700.0, -10800.0}, StreetClass::Local);
+    int walks = 0;
+    const int bad = sidewalkOnRoad(toMeshes(l, Ground::plane()).streets, &walks);
+    CHECK(walks > 10);
+    CHECK(bad == 0);
+}
+
 TEST_CASE("settlement ground: ribbons drape on the quad split the heightfield renderer draws")
 {
     // A terrain cell whose shorter diagonal is 1-3: the renderer splits it 0-2, and the street must lie on that surface.
