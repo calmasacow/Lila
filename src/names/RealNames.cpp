@@ -42,7 +42,8 @@ const std::set<std::string, std::less<>>& genericWords()
         "street", "sur", "super", "supermercado", "taller", "templo", "the", "tienda", "torre", "unidad", "universidad",
         "university", "way", "west", "y", "zona", "abarrotes", "taqueria", "tacos", "mariscos", "panaderia", "gasolinera",
         "aeropuerto", "airport", "fraccionamiento", "residencial", "mini", "express", "dam", "reservoir", "bay", "bahia",
-        "cerro", "mount", "creek", "arroyo", "tower", "grill", "market", "station", "stop", "parada"};
+        "cerro", "mount", "creek", "arroyo", "tower", "grill", "market", "station", "stop", "parada", "bomberos", "fire",
+        "comandancia", "delegacion"};
     return w;
 }
 
@@ -324,6 +325,54 @@ NameBook::NameBook(std::string culture, std::shared_ptr<const RealNames> avoid) 
 
 bool NameBook::real(std::string_view text) const { return (mAvoid && mAvoid->find(text)) || brandBlocklist().find(text); }
 
+namespace
+{
+/** A byte index near the middle of word that starts a UTF-8 character. */
+size_t middleOf(std::string_view word)
+{
+    size_t i = word.size() / 2;
+    while (i > 0 && (static_cast<unsigned char>(word[i]) & 0xC0) == 0x80)
+        --i;
+    return i;
+}
+
+bool distinctiveWord(std::string_view word)
+{
+    const std::string n = normalize(word);
+    return n.size() >= 4 && n.find(' ') == std::string::npos && !genericWords().count(n) && !isNumber(n);
+}
+} // namespace
+
+std::string coinName(std::string_view a, std::string_view b)
+{
+    std::vector<std::string_view> donors;
+    for (std::string_view w : words(b))
+        if (distinctiveWord(w))
+            donors.push_back(w);
+    if (donors.empty())
+        return std::string(a);
+    std::string out;
+    size_t used = 0;
+    for (std::string_view w : words(a))
+    {
+        if (!out.empty())
+            out += ' ';
+        const std::string own = normalize(w);
+        std::string_view d;
+        for (size_t k = 0; k < donors.size() && d.empty() && distinctiveWord(w); ++k, ++used)
+            if (normalize(donors[used % donors.size()]) != own)
+                d = donors[used % donors.size()];
+        if (d.empty())
+        {
+            out += w;
+            continue;
+        }
+        out += w.substr(0, std::max<size_t>(1, middleOf(w)));
+        out += d.substr(middleOf(d));
+    }
+    return out;
+}
+
 template <class F>
 std::string NameBook::unique(uint64_t bucket, uint64_t key, F&& make)
 {
@@ -331,23 +380,46 @@ std::string NameBook::unique(uint64_t bucket, uint64_t key, F&& make)
     if (auto it = mGiven.find(id); it != mGiven.end())
         return it->second;
     std::unordered_set<std::string>& taken = mTaken[bucket];
+    constexpr int kAttempts = 96;
     std::string name;
-    for (int attempt = 0; attempt < 96 && name.empty(); ++attempt)
-        if (std::string s = make(attempt); !taken.count(s) && !real(s))
+    auto take = [&](std::string s) {
+        if (!taken.count(s) && !real(s))
             name = std::move(s);
+    };
+    for (int attempt = 0; attempt < kAttempts && name.empty(); ++attempt)
+        take(make(attempt));
+    // Real data can name things with every word of the culture's lists, or a pattern can have one fixed word a real place
+    // shares; then the words are spliced with others of the culture into ones of its sound.
+    auto coin = [&](int attempt) {
+        const uint64_t k = hash64(key + uint64_t(attempt));
+        return coinName(make(attempt), make((attempt * 7 + 13) % kAttempts) + " " + streetName(mCulture, 2, k, 0) + " " + districtName(mCulture, k, 0));
+    };
+    bool coined = false;
+    for (int attempt = 0; attempt < kAttempts && name.empty(); ++attempt)
+    {
+        take(coin(attempt));
+        coined = !name.empty();
+    }
     // Numbered after any of the attempts whose own name is not real, so a real first attempt can't loop forever. The search
     // resumes at the bucket's last number, so it stays linear however many names one bucket hands out.
     int& from = mNumberFrom[bucket];
     for (int n = std::max(2, from); name.empty(); ++n)
     {
-        for (int attempt = 0; attempt < 96 && name.empty(); ++attempt)
-            if (std::string s = make(attempt) + " " + std::to_string(n); !taken.count(s) && !real(s))
-                name = std::move(s);
+        const std::string number = " " + std::to_string(n);
+        for (int attempt = 0; attempt < kAttempts && name.empty(); ++attempt)
+            take(make(attempt) + number);
+        for (int attempt = 0; attempt < kAttempts && name.empty(); ++attempt)
+        {
+            take(coin(attempt) + number);
+            coined = !name.empty();
+        }
         if (!name.empty())
             from = n;
-        else if (n > from + 4096)
+        else if (n > from + 64)
             throw std::runtime_error("no fictional name left that matches no real name");
     }
+    if (coined)
+        ++mCoined;
     taken.insert(name);
     mGiven.emplace(id, name);
     return name;

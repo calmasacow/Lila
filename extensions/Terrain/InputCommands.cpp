@@ -1340,6 +1340,8 @@ json runImportOsm(const Args& a)
         throw CommandError(cmd + ": " + e.what());
     }
 
+    if (book.coined())
+        log::info("{}: {} names coined from the {} words, every listed one matching a real name in the data", cmd, book.coined(), culture);
     json counts = json::object(), lengths = json::object();
     for (const auto& [kind, m] : byKind)
     {
@@ -1355,6 +1357,7 @@ json runImportOsm(const Args& a)
                 {"culture", culture},
                 {"cultureFrom", cultureFrom},
                 {"named", named},
+                {"coinedNames", book.coined()},
                 {"landcover", landcover},
                 {"georef", georefJson(geo)},
                 {"attribution", osmAttribution()},

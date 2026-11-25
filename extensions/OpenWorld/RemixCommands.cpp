@@ -709,6 +709,8 @@ void registerRemix(ext::Context& ctx)
                 const std::string grp = imported.contains("curves") && imported["curves"].contains("group") ? imported["curves"]["group"].get<std::string>() : std::string();
                 ops::execute("setAttr", {{"args", {ref.mesh + ".remixFeatures", grp}}});
                 out["features"] = {{"group", grp}, {"counts", imported.value("features", json::object())}, {"outside", imported.value("outside", 0)}};
+                if (const size_t coined = imported.value("coinedNames", size_t(0)))
+                    notes.push_back(std::to_string(coined) + " names coined: every listed " + imported.value("culture", std::string()) + " word matched a real name");
             }
             const json check = checkRemix(ref.spec, *r);
             out["check"] = {{"ok", check["ok"]}, {"counts", check["counts"]}};

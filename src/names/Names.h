@@ -159,6 +159,8 @@ public:
     std::string district(uint64_t key);
     /** True when text matches a real name (avoid or blocklist). */
     bool real(std::string_view text) const;
+    /** Names spliced from the culture's words because every listed word matched a real name. */
+    size_t coined() const { return mCoined; }
 
 private:
     template <class F>
@@ -169,7 +171,11 @@ private:
     std::unordered_map<uint64_t, std::string> mGiven;               // (bucket, key) -> name
     std::unordered_map<uint64_t, std::unordered_set<std::string>> mTaken; // bucket -> names
     std::unordered_map<uint64_t, int> mNumberFrom;                   // bucket -> lowest number still worth trying
+    size_t mCoined = 0;
 };
+
+/** a with each distinctive word spliced onto the second half of one of b's: a name of the same sound that lists name neither. */
+LILA_SCENE_API std::string coinName(std::string_view a, std::string_view b);
 
 /** Real names recorded in source attributes on every node of the scene; source is "<node>.<key>". */
 LILA_SCENE_API RealNames sceneRealNames(const scene::Graph& g);
