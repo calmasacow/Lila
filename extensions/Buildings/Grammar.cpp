@@ -22,6 +22,27 @@ namespace
 {
 constexpr double kPi = std::numbers::pi;
 const Vec3 kUp{0.0, 1.0, 0.0};
+/** cm: the widest footprint a pitched roof spans. */
+constexpr double kWidestPitched = 4000.0;
+
+/** The ring's narrowest width: over each side's direction, the farthest any corner stands from that side. */
+double ringWidth(const Ring& r)
+{
+    double best = std::numeric_limits<double>::max();
+    for (size_t e = 0; e < r.size(); ++e)
+    {
+        const Vec2 a = r[e], d = r[(e + 1) % r.size()] - a;
+        const double len = glm::length(d);
+        if (len < 1.0)
+            continue;
+        const Vec2 n(-d.y / len, d.x / len);
+        double far = 0.0;
+        for (const Vec2& q : r)
+            far = std::max(far, std::abs(glm::dot(q - a, n)));
+        best = std::min(best, far);
+    }
+    return best == std::numeric_limits<double>::max() ? 0.0 : best;
+}
 
 struct TierPlan
 {
@@ -1435,6 +1456,9 @@ void roofs(Ctx& c, std::vector<TierPlan>& tiers)
                 kind = c.st.roof;
         }
         if (kind == "skillion" || kind == "shed")
+            kind = "flat";
+        // A style's pitched roof over a footprint wider than a house would stand as a hill: wide tiers take a flat one.
+        if (!c.ed.roof && kind != "flat" && kind != "dome" && ringWidth(tier.ring) > kWidestPitched)
             kind = "flat";
         const bool flat = kind == "flat" || kind == "dome";
         Module m;

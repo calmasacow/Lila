@@ -358,3 +358,18 @@ TEST_CASE("buildings: two-tone modules take the tones their style names, framed 
     s = Style::fromJson(j);
     CHECK(moduleTones(s, p, "arcade") == std::array<glm::vec4, 2>{none, render});
 }
+
+TEST_CASE("buildings: a pitched style roof spans a house, a footprint wider than 40 m takes a flat one")
+{
+    const Style& st = styles().at("church");
+    REQUIRE(st.roof != "flat");
+    auto roofOf = [&](double w, double d) {
+        const auto r = generate(rect(0, 0, w, d, 1, {0, 2, 2, 2}), st, {});
+        for (const Module& m : r->modules)
+            if (m.path == "t0/roof")
+                return m.type;
+        return std::string();
+    };
+    CHECK(roofOf(1400, 2400) != "roof.flat");
+    CHECK(roofOf(6000, 6000) == "roof.flat");
+}
