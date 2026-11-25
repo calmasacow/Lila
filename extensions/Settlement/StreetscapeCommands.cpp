@@ -39,6 +39,7 @@ std::string furnitureSlotType(const std::string& kind)
 {
     static const std::map<std::string, std::string> types = {
         {"lamp", "lamp.street"},         {"lantern", "lamp.lantern"},        {"tree", "tree.street"},
+        {"parkTree", "tree.broadleaf"}, {"yardTree", "tree"},              {"palm", "tree.palm"},
         {"signal", "sign.traffic.signal"}, {"stopSign", "sign.traffic.stop"}, {"yieldSign", "sign.traffic.yield"},
         {"streetSign", "sign.street"},   {"namePlaque", "sign.street.plaque"}, {"bench", "furniture.bench"},
         {"bin", "furniture.bin"},        {"bollard", "furniture.bollard"},   {"hydrant", "furniture.hydrant"},
@@ -313,8 +314,9 @@ void registerStreetscapeCommands(ext::Context& ctx)
         .doc = "Places street furniture: along every road from its road profile's set (lamps, street trees, benches, bins, "
                "hydrants; lanterns in medieval styles), signals on each approach of signalised junctions, stop and yield "
                "signs by junction control, a street-name sign at each junction, and squares furnished (medieval: a well, market "
-               "stalls and carts; modern: benches, trees, and bollards along the main streets). Every placement has a stable id "
-               "that survives unrelated edits.\n\n"
+               "stalls and carts; modern: benches, trees, and bollards along the main streets), trees in parks (the park set, "
+               "parkTree on a grid of its spacing) and behind houses (the yard set, yardTree: more often the wider the house is "
+               "against its spacing). Every placement has a stable id that survives unrelated edits.\n\n"
                "Sets are data: sets= replaces a profile's rules, {profile: [{kind, spacing, where, sides, minWidth}]} with "
                "where kerb, back, verge, median or edge and sides both, alternate, right or left. realize=True places a "
                "Set Dressing library asset for each kind in assets= (lamp defaults to Road/StreetLight) through its place "
