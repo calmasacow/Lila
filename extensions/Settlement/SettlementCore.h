@@ -884,6 +884,8 @@ struct OutputOptions
     double segment = 500.0; // ribbons and outlines are draped at about this spacing
     double lift = 2.0;      // cm above the ground, so streets do not z-fight it
     bool ground = true;     // the ground mesh of blocks and lots
+    bool lots = true;       // lot outlines
+    bool envelopes = true;  // envelope volumes and footprints
 };
 
 MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o = {});

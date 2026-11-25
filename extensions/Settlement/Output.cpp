@@ -873,7 +873,7 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
 
     // Lots: outlines as loose edges draped on the ground.
     std::vector<int32_t> edgeLot;
-    for (const Lot& lot : l.lots)
+    for (const Lot& lot : o.lots ? std::span<const Lot>(l.lots) : std::span<const Lot>())
     {
         const size_t n = lot.outline.size();
         std::vector<geo::Index> ids;
@@ -899,7 +899,7 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     // Envelopes: closed prisms from the foundation to the top, walls facing out, roof up, floor down.
     std::vector<int32_t> envLot, envUse, envFloors, envPart;
     std::vector<int> flatRoofs;
-    for (const Envelope& env : l.envelopes)
+    for (const Envelope& env : o.envelopes ? std::span<const Envelope>(l.envelopes) : std::span<const Envelope>())
     {
         // The Buildings extension's live buildings stand there instead.
         if (env.route == BuildingRoute::Buildings)
