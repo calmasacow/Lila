@@ -160,7 +160,54 @@ struct Polys
         return uint32_t(pts.size() - 1);
     }
     void face(std::initializer_list<uint32_t> ids, const FaceTags& t) { face(std::vector<uint32_t>(ids), t); }
+    /** Quads and triangles go in as they are; larger polygons (clipped lots, junction hulls) as ear-clipped triangles. */
     void face(const std::vector<uint32_t>& ids, const FaceTags& t)
+    {
+        if (ids.size() <= 4)
+        {
+            raw(ids, t);
+            return;
+        }
+        // Wound clockwise in XZ (normal up): an ear turns the same way as the whole.
+        std::vector<uint32_t> ring = ids;
+        auto turn = [&](uint32_t a, uint32_t b, uint32_t c) {
+            const glm::dvec3 &p = pts[a], &q = pts[b], &r = pts[c];
+            return (q.x - p.x) * (r.z - p.z) - (q.z - p.z) * (r.x - p.x);
+        };
+        double whole = 0.0;
+        for (size_t k = 0; k < ring.size(); ++k)
+            whole += pts[ring[k]].x * pts[ring[(k + 1) % ring.size()]].z - pts[ring[(k + 1) % ring.size()]].x * pts[ring[k]].z;
+        const double sign = whole < 0.0 ? -1.0 : 1.0;
+        size_t guard = ring.size() * ring.size();
+        while (ring.size() > 3 && guard-- > 0)
+        {
+            bool cut = false;
+            for (size_t k = 0; k < ring.size() && !cut; ++k)
+            {
+                const uint32_t a = ring[(k + ring.size() - 1) % ring.size()], b = ring[k], c = ring[(k + 1) % ring.size()];
+                if (turn(a, b, c) * sign <= 0.0)
+                    continue;
+                bool inside = false;
+                for (uint32_t q : ring)
+                    if (q != a && q != b && q != c && turn(a, b, q) * sign > 0.0 && turn(b, c, q) * sign > 0.0 && turn(c, a, q) * sign > 0.0)
+                    {
+                        inside = true;
+                        break;
+                    }
+                if (inside)
+                    continue;
+                raw({a, b, c}, t);
+                ring.erase(ring.begin() + long(k));
+                cut = true;
+            }
+            if (!cut)
+                break;
+        }
+        // What is left (three corners, or a sliver no ear could be cut from) goes in as a fan.
+        for (size_t k = 1; k + 1 < ring.size(); ++k)
+            raw({ring[0], ring[k], ring[k + 1]}, t);
+    }
+    void raw(const std::vector<uint32_t>& ids, const FaceTags& t)
     {
         idx.insert(idx.end(), ids.begin(), ids.end());
         sizes.push_back(uint32_t(ids.size()));
