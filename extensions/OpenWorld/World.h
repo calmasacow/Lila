@@ -39,8 +39,12 @@ const json& worldSpecSchema();
  */
 void validateSpec(const json& spec);
 
-/** Relative file paths in the spec (remix sources, terrain source file, settlement OSM files) made absolute against dir. */
-json resolvePaths(json spec, const std::string& dir);
+/**
+ * Relative file paths in the spec (remix sources, terrain source file, coast bathymetry, settlement OSM files) made
+ * absolute against dir. A path not in dir for which elsewhere returns true (found relative to the workspace) stays as
+ * given; a file found nowhere is placed in dir, where worldFetch writes it.
+ */
+json resolvePaths(json spec, const std::string& dir, const std::function<bool(const std::string&)>& elsewhere = {});
 
 /**
  * The part of an OSM document inside an area, for one settlement of a larger map. world holds each node's world XZ

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <functional>
 #include <set>
 #include <stdexcept>
 #include <unordered_set>
@@ -49,7 +50,7 @@ void checkArea(const json& a, const std::string& where)
 
 fs::path utf8Path(const std::string& s) { return fs::path(std::u8string(s.begin(), s.end())); }
 
-std::string resolved(const std::string& p, const fs::path& dir)
+std::string resolved(const std::string& p, const fs::path& dir, const std::function<bool(const std::string&)>& elsewhere)
 {
     if (p.empty() || p == "remix")
         return p;
@@ -58,7 +59,8 @@ std::string resolved(const std::string& p, const fs::path& dir)
         return p;
     std::error_code ec;
     const fs::path there = dir / path;
-    if (!fs::exists(there, ec))
+    // A file found only relative to the workspace stays as given; one found nowhere belongs in the spec's folder.
+    if (!fs::exists(there, ec) && elsewhere && elsewhere(p))
         return p;
     const std::u8string u = there.lexically_normal().generic_u8string();
     return std::string(u.begin(), u.end());
@@ -264,21 +266,27 @@ void validateSpec(const json& spec)
     }
 }
 
-json resolvePaths(json spec, const std::string& dir)
+json resolvePaths(json spec, const std::string& dir, const std::function<bool(const std::string&)>& elsewhere)
 {
     const fs::path d = utf8Path(dir);
     if (spec.contains("remix") && spec["remix"].is_object() && spec["remix"].contains("sources") && spec["remix"]["sources"].is_array())
         for (json& src : spec["remix"]["sources"])
             for (const char* k : {"dem", "osm", "landcover", "bathymetry"})
                 if (src.contains(k) && src[k].is_string())
-                    src[k] = resolved(src[k].get<std::string>(), d);
+                    src[k] = resolved(src[k].get<std::string>(), d, elsewhere);
     if (spec.contains("terrain") && spec["terrain"].is_object() && spec["terrain"].contains("source") && spec["terrain"]["source"].is_object() &&
         spec["terrain"]["source"].contains("file") && spec["terrain"]["source"]["file"].is_string())
-        spec["terrain"]["source"]["file"] = resolved(spec["terrain"]["source"]["file"].get<std::string>(), d);
+        spec["terrain"]["source"]["file"] = resolved(spec["terrain"]["source"]["file"].get<std::string>(), d, elsewhere);
+    if (spec.contains("terrain") && spec["terrain"].is_object() && spec["terrain"].contains("coast") && spec["terrain"]["coast"].is_object())
+    {
+        json& c = spec["terrain"]["coast"];
+        if (c.contains("bathymetry") && c["bathymetry"].is_object() && c["bathymetry"].contains("file") && c["bathymetry"]["file"].is_string())
+            c["bathymetry"]["file"] = resolved(c["bathymetry"]["file"].get<std::string>(), d, elsewhere);
+    }
     if (spec.contains("settlements") && spec["settlements"].is_array())
         for (json& s : spec["settlements"])
             if (s.is_object() && s.contains("osm") && s["osm"].is_string())
-                s["osm"] = resolved(s["osm"].get<std::string>(), d);
+                s["osm"] = resolved(s["osm"].get<std::string>(), d, elsewhere);
     return spec;
 }
 

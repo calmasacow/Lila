@@ -1,6 +1,7 @@
 // Open World: the extension's entry point, Level > Open World and the Level Toolkit's Open World section.
 
 #include "OpenWorld.h"
+#include "Http.h"
 #include "World.h"
 #include "ZoneScene.h"
 
@@ -69,4 +70,8 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     return 0;
 }
 
-LILA_EXTENSION_EXPORT void lilaExtensionUninit(lila::ext::Context&) { openworld::unregisterSites(); }
+LILA_EXTENSION_EXPORT void lilaExtensionUninit(lila::ext::Context&)
+{
+    openworld::unregisterSites();
+    terrain::httpShutdown();
+}

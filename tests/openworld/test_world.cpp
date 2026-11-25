@@ -116,10 +116,15 @@ TEST_CASE("world spec: schema and shape checks name the bad field")
     s["buildings"] = {{"enterable", {{{"programs", {"police"}}}, {{"landmarks", true}, {"limit", 2}}}}};
     CHECK_NOTHROW(validateSpec(s));
 
-    // Relative paths resolve against the spec's folder when the file is there.
+    // Relative paths resolve against the spec's folder; a missing file goes there too, unless found elsewhere (the workspace).
     const fs::path dir = fs::path(LILA_TEST_OPENWORLD_DATA);
-    json r = resolvePaths(json::parse(R"({"remix": {"sources": [{"id": "a", "dem": "coast.asc", "osm": "missing.json"}]}, "terrain": {}})"), dir.generic_string());
+    const json rel = json::parse(R"({"remix": {"sources": [{"id": "a", "dem": "coast.asc", "osm": "missing.json"}]},
+                                     "terrain": {"coast": {"bathymetry": {"file": "real/gebco.tif"}}}})");
+    json r = resolvePaths(rel, dir.generic_string());
     CHECK(fs::path(r["remix"]["sources"][0]["dem"].get<std::string>()).is_absolute());
+    CHECK(fs::path(r["remix"]["sources"][0]["osm"].get<std::string>()) == (dir / "missing.json").lexically_normal());
+    CHECK(fs::path(r["terrain"]["coast"]["bathymetry"]["file"].get<std::string>()) == (dir / "real/gebco.tif").lexically_normal());
+    r = resolvePaths(rel, dir.generic_string(), [](const std::string& f) { return f == "missing.json"; });
     CHECK(r["remix"]["sources"][0]["osm"] == "missing.json");
 }
 

@@ -1215,19 +1215,6 @@ json readBack(const std::optional<WorldRef>& w)
     return {{"spec", spec}, {"from", from}, {"notes", notes}, {"world", w ? json(w->node) : json()}};
 }
 
-json loadSpecFile(const std::string& file, const char* cmd)
-{
-    const fs::path p = paths::resolvePath(file);
-    std::ifstream f(p, std::ios::binary);
-    if (!f)
-        throw CommandError(std::string(cmd) + ": can't read " + paths::toUtf8(p));
-    std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    json j = json::parse(text, nullptr, false, true);
-    if (j.is_discarded())
-        throw CommandError(std::string(cmd) + ": " + paths::toUtf8(p) + " is not JSON");
-    return resolvePaths(std::move(j), paths::toUtf8(p.parent_path()));
-}
-
 std::string worldArg(const Args& a) { return a.positional.empty() || !a.positional[0].is_string() ? std::string() : a.positional[0].get<std::string>(); }
 
 const char* kGuide = R"(# Open World in Lila
@@ -1238,10 +1225,11 @@ A whole open-world map from one JSON: a World Remix of real places (fictional na
 
 1. Read lila://schema/world-spec (and the section schemas it names: lila://schema/remix-spec, lila://schema/terrain-spec, lila://schema/site-kits, lila://schema/zones).
 2. Write the spec. Start small: one remix source, one settlement, two sites. `worldSpec(spec=s)` checks it without building.
-3. Build: `r = worldBuild(spec=s)` (or `worldBuild(file='world.json')`, relative paths from the file's folder). Read `r['steps']`: every step's ok, seconds, memoryMB and error. `replace=True` rebuilds a world of the same name.
-4. Check: `c = worldCheck(report=True)`. Fix by kind (below) and rebuild, until `c['ok']`. `c['placeholders']` is swap progress: slots still on placeholders by type.
-5. Overview map: `worldMap(resolution=2048)` writes a PNG and JSON (districts, zones, settlements, POIs, roads, water) for an in-game map.
-6. Read back after hand edits: `worldSpec(file='world.json')` writes the spec the scene now holds (remix, terrain, slots, sites, zones and Buildings edits from the scene; settlements and export as built).
+3. Real data: remix sources with a bbox and file paths get their files in the same call. `worldBuild(file='world.json', estimate=True)['estimate']` lists each missing file with its size; `worldBuild(file='world.json', fetch=True)` downloads them to the paths the spec names (relative to the spec file), then builds. Over 25 MB (or on a metered connection) needs `consent=True`: ask the user first. GEBCO bathymetry needs an OpenTopography key (`apiKey='...', saveKey=True` once). `worldFetch` downloads without building.
+4. Build: `r = worldBuild(spec=s)` (or `worldBuild(file='world.json')`, relative paths from the file's folder). Read `r['steps']`: every step's ok, seconds, memoryMB and error. `replace=True` rebuilds a world of the same name.
+5. Check: `c = worldCheck(report=True)`. Fix by kind (below) and rebuild, until `c['ok']`. `c['placeholders']` is swap progress: slots still on placeholders by type.
+6. Overview map: `worldMap(resolution=2048)` writes a PNG and JSON (districts, zones, settlements, POIs, roads, water) for an in-game map.
+7. Read back after hand edits: `worldSpec(file='world.json')` writes the spec the scene now holds (remix, terrain, slots, sites, zones and Buildings edits from the scene; settlements and export as built).
 
 ## Sections in build order
 
@@ -1312,14 +1300,22 @@ void registerWorld(ext::Context& ctx)
                "assignments and edits, site kits with their buildings, zones (spec, districts, water), pins, worldCheck and the "
                "export. Each step is timed and measured (seconds, memoryMB) in a Tracy zone. The world node keeps the spec and "
                "what was made, so worldSpec reads it back and replace=True rebuilds it. Returns ok, every step's result or error, "
-               "the check, the exports, total time and memory.",
+               "the check, the exports, total time and memory. fetch=True first downloads the real data the spec names and lacks "
+               "(worldFetch: sizes shown, over 25 MB needs consent=True, files written to the spec's own paths); without it a "
+               "missing data file stops the build before it starts, naming the file.",
         .flags = {{"spec", "s", T::Any, nullptr, "The world spec, a dict."},
                   {"file", "f", T::String, nullptr, "A world spec JSON file; relative paths in it are from its folder."},
                   {"replace", "r", T::Bool, false, "Delete an earlier build of this world first."},
                   {"stopOnError", "soe", T::Bool, true, "Stop at the first failed step."},
                   {"folder", "fo", T::String, nullptr, "Where files go; default the workspace's openworld/world/<name>."},
                   {"skip", "sk", T::List, nullptr, "Sections to leave out: slots, terrain, settlements, buildings, sites, zones."},
-                  {"check", "ch", T::Bool, nullptr, "Run worldCheck at the end (default the spec's check, else true)."}},
+                  {"check", "ch", T::Bool, nullptr, "Run worldCheck at the end (default the spec's check, else true)."},
+                  {"fetch", "fe", T::Bool, false, "Download the spec's missing real data to the paths it names first (worldFetch)."},
+                  {"estimate", "es", T::Bool, false, "Only list the missing data and its download sizes; build nothing."},
+                  {"consent", "cn", T::Bool, false, "With fetch: allow more than 25 MB, or downloads on a metered connection."},
+                  {"offline", "off", T::Bool, false, "Take missing data from the download cache only."},
+                  {"apiKey", "ak", T::String, "", "With fetch: OpenTopography API key (for GEBCO); default the saved one. Never logged."},
+                  {"saveKey", "svk", T::Bool, false, "With fetch: save apiKey for later fetches."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             json spec;
@@ -1331,6 +1327,19 @@ void registerWorld(ext::Context& ctx)
                 throw CommandError("worldBuild: give spec= or file=");
             if (a.has("check"))
                 spec["check"] = a.get<bool>("check");
+            FetchFlags f;
+            f.estimate = a.get<bool>("estimate", false);
+            f.consent = a.get<bool>("consent", false);
+            f.offline = a.get<bool>("offline", false);
+            f.apiKey = a.get<std::string>("apiKey", "");
+            f.saveKey = a.get<bool>("saveKey", false);
+            if (f.estimate)
+                return fetchWorldData(spec, f, "worldBuild");
+            json fetched;
+            if (a.get<bool>("fetch", false) || f.offline)
+                fetched = fetchWorldData(spec, f, "worldBuild");
+            else if (const std::string missing = missingData(spec); !missing.empty())
+                throw CommandError("worldBuild: " + missing);
             BuildOptions o;
             o.replace = a.get<bool>("replace", false);
             o.stopOnError = a.get<bool>("stopOnError", true);
@@ -1338,9 +1347,14 @@ void registerWorld(ext::Context& ctx)
             if (a.has("skip"))
                 for (const json& k : a.flags["skip"])
                     o.skip.push_back(k.get<std::string>());
-            return buildWorld(std::move(spec), o);
+            json out = buildWorld(std::move(spec), o);
+            if (!fetched.is_null())
+                out["fetch"] = std::move(fetched);
+            return out;
         },
         .examples = {"r = worldBuild(file='worlds/sinaloa.json')\nr['ok'], [(s['step'], s['seconds'], s['memoryMB']) for s in r['steps']]",
+                     "worldBuild(file='worlds/sinaloa_real.json', estimate=True)['estimate']['summary']",
+                     "worldBuild(file='worlds/sinaloa_real.json', fetch=True, consent=True, replace=True)",
                      "worldBuild(spec={'name': 'Tiny', 'terrain': {'size': [400000, 400000], 'resolution': 257, 'source': {'type': 'noise'}},\n"
                      "    'sites': [{'kind': 'village', 'id': 'v1', 'at': [0, 0]}]}, replace=True)"},
     });
@@ -1395,6 +1409,7 @@ void registerWorld(ext::Context& ctx)
     });
 
     registerCheckCommands(ctx);
+    registerFetchCommands(ctx);
 
     mcp::Server& server = mcp::Server::get();
     server.addResource(ctx, {.uri = "lila://schema/world-spec",

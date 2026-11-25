@@ -71,6 +71,25 @@ json assignWorldLinkIds(const std::string& world, const std::vector<std::string>
  */
 json sendWorldToUnreal(const std::string& world, const json& built, const json& options, const StepFn& step);
 
+/** A world spec file read with its relative paths resolved against its folder. Throws CommandError naming cmd. */
+json loadSpecFile(const std::string& file, const char* cmd);
+
+/** worldFetch's flags. */
+struct FetchFlags
+{
+    bool estimate = false;
+    bool consent = false;
+    bool offline = false;
+    bool saveKey = false;
+    std::string apiKey;
+};
+/** worldFetch as a function: {estimate} with flags.estimate, else the downloads' report. Throws CommandError naming cmd. */
+json fetchWorldData(const json& spec, const FetchFlags& flags, const char* cmd);
+/** The data files the spec names that are missing, as a message pointing at fetch=True; empty when none are. */
+std::string missingData(const json& spec);
+/** Registers worldFetch (WorldFetchCommands.cpp). */
+void registerFetchCommands(lila::ext::Context& ctx);
+
 /** Registers worldCheck and worldMap (WorldCheck.cpp). */
 void registerCheckCommands(lila::ext::Context& ctx);
 } // namespace openworld::world
