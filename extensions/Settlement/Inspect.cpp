@@ -6,6 +6,9 @@
 
 #include <lila/Profile.h>
 
+#include <tbb/blocked_range.h>
+#include <tbb/parallel_for.h>
+
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -225,19 +228,27 @@ json checkLayout(const Layout& l, const Ground& ground, const Options& o, const 
                 for (int x = int(std::floor(lo.x / cell)); x <= int(std::floor(hi.x / cell)); ++x)
                     bins[key(x, y)].push_back(i);
         }
-        std::map<std::pair<size_t, size_t>, bool> seen;
+        std::vector<std::pair<size_t, size_t>> pairs;
         for (const auto& [k, list] : bins)
             for (size_t m = 0; m < list.size(); ++m)
                 for (size_t n = m + 1; n < list.size(); ++n)
-                {
-                    const auto pr = std::minmax(list[m], list[n]);
-                    if (seen.contains(pr))
-                        continue;
-                    seen[pr] = true;
-                    const Lot &a = l.lots[pr.first], &b = l.lots[pr.second];
-                    if (a.outline.pts.size() >= 3 && b.outline.pts.size() >= 3 && shareArea(a.outline, b.outline, 2.0))
-                        issue("overlap", "error", std::format("lot:{}", a.id), std::format("lots {} and {} overlap", a.id, b.id), at(centroid(a.outline)));
-                }
+                    pairs.push_back(std::minmax(list[m], list[n]));
+        std::sort(pairs.begin(), pairs.end());
+        pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+        std::vector<char> overlaps(pairs.size(), 0);
+        tbb::parallel_for(tbb::blocked_range<size_t>(0, pairs.size()), [&](const tbb::blocked_range<size_t>& r) {
+            for (size_t i = r.begin(); i < r.end(); ++i)
+            {
+                const Lot &a = l.lots[pairs[i].first], &b = l.lots[pairs[i].second];
+                overlaps[i] = a.outline.pts.size() >= 3 && b.outline.pts.size() >= 3 && shareArea(a.outline, b.outline, 2.0);
+            }
+        });
+        for (size_t i = 0; i < pairs.size(); ++i)
+            if (overlaps[i])
+            {
+                const Lot &a = l.lots[pairs[i].first], &b = l.lots[pairs[i].second];
+                issue("overlap", "error", std::format("lot:{}", a.id), std::format("lots {} and {} overlap", a.id, b.id), at(centroid(a.outline)));
+            }
     }
 
     std::map<uint64_t, std::pair<double, int>> steepest;
