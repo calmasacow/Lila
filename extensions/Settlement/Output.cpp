@@ -988,11 +988,16 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             Polys& m = nodePolys[nd];
             // The carriageway: a fan from the centre over its outline, cut in rings so it follows the ground.
             std::vector<Vec2> outline;
-            std::vector<size_t> startOf(count);
+            std::vector<size_t> startOf(count), curbStart(count);
             for (size_t k = 0; k < count; ++k)
             {
                 startOf[k] = outline.size();
                 outline.push_back(R[k]);
+                // The mouth takes the points the street's strip is cut across at, so the two share every edge.
+                const int across = std::clamp(int(std::ceil(2.0 * es[k].inner / seg)), 1, 8);
+                for (int j = across - 1; j >= 1; --j)
+                    outline.push_back(glm::mix(L[k], R[k], double(j) / across));
+                curbStart[k] = outline.size();
                 outline.insert(outline.end(), curbs[k].begin(), curbs[k].end() - 1);
             }
             std::vector<uint32_t> outlineIds;
@@ -1006,7 +1011,7 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             for (size_t k = 0; k < count; ++k)
             {
                 for (size_t i = 0; i + 1 < curbs[k].size(); ++i)
-                    curbIds[k].push_back(outlineIds[startOf[k] + 1 + i]);
+                    curbIds[k].push_back(outlineIds[curbStart[k] + i]);
                 curbIds[k].push_back(outlineIds[startOf[(k + 1) % count]]);
             }
             const int rings = std::clamp(int(std::ceil(reach / seg)), 1, 8);
