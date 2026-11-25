@@ -13,6 +13,7 @@
 #include "Terrain.h"
 #include "Volume.h"
 
+#include <lila/Events.h>
 #include <lila/Extension.h>
 #include <lila/ExtensionScope.h>
 
@@ -37,6 +38,15 @@ LILA_EXTENSION_EXPORT int lilaExtensionInit(lila::ext::Context& ctx)
     terrain::registerRegionRefs(ctx);
     terrain::registerSpec(ctx);
     terrain::registerWedge(ctx);
+    // What the replaced scene's modifiers published (heightfields, volumes) goes with it.
+    for (const lila::events::Event e : {lila::events::Event::SceneNew, lila::events::Event::SceneOpened})
+        lila::events::subscribe(
+            e,
+            [](const lila::events::EventData&) {
+                terrain::cliffs::forgetGoneCliffs();
+                terrain::forgetGoneVolumeResults();
+            },
+            "Terrain");
     return 0;
 }
 

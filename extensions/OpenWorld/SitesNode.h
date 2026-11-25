@@ -38,4 +38,6 @@ std::shared_ptr<const Layout> layoutFor(const Spec& s);
 json envelopeJson(const Evaluated& e, size_t index);
 
 bool registerSiteNode(lila::ext::Context& ctx);
+/** Forgets what site modifiers no longer in the scene evaluated. */
+void forgetGoneSites();
 } // namespace openworld::sites

@@ -5,6 +5,7 @@
 
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
+#include <lila/Graph.h>
 #include <lila/Mesh.h>
 #include <lila/Profile.h>
 #include <lila/Slots.h>
@@ -639,6 +640,13 @@ json envelopeJson(const Evaluated& ev, size_t i)
         if (!out.contains(k))
             out[k] = v;
     return out;
+}
+
+void forgetGoneSites()
+{
+    const lila::scene::Graph& g = lila::scene::Graph::current();
+    std::lock_guard l(evalLock());
+    std::erase_if(evaluated(), [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first)); });
 }
 
 bool registerSiteNode(lila::ext::Context& ctx) { return lila::gn::registerDecl(ctx, siteDecl()) != nullptr; }

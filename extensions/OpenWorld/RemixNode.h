@@ -24,6 +24,8 @@ struct Published
 
 bool publishedRemix(uint64_t modifier, Published* out);
 std::vector<std::pair<uint64_t, Published>> publishedRemixes();
+/** Forgets the remixes of modifiers no longer in the scene. */
+void forgetGoneRemixes();
 void forgetRemix(uint64_t modifier);
 
 bool registerRemixNode(lila::ext::Context& ctx);

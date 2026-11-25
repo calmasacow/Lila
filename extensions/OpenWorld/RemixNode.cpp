@@ -5,6 +5,7 @@
 
 #include <lila/Extension.h>
 #include <lila/GeometryNodes.h>
+#include <lila/Graph.h>
 #include <lila/Profile.h>
 
 #include <map>
@@ -28,6 +29,13 @@ std::map<uint64_t, Published>& published()
     return m;
 }
 } // namespace
+
+void forgetGoneRemixes()
+{
+    const lila::scene::Graph& g = lila::scene::Graph::current();
+    std::lock_guard l(lock());
+    std::erase_if(published(), [&](const auto& e) { return !g.node(lila::scene::NodeId(e.first)); });
+}
 
 bool publishedRemix(uint64_t modifier, Published* out)
 {
