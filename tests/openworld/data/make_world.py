@@ -402,11 +402,13 @@ def build(size, out):
     if not tiny:
         real = json.loads(json.dumps(spec))
         real["name"] = "SinaloaReal"
-        real["description"] = ("Real data for Mazatlan and Culiacan, fetched with remixSource(fetch=True) only after the size is shown and "
-                               "accepted: DEM (Copernicus 30 m via OpenTopography), OSM (Overpass), WorldCover land cover, GEBCO bathymetry. "
-                               "Run the fetch first (remixCreate with these sources, then remixSource(id=..., bbox=..., fetch=True) for each, "
-                               "and terrainBathymetry(fetch=True, estimate=True) for the GEBCO size), point the file paths at what it wrote, "
-                               "then worldBuild. Settlement areas and site positions follow the synthetic map: check them on worldMap first.")
+        real["description"] = ("Real data for Mazatlan and Culiacan: elevation (Copernicus 30 m), OSM (Overpass), WorldCover land cover and GEBCO "
+                               "bathymetry (through OpenTopography, needs your free API key). One call downloads whatever is missing straight into "
+                               "the paths below (relative to this file) and builds: worldBuild(file='sinaloa_real.json', estimate=True) lists each "
+                               "download and its size, then worldBuild(file='sinaloa_real.json', fetch=True, consent=True, apiKey='...', "
+                               "saveKey=True, replace=True) fetches and builds (consent=True allows more than 25 MB; the key is saved once, later "
+                               "calls leave it out). In the UI: Level > Open World > Build World with Fetch Missing Data on. Settlement areas and "
+                               "site positions follow the synthetic map: check them on worldMap first.")
         # The real Mazatlan box is about 22 km across: 1:1.4 fits it to the 16 km map; the capital cut is downtown Culiacan.
         real["remix"]["scale"] = {"horizontal": "1:1.4", "vertical": "1:1.2"}
         h = 250000.0
