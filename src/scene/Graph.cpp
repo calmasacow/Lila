@@ -1936,6 +1936,22 @@ void Graph::evaluateWith(const std::vector<NodeId>* only)
 
 void Graph::evaluateUpstream(const std::vector<NodeId>& nodes) { evaluateDirty(&nodes); }
 
+namespace
+{
+/** A few nodes are worth computing in parallel when they took long last time, or have not computed yet (a scene just opened). */
+bool worthSpreading(const std::vector<Node*>& level)
+{
+    if (level.size() < 2)
+        return false;
+    constexpr uint64_t kWorthUs = 2000;
+    uint64_t us = 0;
+    for (const Node* n : level)
+        if ((us += n->lastComputeUs()) >= kWorthUs)
+            return true;
+    return false;
+}
+} // namespace
+
 void Graph::evaluateDirty(const std::vector<NodeId>* only)
 {
     LILA_ZONE();
@@ -2075,7 +2091,10 @@ void Graph::evaluateDirty(const std::vector<NodeId>* only)
             if (!mDisplayTurns.empty() && n->type().dag)
                 if (auto turn = mDisplayTurns.find(n->id()); turn != mDisplayTurns.end())
                     n->mValues[Transform::kParentMatrix] = turn->second * n->as<glm::dmat4>(Transform::kParentMatrix);
+            const auto computeStart = std::chrono::steady_clock::now();
             n->compute(mCtx);
+            n->mComputeUs = uint32_t(std::min<int64_t>(
+                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - computeStart).count(), Node::kUnknownCost - 1));
             // Computed from a placeholder upstream means a placeholder too.
             if (cacheNode)
                 n->mPlayback = upstream < 2 && keepCached(*n) ? 1 : 2;
@@ -2083,11 +2102,11 @@ void Graph::evaluateDirty(const std::vector<NodeId>* only)
             n->mEvaluatedPass = pass;
         };
 
-        if (level.size() < 16)
+        if (level.size() < 16 && !worthSpreading(level))
             for (Node* n : level)
                 pull(n);
         else
-            tbb::parallel_for(size_t(0), level.size(), [&](size_t i) { pull(level[i]); });
+            tbb::parallel_for(size_t(0), level.size(), [&](size_t i) { pull(level[i]); }, tbb::simple_partitioner());
 
         std::vector<Node*> next;
         for (Node* n : level)
