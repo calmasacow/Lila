@@ -1,6 +1,7 @@
 // World spec: shape checks, worldBuild on a tiny world (terrain, settlement with buildings, sites with buildings, slot
 // rules and pins, zones), worldSpec read back and rebuilt the same, worldMap, and worldCheck catching each issue kind.
 
+#include "RemixSpec.h"
 #include "World.h"
 
 #include "extensions/ExtensionManager.h"
@@ -185,6 +186,22 @@ TEST_CASE("world spec: clipOsm cuts lines at the area's edge, keeps closed ways 
     const openworld::OsmDoc::Node* cut = k.node(trunk->nodes[1]);
     REQUIRE(cut);
     CHECK(cut->at.lon == doctest::Approx(1.5).epsilon(1e-3));
+}
+
+TEST_CASE("world spec: the shipped real-data Sinaloa spec validates, and its cities keep to their built-up land")
+{
+    std::ifstream f(std::string(LILA_TEST_OPENWORLD_DATA) + "/sinaloa_real.json");
+    const json spec = json::parse(f);
+    CHECK_NOTHROW(validateSpec(spec));
+    const openworld::RemixSpec remix = openworld::specFromJson(spec["remix"]);
+    CHECK(remix.erosion.on());
+    std::set<std::string> builtUp;
+    for (const openworld::Source& src : remix.sources)
+        if (src.extent == "builtUp")
+            builtUp.insert("remixPresent_" + src.id);
+    CHECK(builtUp.size() == 2);
+    for (const json& s : spec["settlements"])
+        CHECK(builtUp.count(s.value("within", std::string())));
 }
 
 TEST_CASE("world: worldBuild on a tiny world, read back, rebuilt the same, mapped and checked")
