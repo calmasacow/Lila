@@ -2,6 +2,7 @@
 // overrides surviving regeneration, pins, every style passing buildingCheck, party walls and slopes in the scene, the
 // OSM fixture town through Settlement's buildings route, and a performance budget.
 
+#include "core/Workspace.h"
 #include "extensions/ExtensionManager.h"
 #include "gn/InstanceView.h"
 #include "gn/NodeLib.h"
@@ -12,6 +13,7 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <cstdio>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -327,6 +329,65 @@ TEST_CASE("buildings commands: site kit envelopes (no lot, a stable id each) mak
     // The same ids give the same buildings on a second run.
     const json again = run("buildingCreate", {{"envelopes", envs}, {"name", "Site"}});
     CHECK(again["buildings"] == 3);
+}
+
+TEST_CASE("buildings commands: a style the library lacks falls back to the nearest shipped one and says so; a workspace adds its own")
+{
+    loadBuildings();
+    Workspace::get().close();
+    run("newScene");
+    const std::pair<const char*, const char*> regional[] = {
+        {"colonialCentro", "colonial"}, {"malecon", "seafront"}, {"narcoMansion", "mansion"}, {"villageAdobe", "adobe"}};
+    json envs = json::array();
+    for (size_t k = 0; k < std::size(regional); ++k)
+        envs.push_back(envelope(0x5a0 + k, k * 3000.0, 0.0, 1400.0, 1000.0, 2, {"street", "open", "open", "open"}, regional[k].first));
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Regional"}});
+    CAPTURE(made.dump().substr(0, 2000));
+    REQUIRE(made.contains("warnings"));
+    for (size_t k = 0; k < std::size(regional); ++k)
+    {
+        const std::string want = std::string("style '") + regional[k].first + "' is not in the library; '" + regional[k].second + "' stands in";
+        bool found = false;
+        for (const json& w : made["warnings"])
+            found = found || w.get<std::string>().starts_with(want);
+        CHECK_MESSAGE(found, want);
+        char id[32];
+        std::snprintf(id, sizeof id, "building:%zx", size_t(0x5a0 + k));
+        CHECK(run("buildingInfo", {{"args", {id}}})["style"] == regional[k].second);
+    }
+
+    // A workspace's BuildingStyles folder: the regional style is found and nothing falls back.
+    const std::filesystem::path ws = std::filesystem::temp_directory_path() / "lila_buildings_ws_test";
+    std::filesystem::create_directories(ws / ".lila");
+    std::filesystem::create_directories(ws / "BuildingStyles");
+    {
+        std::ifstream in(std::filesystem::path(LILA_TEST_BUILDINGS_STYLES) / "colonial.json");
+        json st = json::parse(in);
+        st["id"] = "colonialCentro";
+        st["label"] = "Colonial Centro";
+        st["replaces"] = {"colonial"};
+        std::ofstream(ws / "BuildingStyles" / "colonialCentro.json") << st.dump(2);
+    }
+    Workspace::get().open(ws);
+    bool listed = false;
+    const json lib = run("buildingStyles");
+    CAPTURE(lib["workspaceFolder"]);
+    CAPTURE(lib["styles"].size());
+    for (const json& s : lib["styles"])
+        listed = listed || (s["id"] == "colonialCentro" && s.value("source", "") == "workspace");
+    CHECK(listed);
+    const json again = run("buildingCreate", {{"envelopes", json::array({envs[0]})}, {"name", "Regional"}});
+    CHECK_FALSE(again.contains("warnings"));
+    CHECK(run("buildingInfo", {{"args", {"building:5a0"}}})["style"] == "colonialCentro");
+    // It replaces the shipped colonial, so buildings naming colonial get it too.
+    run("buildingCreate", {{"envelopes", json::array({envelope(0x5b0, 0, 4000, 1400, 1000, 2, {"street", "open", "open", "open"}, "colonial")})},
+                           {"name", "Replaced"}});
+    CHECK(run("buildingInfo", {{"args", {"building:5b0"}}})["style"] == "colonialCentro");
+    Workspace::get().close();
+    bool gone = true;
+    for (const json& s : run("buildingStyles")["styles"])
+        gone = gone && s["id"] != "colonialCentro";
+    CHECK(gone);
 }
 
 TEST_CASE("buildings commands: performance budget")

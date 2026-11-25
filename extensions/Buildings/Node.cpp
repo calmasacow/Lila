@@ -211,7 +211,7 @@ void exec(ExecContext& c)
     std::vector<std::shared_ptr<const Style>> styleOf(n);
     std::vector<Edits> editOf(n);
     std::vector<uint64_t> keys(n);
-    std::set<std::string> missingStyles;
+    std::map<std::string, std::string> missingStyles;
     for (size_t i = 0; i < n; ++i)
     {
         const Spec& s = parsed->specs[i];
@@ -223,8 +223,9 @@ void exec(ExecContext& c)
             std::shared_ptr<const Style> st = findStyle(id);
             if (!st)
             {
-                missingStyles.insert(id);
-                st = findStyle("residential");
+                st = nearestStyle(id);
+                if (st)
+                    missingStyles[id] = st->id;
             }
             if (!st)
                 throw lila::gn::ExecError("Buildings: no styles are loaded (the Buildings resources are missing)");
@@ -236,8 +237,9 @@ void exec(ExecContext& c)
         pub->byId[s.id] = int(i);
     }
     pub->keys = keys;
-    for (const std::string& m : missingStyles)
-        pub->warnings.push_back("style '" + m + "' is not in the library; residential stands in");
+    for (const auto& [m, used] : missingStyles)
+        pub->warnings.push_back("style '" + m + "' is not in the library; '" + used + "' stands in (add " + m +
+                                ".json to the workspace's BuildingStyles folder)");
 
     // Generate what the cache lacks, in parallel.
     std::vector<size_t> todo;

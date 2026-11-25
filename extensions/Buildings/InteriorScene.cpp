@@ -618,7 +618,7 @@ std::shared_ptr<const Interior> interiorOf(const std::string& id)
     }
     std::shared_ptr<const Style> st = findStyle(res->style);
     if (!st)
-        st = findStyle("residential");
+        st = nearestStyle(res->style);
     if (!st)
         return nullptr;
     std::shared_ptr<const Interior> in = generateInterior(spec, *res, *st, ie, prof);

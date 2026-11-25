@@ -170,6 +170,8 @@ struct Style
 {
     std::string id, label, description, source;
     std::vector<std::string> tags;
+    /** Shipped style ids this user or workspace style stands in for: buildings naming one of them get this style. */
+    std::vector<std::string> replaces;
     // Floors
     int minFloors = 1, maxFloors = 40;
     double groundHeight = 420.0, floorHeight = 320.0, plinth = 30.0;
@@ -242,7 +244,7 @@ struct Style
  */
 std::array<glm::vec4, 2> moduleTones(const Style& st, const Palette& p, const std::string& kind);
 
-/** A style id from a Settlement style guess or a program ("mansion" -> narcoMansion, "police" -> policeStation). */
+/** A style id from a Settlement style guess (passed through) or else the program and use ("police" -> policeStation). */
 std::string styleFor(std::string_view settlementStyle, std::string_view program, std::string_view use);
 /** The shipped style ids, in menu order. */
 const std::vector<std::string>& shippedStyleIds();

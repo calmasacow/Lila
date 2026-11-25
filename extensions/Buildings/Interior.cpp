@@ -224,12 +224,19 @@ std::string interiorProgramFor(const Spec& s, const Style& st, const std::string
                 return true;
         return false;
     };
+    // By id or tag, so workspace styles tagged like a shipped one ("mansion", "village") read the same.
+    auto styleIs = [&](std::initializer_list<const char*> ks) {
+        for (const char* k : ks)
+            if (sid == k || std::find(st.tags.begin(), st.tags.end(), k) != st.tags.end())
+                return true;
+        return false;
+    };
     set("program");
     if (sid == "church" || sid == "mausoleum" || is({"church", "chapel", "place_of_worship", "cathedral", "mausoleum", "temple"}))
         return "church";
     if (sid == "policeStation" || is({"police", "police_station"}))
         return "police";
-    if (sid == "mansion" || is({"mansion", "villa"}))
+    if (styleIs({"mansion"}) || is({"mansion", "villa"}))
         return "mansion";
     if (is({"bar", "pub", "cantina", "nightclub", "restaurant", "cafe", "fast_food"}))
         return "bar";
@@ -245,7 +252,7 @@ std::string interiorProgramFor(const Spec& s, const Style& st, const std::string
     if (isBusiness(s))
         return "shop";
     const bool residential = u == "residential" || is({"residential", "house", "apartments", "apartment", "detached", "terrace"}) ||
-                             (p.empty() && u.empty() && (sid == "residential" || sid == "colonial" || sid == "adobe" || sid == "ruralShack" || sid == "seafront"));
+                             (p.empty() && u.empty() && styleIs({"residential", "colonial", "adobe", "village", "ruralShack", "seafront"}));
     if (residential)
         return s.floors >= 3 ? "apartment" : "house";
     if (p.empty() && u.empty() && sid == "modernCommercial")

@@ -23,7 +23,8 @@ mesh's footprint. Units cm, Y up. Every command is undoable and echoed; Python: 
 - Output: a group `<settlement>_Buildings` with one live mesh per 64 m cell (four per Settlement World Partition cell),
   `cell=` to change, `standalone=True` for one mesh per building.
 - Styles: `buildingStyles()` lists them; `buildingStyles(style='colonial')` gives the JSON to copy.
-  Settlement's style guesses map onto them (police program -> policeStation).
+  Settlement's style guesses name them (police program -> policeStation). Regional styles go in
+  `<workspace>/BuildingStyles`; a style id the library lacks falls back to the nearest shipped one with a warning.
 
 ## Ids
 

@@ -75,6 +75,7 @@ Style Style::fromJson(const json& j, std::string* error)
     read(j, "label", s.label);
     read(j, "description", s.description);
     read(j, "tags", s.tags);
+    read(j, "replaces", s.replaces);
     if (s.label.empty())
         s.label = s.id;
     const json fl = j.value("floors", json::object());
@@ -256,6 +257,9 @@ std::string styleFor(std::string_view settlementStyle, std::string_view program,
     for (const std::string& id : shippedStyleIds())
         if (s == id)
             return id;
+    // A user or workspace style named by the settlement; the node falls back with a warning when it is missing.
+    if (!s.empty())
+        return s;
     if (p == "church" || p == "cathedral" || p == "chapel" || p == "place_of_worship")
         return "church";
     if (p == "townhall" || p == "courthouse" || p == "government" || p == "public")

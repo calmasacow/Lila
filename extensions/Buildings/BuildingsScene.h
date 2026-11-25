@@ -24,11 +24,15 @@ namespace buildings
 {
 // Style library ---------------------------------------------------------------------------------------------------------
 
-/** Shipped styles (resources/styles), then the user's (<config>/building-styles), then the workspace's (BuildingStyles); later ones of an id win. */
+/** Shipped styles (resources/styles), then the user's (<config>/building-styles), then the workspace's (BuildingStyles); later ones of an id win.
+ *  Opening another workspace reloads them on the next lookup. */
 void loadStyles(const std::filesystem::path& shippedDir);
 void reloadStyles();
 std::shared_ptr<const Style> findStyle(const std::string& id);
 std::vector<std::shared_ptr<const Style>> allStyles();
+/** The shipped style closest to an id the library lacks, by the words of its id against shipped ids and tags
+ *  ("colonialCentro" -> colonial, "malecon" -> seafront); residential when nothing matches. */
+std::shared_ptr<const Style> nearestStyle(const std::string& id);
 /** Bumped whenever a style is added, saved or reloaded. Any thread. */
 uint64_t stylesRevision();
 std::filesystem::path userStyleDir();

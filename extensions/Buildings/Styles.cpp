@@ -6,7 +6,9 @@
 #include <lila/Prefs.h>
 #include <lila/Workspace.h>
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <fstream>
 #include <mutex>
 
@@ -26,12 +28,56 @@ std::map<std::string, std::shared_ptr<const Style>>& lib()
     static std::map<std::string, std::shared_ptr<const Style>> l;
     return l;
 }
+/** Shipped id -> the user or workspace style that replaces it. */
+std::map<std::string, std::shared_ptr<const Style>>& replacements()
+{
+    static std::map<std::string, std::shared_ptr<const Style>> r;
+    return r;
+}
 fs::path& shippedPath()
 {
     static fs::path p;
     return p;
 }
+fs::path& loadedWorkspaceDir()
+{
+    static fs::path p;
+    return p;
+}
 std::atomic<uint64_t> gRevision{1};
+
+/** Lowercase words of a camelCase, snake or spaced name. */
+std::vector<std::string> nameWords(const std::string& s)
+{
+    std::vector<std::string> out;
+    std::string cur;
+    for (char ch : s)
+    {
+        const unsigned char c = static_cast<unsigned char>(ch);
+        if (!std::isalpha(c) || (std::isupper(c) && !cur.empty()))
+        {
+            if (!cur.empty())
+                out.push_back(cur);
+            cur.clear();
+        }
+        if (std::isalpha(c))
+            cur += char(std::tolower(c));
+    }
+    if (!cur.empty())
+        out.push_back(cur);
+    return out;
+}
+
+void syncWorkspace()
+{
+    const fs::path ws = workspaceStyleDir();
+    {
+        std::lock_guard lock(libMutex());
+        if (ws == loadedWorkspaceDir())
+            return;
+    }
+    reloadStyles();
+}
 
 void readDir(const fs::path& dir, const std::string& source, std::map<std::string, std::shared_ptr<const Style>>& into)
 {
@@ -85,12 +131,22 @@ void loadStyles(const fs::path& shippedDir)
 void reloadStyles()
 {
     std::map<std::string, std::shared_ptr<const Style>> next;
+    const fs::path ws = workspaceStyleDir();
     readDir(shippedPath(), "shipped", next);
     readDir(userStyleDir(), "user", next);
-    readDir(workspaceStyleDir(), "workspace", next);
+    readDir(ws, "workspace", next);
     {
         std::lock_guard lock(libMutex());
+        // Workspace styles are read last, so their replacements win over the user's.
+        std::map<std::string, std::shared_ptr<const Style>> repl;
+        for (const char* src : {"user", "workspace"})
+            for (auto& [id, s] : next)
+                if (s->source == src)
+                    for (const std::string& r : s->replaces)
+                        repl[r] = s;
         lib() = std::move(next);
+        replacements() = std::move(repl);
+        loadedWorkspaceDir() = ws;
     }
     ++gRevision;
     clearGenerationCache();
@@ -98,13 +154,17 @@ void reloadStyles()
 
 std::shared_ptr<const Style> findStyle(const std::string& id)
 {
+    syncWorkspace();
     std::lock_guard lock(libMutex());
+    if (auto r = replacements().find(id); r != replacements().end())
+        return r->second;
     auto it = lib().find(id);
     return it == lib().end() ? nullptr : it->second;
 }
 
 std::vector<std::shared_ptr<const Style>> allStyles()
 {
+    syncWorkspace();
     std::vector<std::shared_ptr<const Style>> out;
     {
         std::lock_guard lock(libMutex());
@@ -120,6 +180,39 @@ std::vector<std::shared_ptr<const Style>> allStyles()
         return a->id < b->id;
     });
     return out;
+}
+
+std::shared_ptr<const Style> nearestStyle(const std::string& id)
+{
+    const std::vector<std::string> words = nameWords(id);
+    std::shared_ptr<const Style> best, residential;
+    int bestScore = 0;
+    for (const auto& s : allStyles())
+    {
+        if (s->source != "shipped")
+            continue;
+        if (s->id == "residential")
+            residential = s;
+        const std::vector<std::string> own = nameWords(s->id);
+        std::vector<std::string> tagged;
+        for (const std::string& t : s->tags)
+            for (std::string& w : nameWords(t))
+                tagged.push_back(std::move(w));
+        int score = 0;
+        for (const std::string& w : words)
+        {
+            if (std::find(own.begin(), own.end(), w) != own.end())
+                score += 2;
+            else if (std::find(tagged.begin(), tagged.end(), w) != tagged.end())
+                score += 1;
+        }
+        if (score > bestScore)
+        {
+            bestScore = score;
+            best = s;
+        }
+    }
+    return best ? best : residential;
 }
 
 uint64_t stylesRevision() { return gRevision.load(); }

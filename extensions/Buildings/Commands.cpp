@@ -484,7 +484,7 @@ int ensureMaterials(const std::set<std::string>& styleIds)
         ++made;
     };
     for (const std::string& id : styleIds)
-        if (std::shared_ptr<const Style> s = findStyle(id))
+        if (std::shared_ptr<const Style> s = findStyle(id) ? findStyle(id) : nearestStyle(id))
             for (auto& [name, col] : styleMaterials(*s))
                 make(name, col, 0.85);
     static const std::pair<int, glm::vec3> kShared[] = {
@@ -939,7 +939,7 @@ json pick(Vec3 origin, Vec3 dir)
 json styleSummary(const Style& s)
 {
     return {{"id", s.id},          {"label", s.label},           {"description", s.description}, {"source", s.source},
-            {"tags", s.tags},      {"floors", {s.minFloors, s.maxFloors}}, {"roof", s.roof},     {"palette", s.toJson()["palette"]}};
+            {"tags", s.tags},      {"floors", {s.minFloors, s.maxFloors}}, {"roof", s.roof},     {"palette", s.toJson()["palette"]}, {"replaces", s.replaces}};
 }
 
 void touchAll()
