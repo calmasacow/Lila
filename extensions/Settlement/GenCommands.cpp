@@ -41,7 +41,7 @@ struct LandShape
  * one outline, so the sea is outside it rather than one exclusion per strip (each exclusion makes Settlement route on
  * a finer grid). Water inside a row's span (a lake, a river) becomes exclusions, strips of equal span stacked.
  */
-LandShape landShape(const std::string& terrain, Vec2 lo, Vec2 hi)
+LandShape landShape(const std::string& terrain, Vec2 lo, Vec2 hi, const std::string& within = {})
 {
     LandShape out;
     if (!ops::find("terrainSample"))
@@ -60,16 +60,23 @@ LandShape landShape(const std::string& terrain, Vec2 lo, Vec2 hi)
         const json w = ops::execute("terrainWater", {{"args", {terrain}}});
         if (w.contains("features") && w["features"].contains("settings"))
             sea = w["features"]["settings"].value("seaLevel", sea);
-        samples = ops::execute("terrainSample", {{"args", {terrain}}, {"points", pts}, {"masks", {"water"}}});
+        json masks = {"water"};
+        if (!within.empty())
+            masks.push_back(within);
+        samples = ops::execute("terrainSample", {{"args", {terrain}}, {"points", pts}, {"masks", masks}});
     }
     catch (const std::exception&)
     {
         return out;
     }
-    std::vector<char> wet(size_t(nx) * nz, 0);
+    std::vector<char> wet(size_t(nx) * nz, 0), outside(size_t(nx) * nz, 0);
     bool any = false;
     for (size_t i = 0; i < samples.size() && i < wet.size(); ++i)
+    {
         any = (wet[i] = samples[i].value("water", 0.0) > 0.5 || samples[i].value("height", 0.0) < sea) || any;
+        if (!within.empty())
+            any = (outside[i] = samples[i].value(within, 0.0) < 0.5) || any;
+    }
     if (!any)
         return out;
     // A cell beside water counts as water: the shore cell is half wet and the shore itself too steep for streets.
@@ -87,6 +94,8 @@ LandShape landShape(const std::string& terrain, Vec2 lo, Vec2 hi)
                             break;
                         }
                     }
+        for (size_t i = 0; i < wet.size(); ++i)
+            wet[i] = wet[i] || outside[i];
     }
     // Each row's land span; rows with no land are left out of the outline.
     std::vector<std::pair<int, int>> span(size_t(nz), {-1, -1});
@@ -888,7 +897,9 @@ void registerGeneratorCommands(ext::Context& ctx)
                    {"outline", "massing", "library", "masonry", "unreal", "buildings"}},
                   {"buildingStyle", "bs", GenArg::String, nullptr, "buildings route: one Buildings style for every building; empty picks per envelope."},
                   {"water", "wa", GenArg::Bool, true, "Keep Settlement's own streets and lots off the terrain's sea, lakes and rivers."},
-                  {"exclusions", "ex", GenArg::List, nullptr, "More regions kept clear: closed polygons [[x, z], ...] (other generators' sites)."}},
+                  {"exclusions", "ex", GenArg::List, nullptr, "More regions kept clear: closed polygons [[x, z], ...] (other generators' sites)."},
+                  {"within", "wi", GenArg::String, "", "A terrain mask the settlement keeps to (where it is at least 0.5), such as a remix source's "
+                                                       "remixPresent_<id>; with water=False it is ignored."}},
         .run = [](const Args& a) -> json {
             LILA_ZONE();
             const char* cmd = "settlementFromOsm";
@@ -929,7 +940,7 @@ void registerGeneratorCommands(ext::Context& ctx)
             bool shaped = false;
             if (a.get<bool>("water", true))
             {
-                LandShape land = landShape(ground, lo, hi);
+                LandShape land = landShape(ground, lo, hi, a.get<std::string>("within", ""));
                 if (!land.outline.empty())
                 {
                     outline = land.outline;

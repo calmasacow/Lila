@@ -76,6 +76,8 @@ const json& worldSpecSchema()
              {"osm", str("'remix' (the remix's remixed OSM, needs remix) or an OSM file (.osm, Overpass .json, .osm.pbf).")},
              {"area", {{"type", "array"}, {"items", {{"type", "number"}}}, {"minItems", 4}, {"maxItems", 4},
                        {"description", "[x0, z0, x1, z1] world cm: only the OSM inside goes to this settlement."}}},
+             {"within", str("A terrain mask the settlement keeps to (at least 0.5): remixPresent_<source id> for a builtUp remix source, so the city "
+                            "and its OSM end where the real built-up land does.")},
              {"profile", str("settlementFromOsm profile (usTown, ...); settlementProfiles lists them.")},
              {"fill", {{"type", "string"}, {"enum", {"sparse", "all", "none"}}, {"description", "Settlement's own lots beside imported buildings."}}},
              {"coverage", num("Share of a block imported buildings must cover to count as dense.")},
@@ -190,6 +192,8 @@ void validateSpec(const json& spec)
                 need(s["create"].is_object(), where + ".create is a dict of settlementCreate flags");
             if (s.contains("area"))
                 checkArea(s["area"], where);
+            if (s.contains("within"))
+                need(s["within"].is_string() && s.contains("osm"), where + ".within is a terrain mask name, for an osm settlement");
             if (s.contains("buildings"))
                 need(s["buildings"].is_boolean() || s["buildings"].is_object(), where + ".buildings is true/false or a dict");
         }
@@ -291,14 +295,15 @@ json resolvePaths(json spec, const std::string& dir, const std::function<bool(co
     return spec;
 }
 
-OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2 lo, glm::dvec2 hi)
+OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2 lo, glm::dvec2 hi, const std::function<bool(glm::dvec2)>& keep)
 {
     if (world.size() != d.nodes.size())
         throw std::runtime_error("clipOsm: one world position per node");
     std::unordered_map<int64_t, size_t> at;
     for (size_t i = 0; i < d.nodes.size(); ++i)
         at[d.nodes[i].id] = i;
-    auto inside = [&](glm::dvec2 p) { return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y; };
+    auto inBox = [&](glm::dvec2 p) { return p.x >= lo.x && p.x <= hi.x && p.y >= lo.y && p.y <= hi.y; };
+    auto inside = [&](glm::dvec2 p) { return inBox(p) && (!keep || keep(p)); };
     std::vector<char> in(d.nodes.size(), 0);
     for (size_t i = 0; i < d.nodes.size(); ++i)
         in[i] = inside(world[i]) ? 1 : 0;
@@ -317,6 +322,17 @@ OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2
                 t = std::min(t, (lo[k] - p[k]) / (q[k] - p[k]));
             if (q[k] > hi[k] && q[k] != p[k])
                 t = std::min(t, (hi[k] - p[k]) / (q[k] - p[k]));
+        }
+        if (keep && !keep(p + (q - p) * t))
+        {
+            // The line leaves through keep's edge before the box's: found by halving.
+            double tIn = 0.0, tOut = t;
+            for (int it = 0; it < 16; ++it)
+            {
+                const double m = 0.5 * (tIn + tOut);
+                (keep(p + (q - p) * m) ? tIn : tOut) = m;
+            }
+            t = tIn;
         }
         OsmDoc::Node n;
         n.id = nextId++;

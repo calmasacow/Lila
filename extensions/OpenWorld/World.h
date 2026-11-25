@@ -51,9 +51,10 @@ json resolvePaths(json spec, const std::string& dir, const std::function<bool(co
  * (cm, in document order); lo and hi are the area's corners. Lines (roads, rivers) are cut where they leave the area,
  * with a new node on the edge, so a long highway brings only its stretch inside; a line that leaves and comes back
  * becomes several ways (ids from 2^52 up). Closed ways (buildings, land use) go whole when most of their nodes are
- * inside. Tagged nodes inside are kept, and relations keep the members that stayed.
+ * inside. Tagged nodes inside are kept, and relations keep the members that stayed. keep, when given, narrows the area
+ * to where it holds (a remix source's presence), lines cut where they leave it.
  */
-OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2 lo, glm::dvec2 hi);
+OsmDoc clipOsm(const OsmDoc& d, const std::vector<glm::dvec2>& world, glm::dvec2 lo, glm::dvec2 hi, const std::function<bool(glm::dvec2)>& keep = {});
 
 /** Commands worldBuild, worldSpec, worldCheck, worldMap; resources and the make_open_world prompt. */
 /** The bathymetry files a remix spec's sources blend into its seabed, comma separated; empty when none. worldBuild skips the terrain spec's own bathymetry then. */

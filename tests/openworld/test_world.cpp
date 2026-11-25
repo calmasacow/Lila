@@ -173,6 +173,18 @@ TEST_CASE("world spec: clipOsm cuts lines at the area's edge, keeps closed ways 
     CHECK(tagged == std::set<int64_t>{6});
     REQUIRE(c.relations.size() == 1);
     CHECK(c.relations[0].members.size() == 1);
+
+    // keep narrows the box: the trunk now ends where it leaves x < 1.5, found by halving down to that edge.
+    const openworld::OsmDoc k = clipOsm(d, world, {-1, -1}, {3, 1}, [](glm::dvec2 p) { return p.x < 1.5; });
+    const openworld::OsmDoc::Way* trunk = nullptr;
+    for (const auto& w : k.ways)
+        if (w.id == 10)
+            trunk = &w;
+    REQUIRE(trunk);
+    REQUIRE(trunk->nodes.size() == 2);
+    const openworld::OsmDoc::Node* cut = k.node(trunk->nodes[1]);
+    REQUIRE(cut);
+    CHECK(cut->at.lon == doctest::Approx(1.5).epsilon(1e-3));
 }
 
 TEST_CASE("world: worldBuild on a tiny world, read back, rebuilt the same, mapped and checked")

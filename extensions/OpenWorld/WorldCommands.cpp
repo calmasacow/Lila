@@ -849,7 +849,17 @@ json buildWorld(json spec, const BuildOptions& o)
                     local = readOsmDoc(paths::fromUtf8(file));
                     world = worldPositions(local, terrain, origin);
                 }
-                const OsmDoc clipped = clipOsm(local, world, {x0, z0}, {x1, z1});
+                std::function<bool(glm::dvec2)> keep;
+                std::shared_ptr<const RemixResult> present;
+                if (s.contains("within") && spec.contains("remix"))
+                {
+                    present = cachedRemix(specFromJson(spec["remix"]));
+                    const std::string mask = s["within"].get<std::string>();
+                    if (!present->after.findMask(mask))
+                        throw std::runtime_error("within: the remix has no mask " + mask + " (remixPresent_<id> needs that source's extent builtUp)");
+                    keep = [present, mask](glm::dvec2 p) { return present->after.maskAt(mask, p.x, p.y) >= 0.5; };
+                }
+                const OsmDoc clipped = clipOsm(local, world, {x0, z0}, {x1, z1}, keep);
                 const fs::path f = folder / "settlements" / (sname + ".osm.json");
                 fs::create_directories(f.parent_path());
                 std::ofstream(f, std::ios::binary) << writeOsmDocJson(clipped);
@@ -864,7 +874,7 @@ json buildWorld(json spec, const BuildOptions& o)
                 if (!near.empty())
                     call["exclusions"] = near;
             }
-            for (const char* k : {"profile", "fill", "coverage", "margin"})
+            for (const char* k : {"profile", "fill", "coverage", "margin", "within"})
                 if (s.contains(k))
                     call[k] = s[k];
             return run("settlementFromOsm", call);
