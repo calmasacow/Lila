@@ -36,6 +36,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <deque>
+#include <format>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -1550,25 +1551,64 @@ struct Renderer::Impl
             vkDestroySurfaceKHR(vk.instance, v.surface, nullptr);
     }
 
-    void ensureLines(Frame& f, size_t bytes)
+    /** The most one frame's line and overlay vertices may take; more is cut with a message, never written past the buffer. */
+    static constexpr size_t kMaxLineBytes = size_t(1) << 30;
+    /** The last problem reported for the lines buffer, so a problem lasting many frames is logged once. */
+    std::string linesProblem;
+
+    void reportLines(std::string problem)
     {
-        if (bytes <= f.linesCapacity)
+        if (problem == linesProblem)
             return;
+        if (!problem.empty())
+            log::warn("render: {}", problem);
+        else if (!linesProblem.empty())
+            log::info("render: lines and overlay draw in full again");
+        linesProblem = std::move(problem);
+    }
+
+    /** A mapped lines buffer of at least bytes (at most kMaxLineBytes) for f; false, with nothing mapped, when it can't be made. */
+    bool ensureLines(Frame& f, size_t bytes)
+    {
+        if (bytes <= f.linesCapacity && f.linesMapped)
+            return true;
         if (f.lines)
         {
-            vmaUnmapMemory(vk.allocator, f.linesAlloc);
+            if (f.linesMapped)
+                vmaUnmapMemory(vk.allocator, f.linesAlloc);
             vmaDestroyBuffer(vk.allocator, f.lines, f.linesAlloc);
         }
-        size_t cap = std::max<size_t>(bytes * 2, 64 * 1024);
+        f.lines = VK_NULL_HANDLE;
+        f.linesAlloc = VK_NULL_HANDLE;
+        f.linesMapped = nullptr;
+        f.linesCapacity = 0;
+        const size_t cap = std::clamp<size_t>(bytes + bytes / 2, std::min<size_t>(64 * 1024, kMaxLineBytes), kMaxLineBytes);
+        if (bytes > cap)
+            return false;
         VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
         bci.size = cap;
         bci.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
         VmaAllocationCreateInfo aci{};
         aci.usage = VMA_MEMORY_USAGE_AUTO;
         aci.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
-        vmaCreateBuffer(vk.allocator, &bci, &aci, &f.lines, &f.linesAlloc, nullptr);
-        vmaMapMemory(vk.allocator, f.linesAlloc, &f.linesMapped);
+        if (VkResult r = vmaCreateBuffer(vk.allocator, &bci, &aci, &f.lines, &f.linesAlloc, nullptr); r != VK_SUCCESS)
+        {
+            f.lines = VK_NULL_HANDLE;
+            f.linesAlloc = VK_NULL_HANDLE;
+            reportLines(std::format("no {} MB buffer for lines and overlay ({}); they are not drawn", cap >> 20, vkResultName(r)));
+            return false;
+        }
+        if (VkResult r = vmaMapMemory(vk.allocator, f.linesAlloc, &f.linesMapped); r != VK_SUCCESS || !f.linesMapped)
+        {
+            vmaDestroyBuffer(vk.allocator, f.lines, f.linesAlloc);
+            f.lines = VK_NULL_HANDLE;
+            f.linesAlloc = VK_NULL_HANDLE;
+            f.linesMapped = nullptr;
+            reportLines(std::format("the {} MB lines and overlay buffer could not be mapped ({}); they are not drawn", cap >> 20, vkResultName(r)));
+            return false;
+        }
         f.linesCapacity = cap;
+        return true;
     }
 
     void initDescriptors()
@@ -6481,10 +6521,29 @@ struct Renderer::Impl
             const std::vector<LineVertex>* verts = i < debugBatches ? &(*s.debugLines)[i].vertices : s.debugTris.get();
             lineBytes += verts ? verts->size() * sizeof(GpuLineVertex) : 0;
         }
-        size_t trisBytes = s.overlayTris.size() * sizeof(OverlayVertex);
-        if (lineBytes + trisBytes)
+        // Past kMaxLineBytes the overlay's last triangles are cut, or with too many lines nothing from the buffer is drawn.
+        size_t trisDrawn = s.overlayTris.size();
+        bool linesOk = lineBytes <= kMaxLineBytes;
+        if (!linesOk)
         {
-            ensureLines(f, lineBytes + trisBytes);
+            trisDrawn = 0;
+            reportLines(std::format("{} MB of lines in one frame, more than {} MB; lines and overlay are not drawn", lineBytes >> 20, kMaxLineBytes >> 20));
+        }
+        else if (lineBytes + trisDrawn * sizeof(OverlayVertex) > kMaxLineBytes)
+        {
+            trisDrawn = (kMaxLineBytes - lineBytes) / sizeof(OverlayVertex) / 3 * 3;
+            reportLines(std::format("{} MB of overlay in one frame, more than {} MB; the rest is not drawn", s.overlayTris.size() * sizeof(OverlayVertex) >> 20,
+                                    kMaxLineBytes >> 20));
+        }
+        else
+            reportLines({});
+        const size_t trisBytes = trisDrawn * sizeof(OverlayVertex);
+        if (linesOk && lineBytes + trisBytes)
+            linesOk = ensureLines(f, lineBytes + trisBytes);
+        if (!linesOk)
+            trisDrawn = 0;
+        if (linesOk && lineBytes + trisBytes)
+        {
             GpuLineVertex* mapped = static_cast<GpuLineVertex*>(f.linesMapped);
             const glm::dmat4 clipViewProj = s.proj * s.view;
             const glm::vec3 behind(s.eye + glm::dvec3(s.view[0][2], s.view[1][2], s.view[2][2]));
@@ -7027,7 +7086,7 @@ struct Renderer::Impl
         }
         drawOverScene(cmd, s, vpF);
 
-        if (linesPipeline && !s.lines.empty())
+        if (linesOk && linesPipeline && !s.lines.empty())
         {
             const LinesPush lp{vpF};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, linesPipeline);
@@ -7053,7 +7112,7 @@ struct Renderer::Impl
         for (const Biased& b : biased)
         {
             const std::vector<LineVertex>& verts = *lineSets[b.set];
-            if (!b.pipeline || verts.empty())
+            if (!linesOk || !b.pipeline || verts.empty())
                 continue;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, b.pipeline);
             if (b.width > 0.0f)
@@ -7071,7 +7130,7 @@ struct Renderer::Impl
             {
                 const LineBatch& batch = (*s.debugLines)[i];
                 VkPipeline pipeline = onTop ? linesOverPipeline : linesOnTopPipeline;
-                if (batch.onTop != onTop || batch.vertices.empty() || !pipeline)
+                if (!linesOk || batch.onTop != onTop || batch.vertices.empty() || !pipeline)
                     continue;
                 vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
                 vkCmdSetLineWidth(cmd, lineWidth(batch.width));
@@ -7083,7 +7142,7 @@ struct Renderer::Impl
                 vkCmdDraw(cmd, uint32_t(batch.vertices.size()), 1, debugFirst[i], 0);
             }
         };
-        if (s.debugTris && !s.debugTris->empty() && tris3dPipeline)
+        if (linesOk && s.debugTris && !s.debugTris->empty() && tris3dPipeline)
         {
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, tris3dPipeline);
             const LinesPush lp{vpF, depthPull(s.proj, v.extent.height, kLinePullPixels)};
@@ -7094,7 +7153,7 @@ struct Renderer::Impl
         }
         drawDebugLines(false);
 
-        if (overlayPipeline && !s.linesXray.empty())
+        if (linesOk && overlayPipeline && !s.linesXray.empty())
         {
             const LinesPush lp{vpF};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPipeline);
@@ -7105,7 +7164,7 @@ struct Renderer::Impl
         }
         drawDebugLines(true);
 
-        if (overlayPipeline && !s.overlay.empty())
+        if (linesOk && overlayPipeline && !s.overlay.empty())
         {
             const LinesPush lp{glm::mat4(1.0f)};
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayPipeline);
@@ -7115,7 +7174,7 @@ struct Renderer::Impl
             vkCmdDraw(cmd, uint32_t(s.overlay.size()), 1, lineFirst[3], 0);
         }
 
-        if (overlayTrisPipeline && !s.overlayTris.empty())
+        if (overlayTrisPipeline && trisDrawn)
         {
             glm::vec2 invSize(1.0f / float(v.extent.width), 1.0f / float(v.extent.height));
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, overlayTrisPipeline);
@@ -7123,7 +7182,7 @@ struct Renderer::Impl
             vkCmdPushConstants(cmd, overlayTrisLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(glm::vec2), &invSize);
             VkDeviceSize offset = lineBytes;
             vkCmdBindVertexBuffers(cmd, 0, 1, &f.lines, &offset);
-            vkCmdDraw(cmd, uint32_t(s.overlayTris.size()), 1, 0, 0);
+            vkCmdDraw(cmd, uint32_t(trisDrawn), 1, 0, 0);
         }
 
         vkCmdEndRendering(cmd);
