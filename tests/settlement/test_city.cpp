@@ -293,6 +293,33 @@ TEST_CASE("settlement styles: a wealthy house is a mansion only on a large lot")
     CHECK(env.style == "mansion");
 }
 
+TEST_CASE("settlement styles: a Mexican city's low shops are houses with a shop below, a US town's are commercial blocks")
+{
+    Layout l;
+    l.center = {0.0, 0.0};
+    l.radius = 100000.0;
+    REQUIRE(builtinProfile("mexicanCity", &l.profile));
+    Envelope env;
+    env.footprint = makePolygon({{60000, 60000}, {61500, 60000}, {61500, 61400}, {60000, 61400}}, 0);
+    env.use = Use::Commercial;
+    env.groundUse = Use::Commercial;
+    env.floors = 2;
+    env.eraName = "modern";
+    Lot lot;
+    lot.use = Use::Commercial;
+    lot.area = 210.0;
+    finishProgram(env, lot, l);
+    CHECK(env.style == "residential");
+    CHECK(env.styleFrom.find("shop") != std::string::npos);
+    env.floors = 5;
+    finishProgram(env, lot, l);
+    CHECK(env.style == "modernCommercial");
+    REQUIRE(builtinProfile("usTown", &l.profile));
+    env.floors = 2;
+    finishProgram(env, lot, l);
+    CHECK(env.style == "modernCommercial");
+}
+
 TEST_CASE("settlement osm: the data's town point is the centre, its own squares stand in for a generated one")
 {
     loadCityPackages();

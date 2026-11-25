@@ -846,6 +846,8 @@ void finishProgram(Envelope& env, const Lot& lot, const Layout& l)
         set("colonial", old ? "built " + env.eraName : "three floors or fewer in the old centre");
     else if (env.use == Use::Farm || (dist > 0.85 && env.floors <= 1))
         set(env.eraName == "modern" ? "ruralShack" : "adobe", env.use == Use::Farm ? "farm use" : "single storey at the edge");
+    else if ((env.groundUse == Use::Commercial || env.use == Use::Commercial) && env.floors <= l.profile.shopHouseFloors)
+        set("residential", "shop under a house of " + std::to_string(l.profile.shopHouseFloors) + " floors or fewer");
     else if (env.groundUse == Use::Commercial || env.use == Use::Commercial)
         set("modernCommercial", "commercial use");
     else

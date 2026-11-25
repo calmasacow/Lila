@@ -344,6 +344,7 @@ struct Profile
     double foundation = 50.0; // cm below the lowest ground under a footprint
     std::string roof = "gable";
     double commercial = 0.35; // lots on main streets within this fraction of the radius are commercial
+    int shopHouseFloors = 0;  // commercial buildings of up to this many floors are houses with a shop below (residential style)
     std::string era;                // medieval, early, industrial, modern or future; empty takes it from the style's name and pattern
     std::string blockType = "auto"; // the type ordinary blocks take (blockTypeName), auto chooses by era and block shape
     std::string lotMethod = "auto"; // how ordinary blocks are cut into lots (lotMethodName), auto chooses by block type and era
