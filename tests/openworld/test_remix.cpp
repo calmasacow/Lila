@@ -386,14 +386,15 @@ TEST_CASE("remix: a sea region sinks the land inside it to the floor over its se
 {
     json j = base();
     j["seams"]["width"] = 3000;
+    const std::shared_ptr<RemixResult> fitted = runRemix(specFromJson(j));
+    // Both runs on the fitted grid, so samples compare one to one.
+    const Vec2 centre = fitted->after.origin + fitted->after.extent() * 0.5;
+    j["map"] = {{"center", {centre.x, centre.y}}, {"size", {fitted->after.extent().x, fitted->after.extent().y}}, {"cell", fitted->after.cell}};
     const RemixSpec land = specFromJson(j);
     const std::shared_ptr<RemixResult> before = runRemix(land);
     // A channel across the whole map over the ridge and its roads, open to the sea at the map edge.
     const json poly = box(20000, -400000, 70000, 400000);
     j["regions"] = json::array({{{"id", "bay"}, {"op", "sea"}, {"polygon", poly}}});
-    // The same grid as the land-only run, so samples compare one to one.
-    const Vec2 centre = before->after.origin + before->after.extent() * 0.5;
-    j["map"] = {{"center", {centre.x, centre.y}}, {"size", {before->after.extent().x, before->after.extent().y}}, {"cell", before->after.cell}};
     const RemixSpec s = specFromJson(j);
     CHECK(toJson(s)["regions"][0]["op"] == "sea");
     CHECK_FALSE(toJson(s)["regions"][0].contains("translate"));
