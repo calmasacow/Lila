@@ -874,7 +874,7 @@ json buildWorld(json spec, const BuildOptions& o)
                 if (!near.empty())
                     call["exclusions"] = near;
             }
-            for (const char* k : {"profile", "fill", "coverage", "margin", "within"})
+            for (const char* k : {"profile", "overrides", "fill", "coverage", "margin", "within"})
                 if (s.contains(k))
                     call[k] = s[k];
             return run("settlementFromOsm", call);

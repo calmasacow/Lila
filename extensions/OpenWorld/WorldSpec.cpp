@@ -78,7 +78,8 @@ const json& worldSpecSchema()
                        {"description", "[x0, z0, x1, z1] world cm: only the OSM inside goes to this settlement."}}},
              {"within", str("A terrain mask the settlement keeps to (at least 0.5): remixPresent_<source id> for a builtUp remix source, so the city "
                             "and its OSM end where the real built-up land does.")},
-             {"profile", str("settlementFromOsm profile (usTown, ...); settlementProfiles lists them.")},
+             {"profile", str("settlementFromOsm profile (usTown, mexicanCity, ...); settlementProfiles lists them.")},
+             {"overrides", obj("Profile fields to change, such as {\"lotWidth\": 1500, \"maxFloors\": 5}.")},
              {"fill", {{"type", "string"}, {"enum", {"sparse", "all", "none"}}, {"description", "Settlement's own lots beside imported buildings."}}},
              {"coverage", num("Share of a block imported buildings must cover to count as dense.")},
              {"margin", num("Room round the imported streets, cm.")},
@@ -196,6 +197,8 @@ void validateSpec(const json& spec)
                 need(s["within"].is_string() && s.contains("osm"), where + ".within is a terrain mask name, for an osm settlement");
             if (s.contains("buildings"))
                 need(s["buildings"].is_boolean() || s["buildings"].is_object(), where + ".buildings is true/false or a dict");
+            if (s.contains("overrides"))
+                need(s["overrides"].is_object() && s.contains("osm"), where + ".overrides is a dict of profile fields, for an osm settlement");
         }
     }
     if (spec.contains("sites"))

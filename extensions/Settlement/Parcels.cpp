@@ -154,7 +154,8 @@ void typeBlocks(Layout& l, const Ground& g, const Site& site, const std::string&
     const bool pm = preModern(era);
     int market = -1;
     std::string marketWhy;
-    if (p.plaza)
+    // Imported streets bring their own squares: the data's parks and plazas, not one laid at the centre.
+    if (p.plaza && p.pattern != Pattern::Osm)
     {
         for (const Block& b : l.blocks)
             if (contains(b.outline.pts, l.center) && streetSides(b.outline) > 0)

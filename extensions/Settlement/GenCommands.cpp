@@ -269,6 +269,32 @@ std::string curveAttr(Graph& g, const std::string& name, const char* attr)
     return {};
 }
 
+/** The data's own centre: its city point inside the outline, else a town's, else none. */
+bool osmCentre(Graph& g, const std::string& placeCurve, const json& outline, Vec2* at)
+{
+    std::vector<Vec2> ring;
+    for (const json& p : outline)
+        ring.push_back({p[0].get<double>(), p[1].get<double>()});
+    const json points = json::parse(curveAttr(g, placeCurve, "osmPlaces"), nullptr, false);
+    if (!points.is_array() || ring.size() < 3)
+        return false;
+    int best = 0;
+    for (const json& i : points)
+    {
+        if (!i.is_object() || i.value("kind", std::string()) != "town" || !i.contains("at") || !i["at"].is_array() || i["at"].size() < 2)
+            continue;
+        const json& p = i["at"];
+        const Vec2 q(p[0].get<double>(), p[p.size() >= 3 ? 2 : 1].get<double>());
+        const int rank = i.value("value", std::string()) == "city" ? 2 : 1;
+        if (rank > best && contains(ring, q))
+        {
+            best = rank;
+            *at = q;
+        }
+    }
+    return best > 0;
+}
+
 json xzRing(const std::vector<Vec2>& pts)
 {
     json out = json::array();
@@ -887,6 +913,7 @@ void registerGeneratorCommands(ext::Context& ctx)
                   {"file", "fi", GenArg::String, "", "The OSM file, when not given as the first argument."},
                   {"origin", "or", GenArg::List, nullptr, "[latitude, longitude] of the terrain's centre, for terrains not from real data."},
                   {"profile", "pr", GenArg::String, "usTown", "Style for heights, roofs and the lots Settlement cuts itself.", profiles},
+                  {"overrides", "ov", GenArg::Any, nullptr, "Profile fields to change, as a JSON object or its text, such as {\"maxFloors\": 6}."},
                   {"culture", "cu", GenArg::String, "", "Naming culture for every name (namingCultures); empty chooses one from where the data lies.", cultureValues},
                   {"fill", "fl", GenArg::String, "sparse", "Settlement's own lots beside the imported buildings: sparse (in blocks they "
                                                            "cover less than coverage of), all, or none.", {"sparse", "all", "none"}},
@@ -952,18 +979,27 @@ void registerGeneratorCommands(ext::Context& ctx)
             if (a.has("exclusions"))
                 for (const json& poly : a.flags["exclusions"])
                     exclusions.push_back(poly);
-            json out = ops::execute("settlementCreate", {{"profile", a.get<std::string>("profile", "usTown")},
-                                                         {"exclusions", exclusions},
-                                                         {"ground", ground},
-                                                         {"outline", outline},
-                                                         {"osm", osm},
-                                                         {"osmFill", a.get<std::string>("fill", "sparse")},
-                                                         {"osmCoverage", a.get<double>("coverage", 0.25)},
-                                                         {"osmCulture", made.value("culture", std::string())},
-                                                         {"terrainWater", false},
-                                                         {"buildingRoute", a.get<std::string>("buildingRoute", "outline")},
-                                                         {"buildingStyle", a.get<std::string>("buildingStyle", "")},
-                                                         {"name", a.get<std::string>("name", "Town")}});
+            json create = {{"profile", a.get<std::string>("profile", "usTown")},
+                           {"exclusions", exclusions},
+                           {"ground", ground},
+                           {"outline", outline},
+                           {"osm", osm},
+                           {"osmFill", a.get<std::string>("fill", "sparse")},
+                           {"osmCoverage", a.get<double>("coverage", 0.25)},
+                           {"osmCulture", made.value("culture", std::string())},
+                           {"terrainWater", false},
+                           {"buildingRoute", a.get<std::string>("buildingRoute", "outline")},
+                           {"buildingStyle", a.get<std::string>("buildingStyle", "")},
+                           {"name", a.get<std::string>("name", "Town")}};
+            if (a.has("overrides"))
+                create["overrides"] = a.flags["overrides"].is_string() ? a.flags["overrides"].get<std::string>() : a.flags["overrides"].dump();
+            // Heights and land use rank from the centre: the data's own city point, where it has one.
+            Vec2 centre(0.0);
+            const bool centred = curves.contains("place") && curves["place"].is_string() && osmCentre(g, curves["place"].get<std::string>(), outline, &centre);
+            if (centred)
+                create["attractors"] = json::array({json::array({centre.x, centre.y})});
+            json out = ops::execute("settlementCreate", create);
+            out["centreFrom"] = centred ? "the data's city or town point" : "the outline's middle (the data has no city or town point inside it)";
             if (shaped)
                 out["outlineFrom"] = "land (the water inside the box is outside the outline)";
             if (waterCount > 0)
