@@ -94,6 +94,9 @@ terrain::Dem cropDem(const terrain::Dem& d, const std::vector<double>& bbox)
     return c;
 }
 
+/** How deep sea the elevation holds flat comes out at least, cm. */
+constexpr double kFlatSeaDepth = 100.0;
+
 /** WorldCover's permanent water class (the code mask holds code / 255). */
 constexpr long kWaterCode = 80;
 
@@ -471,7 +474,9 @@ Sample baseSample(const Work& w, const MaskSet& m, Vec2 b, float* masks)
         double hs = h.heightAt(l.x, l.y) * w.spec.vertical;
         const double flat = floor && !w.data[s]->flatSea.empty() ? bilinear(w.data[s]->flatSea, h, l) : 0.0;
         if (flat > 0.0)
-            hs += (std::min(hs, floorHeight) - hs) * flat;
+            // Never shallower than kFlatSeaDepth: where the floor reads as land (a grid cell over a lagoon) the water
+            // would otherwise stand as islands at the elevation's own height.
+            hs += (std::min({hs, floorHeight, -kFlatSeaDepth}) - hs) * flat;
         out.height += (hs - out.height) * wt;
         for (size_t k = 0; k < m.names.size(); ++k)
         {

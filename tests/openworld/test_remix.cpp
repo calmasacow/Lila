@@ -464,7 +464,8 @@ TEST_CASE("remix: a lagoon the elevation holds above sea level joins the sea whe
     // The middle of the lagoon: an island of 1.5 m ground without land cover, sea floor with it.
     const Vec2 mid = bare->after.origin + Vec2(0.31 * bare->after.extent().x, 0.5 * bare->after.extent().y);
     CHECK(bare->after.heightAt(mid.x, mid.y) > 100.0);
-    CHECK(covered->after.heightAt(mid.x, mid.y) < 0.0);
+    // At least a metre deep, whatever the floor reads there.
+    CHECK(covered->after.heightAt(mid.x, mid.y) < -90.0);
     // Dry land stays where it was.
     const Vec2 land = bare->after.origin + Vec2(0.8 * bare->after.extent().x, 0.2 * bare->after.extent().y);
     CHECK(covered->after.heightAt(land.x, land.y) == doctest::Approx(bare->after.heightAt(land.x, land.y)).epsilon(1e-3));
