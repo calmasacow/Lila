@@ -72,7 +72,7 @@ std::string styleFor(const std::string& program)
     if (program == "police")
         return "policeStation";
     if (program == "mansion")
-        return "narcoMansion";
+        return "mansion";
     if (program == "warehouse")
         return "warehouse";
     if (program == "hotel")
@@ -80,7 +80,7 @@ std::string styleFor(const std::string& program)
     if (program == "office")
         return "modernCommercial";
     if (program == "shop" || program == "bar" || program == "garage")
-        return "colonialCentro";
+        return "colonial";
     return "residential";
 }
 
@@ -203,7 +203,7 @@ TEST_CASE("interiors: the program comes from the building, with a generic fallba
     CHECK(interiorProgramFor(rectSpec(1000, 800, 1, "shop", 1), res, "", &from) == "shop");
     CHECK(interiorProgramFor(rectSpec(1000, 800, 1, "", 1), styles().at("policeStation"), "", &from) == "police");
     CHECK(interiorProgramFor(rectSpec(1000, 800, 1, "", 1), styles().at("church"), "", &from) == "church");
-    CHECK(interiorProgramFor(rectSpec(1000, 800, 1, "", 1), styles().at("narcoMansion"), "", &from) == "mansion");
+    CHECK(interiorProgramFor(rectSpec(1000, 800, 1, "", 1), styles().at("mansion"), "", &from) == "mansion");
     Spec odd = rectSpec(1000, 800, 2, "spaceport", 7);
     odd.businesses.clear();
     CHECK(interiorProgramFor(odd, res, "", &from) == "generic");
@@ -367,7 +367,7 @@ TEST_CASE("interiors: a stepped ground floor on a slope: rooms at their doors' l
         {
             CAPTURE(program);
             CAPTURE(floors);
-            const Style& st = styles().at(std::string(program) == "shop" ? "colonialCentro" : "residential");
+            const Style& st = styles().at(std::string(program) == "shop" ? "colonial" : "residential");
             Spec s = rectSpec(2400, 1200, floors, program, 0x880 + uint64_t(floors) + (std::string(program) == "shop" ? 10 : 0));
             s.style = st.id;
             s.cornerGround = {0.0, 260.0, 260.0, 0.0}; // rising along the street
@@ -556,7 +556,7 @@ json env(uint64_t lot, double x0, double z0, double w, double d, int floors, con
 
 json town()
 {
-    return json::array({env(0x4a1, 0, 0, 1400, 1000, 2, "colonialCentro", "shop"), env(0x4a2, 3000, 0, 1200, 1000, 3, "residential", "residential")});
+    return json::array({env(0x4a1, 0, 0, 1400, 1000, 2, "colonial", "shop"), env(0x4a2, 3000, 0, 1200, 1000, 3, "residential", "residential")});
 }
 
 std::string partMesh(const std::string& id, const std::string& part)

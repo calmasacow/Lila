@@ -44,7 +44,7 @@ json tinySpec()
         "terrain": {"size": [260000, 260000], "resolution": 129, "seed": 3, "source": {"type": "noise", "amplitude": 1500, "featureSize": 120000}},
         "settlements": [{"name": "Pueblo", "create": {"profile": "usTown", "seed": 2,
                           "outline": [[-36000, -36000], [36000, -36000], [36000, 36000], [-36000, 36000]]},
-                         "buildings": {"style": "colonialCentro"}}],
+                         "buildings": {"style": "colonial"}}],
         "sites": [{"kind": "village", "id": "v1", "at": [80000, 80000]},
                   {"kind": "cemetery", "id": "c1", "at": [-80000, 80000], "params": {"cemeteryWidth": 9000, "cemeteryDepth": 7000}}],
         "slots": {"rules": [{"id": "r1", "name": "Signs", "type": "sign.storefront", "payload": {"poolTag": "fictional_signs"}}],
@@ -192,7 +192,7 @@ TEST_CASE("world: worldBuild on a tiny world, read back, rebuilt the same, mappe
     const json sb = run("siteBuildings", {{"args", {"v1", "c1"}}});
     CHECK(sb["buildings"].get<int>() > 3);
     CHECK(sb["styles"].contains("mausoleum"));
-    CHECK((sb["styles"].contains("villageAdobe") || sb["styles"].contains("ruralShack")));
+    CHECK((sb["styles"].contains("adobe") || sb["styles"].contains("ruralShack")));
 
     // Read back: the scene's sites, slots and zones; a Buildings edit survives a rebuild from the read-back spec.
     std::string someBuilding;

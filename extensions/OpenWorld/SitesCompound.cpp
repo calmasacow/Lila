@@ -44,7 +44,7 @@ Ring walledCompound(Kit& k, double z0, bool guard, bool cameras)
     if (guard)
     {
         const Ring g = rect(700.0, z0 + 300.0, 1600.0, z0 + 1100.0);
-        EnvelopeOut& e = k.envelope("guardHouse", g, "narcoMansion", "guardhouse", "residential", 1, 300.0, "flat");
+        EnvelopeOut& e = k.envelope("guardHouse", g, "mansion", "guardhouse", "residential", 1, 300.0, "flat");
         e.front = {-1.0, 0.0};
         e.entrances = {{700.0, z0 + 700.0}};
         taken.push_back(g);
@@ -57,7 +57,7 @@ Ring walledCompound(Kit& k, double z0, bool guard, bool cameras)
     const Ring m = rect(-mw * 0.5, mz - md * 0.5, mw * 0.5, mz + md * 0.5);
     const double r = k.rnd(31);
     const std::string roof = r < 0.3 ? "dome" : r < 0.75 ? "hip" : "flat";
-    EnvelopeOut& mansion = k.envelope("mansion", m, "narcoMansion", "mansion", "residential", floors, floors * 380.0, roof);
+    EnvelopeOut& mansion = k.envelope("mansion", m, "mansion", "mansion", "residential", floors, floors * 380.0, roof);
     mansion.front = {0.0, -1.0};
     mansion.entrances = {{0.0, mz - md * 0.5}};
     mansion.name = s.name;
@@ -67,7 +67,7 @@ Ring walledCompound(Kit& k, double z0, bool guard, bool cameras)
     const Ring garage = rect(x0 + 600.0, z0 + D * 0.22, x0 + 600.0 + std::min(1800.0, W * 0.2), z0 + D * 0.22 + 900.0);
     if (!ringsOverlap(garage, m))
     {
-        EnvelopeOut& g = k.envelope("garage", garage, "narcoMansion", "garage", "residential", 1, 320.0, "flat");
+        EnvelopeOut& g = k.envelope("garage", garage, "mansion", "garage", "residential", 1, 320.0, "flat");
         g.front = {1.0, 0.0};
         g.entrances = {{garage[1].x, (garage[0].y + garage[2].y) * 0.5}};
         taken.push_back(garage);

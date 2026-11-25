@@ -183,8 +183,8 @@ std::string kindList()
 
 const std::vector<std::string>& styles()
 {
-    static const std::vector<std::string> s = {"colonial", "malecon", "resortTower", "modernCommercial", "narcoMansion", "civic",
-                                               "warehouse", "packingPlant", "portShed", "villageAdobe", "ruralShack", "church",
+    static const std::vector<std::string> s = {"colonial", "seafront", "resortTower", "modernCommercial", "mansion", "civic",
+                                               "warehouse", "packingPlant", "portShed", "adobe", "ruralShack", "church",
                                                "mausoleum", "hangar", "lighthouse", "terminal"};
     return s;
 }

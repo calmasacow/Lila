@@ -229,7 +229,7 @@ std::string interiorProgramFor(const Spec& s, const Style& st, const std::string
         return "church";
     if (sid == "policeStation" || is({"police", "police_station"}))
         return "police";
-    if (sid == "narcoMansion" || is({"mansion", "villa"}))
+    if (sid == "mansion" || is({"mansion", "villa"}))
         return "mansion";
     if (is({"bar", "pub", "cantina", "nightclub", "restaurant", "cafe", "fast_food"}))
         return "bar";
@@ -245,7 +245,7 @@ std::string interiorProgramFor(const Spec& s, const Style& st, const std::string
     if (isBusiness(s))
         return "shop";
     const bool residential = u == "residential" || is({"residential", "house", "apartments", "apartment", "detached", "terrace"}) ||
-                             (p.empty() && u.empty() && (sid == "residential" || sid == "colonialCentro" || sid == "villageAdobe" || sid == "ruralShack" || sid == "malecon"));
+                             (p.empty() && u.empty() && (sid == "residential" || sid == "colonial" || sid == "adobe" || sid == "ruralShack" || sid == "seafront"));
     if (residential)
         return s.floors >= 3 ? "apartment" : "house";
     if (p.empty() && u.empty() && sid == "modernCommercial")

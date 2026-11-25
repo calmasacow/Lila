@@ -1,6 +1,6 @@
 {
-  "id": "narcoMansion",
-  "label": "Narco Mansion",
+  "id": "mansion",
+  "label": "Mansion",
   "description": "Walled villas: columns and a pediment at the door, a dome, balustraded roofs, a gate in a high perimeter wall, a pool behind.",
   "tags": [
     "mansion",
@@ -69,7 +69,7 @@
     ],
     "trim": [
       "#ffffff",
-      "#c9a227"
+      "#d8cfc0"
     ],
     "roof": [
       "#b5651d",

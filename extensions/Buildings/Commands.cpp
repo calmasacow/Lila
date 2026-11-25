@@ -1223,7 +1223,7 @@ void registerCommands(ext::Context& ctx)
                 out["note"] = "the settlement has no ground mesh: doors stand at each envelope's highest ground, with steps where needed";
             return out;
         },
-        .examples = {"buildingCreate(settlement='Town')", "buildingCreate(settlement='Town', style='colonialCentro', cell=6400)",
+        .examples = {"buildingCreate(settlement='Town')", "buildingCreate(settlement='Town', style='colonial', cell=6400)",
                      "buildingCreate(curve='Footprints', floors=3, style='residential')", "buildingCreate(mesh='Block_3', style='warehouse')"},
     });
 
@@ -1409,14 +1409,14 @@ void registerCommands(ext::Context& ctx)
                 out["interiors"] = in;
             return out;
         },
-        .examples = {"buildingStyle('Town_Buildings_0_0', style='malecon')", "buildingStyle(polygon=[[0, 0], [8000, 0], [8000, 8000], [0, 8000]], style='colonialCentro')"},
+        .examples = {"buildingStyle('Town_Buildings_0_0', style='seafront')", "buildingStyle(polygon=[[0, 0], [8000, 0], [8000, 8000], [0, 8000]], style='colonial')"},
     });
 
     ctx.registerCommand({
         .name = "buildingStyles",
-        .doc = "The building styles: shipped (colonial centro, malecón, resort tower, modern commercial, residential, narco mansion, "
-               "civic, police station, church, mausoleum, warehouse, packing plant, port shed, hangar, village adobe, rural shack), "
-               "the user's and the workspace's. style= gives one style's full JSON (the format to copy for your own); reload=True "
+        .doc = "The building styles: shipped (colonial, seafront, resort tower, modern commercial, residential, mansion, civic, "
+               "police station, church, mausoleum, warehouse, packing plant, port shed, hangar, adobe, rural shack, terminal, "
+               "lighthouse), the user's and the workspace's (<workspace>/BuildingStyles, where regional styles belong). style= gives one style's full JSON (the format to copy for your own); reload=True "
                "reads the folders again.",
         .flags = {{"style", "sy", T::String, nullptr, "One style's full JSON."}, {"reload", "rl", T::Bool, false, "Read the style folders again."}},
         .undoable = false,
@@ -1440,7 +1440,7 @@ void registerCommands(ext::Context& ctx)
                 out.push_back(styleSummary(*s));
             return {{"styles", out}, {"userFolder", userStyleDir().generic_string()}, {"workspaceFolder", workspaceStyleDir().generic_string()}};
         },
-        .examples = {"[s['id'] for s in buildingStyles()['styles']]", "buildingStyles(style='colonialCentro')"},
+        .examples = {"[s['id'] for s in buildingStyles()['styles']]", "buildingStyles(style='colonial')"},
     });
 
     ctx.registerCommand({
@@ -1482,7 +1482,7 @@ void registerCommands(ext::Context& ctx)
             touchAll();
             return {{"style", id}, {"file", f.generic_string()}};
         },
-        .examples = {"buildingStyleSave(id='pinkCentro', base='colonialCentro', spec={'palette': {'render': ['#e8a0b4', '#f2c6d3']}})"},
+        .examples = {"buildingStyleSave(id='pinkCentro', base='colonial', spec={'palette': {'render': ['#e8a0b4', '#f2c6d3']}})"},
     });
 
     ctx.registerCommand({

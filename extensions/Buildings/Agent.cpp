@@ -22,8 +22,8 @@ mesh's footprint. Units cm, Y up. Every command is undoable and echoed; Python: 
   `buildingCreate(mesh='Block', style='warehouse')`.
 - Output: a group `<settlement>_Buildings` with one live mesh per 64 m cell (four per Settlement World Partition cell),
   `cell=` to change, `standalone=True` for one mesh per building.
-- Styles: `buildingStyles()` lists them; `buildingStyles(style='colonialCentro')` gives the JSON to copy.
-  Settlement's style guesses map onto them (mansion -> narcoMansion, police program -> policeStation).
+- Styles: `buildingStyles()` lists them; `buildingStyles(style='colonial')` gives the JSON to copy.
+  Settlement's style guesses map onto them (police program -> policeStation).
 
 ## Ids
 
@@ -37,11 +37,11 @@ mesh's footprint. Units cm, Y up. Every command is undoable and echoed; Python: 
 
 - `buildingInfo(id, bays=True, modules=True)`: style, floors, palette, facades, bays (paths and corners), modules
   with slot ids, floor plates, core, openings.
-- `buildingEdit(id, floors=3, style='malecon', seed=2, bayWidth=300, roof='hip', palette={'render': '#e4572e'})`.
+- `buildingEdit(id, floors=3, style='seafront', seed=2, bayWidth=300, roof='hip', palette={'render': '#e4572e'})`.
 - Bays: `buildingEdit(id, bays={'t0/f0/l0/b2': 'door'})` (window, door, shopfront, shopdoor, wall, arcade, garage);
   parts: `toggles={'t0/f0/l1/b1': {'balcony': True}}` (balcony, awning, ac, grille, shutter); `facadeBays={'t0/f0': 5}`;
   `clearBays=[...]`, `clear=True`.
-- District: `buildingStyle(polygon=[[x, z], ...], style='colonialCentro')`; `buildingAge(polygon=..., dirt=0.7)` or
+- District: `buildingStyle(polygon=[[x, z], ...], style='colonial')`; `buildingAge(polygon=..., dirt=0.7)` or
   `preset='Grunge'` (Weathering).
 - Swap parts with W0 slots: `slotRule('add', type='sign.storefront', poolTag='fictional_signs')`,
   `slotSet(id='building:1a2b/t0/f0/l0/b2/door', unrealClass='/Game/BP/BP_Door.BP_Door_C', data={'locked': True})`.

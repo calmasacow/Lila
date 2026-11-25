@@ -488,7 +488,7 @@ void buildVillage(Kit& k)
                 return false;
             taken.push_back(pad);
             const bool shack = k.rnd(key, 4) < 0.15;
-            EnvelopeOut& e = k.envelope(id, fp, shack ? "ruralShack" : "villageAdobe", "house", "residential", k.rnd(key, 5) < 0.1 ? 2 : 1,
+            EnvelopeOut& e = k.envelope(id, fp, shack ? "ruralShack" : "adobe", "house", "residential", k.rnd(key, 5) < 0.1 ? 2 : 1,
                                         280.0 + k.rnd(key, 6) * 40.0, k.rnd(key, 7) < 0.5 ? "flat" : "gable");
             e.front = -n * sd;
             e.entrances = {c - n * sd * (d * 0.5)};

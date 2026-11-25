@@ -218,7 +218,7 @@ TEST_CASE("slots on a generator's own instances: a cell of 400 is quick, and an 
         s.id = slots::makeId("building:00ff", "t0/f" + std::to_string(k % 4) + "/l" + std::to_string(k % 3) + "/b" + std::to_string(k) + "/window");
         s.type = k % 5 == 0 ? "door" : "window";
         s.owner = "building:00ff";
-        s.regions = {"settlement:Puerto", "district:centro", "style:colonialCentro", "cell:3_4"};
+        s.regions = {"settlement:Puerto", "district:centro", "style:colonial", "cell:3_4"};
         s.tags = {"building", "shop"};
         if (k % 20 == 0)
             s.payload.data = {{"text", "Abarrotes Lupita"}};

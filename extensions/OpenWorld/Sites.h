@@ -133,8 +133,8 @@ struct EnvelopeOut
     std::vector<P2> entrances;
     std::string use = "commercial"; // Settlement's use names
     std::string program;
-    std::string style; // colonial, malecon, resortTower, modernCommercial, narcoMansion, civic, warehouse, packingPlant, portShed,
-                       // villageAdobe, ruralShack, church, mausoleum, hangar, lighthouse, terminal
+    std::string style; // colonial, seafront, resortTower, modernCommercial, mansion, civic, warehouse, packingPlant, portShed,
+                       // adobe, ruralShack, church, mausoleum, hangar, lighthouse, terminal
     std::string name;
     json extra = json::object();
 };

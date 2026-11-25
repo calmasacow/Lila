@@ -5,7 +5,7 @@
     b = bld.info("building:1a2b", bays=True)
     bld.paint(b.id, {"t0/f0/l0/b2": "door"})
     bld.toggle(b.id, "t0/f0/l1/b1", balcony=True)
-    bld.style("colonialCentro", polygon=[[0, 0], [8000, 0], [8000, 8000], [0, 8000]])
+    bld.style("colonial", polygon=[[0, 0], [8000, 0], [8000, 8000], [0, 8000]])
     print(bld.check().counts)
 
 Every function runs the Buildings command of the same name (buildingCreate, buildingEdit, buildingStyle, buildingInfo,

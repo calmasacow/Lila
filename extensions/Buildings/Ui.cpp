@@ -408,7 +408,7 @@ void registerUi(ext::Context& ctx)
          .label = "Building Style",
          .run = [] { warnOnThrow([] { actions::runWithOptions("buildingStyle", {{"building", selectedBuildings()}}); }); },
          .doc = "Give the selected buildings, a district or every building a style.",
-         .python = "buildingStyle('Town_Buildings_0_0', style='malecon')",
+         .python = "buildingStyle('Town_Buildings_0_0', style='seafront')",
          .command = "buildingStyle",
          .icon = "palette"});
     add({.id = "buildings.check",
@@ -464,7 +464,7 @@ void registerUi(ext::Context& ctx)
     add({.id = "buildings.saveStyle",
          .label = "Save Building Style",
          .doc = "Save a style of your own from a base style and changes, for you or the workspace.",
-         .python = "buildingStyleSave(id='pinkCentro', base='colonialCentro', spec={'palette': {'render': ['#e8a0b4']}})",
+         .python = "buildingStyleSave(id='pinkCentro', base='colonial', spec={'palette': {'render': ['#e8a0b4']}})",
          .command = "buildingStyleSave",
          .icon = "device-floppy"});
     add({.id = "buildings.enterable",

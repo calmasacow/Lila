@@ -1,11 +1,11 @@
 {
-  "id": "colonialCentro",
-  "label": "Colonial Centro",
-  "description": "One and two storey houses and shops of the old centre: tall doors, barred windows, iron balconettes, saturated painted render, flat roofs behind parapets.",
+  "id": "colonial",
+  "label": "Colonial",
+  "description": "One and two storey houses and shops of an old town centre: tall doors, barred windows, iron balconettes, painted render, flat roofs behind parapets.",
   "tags": [
-    "centro",
     "colonial",
-    "historic"
+    "historic",
+    "old town"
   ],
   "floors": {
     "min": 1,
@@ -46,9 +46,9 @@
     "awnings": 0.15
   },
   "modules": {
-    "balconies": 0.45,
+    "balconies": 0.35,
     "balconyKind": "iron",
-    "grilles": 0.9,
+    "grilles": 0.6,
     "acUnits": 0.15,
     "pilasters": true,
     "cornice": "heavy",
@@ -65,19 +65,18 @@
   },
   "palette": {
     "render": [
-      "#c8553d",
-      "#e0a458",
-      "#2a5d8f",
-      "#b83b5e",
-      "#3aa6a0",
-      "#a7c957",
-      "#f2c14e",
-      "#f28f6b"
+      "#c9a46b",
+      "#e6d5b0",
+      "#b5654a",
+      "#9aa88a",
+      "#cbbca4",
+      "#8a9fae",
+      "#d8b48a"
     ],
     "trim": [
-      "#f4f1de",
-      "#efe6d2",
-      "#ffffff"
+      "#f1ebdd",
+      "#e6dcc8",
+      "#faf8f2"
     ],
     "roof": [
       "#7a6a5c"
@@ -92,8 +91,17 @@
     ]
   },
   "moduleTones": {
-    "arcade": ["render", "trim"],
-    "window": [null, "trim"],
-    "door": [null, "trim"]
+    "arcade": [
+      "render",
+      "trim"
+    ],
+    "window": [
+      null,
+      "trim"
+    ],
+    "door": [
+      null,
+      "trim"
+    ]
   }
 }

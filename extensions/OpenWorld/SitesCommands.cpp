@@ -1543,8 +1543,8 @@ void registerSites(ext::Context& ctx)
     ctx.registerCommand({
         .name = "siteEnvelopes",
         .doc = "Every building the site kits want, as Settlement-style envelopes in world space (footprint, base, top, height, floors, use, "
-               "roof, roofHeight, front, entrances, program, name) with a style tag (colonial, malecon, resortTower, modernCommercial, "
-               "narcoMansion, civic, warehouse, packingPlant, portShed, villageAdobe, ruralShack, church, mausoleum, hangar, lighthouse, "
+               "roof, roofHeight, front, entrances, program, name) with a style tag (colonial, seafront, resortTower, modernCommercial, "
+               "mansion, civic, warehouse, packingPlant, portShed, adobe, ruralShack, church, mausoleum, hangar, lighthouse, "
                "terminal) and a stable id under site:<id>. This is what a building generator builds from; until one does they draw as "
                "greybox massing. sites= limits it to some sites.",
         .flags = {{"sites", "s", T::List, nullptr, "Site ids or meshes; default every site."}},
@@ -1577,8 +1577,8 @@ void registerSites(ext::Context& ctx)
     ctx.registerCommand({
         .name = "siteBuildings",
         .doc = "Build site kits' buildings with the Buildings generator: each envelope (siteEnvelopes) becomes a procedural building "
-               "in its kit's style (portShed, warehouse, packingPlant, mausoleum, hangar, narcoMansion, church, civic, colonialCentro, "
-               "villageAdobe, ruralShack, terminal, lighthouse), under the group SiteBuildings, and the site's greybox massing turns "
+               "in its kit's style (portShed, warehouse, packingPlant, mausoleum, hangar, mansion, church, civic, colonial, "
+               "adobe, ruralShack, terminal, lighthouse), under the group SiteBuildings, and the site's greybox massing turns "
                "off. Building ids are stable per envelope, so edits, slot overrides and pins carry over; siteEdit rebuilds them when "
                "the layout changes. remove=True turns massing back on and drops those buildings. Returns the group, building count, "
                "styles and slots.",

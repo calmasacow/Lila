@@ -100,7 +100,7 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
     loadBuildings();
     run("newScene");
     const json envs = json::array({envelope(0x1111, 0, 0, 1500, 1200, 2), envelope(0x2222, 1500, 0, 1500, 1200, 2, {"street", "open", "open", "party"})});
-    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Town"}, {"style", "colonialCentro"}});
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Town"}, {"style", "colonial"}});
     CHECK(made["buildings"] == 2);
     CHECK(made["slots"].get<int>() > 20);
     const std::string A = "building:1111", B = "building:2222";
@@ -119,12 +119,12 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
                             colored += c.a == 1.0f && c != glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         CHECK(colored > 10);
         CHECK(run("getAttr", {{"args", {"bld_glass.instanceColor"}}}) == false);
-        CHECK(run("getAttr", {{"args", {"Bld_colonialCentro_render0.instanceColor"}}}) == true);
-        // Two tones: trim and frames take the second; colonialCentro paints its windows' and doors' frames in its trim.
+        CHECK(run("getAttr", {{"args", {"Bld_colonial_render0.instanceColor"}}}) == true);
+        // Two tones: trim and frames take the second; colonial paints its windows' and doors' frames in its trim.
         CHECK(run("getAttr", {{"args", {"bld_trim.instanceColor2"}}}) == true);
         CHECK(run("getAttr", {{"args", {"bld_frame.instanceColor2"}}}) == true);
         CHECK(run("getAttr", {{"args", {"bld_frame.instanceColor"}}}) == true);
-        CHECK(run("getAttr", {{"args", {"Bld_colonialCentro_render0.instanceColor2"}}}) == false);
+        CHECK(run("getAttr", {{"args", {"Bld_colonial_render0.instanceColor2"}}}) == false);
         size_t toned = 0;
         for (scene::NodeId id : g.nodes())
             if (gn::InstanceViewPtr v = gn::instanceViewFor(g, id))
@@ -138,7 +138,7 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
     const std::vector<std::string> aBefore = slotIds(A);
 
     // Unrelated edit: A's style and floors. B's ids hash the same.
-    run("buildingEdit", {{"args", {A}}, {"floors", 1}, {"style", "malecon"}});
+    run("buildingEdit", {{"args", {A}}, {"floors", 1}, {"style", "seafront"}});
     CHECK(hashIds(slotIds(B)) == before);
     CHECK(slotIds(A) != aBefore);
 
@@ -147,7 +147,7 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
     REQUIRE_FALSE(window.empty());
     run("slotSet", {{"id", window}, {"placeholder", "box"}, {"data", {{"locked", true}}}});
     run("buildingEdit", {{"args", {B}}, {"bays", {{"t0/f0/l0/b0", "door"}}}});
-    run("buildingCreate", {{"envelopes", envs}, {"name", "Town"}, {"style", "colonialCentro"}});
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Town"}, {"style", "colonial"}});
     const json found = run("slotFind", {{"id", window}});
     REQUIRE(found["count"] == 1);
     bool override = false;
@@ -172,7 +172,7 @@ TEST_CASE("buildings commands: create, stable ids across unrelated edits, edits 
     run("slotPin", {{"args", {"owner:" + A}}});
     json changed = envs;
     changed[0]["floors"] = 5;
-    run("buildingCreate", {{"envelopes", changed}, {"name", "Town"}, {"style", "colonialCentro"}});
+    run("buildingCreate", {{"envelopes", changed}, {"name", "Town"}, {"style", "colonial"}});
     CHECK(run("buildingInfo", {{"args", {A}}})["floors"] == 1); // the edit, on the pinned spec
 }
 
@@ -239,7 +239,7 @@ TEST_CASE("buildings commands: party walls, overlapping neighbours, slopes on a 
                                            {"name", "Ground"}});
     json envs = json::array({envelope(0x7001, 0, 0, 3000, 1200, 2, {"street", "party", "open", "open"}),
                              envelope(0x7002, 3000, 0, 1500, 1200, 2, {"street", "open", "open", "party"})});
-    run("buildingCreate", {{"envelopes", envs}, {"name", "Slope"}, {"ground", ground}, {"style", "colonialCentro"}});
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Slope"}, {"ground", ground}, {"style", "colonial"}});
     json check = run("buildingCheck");
     CAPTURE(check["issues"].dump());
     CHECK(check["counts"]["doorNotReachingGround"] == 0);
@@ -256,7 +256,7 @@ TEST_CASE("buildings commands: party walls, overlapping neighbours, slopes on a 
     // An overlapping neighbour and a real brand on a sign are flagged.
     envs.push_back(envelope(0x7003, 2000, 300, 1500, 1200, 2, {"street", "open", "open", "open"}, "modernCommercial", "shop"));
     envs.back()["businesses"][0]["name"] = "Walmart";
-    run("buildingCreate", {{"envelopes", envs}, {"name", "Slope"}, {"ground", ground}, {"style", "colonialCentro"}});
+    run("buildingCreate", {{"envelopes", envs}, {"name", "Slope"}, {"ground", ground}, {"style", "colonial"}});
     check = run("buildingCheck");
     CHECK(check["counts"]["overlappingNeighbours"].get<int>() >= 1);
     CHECK(check["counts"]["realName"].get<int>() >= 1);
@@ -296,7 +296,7 @@ TEST_CASE("buildings commands: the OSM fixture town through Settlement's buildin
     CHECK(ruled == after["count"].get<int>());
 
     // Change a style by district and paint a bay through the route's buildings.
-    const json st = run("buildingStyle", {{"all", true}, {"style", "malecon"}});
+    const json st = run("buildingStyle", {{"all", true}, {"style", "seafront"}});
     CHECK(st["count"] == envelopes);
 
     // A settlement edit rebuilds its buildings as a step of their own: none stale after, one undo shows the old ones.
@@ -339,7 +339,7 @@ TEST_CASE("buildings commands: performance budget")
     {
         const double x = (k % 40) * 1600.0, z = (k / 40) * 1600.0;
         envs.push_back(envelope(0x90000 + uint64_t(k), x, z, 1200 + (k % 5) * 50.0, 1100, 1 + k % 4, {"street", "party", "open", "party"},
-                                k % 3 == 0 ? "colonialCentro" : k % 3 == 1 ? "residential" : "modernCommercial", k % 4 == 0 ? "shop" : ""));
+                                k % 3 == 0 ? "colonial" : k % 3 == 1 ? "residential" : "modernCommercial", k % 4 == 0 ? "shop" : ""));
     }
     const auto t0 = std::chrono::steady_clock::now();
     const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Perf"}});
@@ -383,7 +383,7 @@ TEST_CASE("buildings commands: near detail keeps the modules as instances, reali
     json envs = json::array();
     for (int k = 0; k < 12; ++k)
         envs.push_back(envelope(0xa0000 + uint64_t(k), (k % 4) * 1600.0, (k / 4) * 1600.0, 1200, 1100, 3, {"street", "party", "open", "party"},
-                                "colonialCentro", k % 2 ? "shop" : ""));
+                                "colonial", k % 2 ? "shop" : ""));
     const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Inst"}});
     REQUIRE(!made["meshes"].empty());
     const std::string mesh = made["meshes"][0].get<std::string>();
@@ -407,7 +407,7 @@ TEST_CASE("buildings commands: acute corners, a tiny edge between two walls and 
     };
     json envs = json::array();
     int k = 0;
-    for (const char* style : {"modernCommercial", "colonialCentro", "residential", "narcoMansion", "malecon"})
+    for (const char* style : {"modernCommercial", "colonial", "residential", "mansion", "seafront"})
         for (const auto& shape : shapes)
             for (int seed = 0; seed < 2; ++seed, ++k)
             {
@@ -437,7 +437,7 @@ TEST_CASE("buildings commands: a reopened scene reads its buildings from the cac
     loadBuildings();
     run("newScene");
     const json envs = json::array({envelope(0xc001, 0, 0, 1500, 1200, 3), envelope(0xc002, 1500, 0, 1500, 1200, 2, {"street", "open", "open", "party"})});
-    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Cached"}, {"style", "colonialCentro"}, {"cell", 0}});
+    const json made = run("buildingCreate", {{"envelopes", envs}, {"name", "Cached"}, {"style", "colonial"}, {"cell", 0}});
     REQUIRE(made["meshes"].size() == 1);
     const std::string mesh = made["meshes"][0];
     const std::string A = "building:c001", B = "building:c002";

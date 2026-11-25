@@ -1,11 +1,12 @@
 {
-  "id": "villageAdobe",
-  "label": "Village Adobe",
-  "description": "Mountain village houses: thick earth walls, small deep-set windows, a wooden door, roof beams (vigas) poking out under a flat roof.",
+  "id": "adobe",
+  "label": "Adobe",
+  "description": "Earth-walled village houses: thick walls, small deep-set windows, a wooden door, roof beams (vigas) poking out under a flat roof.",
   "tags": [
-    "village",
     "adobe",
-    "rural"
+    "village",
+    "rural",
+    "earth"
   ],
   "floors": {
     "min": 1,
@@ -84,7 +85,13 @@
     "wallThickness": 50
   },
   "moduleTones": {
-    "window": [null, "trim"],
-    "door": [null, "trim"]
+    "window": [
+      null,
+      "trim"
+    ],
+    "door": [
+      null,
+      "trim"
+    ]
   }
 }

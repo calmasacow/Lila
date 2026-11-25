@@ -870,7 +870,7 @@ void registerLotCommands(ext::Context& ctx)
             out["objects"] = made;
             return out;
         },
-        .examples = {"settlementBuildings('Settlement', route='massing')", "settlementBuildings('Settlement', via='buildings', style='colonialCentro')",
+        .examples = {"settlementBuildings('Settlement', route='massing')", "settlementBuildings('Settlement', via='buildings', style='colonial')",
                      "settlementBuildings('Settlement', route='library', tags=['medieval', 'house'], contacts=True)",
                      "settlementBuildings('Settlement', route='masonry', polygon=[[-5000, -5000], [5000, -5000], [5000, 5000], [-5000, 5000]], name='old_town')"},
     });

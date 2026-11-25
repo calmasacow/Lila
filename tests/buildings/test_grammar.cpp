@@ -135,7 +135,7 @@ TEST_CASE("buildings: the shipped styles read and every style generates with sev
 
 TEST_CASE("buildings: module paths are stable and follow tier, facade, floor, bay, kind")
 {
-    const Style& st = styles().at("colonialCentro");
+    const Style& st = styles().at("colonial");
     const Spec a = rect(0, 0, 1600, 1200, 2);
     const auto r1 = generate(a, st, {});
     const auto r2 = generate(a, st, {});
@@ -181,7 +181,7 @@ TEST_CASE("buildings: party walls are blank, courtyards open, roofs over the res
 
     Spec c = rect(0, 0, 3000, 3000, 2, {0, 0, 0, 0});
     c.holes = {{{1000, 1000}, {1000, 2000}, {2000, 2000}, {2000, 1000}}};
-    const auto rc = generate(c, styles().at("colonialCentro"), {});
+    const auto rc = generate(c, styles().at("colonial"), {});
     int courtyard = 0;
     for (const Facade& f : rc->facades)
         courtyard += f.courtyard ? 1 : 0;
@@ -200,7 +200,7 @@ TEST_CASE("buildings: party walls are blank, courtyards open, roofs over the res
 
 TEST_CASE("buildings: slopes step the ground floor, doors reach the ground or get steps")
 {
-    const Style& st = styles().at("colonialCentro");
+    const Style& st = styles().at("colonial");
     Spec s = rect(0, 0, 2400, 1200, 2);
     s.cornerGround = {0.0, 260.0, 260.0, 0.0}; // rising along the street
     s.ground = 0.0;
@@ -273,7 +273,7 @@ TEST_CASE("buildings: podium and tower, bell towers, chamfered corners, mansion 
 
     Spec corner = rect(0, 0, 1500, 1500, 2, {0, 0, 2, 2});
     corner.corner = "chamfer";
-    const auto rc = generate(corner, styles().at("colonialCentro"), {});
+    const auto rc = generate(corner, styles().at("colonial"), {});
     bool chamfer = false;
     for (const Facade& f : rc->facades)
         chamfer = chamfer || f.path.find("x") != std::string::npos;
@@ -282,7 +282,7 @@ TEST_CASE("buildings: podium and tower, bell towers, chamfered corners, mansion 
     Spec villa = rect(0, 0, 2000, 1400, 2);
     villa.setbackFront = 800;
     villa.setbackSide = 600;
-    const auto rv = generate(villa, styles().at("narcoMansion"), {});
+    const auto rv = generate(villa, styles().at("mansion"), {});
     std::set<std::string> kinds;
     for (const Module& m : rv->modules)
         kinds.insert(m.kind);
@@ -309,7 +309,7 @@ TEST_CASE("buildings: placeholders have uvs and faces for every kind")
 
 TEST_CASE("buildings: a portico's floor stands on the ground in front of the door, on slopes too")
 {
-    for (const char* style : {"narcoMansion", "mausoleum"})
+    for (const char* style : {"mansion", "mausoleum"})
         for (const std::vector<double>& corners : {std::vector<double>{0.0, 0.0, 0.0, 0.0}, std::vector<double>{400.0, 400.0, 0.0, 0.0},
                                                    std::vector<double>{0.0, 0.0, 400.0, 400.0}, std::vector<double>{0.0, 350.0, 350.0, 0.0}})
         {
@@ -333,7 +333,7 @@ TEST_CASE("buildings: a portico's floor stands on the ground in front of the doo
 
 TEST_CASE("buildings: two-tone modules take the tones their style names, framed pieces keep their frames by default")
 {
-    const Style& centro = styles().at("colonialCentro");
+    const Style& centro = styles().at("colonial");
     const Style& plain = styles().at("residential");
     Palette p;
     p.render = {0.8f, 0.2f, 0.1f};
@@ -346,7 +346,7 @@ TEST_CASE("buildings: two-tone modules take the tones their style names, framed 
     CHECK(moduleTones(plain, p, "arcade") == std::array<glm::vec4, 2>{trim, trim});
     CHECK(moduleTones(plain, p, "window") == std::array<glm::vec4, 2>{trim, none});
     CHECK(moduleTones(plain, p, "door") == std::array<glm::vec4, 2>{trim, none});
-    // colonialCentro: arcade beams in the render, columns in the trim; window and door frames in the trim.
+    // colonial: arcade beams in the render, columns in the trim; window and door frames in the trim.
     CHECK(moduleTones(centro, p, "arcade") == std::array<glm::vec4, 2>{render, trim});
     CHECK(moduleTones(centro, p, "window") == std::array<glm::vec4, 2>{trim, trim});
     CHECK(moduleTones(centro, p, "door") == std::array<glm::vec4, 2>{trim, trim});

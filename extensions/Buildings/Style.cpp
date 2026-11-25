@@ -241,10 +241,10 @@ std::array<glm::vec4, 2> moduleTones(const Style& st, const Palette& p, const st
 
 const std::vector<std::string>& shippedStyleIds()
 {
-    static const std::vector<std::string> ids = {"colonialCentro", "malecon",     "resortTower", "modernCommercial", "residential",
-                                                 "narcoMansion",   "civic",       "policeStation", "church",         "mausoleum",
-                                                 "warehouse",      "packingPlant", "portShed",   "hangar",           "villageAdobe",
-                                                 "ruralShack",     "terminal",    "lighthouse"};
+    static const std::vector<std::string> ids = {"colonial",  "seafront",     "resortTower", "modernCommercial", "residential",
+                                                 "mansion",   "civic",        "policeStation", "church",         "mausoleum",
+                                                 "warehouse", "packingPlant", "portShed",    "hangar",           "adobe",
+                                                 "ruralShack", "terminal",    "lighthouse"};
     return ids;
 }
 
@@ -253,14 +253,6 @@ std::string styleFor(std::string_view settlementStyle, std::string_view program,
     const std::string s(settlementStyle), p(program), u(use);
     if (p == "police" || p == "fire_station" || p == "prison")
         return "policeStation";
-    if (s == "mansion")
-        return "narcoMansion";
-    if (s == "colonial")
-        return "colonialCentro";
-    if (s == "church" || s == "mausoleum" || s == "civic" || s == "packingPlant" || s == "portShed" || s == "warehouse" ||
-        s == "resortTower" || s == "malecon" || s == "colonialCentro" || s == "villageAdobe" || s == "ruralShack" ||
-        s == "modernCommercial" || s == "residential")
-        return s;
     for (const std::string& id : shippedStyleIds())
         if (s == id)
             return id;
@@ -279,7 +271,7 @@ std::string styleFor(std::string_view settlementStyle, std::string_view program,
     if (u == "civic")
         return "civic";
     if (u == "farm" || u == "rural")
-        return "villageAdobe";
+        return "adobe";
     return "residential";
 }
 

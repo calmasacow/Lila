@@ -809,11 +809,11 @@ void finishProgram(Envelope& env, const Lot& lot, const Layout& l)
     else if ((pg == "hotel" || pg == "apartments") && env.floors >= 6)
         set("resortTower", "hotel or apartments of 6 floors or more");
     else if (water < 6000.0 && env.floors <= 4 && dist < 0.8)
-        set("malecon", "within 60 m of water");
+        set("seafront", "within 60 m of water");
     else if (old || (dist < 0.3 && env.floors <= 2))
-        set("colonialCentro", old ? "built " + env.eraName : "low building in the old centre");
+        set("colonial", old ? "built " + env.eraName : "low building in the old centre");
     else if (env.use == Use::Farm || (dist > 0.85 && env.floors <= 1))
-        set(env.eraName == "modern" ? "ruralShack" : "villageAdobe", env.use == Use::Farm ? "farm use" : "single storey at the edge");
+        set(env.eraName == "modern" ? "ruralShack" : "adobe", env.use == Use::Farm ? "farm use" : "single storey at the edge");
     else if (env.groundUse == Use::Commercial || env.use == Use::Commercial)
         set("modernCommercial", "commercial use");
     else

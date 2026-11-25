@@ -1,11 +1,12 @@
 {
-  "id": "malecon",
-  "label": "Malecón Seafront",
-  "description": "Two to five storey seafront blocks: pastel render, iron balconies, awnings over restaurants, portales here and there.",
+  "id": "seafront",
+  "label": "Seafront",
+  "description": "Two to five storey blocks along a waterfront: light render, iron balconies, awnings over restaurants, arcades here and there.",
   "tags": [
     "seafront",
-    "malecon",
-    "coast"
+    "promenade",
+    "coast",
+    "malecon"
   ],
   "floors": {
     "min": 2,
@@ -64,12 +65,12 @@
   },
   "palette": {
     "render": [
-      "#f6c6a8",
-      "#a8dadc",
-      "#f1e3a1",
-      "#e5a5b8",
-      "#bde0c6",
-      "#fdf6ec"
+      "#f2ebe0",
+      "#e3ddd2",
+      "#d9cbb5",
+      "#c9d3d6",
+      "#e8e1c9",
+      "#fdf9f2"
     ],
     "trim": [
       "#ffffff",
@@ -87,6 +88,9 @@
     ]
   },
   "moduleTones": {
-    "arcade": ["render", "trim"]
+    "arcade": [
+      "render",
+      "trim"
+    ]
   }
 }
