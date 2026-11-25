@@ -2192,6 +2192,9 @@ void registerContractCommands(ext::Context& ctx)
 
 void registerCommands(ext::Context& ctx)
 {
+    // The revisions kept for terrainDirtyRegions are whole heightfields, by terrain path: a replaced scene's go with it.
+    for (const events::Event e : {events::Event::SceneNew, events::Event::SceneOpened})
+        ctx.subscribe(e, [](const events::EventData&) { seenRevisions().clear(); });
     const NoiseParams np;
     ctx.registerCommand({
         .name = "terrainCreate",
