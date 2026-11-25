@@ -126,6 +126,8 @@ struct Soup
     size_t faces() const { return sizes.size(); }
     void clear();
     void reserve(size_t faces);
+    /** Gives back what reserve and growth left unused: a city holds tens of thousands of these. */
+    void shrink();
     /** Appends one polygon (counter-clockwise seen from its front). */
     void poly(const Vec3* p, const glm::vec2* uv, size_t n, int32_t m, int32_t trim, int32_t owner, int32_t part, int32_t bay, glm::vec4 colour);
     void append(const Soup& o, int32_t ownerOffset = 0, int32_t bayOffset = 0);

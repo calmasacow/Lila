@@ -320,6 +320,19 @@ void Soup::reserve(size_t f)
     uvs.reserve(f * 4);
 }
 
+void Soup::shrink()
+{
+    sizes.shrink_to_fit();
+    mat.shrink_to_fit();
+    trim.shrink_to_fit();
+    owner.shrink_to_fit();
+    part.shrink_to_fit();
+    bay.shrink_to_fit();
+    colour.shrink_to_fit();
+    pts.shrink_to_fit();
+    uvs.shrink_to_fit();
+}
+
 void Soup::poly(const Vec3* p, const glm::vec2* uv, size_t n, int32_t m, int32_t t, int32_t o, int32_t pt, int32_t b, glm::vec4 c)
 {
     if (n < 3)

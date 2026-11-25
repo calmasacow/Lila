@@ -1858,6 +1858,13 @@ std::shared_ptr<const Result> generate(const Spec& spec, const Style& style, con
         r.lo = glm::min(r.lo, p);
         r.hi = glm::max(r.hi, p);
     }
+    for (Soup* s : {&r.shell, &r.hlod, &r.far})
+        s->shrink();
+    r.modules.shrink_to_fit();
+    r.bays.shrink_to_fit();
+    r.facades.shrink_to_fit();
+    r.plates.shrink_to_fit();
+    r.openings.shrink_to_fit();
     return out;
 }
 } // namespace buildings
