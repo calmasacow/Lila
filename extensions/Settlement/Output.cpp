@@ -1330,6 +1330,53 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             }
         }
     });
+    // Islands: faces of the street graph too small for a block (between a divided road's carriageways, inside a cluster of
+    // short streets) are raised to the sidewalks out to the curb lines, so no ground shows in the road; planted where they
+    // are 3 m or more across.
+    const std::vector<Face> faces = planarFaces(g);
+    // Just under the sidewalks, so an island's own sidewalk ring draws over its fill.
+    const double islandLift = walkLift - 1.5;
+    std::vector<Polys> islandPolys(faces.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, faces.size()), [&](const tbb::blocked_range<size_t>& range) {
+        for (size_t k = range.begin(); k < range.end(); ++k)
+        {
+            const Polygon& f = faces[k].outline;
+            std::vector<double> full(f.size()), curbs(f.size());
+            bool streets = true;
+            for (size_t i = 0; i < f.size() && streets; ++i)
+            {
+                const int e = f.tag[i];
+                streets = g.isStreet(e);
+                full[i] = streets ? 0.5 * edgeWidth(l, e) : 0.0;
+                curbs[i] = full[i] - (streets ? walkWidth(l, e, 2.0 * full[i], medieval) : 0.0);
+            }
+            if (!streets)
+                continue;
+            if (const Polygon block = inset(f, full); block.size() >= 3 && area(block) >= l.profile.minLot * kM2)
+                continue;
+            const Polygon island = inset(f, curbs);
+            if (island.size() < 3 || area(island) < 0.5 * kM2)
+                continue;
+            const std::vector<double> margin(island.size(), 150.0);
+            const Polygon core = inset(island, margin);
+            const FaceTags top{-1, int32_t(StreetClass::Local), -1, core.size() >= 3 && area(core) > kM2 ? SurfGrass : SurfSidewalk};
+            const FaceTags curb{-1, int32_t(StreetClass::Local), -1, SurfConcrete};
+            Polys& m = islandPolys[k];
+            addDraped(m, island, std::max(2.0 * seg, 400.0), ground.lattice(), [&](Vec2 q) { return at(q, islandLift); }, top);
+            for (size_t i = 0; i < island.size(); ++i)
+            {
+                const Vec2 a = island.pts[i], b = island.pts[(i + 1) % island.size()];
+                const Vec2 d = b - a;
+                const int steps = std::max(1, int(std::ceil(glm::length(d) / seg)));
+                for (int s = 0; s < steps; ++s)
+                {
+                    const Vec2 p = a + d * (double(s) / steps), q = a + d * (double(s + 1) / steps);
+                    const uint32_t p0 = m.point(at(p, roadLift)), q0 = m.point(at(q, roadLift)), p1 = m.point(at(p, islandLift)), q1 = m.point(at(q, islandLift));
+                    orient(m, {p0, q0, q1, p1}, Vec2(d.y, -d.x), curb);
+                }
+            }
+        }
+    });
     std::vector<int32_t> streetId, streetClass, streetPath, streetMat, waterId;
     for (size_t e = 0; e < edgePolys.size(); ++e)
     {
@@ -1355,6 +1402,14 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             streetMat.push_back(t[3]);
         });
     nodePolys = {};
+    for (const Polys& p : islandPolys)
+        p.appendTo(out.streets, [&](const FaceTags& t) {
+            streetId.push_back(t[0]);
+            streetClass.push_back(t[1]);
+            streetPath.push_back(t[2]);
+            streetMat.push_back(t[3]);
+        });
+    islandPolys = {};
     // Surface paths: ribbons on the walkable surface, level with each point, -1 for the street id.
     for (const SurfacePath& s : l.surfacePaths)
     {

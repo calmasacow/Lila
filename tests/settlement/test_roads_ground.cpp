@@ -78,6 +78,20 @@ struct Cover
     }
 };
 
+Layout testLayout()
+{
+    Layout l{StreetGraph(150.0, 2000.0)};
+    for (StreetClass c : {StreetClass::Arterial, StreetClass::Collector, StreetClass::Local, StreetClass::Alley, StreetClass::Path})
+    {
+        RoadProfile r;
+        builtinRoadProfile(defaultRoadProfile(c), &r);
+        l.roads.push_back(r);
+    }
+    REQUIRE(builtinProfile("mexicanCity", &l.profile));
+    l.radius = 100000.0;
+    return l;
+}
+
 Layout city(double size, uint32_t seed)
 {
     Options o;
@@ -238,4 +252,73 @@ TEST_CASE("settlement ground: blocks are covered whole, open blocks only near th
     }
     CHECK(spilled == 0);
     CHECK(far == 0);
+}
+
+TEST_CASE("settlement meshes: the carriageways and sidewalks cover every street and the islands between them")
+{
+    // A divided road 10 m apart, joined by cross streets: the face between its carriageways is too small for a block.
+    Layout l = testLayout();
+    l.graph.addStreet({-9000.0, 0.0}, {9000.0, 0.0}, StreetClass::Local);
+    l.graph.addStreet({-9000.0, 1000.0}, {9000.0, 1300.0}, StreetClass::Local);
+    for (double x : {-9000.0, -3000.0, 3000.0, 9000.0})
+    {
+        l.graph.addStreet({x, -6000.0}, {x, 0.0}, StreetClass::Local);
+        l.graph.addStreet({x, 0.0}, {x, 1000.0 + 300.0 * (x + 9000.0) / 18000.0}, StreetClass::Local);
+        l.graph.addStreet({x, 1000.0 + 300.0 * (x + 9000.0) / 18000.0}, {x, 7000.0}, StreetClass::Local);
+    }
+    // Faces wide enough for a block become blocks, as a layout's would; the rest are islands.
+    for (const Face& f : planarFaces(l.graph))
+    {
+        std::vector<double> d;
+        for (int e : f.outline.tag)
+            d.push_back(0.5 * edgeWidth(l, e));
+        if (Polygon in = inset(f.outline, d); in.size() >= 3 && area(in) >= l.profile.minLot * kM2)
+        {
+            Block b;
+            b.id = int(l.blocks.size());
+            b.outline = std::move(in);
+            l.blocks.push_back(std::move(b));
+        }
+    }
+    const MeshParts parts = toMeshes(l, Ground::plane());
+    const Cover streets(parts.streets), ground(parts.ground);
+    auto covered = [&](Vec2 p) { return streets.at(p) || ground.at(p); };
+
+    int samples = 0, holes = 0;
+    // Along and across every street's full width.
+    for (size_t e = 0; e < l.graph.edges.size(); ++e)
+    {
+        if (!l.graph.isStreet(int(e)))
+            continue;
+        const Vec2 a = l.graph.nodes[size_t(l.graph.edges[e].a)].p, b = l.graph.nodes[size_t(l.graph.edges[e].b)].p;
+        const double half = 0.5 * edgeWidth(l, int(e)) - 5.0, len = glm::length(b - a);
+        const Vec2 d = (b - a) / len, n(-d.y, d.x);
+        for (double s = 7.0; s < len; s += 97.0)
+            for (double t = -half; t <= half; t += half / 6.0)
+            {
+                ++samples;
+                holes += covered(a + d * s + n * t) ? 0 : 1;
+            }
+    }
+    // Inside the faces between the carriageways: blocks or islands.
+    int islandSamples = 0;
+    for (const Face& f : planarFaces(l.graph))
+    {
+        Vec2 lo(1e300), hi(-1e300);
+        for (const Vec2& q : f.outline.pts)
+            lo = glm::min(lo, q), hi = glm::max(hi, q);
+        if (hi.y - lo.y > 2000.0)
+            continue;
+        for (double x = lo.x + 31.0; x < hi.x; x += 113.0)
+            for (double z = lo.y + 17.0; z < hi.y; z += 37.0)
+                if (insidePolygon(f.outline, {x, z}))
+                {
+                    ++islandSamples;
+                    holes += covered({x, z}) ? 0 : 1;
+                }
+    }
+    CAPTURE(samples);
+    CAPTURE(islandSamples);
+    CHECK(islandSamples > 300);
+    CHECK(holes == 0);
 }
