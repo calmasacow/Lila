@@ -257,7 +257,13 @@ Ground Ground::fromMesh(const geo::Mesh& mesh, double cell, int maxSide)
         for (size_t k = 1; k + 1 < pts.size(); ++k)
             put(mesh.position(pts[0]), mesh.position(pts[k]), mesh.position(pts[k + 1]));
     }
-    g.mBvh = std::make_shared<const geo::MeshBvh>(mesh);
+    // Quads split from their first corner, as the grid above and the heightfield renderer split them: a ribbon draped on the
+    // shorter diagonal sinks under the terrain drawn wherever the two differ.
+    geo::TriangulateOptions split;
+    split.quads = geo::QuadSplit::FirstCorner;
+    auto bvh = std::make_shared<geo::MeshBvh>();
+    bvh->build(mesh, geo::triangulate(mesh, split));
+    g.mBvh = std::move(bvh);
     g.mTop = b.max.y + 100.0;
     g.mDepth = (b.max.y - b.min.y) + 200.0;
     g.mPlane = b.min.y;

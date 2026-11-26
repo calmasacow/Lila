@@ -17,7 +17,7 @@ endif()
 # Pins the MSVC toolset for dependencies (vcpkg otherwise picks the newest installed Visual Studio).
 set(VCPKG_OVERLAY_TRIPLETS "${CMAKE_CURRENT_SOURCE_DIR}/cmake/triplets")
 
-project(Lila VERSION 0.13.0 LANGUAGES C CXX)
+project(Lila VERSION 0.14.0 LANGUAGES C CXX)
 
 # System packages on Linux may export only NOCONFIG; retain vcpkg's release fallbacks as well.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -136,12 +136,14 @@ add_subdirectory(extensions/Settlement)
 add_subdirectory(extensions/Foliage)
 add_subdirectory(extensions/GroundTiles)
 add_subdirectory(extensions/Terrain)
+add_subdirectory(extensions/OpenWorld)
 add_subdirectory(extensions/Meadowlight)
 add_subdirectory(extensions/Paintbox)
 add_subdirectory(extensions/Seamwork)
 add_subdirectory(extensions/Plating)
 add_subdirectory(extensions/Blockwork)
 add_subdirectory(extensions/Weathering)
+add_subdirectory(extensions/Buildings)
 if(LILA_USD)
     add_subdirectory(extensions/OpenUSD)
 endif()

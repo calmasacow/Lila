@@ -1,6 +1,9 @@
 #include "ui/PointCloudDisplay.h"
+#include "core/Log.h"
+#include "core/Release.h"
 #include "ui/ViewportWidgetDetail.h"
 
+#include "io/SceneFile.h"
 #include "render/Surface.h"
 #include "scene/LightingChannels.h"
 #include "scene/SceneIndex.h"
@@ -50,6 +53,7 @@ using namespace viewportDetail;
 
 ViewportWidget::ViewportWidget(QWidget* parent) : QWidget(parent)
 {
+    io::setEvaluateOnLoad(true);
     setAttribute(Qt::WA_NativeWindow);
     setAttribute(Qt::WA_PaintOnScreen);
     setAttribute(Qt::WA_NoSystemBackground);
@@ -541,6 +545,16 @@ void ViewportWidget::submit()
     syncLookThrough();
     if (!mId)
         return;
+    // A load pumps events; drawing then would evaluate the half-read scene, only for the rest of the load to dirty it again.
+    if (io::loading())
+    {
+        if (!std::exchange(mLoadWaitQueued, true))
+            QTimer::singleShot(100, this, [this] {
+                mLoadWaitQueued = false;
+                submit();
+            });
+        return;
+    }
     render::Renderer::get().submit(mId, buildFrame(nullptr));
 }
 
@@ -552,6 +566,7 @@ render::FrameState ViewportWidget::renderFrame(const RenderView& view)
 render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
 {
     LILA_ZONE();
+    const release::Hold holdReleases;
     const Camera& camera = rv ? rv->camera : shownCamera();
     const double viewAspect = rv ? double(rv->width) / double(std::max(rv->height, 1)) : aspect();
     scene::Graph& g = scene::Graph::current();
@@ -561,6 +576,8 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     const bool inherit = scene::inheritVisibility();
 
     render::FrameState s;
+    if (!rv)
+        render::Renderer::get().reuseBuffers(mId, s);
     s.view = camera.view();
     s.proj = camera.proj(viewAspect);
     s.eye = camera.eye();
@@ -670,6 +687,7 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     drawPreselect(s);
     drawHandlerHover(s);
     OverlayPainter painter(s.overlayTris, devicePixelRatioF());
+    painter.setClip(QRectF(0, 0, width(), height()));
     {
         constexpr int kCols = 8, kRows = 6;
         auto probe = render::Renderer::get().environmentProbe(s.envPath);
@@ -721,9 +739,11 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     renderPasses::run(renderPasses::Stage::Scene, passes);
     {
         const std::vector<viewportHooks::Drawer> drawers = viewportHooks::drawers();
-        const std::vector<std::string> drawerIds = LILA_PROFILER_CONNECTED() ? viewportHooks::drawerIds() : std::vector<std::string>();
+        const std::vector<std::string> drawerIds = viewportHooks::drawerIds();
         for (size_t i = 0; i < drawers.size(); ++i)
         {
+            if (i < drawerIds.size() && !viewOverlays::drawerShown(drawerIds[i], view.camera))
+                continue;
             LILA_ZONE_N("buildFrame viewport drawer");
             if (i < drawerIds.size())
                 LILA_ZONE_TEXT(drawerIds[i].data(), drawerIds[i].size());
@@ -755,6 +775,13 @@ render::FrameState ViewportWidget::buildFrame(const RenderView* rv)
     else
         cursorBadges::publish(this, {});
     renderPasses::run(renderPasses::Stage::Final, passes);
+    if (painter.capped())
+    {
+        static bool warned = false;
+        if (!std::exchange(warned, true))
+            log::warn("viewport: the overlay passed {} vertices in one frame; the rest is not drawn until there is less of it", OverlayPainter::kMaxVertices);
+        painter.cappedNote(QPointF(12, height() - 16));
+    }
     // The ground grid is edge-on in side views, so they get a grid in the view plane through the origin instead.
     if (s.grid && mCamera.ortho && std::abs(glm::dot(mCamera.forward(), mCamera.up())) < 0.5)
     {

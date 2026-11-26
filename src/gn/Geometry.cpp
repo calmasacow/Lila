@@ -526,6 +526,7 @@ Geometry join(std::span<const GeometryPtr> parts)
             continue;
         if (out.name.empty())
             out.name = g->name;
+        out.keepInstances = out.keepInstances || g->keepInstances;
         if (g->volume)
         {
             if (!out.volume)
@@ -695,7 +696,10 @@ geo::Mesh toOutputMesh(const Geometry& g)
         geo::HeightfieldMeshOptions o;
         while (size_t((h.nx + o.step - 1) / o.step) * size_t((h.nz + o.step - 1) / o.step) > kMaxPoints)
             ++o.step;
-        m.append(geo::heightfieldToMesh(h, o));
+        if (r.mesh)
+            m.append(geo::heightfieldToMesh(h, o));
+        else
+            m = geo::heightfieldToMesh(h, o);
     }
     stripAnonymous(m);
     m.compact();

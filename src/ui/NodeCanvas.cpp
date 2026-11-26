@@ -731,6 +731,8 @@ void NodeCanvas::build(const std::string& group, const json& info, const std::se
     mLazyFrom = nullptr;
     mHoverNode = nullptr;
     mHotFieldNode = nullptr;
+    mHotPropNode = nullptr;
+    mWireFrom = nullptr;
     mTieDrag = -1;
     mTieStroke = false;
     mHotTie = -1;
