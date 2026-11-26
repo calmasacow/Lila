@@ -273,6 +273,45 @@ Ground Ground::plane(double height)
     return g;
 }
 
+/** Whether every face is an axis-aligned quad of one size on a grid from origin, all split from the same corner pair. */
+static bool findLattice(const geo::Mesh& mesh, Vec2 origin, Ground::Lattice& out)
+{
+    bool first = true;
+    for (geo::Index f = 0; f < mesh.faceCapacity(); ++f)
+    {
+        if (!mesh.faceValid(f))
+            continue;
+        const std::vector<geo::Index> pts = mesh.facePoints(f);
+        if (pts.size() != 4)
+            return false;
+        glm::dvec3 c[4];
+        for (size_t k = 0; k < 4; ++k)
+            c[k] = mesh.position(pts[k]);
+        Vec2 lo(std::min({c[0].x, c[1].x, c[2].x, c[3].x}), std::min({c[0].z, c[1].z, c[2].z, c[3].z}));
+        Vec2 hi(std::max({c[0].x, c[1].x, c[2].x, c[3].x}), std::max({c[0].z, c[1].z, c[2].z, c[3].z}));
+        const Vec2 size = hi - lo;
+        // The split runs from corner 0 to corner 2: the main diagonal when they differ the same way in x and z.
+        const bool main = (c[0].x - c[2].x) * (c[0].z - c[2].z) > 0.0;
+        if (first)
+        {
+            if (size.x <= 1e-3 || size.y <= 1e-3)
+                return false;
+            out = {origin, size, main};
+            first = false;
+        }
+        const double tol = 1e-3 * std::min(out.cell.x, out.cell.y);
+        if (std::abs(size.x - out.cell.x) > tol || std::abs(size.y - out.cell.y) > tol || main != out.mainDiagonal)
+            return false;
+        for (size_t k = 0; k < 4; ++k)
+            if ((std::abs(c[k].x - lo.x) > tol && std::abs(c[k].x - hi.x) > tol) || (std::abs(c[k].z - lo.y) > tol && std::abs(c[k].z - hi.y) > tol))
+                return false;
+        const Vec2 at = (lo - origin) / out.cell;
+        if (std::abs(at.x - std::round(at.x)) * out.cell.x > tol || std::abs(at.y - std::round(at.y)) * out.cell.y > tol)
+            return false;
+    }
+    return !first;
+}
+
 Ground Ground::fromMesh(const geo::Mesh& mesh, double cell, int maxSide)
 {
     LILA_ZONE();
@@ -324,6 +363,7 @@ Ground Ground::fromMesh(const geo::Mesh& mesh, double cell, int maxSide)
     }
     // Quads split from their first corner, as the grid above and the heightfield renderer split them: a ribbon draped on the
     // shorter diagonal sinks under the terrain drawn wherever the two differ.
+    g.mHasLattice = findLattice(mesh, {b.min.x, b.min.z}, g.mLattice);
     geo::TriangulateOptions split;
     split.quads = geo::QuadSplit::FirstCorner;
     auto bvh = std::make_shared<geo::MeshBvh>();

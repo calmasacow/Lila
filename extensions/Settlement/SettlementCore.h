@@ -122,7 +122,22 @@ public:
     bool solid(Vec2 p) const;
     bool isPlane() const { return mHeights.empty(); }
 
+    /** A mesh that is one grid of quads, every quad split on the same diagonal as the renderer draws it. */
+    struct Lattice
+    {
+        Vec2 origin{0.0};
+        Vec2 cell{0.0};
+        bool mainDiagonal = true; // split from its low x, low z corner to the opposite one; else the other two
+    };
+    /**
+     * The mesh's grid when it is one: a polygon cut on its lines and diagonals lies flat on the surface drawn, so a
+     * draped piece cannot dip under it. Null for a plane or any other mesh.
+     */
+    const Lattice* lattice() const { return mHasLattice ? &mLattice : nullptr; }
+
 private:
+    Lattice mLattice;
+    bool mHasLattice = false;
     double mPlane = 0.0;
     Vec2 mOrigin{0.0};
     double mCell = 100.0;

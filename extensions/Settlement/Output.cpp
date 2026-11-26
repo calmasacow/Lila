@@ -241,17 +241,66 @@ struct Polys
     }
 };
 
+/** A simple polygon as triangles, counter-clockwise, by ear clipping; what no ear can be cut from goes in as a fan. */
+std::vector<std::array<Vec2, 3>> earClip(std::vector<Vec2> ring)
+{
+    std::vector<std::array<Vec2, 3>> out;
+    if (ring.size() < 3)
+        return out;
+    if (signedArea(ring) < 0.0)
+        std::reverse(ring.begin(), ring.end());
+    auto turn = [](Vec2 a, Vec2 b, Vec2 c) { return cross(b - a, c - a); };
+    for (size_t guard = ring.size() * ring.size(); ring.size() > 3 && guard > 0; --guard)
+    {
+        bool cut = false;
+        const size_t n = ring.size();
+        for (size_t k = 0; k < n && !cut; ++k)
+        {
+            const Vec2 a = ring[(k + n - 1) % n], b = ring[k], c = ring[(k + 1) % n];
+            const double t = turn(a, b, c);
+            // A point that turns neither way (a run back along a cut, a straight side) is dropped without a triangle.
+            if (std::abs(t) <= 1e-9 * (glm::dot(b - a, b - a) + glm::dot(c - b, c - b) + 1.0))
+            {
+                ring.erase(ring.begin() + long(k));
+                cut = true;
+                break;
+            }
+            if (t < 0.0)
+                continue;
+            bool inside = false;
+            for (size_t i = 0; i < n && !inside; ++i)
+            {
+                const Vec2 q = ring[i];
+                if (i == k || i == (k + 1) % n || i == (k + n - 1) % n || q == a || q == b || q == c)
+                    continue;
+                inside = turn(a, b, q) > 0.0 && turn(b, c, q) > 0.0 && turn(c, a, q) > 0.0;
+            }
+            if (inside)
+                continue;
+            out.push_back({a, b, c});
+            ring.erase(ring.begin() + long(k));
+            cut = true;
+        }
+        if (!cut)
+            break;
+    }
+    for (size_t k = 1; k + 1 < ring.size(); ++k)
+        if (turn(ring[0], ring[k], ring[k + 1]) > 0.0)
+            out.push_back({ring[0], ring[k], ring[k + 1]});
+    return out;
+}
+
 /**
- * Adds the polygon as faces cut on a grid of cell, every corner draped by at, so a lot or block follows the ground under
- * it however large it is.
+ * Adds the polygon as faces cut on a grid, every corner draped by at, so a lot or block follows the ground under it
+ * however large it is. The polygon is triangulated first and each triangle cut, so every piece is convex. On a lattice
+ * ground the cuts are its own lines and diagonals: every piece then lies flat on one triangle of the surface drawn and
+ * cannot dip under it; on other ground they are a grid of cell.
  */
-void addDraped(Polys& m, const Polygon& p, double cell, const std::function<glm::dvec3(Vec2)>& at, const FaceTags& tags)
+void addDraped(Polys& m, const Polygon& p, double cell, const Ground::Lattice* grid, const std::function<glm::dvec3(Vec2)>& at,
+               const FaceTags& tags)
 {
     if (p.size() < 3)
         return;
-    Vec2 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
-    for (const Vec2& q : p.pts)
-        lo = glm::min(lo, q), hi = glm::max(hi, q);
     auto add = [&](const Polygon& piece) {
         if (piece.size() < 3 || area(piece) < 1.0)
             return;
@@ -261,30 +310,41 @@ void addDraped(Polys& m, const Polygon& p, double cell, const std::function<glm:
             ids.push_back(m.point(at(*it)));
         m.face(ids, tags);
     };
-    const int nx = std::max(1, int(std::ceil((hi.x - lo.x) / cell))), nz = std::max(1, int(std::ceil((hi.y - lo.y) / cell)));
-    if (nx == 1 && nz == 1)
+    const Vec2 origin = grid ? grid->origin : Vec2(0.0), step = grid ? grid->cell : Vec2(cell);
+    for (const std::array<Vec2, 3>& tri : earClip(p.pts))
     {
-        add(p);
-        return;
-    }
-    const double sx = (hi.x - lo.x) / nx, sz = (hi.y - lo.y) / nz;
-    for (int i = 0; i < nx; ++i)
-    {
-        Polygon col = p;
-        if (i > 0)
-            col = clipHalfPlane(col, {lo.x + i * sx, 0.0}, {1.0, 0.0});
-        if (i + 1 < nx)
-            col = clipHalfPlane(col, {lo.x + (i + 1) * sx, 0.0}, {-1.0, 0.0});
-        if (col.size() < 3)
-            continue;
-        for (int j = 0; j < nz; ++j)
+        Polygon t;
+        t.pts.assign(tri.begin(), tri.end());
+        t.tag.assign(3, -1);
+        const Vec2 lo = glm::min(tri[0], glm::min(tri[1], tri[2])), hi = glm::max(tri[0], glm::max(tri[1], tri[2]));
+        const int i0 = int(std::floor((lo.x - origin.x) / step.x)), i1 = int(std::ceil((hi.x - origin.x) / step.x));
+        const int j0 = int(std::floor((lo.y - origin.y) / step.y)), j1 = int(std::ceil((hi.y - origin.y) / step.y));
+        for (int i = i0; i < i1; ++i)
         {
-            Polygon piece = col;
-            if (j > 0)
-                piece = clipHalfPlane(piece, {0.0, lo.y + j * sz}, {0.0, 1.0});
-            if (j + 1 < nz)
-                piece = clipHalfPlane(piece, {0.0, lo.y + (j + 1) * sz}, {0.0, -1.0});
-            add(piece);
+            const double x0 = origin.x + i * step.x, x1 = x0 + step.x;
+            Polygon col = x0 > lo.x ? clipHalfPlane(t, {x0, 0.0}, {1.0, 0.0}) : t;
+            if (x1 < hi.x && col.size() >= 3)
+                col = clipHalfPlane(col, {x1, 0.0}, {-1.0, 0.0});
+            if (col.size() < 3)
+                continue;
+            for (int j = j0; j < j1; ++j)
+            {
+                const double z0 = origin.y + j * step.y, z1 = z0 + step.y;
+                Polygon piece = z0 > lo.y ? clipHalfPlane(col, {0.0, z0}, {0.0, 1.0}) : col;
+                if (z1 < hi.y && piece.size() >= 3)
+                    piece = clipHalfPlane(piece, {0.0, z1}, {0.0, -1.0});
+                if (piece.size() < 3)
+                    continue;
+                if (!grid)
+                {
+                    add(piece);
+                    continue;
+                }
+                const Vec2 from = grid->mainDiagonal ? Vec2(x0, z0) : Vec2(x1, z0);
+                const Vec2 n = grid->mainDiagonal ? Vec2(-step.y, step.x) : Vec2(-step.y, -step.x);
+                add(clipHalfPlane(piece, from, n));
+                add(clipHalfPlane(piece, from, -n));
+            }
         }
     }
 }
@@ -1274,16 +1334,17 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     // plazas, works yards, fields, graveyards), a little above it.
     if (o.ground)
     {
-        const double cell = std::max(4.0 * seg, 1200.0);
+        const Ground::Lattice* grid = ground.lattice();
+        const double cell = ground.isPlane() ? std::max(4.0 * seg, 1200.0) : std::max(2.0 * seg, 400.0);
         auto lay = [&](Polys& m, const Polygon& p, double lift, int32_t block, int32_t mat) {
-            addDraped(m, p, cell, [&](Vec2 q) { return at(q, lift); }, {block, mat, 0, 0});
+            addDraped(m, p, cell, grid, [&](Vec2 q) { return at(q, lift); }, {block, mat, 0, 0});
         };
         std::vector<Polys> blockPolys(l.blocks.size()), lotPolys(l.lots.size());
         tbb::parallel_for(tbb::blocked_range<size_t>(0, l.blocks.size()), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t k = range.begin(); k < range.end(); ++k)
             {
                 const Block& b = l.blocks[k];
-                lay(blockPolys[k], b.outline, o.lift * 0.5, b.id,
+                lay(blockPolys[k], b.outline, o.lift, b.id,
                     b.use == Use::Park ? SurfGrass : b.use == Use::Plaza ? SurfPaving : b.use == Use::Farm ? SurfField : SurfYard);
             }
         });
@@ -1292,7 +1353,7 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             {
                 const Lot& lot = l.lots[k];
                 if (const int32_t mat = lotSurface(lot.use); mat >= 0 && size_t(lot.block) < l.blocks.size() && lotSurface(l.blocks[size_t(lot.block)].use) != mat)
-                    lay(lotPolys[k], lot.outline, o.lift, lot.block, mat);
+                    lay(lotPolys[k], lot.outline, o.lift * 1.5, lot.block, mat);
             }
         });
         std::vector<int32_t> groundBlock, groundMat;
