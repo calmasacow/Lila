@@ -82,8 +82,8 @@ struct Mask
     void fillPolygon(std::span<const Vec2> pts);
     /** Sets every cell within r of a set one. */
     void dilate(double r);
-    /** Outer outlines of the set cells, holes filled, simplified to within about a cell. */
-    std::vector<Polygon> outlines() const;
+    /** Outer outlines of the set cells, holes filled, simplified to within tolerance (0: three quarters of a cell). */
+    std::vector<Polygon> outlines(double tolerance = 0.0) const;
 };
 
 /** What a mesh covers seen from above, grown by margin: one polygon per separate piece. */

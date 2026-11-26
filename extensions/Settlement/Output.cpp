@@ -366,6 +366,61 @@ int32_t lotSurface(Use u)
     default: return -1;
     }
 }
+/** A block some of whose sides are not streets (the settlement's edge, water): open land lies past its lots. */
+bool openBlock(const Block& b)
+{
+    return std::ranges::any_of(b.outline.tag, [](int t) { return t < 0; });
+}
+
+/**
+ * The town ground of an area in an open block: what lies within reach of a street's edge or 2 m of a building, traced
+ * on a grid of cell; not past a dead end, where the street runs out into open land. The area is taken two cells wider so its traced edge stays under the sidewalks it meets.
+ */
+std::vector<Polygon> nearStreets(const Polygon& area, const Layout& l, std::span<const int> degree, double reach,
+                                 std::span<const Polygon* const> buildings, double cell)
+{
+    if (area.size() < 3)
+        return {};
+    Vec2 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
+    for (const Vec2& q : area.pts)
+        lo = glm::min(lo, q), hi = glm::max(hi, q);
+    Mask inside = Mask::around(lo, hi, cell, cell), near = inside;
+    inside.fillPolygon(area.pts);
+    inside.dilate(2.0 * cell);
+    const StreetGraph& g = l.graph;
+    for (size_t e = 0; e < g.edges.size(); ++e)
+    {
+        if (!g.isStreet(int(e)))
+            continue;
+        const Vec2 a = g.nodes[size_t(g.edges[e].a)].p, b = g.nodes[size_t(g.edges[e].b)].p;
+        const double r = 0.5 * edgeWidth(l, int(e)) + reach, len = glm::length(b - a);
+        if (len < 1e-6 || glm::min(a, b).x - r > hi.x || glm::max(a, b).x + r < lo.x || glm::min(a, b).y - r > hi.y || glm::max(a, b).y + r < lo.y)
+            continue;
+        const Vec2 d = (b - a) / len, n(-d.y, d.x);
+        const std::array<Vec2, 4> band{a + n * r, a - n * r, b - n * r, b + n * r};
+        near.fillPolygon(band);
+        for (const int nd : {g.edges[e].a, g.edges[e].b})
+        {
+            const Vec2 c = g.nodes[size_t(nd)].p;
+            const double rc = degree[size_t(nd)] > 1 ? r : 0.5 * edgeWidth(l, int(e));
+            std::array<Vec2, 12> disk;
+            for (size_t k = 0; k < disk.size(); ++k)
+                disk[k] = c + Vec2(std::cos(k * kPi / 6.0), std::sin(k * kPi / 6.0)) * rc;
+            near.fillPolygon(disk);
+        }
+    }
+    for (const Polygon* fp : buildings)
+        if (fp && fp->size() >= 3)
+            if (const Polygon around = grow(*fp, 200.0); around.size() >= 3)
+                near.fillPolygon(around.pts);
+    for (size_t k = 0; k < near.on.size(); ++k)
+        near.on[k] = near.on[k] && inside.on[k];
+    std::vector<Polygon> out;
+    for (const Polygon& p : near.outlines(1.5 * cell))
+        if (Polygon q = makePolygon(p.pts); q.size() >= 3)
+            out.push_back(std::move(q));
+    return out;
+}
 } // namespace
 
 std::span<const SurfaceMaterial> surfaceMaterials() { return kSurfaces; }
@@ -1339,21 +1394,47 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
         auto lay = [&](Polys& m, const Polygon& p, double lift, int32_t block, int32_t mat) {
             addDraped(m, p, cell, grid, [&](Vec2 q) { return at(q, lift); }, {block, mat, 0, 0});
         };
+        auto blockSurface = [](const Block& b) {
+            return b.use == Use::Park ? SurfGrass : b.use == Use::Plaza ? SurfPaving : b.use == Use::Farm ? SurfField : SurfYard;
+        };
+        // An open block shows town ground only within reach of its streets and buildings: past them is open land.
+        std::vector<std::vector<const Polygon*>> buildingsIn(l.blocks.size());
+        for (const Envelope& env : l.envelopes)
+            if (env.lot >= 0 && size_t(env.lot) < l.lots.size() && size_t(l.lots[size_t(env.lot)].block) < l.blocks.size())
+                buildingsIn[size_t(l.lots[size_t(env.lot)].block)].push_back(&env.footprint);
+        const double reach = std::max(l.profile.lotDepth, 500.0), traceCell = 50.0;
+        std::vector<int> degree(g.nodes.size(), 0);
+        for (size_t e = 0; e < g.edges.size(); ++e)
+            if (g.isStreet(int(e)))
+                ++degree[size_t(g.edges[e].a)], ++degree[size_t(g.edges[e].b)];
         std::vector<Polys> blockPolys(l.blocks.size()), lotPolys(l.lots.size());
         tbb::parallel_for(tbb::blocked_range<size_t>(0, l.blocks.size()), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t k = range.begin(); k < range.end(); ++k)
             {
                 const Block& b = l.blocks[k];
-                lay(blockPolys[k], b.outline, o.lift, b.id,
-                    b.use == Use::Park ? SurfGrass : b.use == Use::Plaza ? SurfPaving : b.use == Use::Farm ? SurfField : SurfYard);
+                if (!openBlock(b))
+                    lay(blockPolys[k], b.outline, o.lift, b.id, blockSurface(b));
+                else
+                    for (const Polygon& p : nearStreets(b.outline, l, degree, reach, buildingsIn[k], traceCell))
+                        lay(blockPolys[k], p, o.lift, b.id, blockSurface(b));
             }
         });
         tbb::parallel_for(tbb::blocked_range<size_t>(0, l.lots.size()), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t k = range.begin(); k < range.end(); ++k)
             {
                 const Lot& lot = l.lots[k];
-                if (const int32_t mat = lotSurface(lot.use); mat >= 0 && size_t(lot.block) < l.blocks.size() && lotSurface(l.blocks[size_t(lot.block)].use) != mat)
-                    lay(lotPolys[k], lot.outline, o.lift * 1.5, lot.block, mat);
+                const int32_t own = lotSurface(lot.use);
+                if (own < 0 || size_t(lot.block) >= l.blocks.size())
+                    continue;
+                const Block& b = l.blocks[size_t(lot.block)];
+                if (!openBlock(b))
+                {
+                    if (lotSurface(b.use) != own)
+                        lay(lotPolys[k], lot.outline, o.lift * 1.5, lot.block, own);
+                    continue;
+                }
+                for (const Polygon& p : nearStreets(lot.outline, l, degree, reach, buildingsIn[size_t(lot.block)], traceCell))
+                    lay(lotPolys[k], p, o.lift * 1.5, lot.block, own);
             }
         });
         std::vector<int32_t> groundBlock, groundMat;
