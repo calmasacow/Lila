@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace settlement
 {
@@ -131,6 +132,67 @@ bool selfIntersects(std::span<const Vec2> pts)
     return false;
 }
 
+/**
+ * p's sides moved in by d with every side whose offset turns back on itself dropped, shortest first, its neighbours
+ * meeting in its place (the edge events of a straight skeleton). Empty when what is left still crosses itself.
+ */
+static Polygon insetDropping(const Polygon& p, std::span<const double> d)
+{
+    const size_t n = p.pts.size();
+    std::vector<Vec2> dir(n), base(n);
+    for (size_t k = 0; k < n; ++k)
+    {
+        const Vec2 e = p.pts[(k + 1) % n] - p.pts[k];
+        const double len = glm::length(e);
+        dir[k] = len > 1e-12 ? e / len : Vec2(1.0, 0.0);
+        base[k] = p.pts[k] + leftNormal(dir[k]) * d[k];
+    }
+    std::vector<size_t> keep(n);
+    std::iota(keep.begin(), keep.end(), size_t(0));
+    std::vector<Vec2> v;
+    while (keep.size() >= 3)
+    {
+        const size_t m = keep.size();
+        v.assign(m, Vec2(0.0));
+        for (size_t i = 0; i < m; ++i)
+        {
+            const size_t j = keep[(i + m - 1) % m], k = keep[i];
+            const double den = cross(dir[j], dir[k]);
+            // Nearly parallel neighbours (a street changing width along a straight run) step across at the corner.
+            if (std::abs(den) < 0.05)
+            {
+                const Vec2 q = p.pts[k];
+                v[i] = 0.5 * (base[j] + dir[j] * glm::dot(q - base[j], dir[j]) + base[k] + dir[k] * glm::dot(q - base[k], dir[k]));
+            }
+            else
+                v[i] = base[j] + dir[j] * (cross(base[k] - base[j], dir[k]) / den);
+        }
+        size_t worst = m;
+        double shortest = 0.0;
+        for (size_t i = 0; i < m; ++i)
+            if (const double along = glm::dot(v[(i + 1) % m] - v[i], dir[keep[i]]); along <= 0.0 && along < shortest + 1e-9)
+            {
+                shortest = along;
+                worst = i;
+            }
+        if (worst == m)
+            break;
+        keep.erase(keep.begin() + long(worst));
+    }
+    if (keep.size() < 3 || signedArea(v) <= 1e-6 || selfIntersects(v))
+        return {};
+    // Sides that met across a narrow neck leave corners outside, or nearer a side than its distance: not an inset.
+    const double nearest = *std::min_element(d.begin(), d.end());
+    for (const Vec2& q : v)
+        if (!contains(p.pts, q) || boundaryDistance(p.pts, q) < nearest - 1.0)
+            return {};
+    Polygon out;
+    out.pts = v;
+    for (size_t k : keep)
+        out.tag.push_back(p.tag[k]);
+    return out;
+}
+
 Polygon inset(const Polygon& p, std::span<const double> d)
 {
     const size_t n = p.pts.size();
@@ -166,6 +228,9 @@ Polygon inset(const Polygon& p, std::span<const double> d)
             ok = glm::dot(out.pts[(k + 1) % n] - out.pts[k], dir[k]) > 0.0;
     if (ok && signedArea(out.pts) > 1e-6 && !selfIntersects(out.pts))
         return out;
+    // A short side between bends turns back once moved in; clipping by every side would cut a concave face away.
+    if (Polygon dropped = insetDropping(p, d); !dropped.pts.empty())
+        return dropped;
 
     Polygon cut = p;
     for (size_t k = 0; k < n && !cut.pts.empty(); ++k)
