@@ -21,10 +21,12 @@
 #include <lila/Profile.h>
 #include <lila/Slots.h>
 #include <lila/Tasks.h>
+#include <lila/Transform.h>
 #include <lila/UnrealLink.h>
 #include <lila/Workspace.h>
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -87,6 +89,16 @@ bool isGroupOf(Graph& g, const Node& mod, std::string_view groupName)
     Node* grp = gn::groupOfModifier(g, mod);
     return grp && grp->name() == groupName;
 }
+
+/** The node a build asked to call wanted: that name, else the name the workspace's naming rules turn it into. */
+Node* findAsked(const std::string& wanted, const char* type = "transform")
+{
+    Graph& g = Graph::current();
+    if (Node* n = g.find(wanted))
+        return n;
+    const scene::NodeType* t = scene::types::find(type);
+    return t ? g.find(g.namingPolicy().conform(*t, wanted)) : nullptr;
+}
 } // namespace
 
 std::vector<WorldRef> allWorlds()
@@ -101,12 +113,15 @@ std::vector<WorldRef> allWorlds()
 
 std::optional<WorldRef> findWorld(const std::string& name)
 {
-    Graph& g = Graph::current();
     if (!name.empty())
     {
         for (const std::string& candidate : {name, worldNodeName(name)})
-            if (Node* n = g.find(candidate); n && n->type().attrIndex(kSpecAttr) >= 0)
+            if (Node* n = findAsked(candidate); n && n->type().attrIndex(kSpecAttr) >= 0)
                 return readWorld(*n);
+        // Renamed by hand or by the naming rules of the workspace it was built in: the spec it holds names it.
+        for (WorldRef& w : allWorlds())
+            if (w.spec.is_object() && w.spec.value("name", std::string()) == name)
+                return w;
         return std::nullopt;
     }
     std::vector<WorldRef> all = allWorlds();
@@ -397,8 +412,8 @@ void seedEdits(const std::string& groupName, const json& edits)
 {
     if (!edits.is_object() || edits.empty())
         return;
-    Graph& g = Graph::current();
-    std::string grp = g.find(groupName) ? g.find(groupName)->path() : std::string();
+    Node* found = findAsked(groupName);
+    std::string grp = found ? found->path() : std::string();
     if (grp.empty())
         grp = pathOfResult(run("group", {{"empty", true}, {"name", groupName}}));
     json merged = attrOf(grp, "buildingsOrphanEdits");
@@ -412,8 +427,8 @@ void seedLod(const std::string& groupName, const std::string& lod)
 {
     if (lod != "near" && lod != "hlod" && lod != "far")
         throw std::runtime_error("buildings lod is near, hlod or far, not " + lod);
-    Graph& g = Graph::current();
-    std::string grp = g.find(groupName) ? g.find(groupName)->path() : std::string();
+    Node* found = findAsked(groupName);
+    std::string grp = found ? found->path() : std::string();
     if (grp.empty())
         grp = pathOfResult(run("group", {{"empty", true}, {"name", groupName}}));
     setStringAttr(grp, "buildingsLod", lod, "The level of detail new building cells start at.");
@@ -535,21 +550,229 @@ void makeEnterable(Steps& st, const std::string& groupName, const json& edits)
         st.run("buildings.enterable." + groupName, [&] { return run("buildingMakeEnterable", {{"building", ids}}); });
 }
 
-/** Deletes what an earlier build of this world made, so a rebuild starts clean. */
-void removeBuilt(const WorldRef& w)
+/** Lower-case letters and digits of a name, trailing digits dropped: PuertoCentro_Buildings1 and PuertoCentroBuildings match. */
+std::string squashed(std::string_view s)
+{
+    std::string out;
+    for (char c : s)
+        if (std::isalnum(static_cast<unsigned char>(c)))
+            out.push_back(char(std::tolower(static_cast<unsigned char>(c))));
+    while (!out.empty() && out.back() >= '0' && out.back() <= '9')
+        out.pop_back();
+    return out;
+}
+
+/** What follows prefix in a squashed name, past the digits a renamed base may carry (sinaloablock1remixosm: remixosm). */
+std::optional<std::string> restAfter(const std::string& q, const std::string& prefix)
+{
+    if (prefix.empty() || q.compare(0, prefix.size(), prefix) != 0)
+        return std::nullopt;
+    size_t i = prefix.size();
+    while (i < q.size() && q[i] >= '0' && q[i] <= '9')
+        ++i;
+    return q.substr(i);
+}
+
+std::string linkIdOf(const Node& n)
+{
+    if (!n.type().dag || n.type().attrs.size() <= size_t(scene::Transform::kLinkId))
+        return {};
+    const std::string* v = std::get_if<std::string>(&n.value(scene::Transform::kLinkId));
+    return v ? *v : std::string();
+}
+
+/** A link id assignWorldLinkIds gave: w, 8 hex of the world's name, 12 hex of the node's path. */
+bool worldLinkId(const std::string& id)
+{
+    return id.size() == 21 && id[0] == 'w' && std::all_of(id.begin() + 1, id.end(), [](char c) { return std::isxdigit(static_cast<unsigned char>(c)) != 0; });
+}
+
+bool hasBuildingsModifier(Graph& g, scene::NodeId mesh)
+{
+    for (scene::NodeId m : scene::modifiers::stack(g, mesh))
+        if (Node* mod = g.node(m); mod && isGroupOf(g, *mod, "LilaBuildings"))
+            return true;
+    return false;
+}
+
+/** A Buildings group: seeded with Buildings attributes, or holding only Buildings cell meshes. */
+bool buildingsGroup(Graph& g, const Node& n)
+{
+    if (!n.type().dag || n.type().isA("mesh"))
+        return false;
+    for (const char* a : {"buildingsLod", "buildingsOrphanEdits"})
+        if (n.type().attrIndex(a) >= 0)
+            return true;
+    const std::vector<scene::NodeId>& kids = g.children(n.id());
+    return !kids.empty() && std::all_of(kids.begin(), kids.end(), [&](scene::NodeId k) { return hasBuildingsModifier(g, k); });
+}
+
+/** A group of curves only, as an OSM import makes. */
+bool curveGroup(Graph& g, scene::NodeId id)
+{
+    bool curves = false;
+    for (scene::NodeId d : g.descendants(id))
+    {
+        Node* n = g.node(d);
+        if (n && n->type().isA("curve"))
+            curves = true;
+        else if (n && n->type().dag && n->type().name != "transform")
+            return false;
+    }
+    return curves;
+}
+
+/** The meshSource nodes feeding a modifier (a stack's base, which goes with it). */
+std::vector<scene::NodeId> meshSourcesInto(const Node& mod)
 {
     Graph& g = Graph::current();
-    // The made nodes go first (terrain, building groups, settlements, zones): the sites' removal then has no terrain to
-    // regrade and no site buildings to rebuild, which on a big world is most of the cost.
+    std::vector<scene::NodeId> out;
+    const json inputs = ops::execute("listConnections", {{"args", {mod.path()}}, {"source", true}, {"destination", false}});
+    for (const json& in : inputs.is_array() ? inputs : json::array())
+        if (Node* src = in.is_string() ? g.find(in.get<std::string>()) : nullptr; src && src->type().isA("meshSource"))
+            out.push_back(src->id());
+    return out;
+}
+
+/** Building ids a Buildings cell modifier holds. */
+void buildingIdsOf(const Node& mod, std::set<std::string>& out)
+{
+    const json specs = attrOf(mod.path(), "spec", json::array());
+    if (specs.is_array())
+        for (const json& s : specs)
+            if (s.is_object() && s.contains("id") && s["id"].is_string())
+                out.insert(s["id"].get<std::string>());
+}
+
+/**
+ * Deletes what earlier builds of the world called name made, so a rebuild leaves one copy. Found by each build's record
+ * and by the link ids every build gives its nodes (both survive a save and a rename); for builds that recorded less or
+ * nothing, by the world's name and node types (its terrain, OSM line groups and water, the specs' settlements, their
+ * Buildings groups and zone set) and by the modifiers its meshes left behind. Nodes another world made are never matched.
+ * Returns what went and a note saying how it was found.
+ */
+json removeBuilt(const std::string& name, const WorldRef* w, const json& spec)
+{
+    LILA_ZONE();
+    Graph& g = Graph::current();
+    // Every world node built under this name is this world (a renamed one, and the copy a missed replace made beside it).
+    std::vector<WorldRef> ours, others;
+    for (WorldRef& r : allWorlds())
+    {
+        const bool same = (w && r.node == w->node) || (r.spec.is_object() && r.spec.value("name", std::string()) == name);
+        (same ? ours : others).push_back(std::move(r));
+    }
+    std::set<scene::NodeId> foreign;
+    std::set<std::string> foreignPrefixes;
+    for (const WorldRef& r : others)
+    {
+        if (Node* n = g.find(r.node))
+            foreign.insert(n->id());
+        if (r.spec.is_object() && r.spec.contains("name") && r.spec["name"].is_string())
+            foreignPrefixes.insert(worldLinkPrefix(r.spec["name"].get<std::string>()));
+        for (const char* k : {"nodes", "siteMeshes", "buildingGroups", "settlements"})
+            for (const json& p : r.built.value(k, json::array()))
+                if (Node* n = p.is_string() ? g.find(p.get<std::string>()) : nullptr)
+                    foreign.insert(n->id());
+    }
+    auto isForeign = [&](const Node& n) {
+        if (const std::string id = linkIdOf(n); worldLinkId(id) && foreignPrefixes.count(id.substr(0, 9)))
+            return true;
+        for (scene::NodeId p = n.id(); p != scene::kNoNode; p = g.parent(p))
+            if (foreign.count(p))
+                return true;
+        return false;
+    };
+    std::set<scene::NodeId> picked;
+    int byRecord = 0, byLink = 0;
+    json byName = json::array();
+    auto pick = [&](Node* n) {
+        if (!n || picked.count(n->id()) || isForeign(*n))
+            return false;
+        picked.insert(n->id());
+        return true;
+    };
+
+    std::set<std::string> recordedGroups;
+    for (const WorldRef& r : ours)
+    {
+        byRecord += pick(g.find(r.node));
+        for (const char* k : {"nodes", "siteMeshes", "buildingGroups", "settlements"})
+            for (const json& p : r.built.value(k, json::array()))
+                if (p.is_string())
+                    byRecord += pick(g.find(p.get<std::string>()));
+        for (const char* k : {"terrain", "remix", "remixFeatures", "zones"})
+            if (const json p = r.built.value(k, json()); p.is_string())
+                byRecord += pick(g.find(p.get<std::string>()));
+        for (const json& p : r.built.value("gnGroups", json::array()))
+            if (p.is_string())
+                recordedGroups.insert(p.get<std::string>());
+    }
+    const std::string prefix = worldLinkPrefix(name);
+    for (scene::NodeId id : g.nodes())
+        if (Node* n = g.node(id))
+            if (const std::string lid = linkIdOf(*n); worldLinkId(lid) && lid.compare(0, prefix.size(), prefix) == 0)
+                byLink += pick(n);
+
+    // By name and type, for what a build recorded under another name or not at all.
+    const std::string key = squashed(name);
+    std::set<std::string> settlementKeys, zoneKeys;
+    bool sites = false;
+    std::vector<const json*> specs = {&spec};
+    for (const WorldRef& r : ours)
+    {
+        if (r.spec.is_object())
+            specs.push_back(&r.spec);
+        for (const json& s : r.built.value("settlementNames", json::array()))
+            if (s.is_string())
+                settlementKeys.insert(squashed(s.get<std::string>()));
+    }
+    for (const json* sp : specs)
+    {
+        for (const json& s : sp->value("settlements", json::array()))
+            if (s.is_object() && s.contains("name") && s["name"].is_string())
+                settlementKeys.insert(squashed(s["name"].get<std::string>()));
+        if (const json si = sp->value("sites", json::array()); si.is_array() && !si.empty())
+            sites = true;
+        if (const json z = sp->value("zones", json()); z.is_object())
+            zoneKeys.insert(squashed(z.value("name", std::string("Zones"))));
+    }
+    std::set<scene::NodeId> terrainIds, settlementIds;
+    for (const std::string& p : terrainMeshes())
+        if (Node* n = g.find(p))
+            terrainIds.insert(n->id());
+    for (const std::string& p : settlementMeshes())
+        if (Node* n = g.find(p))
+            settlementIds.insert(n->id());
+    for (scene::NodeId id : g.nodes())
+    {
+        Node* n = g.node(id);
+        if (!n || picked.count(id) || !((n->type().dag && g.parent(id) == scene::kNoNode) || n->type().isA("zoneSet")))
+            continue;
+        const std::string q = squashed(n->name());
+        bool match = false;
+        if (const std::optional<std::string> rest = restAfter(q, key))
+        {
+            if (rest->empty())
+                match = terrainIds.count(id) > 0;
+            else if (*rest == "osm" || *rest == "remixosm")
+                match = curveGroup(g, id);
+            else if (*rest == "water" || *rest == "groundcover")
+                match = n->type().isA("mesh");
+        }
+        for (const std::string& s : settlementKeys)
+            match = match || (q == s && settlementIds.count(id)) || (q == s + "buildings" && buildingsGroup(g, *n));
+        match = match || (sites && q == "sitebuildings" && buildingsGroup(g, *n)) || (zoneKeys.count(q) && n->type().isA("zoneSet"));
+        if (match && pick(n))
+            byName.push_back(n->path());
+    }
+
+    // A parent and its child both picked: delete the parents only.
     std::vector<std::string> gone;
-    for (const json& n : w.built.value("nodes", json::array()))
-        if (n.is_string() && g.find(n.get<std::string>()))
-            gone.push_back(g.find(n.get<std::string>())->path());
-    if (g.find(w.node))
-        gone.push_back(w.node);
-    // A parent and its child both listed: delete the parents only.
+    for (scene::NodeId id : picked)
+        if (Node* n = g.node(id))
+            gone.push_back(n->path());
     std::sort(gone.begin(), gone.end());
-    gone.erase(std::unique(gone.begin(), gone.end()), gone.end());
     std::vector<std::string> roots;
     for (const std::string& p : gone)
         if (std::none_of(roots.begin(), roots.end(), [&](const std::string& r) { return p.size() > r.size() && p.compare(0, r.size(), r) == 0 && p[r.size()] == '|'; }))
@@ -557,6 +780,18 @@ void removeBuilt(const WorldRef& w)
     // Deleting a mesh leaves its modifier stack behind; a Buildings modifier left alone keeps publishing its slots, which
     // then count twice beside the rebuilt ones.
     std::vector<scene::NodeId> stacks;
+    std::set<scene::NodeId> groups;
+    std::vector<scene::NodeId> cells;
+    auto takeModifier = [&](scene::NodeId m) {
+        stacks.push_back(m);
+        if (Node* mod = g.node(m); mod && gn::isGnModifier(*mod))
+            if (Node* grp = gn::groupOfModifier(g, *mod))
+            {
+                groups.insert(grp->id());
+                if (grp->name() == "LilaBuildings")
+                    cells.push_back(m);
+            }
+    };
     for (const std::string& r : roots)
         if (Node* top = g.find(r))
         {
@@ -566,25 +801,173 @@ void removeBuilt(const WorldRef& w)
                 if (Node* n = g.node(id); n && n->type().isA("mesh"))
                 {
                     for (scene::NodeId m : scene::modifiers::stack(g, id))
-                        stacks.push_back(m);
+                        takeModifier(m);
                     if (const scene::NodeId src = scene::modifiers::stackSource(g, id); src != scene::kNoNode && g.node(src) && !g.node(src)->type().dag)
                         stacks.push_back(src);
                 }
         }
+    // Modifiers an earlier build's meshes left without a mesh: the world's own node groups', and Buildings cells holding its buildings.
+    auto worldGroup = [&](const Node& grp) {
+        if (recordedGroups.count(grp.name()))
+            return true;
+        const std::string q = squashed(grp.name());
+        if (const std::optional<std::string> rest = restAfter(q, key); rest && (*rest == "remix" || *rest == "terrain"))
+            return true;
+        return std::any_of(settlementKeys.begin(), settlementKeys.end(), [&](const std::string& s) { return q == s + "settlement"; });
+    };
+    // The removed cells' building ids, read only if a Buildings modifier without a mesh needs them (their specs are big).
+    std::optional<std::set<std::string>> buildingIds;
+    auto removedBuildings = [&]() -> const std::set<std::string>& {
+        if (!buildingIds)
+        {
+            buildingIds.emplace();
+            for (scene::NodeId m : cells)
+                if (Node* mod = g.node(m))
+                    buildingIdsOf(*mod, *buildingIds);
+        }
+        return *buildingIds;
+    };
+    int dangling = 0;
+    for (scene::NodeId id : g.nodes())
+    {
+        Node* mod = g.node(id);
+        if (!mod || !gn::isGnModifier(*mod) || scene::modifiers::meshOf(g, id) != scene::kNoNode)
+            continue;
+        Node* grp = gn::groupOfModifier(g, *mod);
+        if (!grp)
+            continue;
+        bool mine = worldGroup(*grp);
+        if (!mine && grp->name() == "LilaBuildings")
+        {
+            std::set<std::string> ids;
+            buildingIdsOf(*mod, ids);
+            const std::set<std::string>& removed = removedBuildings();
+            mine = std::any_of(ids.begin(), ids.end(), [&](const std::string& b) { return removed.count(b) > 0; });
+        }
+        if (!mine)
+            continue;
+        takeModifier(id);
+        ++dangling;
+        for (scene::NodeId src : meshSourcesInto(*mod))
+            stacks.push_back(src);
+    }
+
     if (!roots.empty())
         run("delete", {{"args", roots}});
     for (scene::NodeId id : stacks)
         if (g.node(id))
             g.deleteNode(id);
-    for (const json& s : w.built.value("sites", json::array()))
-        if (s.is_string())
+    int groupsGone = 0;
+    for (scene::NodeId id : groups)
+        if (Node* grp = g.node(id); grp && worldGroup(*grp) && gn::instancesOf(g, id).empty())
+        {
+            g.deleteNode(id);
+            ++groupsGone;
+        }
+    // Sites by the records' ids, then by the specs' (a site id is unique in a scene, and the rebuild makes these again).
+    std::set<std::string> recordedSites, specSites;
+    for (const WorldRef& r : ours)
+        for (const json& s : r.built.value("sites", json::array()))
+            if (s.is_string())
+                recordedSites.insert(s.get<std::string>());
+    for (const json* sp : specs)
+        for (const json& s : sp->value("sites", json::array()))
+            if (s.is_object() && s.contains("id") && s["id"].is_string())
+                specSites.insert(s["id"].get<std::string>());
+    for (const std::set<std::string>* ids : {&recordedSites, &specSites})
+        for (const std::string& id : *ids)
+        {
+            if (ids == &specSites && recordedSites.count(id))
+                continue;
             try
             {
-                run("siteRemove", {{"args", {s}}});
+                run("siteRemove", {{"args", {id}}});
+                if (ids == &specSites)
+                    byName.push_back("site " + id);
             }
             catch (const std::exception&)
             {
             }
+        }
+
+    json out = {{"roots", roots}, {"byRecord", byRecord}, {"byLinkId", byLink}, {"byName", byName}, {"danglingModifiers", dangling}, {"groups", groupsGone}};
+    if (roots.empty() && dangling == 0 && byName.empty())
+        out["note"] = "replace: no earlier build of " + name + " in the scene";
+    else
+    {
+        std::string note = "replace: removed the earlier build of " + name + " (" + std::to_string(roots.size()) + " nodes";
+        if (!byName.empty())
+        {
+            note += "; " + std::to_string(byName.size()) + " not in its record, matched by the world's names and node types:";
+            for (const json& p : byName)
+                note += " " + p.get<std::string>();
+        }
+        if (dangling > 0)
+            note += "; " + std::to_string(dangling) + " modifiers left without a mesh";
+        note += ")";
+        out["note"] = note;
+    }
+    return out;
+}
+
+/**
+ * Deletes Buildings cell modifiers left without a mesh that hold buildings a live cell holds too: an earlier build's
+ * leftovers that would publish those buildings' slots a second time. Returns how many went.
+ */
+int dropStaleCells()
+{
+    Graph& g = Graph::current();
+    std::vector<scene::NodeId> dangling, attached;
+    for (scene::NodeId id : g.nodes())
+        if (Node* mod = g.node(id); mod && isGroupOf(g, *mod, "LilaBuildings"))
+            (scene::modifiers::meshOf(g, id) == scene::kNoNode ? dangling : attached).push_back(id);
+    if (dangling.empty())
+        return 0;
+    std::set<std::string> live;
+    for (scene::NodeId id : attached)
+        buildingIdsOf(*g.node(id), live);
+    int gone = 0;
+    for (scene::NodeId id : dangling)
+    {
+        Node* mod = g.node(id);
+        std::set<std::string> ids;
+        buildingIdsOf(*mod, ids);
+        if (std::none_of(ids.begin(), ids.end(), [&](const std::string& b) { return live.count(b) > 0; }))
+            continue;
+        for (scene::NodeId src : meshSourcesInto(*mod))
+            if (g.node(src))
+                g.deleteNode(src);
+        g.deleteNode(id);
+        ++gone;
+    }
+    return gone;
+}
+
+/** Records every node the build made: the new DAG roots in nodes, the new node groups in gnGroups. */
+void recordMade(const std::set<scene::NodeId>& existing, json& built)
+{
+    Graph& g = Graph::current();
+    std::set<std::string> nodes;
+    for (const json& p : built["nodes"])
+        if (Node* n = p.is_string() ? g.find(p.get<std::string>()) : nullptr)
+            nodes.insert(n->path());
+    json groups = json::array();
+    for (scene::NodeId id : g.nodes())
+    {
+        Node* n = g.node(id);
+        if (!n || existing.count(id))
+            continue;
+        if (n->type().dag)
+        {
+            const scene::NodeId parent = g.parent(id);
+            if (parent == scene::kNoNode || existing.count(parent))
+                nodes.insert(n->path());
+        }
+        else if (n->type().isA("gnGroup"))
+            groups.push_back(n->name());
+    }
+    built["nodes"] = json(std::vector<std::string>(nodes.begin(), nodes.end()));
+    built["gnGroups"] = groups;
 }
 
 json buildWorld(json spec, const BuildOptions& o)
@@ -601,14 +984,22 @@ json buildWorld(json spec, const BuildOptions& o)
     Graph& g = Graph::current();
     const std::string name = spec.value("name", std::string("World"));
     const std::string culture = spec.value("culture", std::string("mexican"));
-    if (std::optional<WorldRef> old = findWorld(name))
-    {
-        if (!o.replace)
-            throw CommandError("worldBuild: a world named " + name + " exists (" + old->node + "); replace=True rebuilds it");
-        removeBuilt(*old);
-    }
-    auto skipped = [&](const char* step) { return std::find(o.skip.begin(), o.skip.end(), step) != o.skip.end(); };
+    const std::optional<WorldRef> old = findWorld(name);
+    if (old && !o.replace)
+        throw CommandError("worldBuild: a world named " + name + " exists (" + old->node + "); replace=True rebuilds it");
     json notes = json::array();
+    json replaced;
+    if (o.replace)
+    {
+        replaced = removeBuilt(name, old ? &*old : nullptr, spec);
+        if (const std::string note = replaced.value("note", std::string()); !note.empty())
+            notes.push_back(note);
+    }
+    // Everything made from here on is the world's: what is new afterwards is recorded, so a rebuild finds it all.
+    std::set<scene::NodeId> existing;
+    for (scene::NodeId id : g.nodes())
+        existing.insert(id);
+    auto skipped = [&](const char* step) { return std::find(o.skip.begin(), o.skip.end(), step) != o.skip.end(); };
     const fs::path folder = o.folder.empty() ? outputFolder("world", name, &notes) : paths::fromUtf8(o.folder);
     std::error_code ec;
     fs::create_directories(folder, ec);
@@ -780,6 +1171,13 @@ json buildWorld(json spec, const BuildOptions& o)
 
     // Settlements: each from OSM (the remix's or a file, clipped to its area) or laid out by Settlement, then its buildings.
     const json editsByGroup = spec.value("buildings", json::object()).value("edits", json::object());
+    // A spec read back from a scene keys edits by the group's name there, which the naming rules may have changed.
+    auto groupEdits = [&](const std::string& groupName) {
+        if (editsByGroup.contains(groupName))
+            return editsByGroup[groupName];
+        const std::string conformed = g.namingPolicy().conform(*scene::types::find("transform"), groupName);
+        return editsByGroup.value(conformed, json::object());
+    };
     std::optional<OsmDoc> remixDoc;
     std::vector<glm::dvec2> remixWorld;
     // Site outlines a settlement must keep clear: only those reaching into its box (Settlement makes every exclusion a
@@ -804,8 +1202,6 @@ json buildWorld(json spec, const BuildOptions& o)
         built["settlementNames"].push_back(sname);
         json made1;
         const bool ok = st.run("settlement." + sname, [&] {
-            if (Node* old = g.find(sname); old && o.replace)
-                run("delete", {{"args", {old->path()}}});
             if (s.contains("create"))
             {
                 json call = s["create"];
@@ -891,7 +1287,7 @@ json buildWorld(json spec, const BuildOptions& o)
             continue;
         const std::string groupName = g.find(mesh) ? g.find(mesh)->name() + "_Buildings" : sname + "_Buildings";
         st.run("buildings." + sname, [&] {
-            seedEdits(groupName, editsByGroup.value(groupName, json::object()));
+            seedEdits(groupName, groupEdits(groupName));
             const std::string lod = b.is_object() && b.contains("lod") ? b["lod"].get<std::string>() : spec.value("buildings", json::object()).value("lod", std::string());
             if (!lod.empty())
                 seedLod(groupName, lod);
@@ -926,11 +1322,11 @@ json buildWorld(json spec, const BuildOptions& o)
             }
             return out;
         });
-        if (Node* grp = g.find(groupName))
+        if (Node* grp = findAsked(groupName))
         {
             built["buildingGroups"].push_back(grp->path());
             made(grp->path());
-            makeEnterable(st, groupName, editsByGroup.value(groupName, json::object()));
+            makeEnterable(st, groupName, groupEdits(groupName));
         }
         if (s.contains("furniture") && !(s["furniture"].is_boolean() && !s["furniture"].get<bool>()))
             st.run("furniture." + sname, [&] {
@@ -942,7 +1338,7 @@ json buildWorld(json spec, const BuildOptions& o)
 
     if (!siteIds.empty() && !skipped("buildings") && ops::find("buildingCreate"))
         st.run("buildings.sites", [&] {
-            seedEdits("SiteBuildings", editsByGroup.value("SiteBuildings", json::object()));
+            seedEdits("SiteBuildings", groupEdits("SiteBuildings"));
             if (const std::string lod = spec.value("buildings", json::object()).value("lod", std::string()); !lod.empty())
                 seedLod("SiteBuildings", lod);
             json call = {{"args", siteIds}};
@@ -957,7 +1353,7 @@ json buildWorld(json spec, const BuildOptions& o)
     else if (!siteIds.empty() && !ops::find("buildingCreate"))
         notes.push_back("the Buildings extension is not loaded: site buildings stay greybox massing");
     if (!siteIds.empty() && !skipped("buildings") && ops::find("buildingCreate"))
-        makeEnterable(st, "SiteBuildings", editsByGroup.value("SiteBuildings", json::object()));
+        makeEnterable(st, "SiteBuildings", groupEdits("SiteBuildings"));
 
     // Style calls over everything built.
     for (const json& c : spec.value("buildings", json::object()).value("styles", json::array()))
@@ -1006,7 +1402,7 @@ json buildWorld(json spec, const BuildOptions& o)
         const json& z = spec["zones"];
         const std::string setName = z.value("name", std::string("Zones"));
         auto setFlags = [&](json call) {
-            if (Node* n = g.find(setName))
+            if (Node* n = findAsked(setName, "zoneSet"))
                 call["set"] = n->path();
             else
             {
@@ -1052,14 +1448,14 @@ json buildWorld(json spec, const BuildOptions& o)
             st.run("zones.playArea", [&] { return run("zonePlayArea", setFlags({{"polygon", z["playArea"]}})); });
         // Must-cover layers (districts, police) filled out to the play area unless the spec says otherwise.
         const json fg = z.value("fillGaps", json(true));
-        if (Node* setNode = g.find(setName); setNode && !(fg.is_boolean() && !fg.get<bool>()))
+        if (Node* setNode = findAsked(setName, "zoneSet"); setNode && !(fg.is_boolean() && !fg.get<bool>()))
         {
             const zones::ZoneSpec now = zones::zonesFromJson(run("zoneSpec", {{"set", setNode->path()}}));
             for (const zones::Layer& l : now.layers)
                 if (l.mustCover && (fg.is_boolean() || std::find(fg.begin(), fg.end(), json(l.id)) != fg.end()))
                     st.run("zones.fill." + l.id, [&] { return fillLayerGaps(setNode->path(), terrain, l.id); });
         }
-        if (Node* n = g.find(setName))
+        if (Node* n = findAsked(setName, "zoneSet"))
         {
             built["zones"] = n->path();
             made(n->path());
@@ -1081,6 +1477,11 @@ json buildWorld(json spec, const BuildOptions& o)
                 }
             return json{{"pinned", n}, {"nothingMatched", missed}};
         });
+
+    if (o.replace)
+        if (const int stale = dropStaleCells(); stale > 0)
+            notes.push_back("replace: " + std::to_string(stale) + " Buildings modifiers an earlier build left without a mesh held this build's buildings; removed");
+    recordMade(existing, built);
 
     // The world node: the spec it was built from and what was made, for worldSpec, worldCheck and a rebuild.
     const std::string node = pathOfResult(run("group", {{"empty", true}, {"name", worldNodeName(name)}}));
