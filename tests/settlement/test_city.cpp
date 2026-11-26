@@ -149,6 +149,7 @@ TEST_CASE("settlement meshes: sidewalks stand a curb above the road, junctions m
     const auto& names = m.materialNames();
     auto slot = [&](const char* name) { return int32_t(std::find(names.begin(), names.end(), name) - names.begin()); };
     const int32_t asphalt = slot("Settlement_Asphalt"), sidewalk = slot("Settlement_Sidewalk"), concrete = slot("Settlement_Concrete");
+    const int32_t dirt = slot("Settlement_Dirt");
 
     // Up-facing faces lie flat at one height per surface on flat ground; curbs stand between the two.
     struct Flat
@@ -171,6 +172,9 @@ TEST_CASE("settlement meshes: sidewalks stand a curb above the road, junctions m
             const glm::dvec3 &a = pts[k], &b = pts[(k + 1) % pts.size()];
             n += glm::dvec3((a.y - b.y) * (a.z + b.z), (a.z - b.z) * (a.x + b.x), (a.x - b.x) * (a.y + b.y));
         }
+        // A street running out of the town comes down to the ground as a dirt track.
+        if (mat[f] == dirt)
+            continue;
         // On flat ground every face is level or upright: anything between is a fold or a sliver standing up.
         const bool level = n.y > (1.0 - 1e-9) * glm::length(n), upright = std::abs(n.y) < 1e-6 * glm::length(n);
         slanted += level || upright ? 0 : 1;

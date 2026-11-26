@@ -322,3 +322,61 @@ TEST_CASE("settlement meshes: the carriageways and sidewalks cover every street 
     CHECK(islandSamples > 300);
     CHECK(holes == 0);
 }
+
+TEST_CASE("settlement meshes: a street's open end runs out as a dirt track or ends at a turning head, never alone")
+{
+    Layout l = testLayout();
+    l.outline = makePolygon({{-20000.0, -20000.0}, {20000.0, -20000.0}, {20000.0, 20000.0}, {-20000.0, 20000.0}});
+    // A cross street through the middle; one leg stops 20 m short of the outline, one ends in town.
+    l.graph.addStreet({-18000.0, 0.0}, {0.0, 0.0}, StreetClass::Local);
+    l.graph.addStreet({0.0, 0.0}, {6000.0, 0.0}, StreetClass::Local);
+    l.graph.addStreet({0.0, -18000.0}, {0.0, 0.0}, StreetClass::Local);
+    l.graph.addStreet({0.0, 0.0}, {0.0, 18000.0}, StreetClass::Local);
+    const MeshParts parts = toMeshes(l, Ground::plane());
+    const Cover streets(parts.streets);
+    const auto& names = parts.streets.materialNames();
+    auto slot = [&](const char* name) { return int32_t(std::find(names.begin(), names.end(), name) - names.begin()); };
+
+    // At the edge: dirt past the street's end, narrower than the carriageway by its far end.
+    const Cover::Tri* track = streets.at({-18000.0 - 1000.0, 0.0});
+    REQUIRE(track != nullptr);
+    CHECK(track->material == slot("Settlement_Dirt"));
+    CHECK(streets.at({-18000.0 - 1900.0, 0.0}) != nullptr);
+    CHECK(streets.at({-18000.0 - 1900.0, 300.0}) == nullptr);
+    // Inside the town: a turning head wider than the street round its end, with its sidewalk round it.
+    const double inner = 0.5 * edgeWidth(l, 1) - 0.5 * edgeWidth(l, 1) * 0.3;
+    const Cover::Tri* head = streets.at({6000.0 + 200.0, inner + 50.0});
+    REQUIRE(head != nullptr);
+    CHECK(head->material == slot("Settlement_Asphalt"));
+    CHECK(streets.at({6000.0 + inner + 300.0, 0.0}) != nullptr);
+
+    // One piece: every up-facing face reaches every other through shared corners.
+    const geo::Mesh& m = parts.streets;
+    std::vector<int> parent(m.numPoints());
+    std::iota(parent.begin(), parent.end(), 0);
+    auto root = [&](int x) {
+        while (parent[size_t(x)] != x)
+            x = parent[size_t(x)] = parent[size_t(parent[size_t(x)])];
+        return x;
+    };
+    std::map<std::tuple<long long, long long, long long>, int> at;
+    for (geo::Index p = 0; p < geo::Index(m.numPoints()); ++p)
+    {
+        const glm::dvec3 q = m.position(p);
+        const auto k = std::make_tuple(std::llround(q.x), std::llround(q.y), std::llround(q.z));
+        if (auto it = at.find(k); it != at.end())
+            parent[size_t(root(int(p)))] = root(it->second);
+        else
+            at[k] = int(p);
+    }
+    for (geo::Index f = 0; f < geo::Index(m.numFaces()); ++f)
+    {
+        const std::vector<geo::Index> pts = m.facePoints(f);
+        for (size_t k = 1; k < pts.size(); ++k)
+            parent[size_t(root(int(pts[k])))] = root(int(pts[0]));
+    }
+    std::set<int> pieces;
+    for (geo::Index f = 0; f < geo::Index(m.numFaces()); ++f)
+        pieces.insert(root(int(m.facePoints(f)[0])));
+    CHECK(pieces.size() == 1);
+}
