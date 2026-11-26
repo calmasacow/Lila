@@ -1503,9 +1503,17 @@ void registerSites(ext::Context& ctx)
             const SiteRef r = findSite(siteArg(a), cmd);
             std::vector<std::string> errors;
             const json removed = ungrade(r.ground, {}, &errors);
+            Graph& g = Graph::current();
+            // The stack's base stays behind when its mesh goes.
+            std::string base;
+            if (Node* m = g.find(r.mesh))
+                if (const scene::NodeId src = scene::modifiers::stackSource(g, m->id()); src != scene::kNoNode && g.node(src) && g.node(src)->type().isA("meshSource"))
+                    base = g.node(src)->path();
             ops::execute("delete", {{"args", {r.mesh}}});
-            if (Graph::current().find(r.modifier))
+            if (g.find(r.modifier))
                 ops::execute("delete", {{"args", {r.modifier}}});
+            if (!base.empty() && g.find(base))
+                ops::execute("delete", {{"args", {base}}});
             try
             {
                 ops::execute("gnDeleteGroup", {{"args", {r.group}}});
