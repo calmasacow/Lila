@@ -135,7 +135,8 @@ std::map<uint64_t, std::string> terrainStreetRoads(const Rebuilt& r, std::string
         return out;
     }
     const std::string prefix = (r.mesh.empty() ? r.modifier : r.mesh) + "/street/";
-    for (const auto& [layer, list] : roads.value("layers", json::object()).items())
+    const json layers = roads.value("layers", json::object());
+    for (const auto& [layer, list] : layers.items())
         for (const json& road : list)
         {
             const std::string id = road.value("id", std::string());
