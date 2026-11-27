@@ -267,11 +267,12 @@ void buildPrefab(Graph& g, const json& doc, NodeId group, const glm::dmat4& plac
         const std::string path = ops::execute("blockworkEntity", {{"class", c->name}, {"position", {w.x, w.y, w.z}}, {"turn", e.value("turn", 0.0)},
                                                                   {"name", e.value("name", c->name + "1")}, {"parent", ""}})
                                      .get<std::string>();
-        g.setParent(g.find(path)->id(), group, true);
+        const NodeId entity = g.find(path)->id();
+        g.setParent(entity, group, true);
         const json properties = e.value("properties", json::object());
         for (const auto& [k, v] : properties.items())
             if (!v.is_null())
-                ops::execute("setAttr", {{"args", {g.fullPath(g.find(path)->id()) + "." + k, v}}});
+                ops::execute("setAttr", {{"args", {g.fullPath(entity) + "." + k, v}}});
     }
 }
 
