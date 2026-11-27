@@ -951,6 +951,36 @@ std::optional<QPointF> ViewportWidget::project(const glm::dvec3& world) const
     return QPointF((clip.x / clip.w * 0.5 + 0.5) * width(), (clip.y / clip.w * 0.5 + 0.5) * height());
 }
 
+bool ViewportWidget::meshTouchesSelectRegion(const render::RenderMesh& rm, const glm::dmat4& world, const QRectF& box) const
+{
+    const size_t step = std::max<size_t>(1, rm.vertices.size() / 20000);
+    for (size_t k = 0; k < rm.vertices.size(); k += step)
+        if (auto p = project(glm::dvec3(world * glm::dvec4(glm::dvec3(rm.vertices[k].pos), 1.0))); p && inSelectRegion(box, *p))
+            return true;
+    // No sampled point inside: the region can still sit over an edge or the middle of a face.
+    constexpr double kBehind = std::numeric_limits<double>::quiet_NaN();
+    std::vector<glm::dvec2> screen(rm.vertices.size());
+    for (size_t k = 0; k < rm.vertices.size(); ++k)
+    {
+        auto p = project(glm::dvec3(world * glm::dvec4(glm::dvec3(rm.vertices[k].pos), 1.0)));
+        screen[k] = p ? glm::dvec2(p->x(), p->y()) : glm::dvec2(kBehind);
+    }
+    std::vector<glm::dvec2> tri(3);
+    for (size_t i = 0; i + 2 < rm.indices.size(); i += 3)
+    {
+        for (int c = 0; c < 3; ++c)
+            tri[c] = screen[rm.indices[i + c]];
+        if (std::isnan(tri[0].x) || std::isnan(tri[1].x) || std::isnan(tri[2].x))
+            continue;
+        const glm::dvec2 lo = glm::min(tri[0], glm::min(tri[1], tri[2])), hi = glm::max(tri[0], glm::max(tri[1], tri[2]));
+        if (hi.x < box.left() || lo.x > box.right() || hi.y < box.top() || lo.y > box.bottom())
+            continue;
+        if (touchesSelectRegion(box, tri))
+            return true;
+    }
+    return false;
+}
+
 std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
 {
     LILA_ZONE();
@@ -994,7 +1024,7 @@ std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
         }
     }
     // Meshes: a click takes the nearest surface under the cursor unless a locator line is right there; a box takes
-    // any mesh with a vertex inside it.
+    // any mesh it overlaps.
     glm::dvec3 rayO, rayD;
     view.ray(a, rayO, rayD);
     double nearest = 1e300;
@@ -1028,19 +1058,13 @@ std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
                 }
             continue;
         }
-        size_t step = std::max<size_t>(1, rm->vertices.size() / 20000);
         for (const scene::arrays::Copy& c : copies)
         {
             const std::string arrayPath = g.node(c.array)->path();
             if (std::ranges::any_of(hits, [&](const json& h) { return h.get<std::string>() == arrayPath; }))
                 continue;
-            const glm::dmat4 at = c.transform * world;
-            for (size_t k = 0; k < rm->vertices.size(); k += step)
-                if (auto p = project(glm::dvec3(at * glm::dvec4(glm::dvec3(rm->vertices[k].pos), 1.0))); p && inSelectRegion(box, *p))
-                {
-                    hits.push_back(arrayPath);
-                    break;
-                }
+            if (meshTouchesSelectRegion(*rm, c.transform * world, box))
+                hits.push_back(arrayPath);
         }
         if (mIsolation.isPartial(id))
         {
@@ -1056,12 +1080,8 @@ std::vector<std::string> ViewportWidget::hitTest(QPointF a, QPointF b)
                     }
             continue;
         }
-        for (size_t k = 0; k < rm->vertices.size(); k += step)
-            if (auto p = project(glm::dvec3(world * glm::dvec4(glm::dvec3(rm->vertices[k].pos), 1.0))); p && inSelectRegion(box, *p))
-            {
-                hits.push_back(n->path());
-                break;
-            }
+        if (meshTouchesSelectRegion(*rm, world, box))
+            hits.push_back(n->path());
     }
     for (const auto& picker : viewportHooks::pickers())
         for (const viewportHooks::PickHit& h : picker(a, b, click, view))
