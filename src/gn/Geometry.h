@@ -6,6 +6,7 @@
 #include "curve/Tessellate.h"
 #include "geo/Heightfield.h"
 #include "geo/Mesh.h"
+#include "geo/Ops.h"
 
 #include <glm/glm.hpp>
 
@@ -143,7 +144,7 @@ LILA_SCENE_API GeometryPtr heightfieldGeometry(geo::Heightfield h);
  * signed distances are scaled by the transform's average scale and vectors turned by its linear part.
  */
 LILA_SCENE_API Geometry transformed(const Geometry& g, const glm::dmat4& xf);
-LILA_SCENE_API void transformMesh(geo::Mesh& m, const glm::dmat4& xf);
+using geo::transformMesh;
 LILA_SCENE_API void transformCurves(CurveSet& c, const glm::dmat4& xf);
 
 /**
