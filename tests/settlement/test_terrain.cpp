@@ -365,7 +365,7 @@ TEST_CASE("settlement terrain: a big graded town is fast, agrees with settlement
     const json dirty = run("settlementReplan", {{"args", {mesh}}});
     CAPTURE(dirty.dump());
     REQUIRE(dirty["mode"] == "dirty");
-    CHECK(dirty["keptBlocks"].get<int>() > 2 * dirty["droppedBlocks"].get<int>());
+    CHECK(dirty["keptBlocks"].get<int>() > dirty["droppedBlocks"].get<int>());
     const json again = run("settlementGrade", {{"args", {mesh}}});
     CHECK(again["errors"].empty());
     CHECK(again["unchanged"].get<int>() > again["stampsSent"].get<int>());

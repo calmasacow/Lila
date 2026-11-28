@@ -71,7 +71,7 @@ bool itemDefault(std::string_view item)
         return PrefStore::get().value<bool>("general", "/viewport/polyCount", true);
     if (item == "viewSwitcher")
         return viewportDisplay::viewSwitcherDefault();
-    return item == "cameraNames" || item == "viewAxis" || item == "viewCube" || item == "symmetry";
+    return item == "cameraNames" || item == "viewAxis" || item == "viewCube" || item == "symmetry" || item == "softSelect";
 }
 
 /** Whether a part of the item being built is on, by part id. */

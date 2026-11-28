@@ -82,8 +82,8 @@ struct Mask
     void fillPolygon(std::span<const Vec2> pts);
     /** Sets every cell within r of a set one. */
     void dilate(double r);
-    /** Outer outlines of the set cells, holes filled, simplified to within about a cell. */
-    std::vector<Polygon> outlines() const;
+    /** Outer outlines of the set cells, holes filled, simplified to within tolerance (0: three quarters of a cell). */
+    std::vector<Polygon> outlines(double tolerance = 0.0) const;
 };
 
 /** What a mesh covers seen from above, grown by margin: one polygon per separate piece. */
@@ -122,7 +122,22 @@ public:
     bool solid(Vec2 p) const;
     bool isPlane() const { return mHeights.empty(); }
 
+    /** A mesh that is one grid of quads, every quad split on the same diagonal as the renderer draws it. */
+    struct Lattice
+    {
+        Vec2 origin{0.0};
+        Vec2 cell{0.0};
+        bool mainDiagonal = true; // split from its low x, low z corner to the opposite one; else the other two
+    };
+    /**
+     * The mesh's grid when it is one: a polygon cut on its lines and diagonals lies flat on the surface drawn, so a
+     * draped piece cannot dip under it. Null for a plane or any other mesh.
+     */
+    const Lattice* lattice() const { return mHasLattice ? &mLattice : nullptr; }
+
 private:
+    Lattice mLattice;
+    bool mHasLattice = false;
     double mPlane = 0.0;
     Vec2 mOrigin{0.0};
     double mCell = 100.0;

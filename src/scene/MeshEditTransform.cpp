@@ -248,6 +248,52 @@ Ids drivingSide(NodeId node, ComponentMode kind, const Ids& ids, MeshPtr mesh)
 
 namespace
 {
+/**
+ * Points falloff must not reach when the selection sits on top of the surface it came from, as after an extrude that has
+ * not moved yet: the unselected ends of zero-length edges from the selection, and whatever the selection reaches only
+ * through them. Empty when nothing is stacked, so ordinary selections fall off as usual.
+ */
+std::vector<char> stackedBase(const geo::Mesh& m, const std::vector<float>& w)
+{
+    constexpr double kCoincident2 = 1e-12;
+    std::vector<char> blocked(m.pointCapacity(), 0);
+    std::vector<Index> stack;
+    bool any = false;
+    for (Index p = 0; p < m.pointCapacity(); ++p)
+    {
+        if (w[p] < 1.0f || !m.pointValid(p))
+            continue;
+        stack.push_back(p);
+        m.forEachPointEdge(p, [&](Index e) {
+            Index q = m.edgePoint(e, 0) == p ? m.edgePoint(e, 1) : m.edgePoint(e, 0);
+            glm::dvec3 d = m.position(q) - m.position(p);
+            if (w[q] < 1.0f && glm::dot(d, d) < kCoincident2)
+                blocked[q] = any = true;
+        });
+    }
+    if (!any)
+        return {};
+    std::vector<char> reached(m.pointCapacity(), 0);
+    for (Index p : stack)
+        reached[p] = 1;
+    while (!stack.empty())
+    {
+        Index p = stack.back();
+        stack.pop_back();
+        m.forEachPointEdge(p, [&](Index e) {
+            Index q = m.edgePoint(e, 0) == p ? m.edgePoint(e, 1) : m.edgePoint(e, 0);
+            if (!reached[q] && !blocked[q])
+            {
+                reached[q] = 1;
+                stack.push_back(q);
+            }
+        });
+    }
+    for (char& r : reached)
+        r = !r;
+    return reached;
+}
+
 std::vector<float> falloffWeights(const geo::Mesh& m, const glm::dmat4& world, const Ids& selected)
 {
     LILA_ZONE();
@@ -261,12 +307,14 @@ std::vector<float> falloffWeights(const geo::Mesh& m, const glm::dmat4& world, c
     double radius = PrefStore::get().value<double>("general", "/softSelect/radius", 25.0);
     if (radius <= 0.0)
         return w;
+    const std::vector<char> cut = stackedBase(m, w);
+    auto excluded = [&](Index p) { return !cut.empty() && cut[p]; };
     softSelect::Curve curve = softSelect::currentCurve();
     if (softSelect::surfaceFalloff())
     {
         std::vector<double> dist = surfaceDistances(m, world, selected, radius);
         for (Index p = 0; p < m.pointCapacity(); ++p)
-            if (w[p] < 1.0f && dist[p] < radius)
+            if (w[p] < 1.0f && dist[p] < radius && !excluded(p))
                 w[p] = float(curve.evaluate(dist[p] / radius));
         return w;
     }
@@ -278,7 +326,7 @@ std::vector<float> falloffWeights(const geo::Mesh& m, const glm::dmat4& world, c
     size_t stride = std::max<size_t>(1, seeds.size() / 4096);
     double r2 = radius * radius;
     tbb::parallel_for(Index(0), m.pointCapacity(), [&](Index p) {
-        if (!m.pointValid(p) || w[p] >= 1.0f)
+        if (!m.pointValid(p) || w[p] >= 1.0f || excluded(p))
             return;
         glm::dvec3 q = glm::dvec3(world * glm::dvec4(m.position(p), 1.0));
         double best = r2;

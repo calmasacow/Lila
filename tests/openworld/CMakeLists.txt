@@ -2,7 +2,7 @@
 # the package driven through its commands. Fixtures are small synthetic files in data/ (make_fixtures.py); no network.
 set(_ow ${CMAKE_SOURCE_DIR}/extensions/OpenWorld)
 set(_terrain ${CMAKE_SOURCE_DIR}/extensions/Terrain)
-add_executable(lila_openworld_tests main.cpp test_remix.cpp test_remix_look.cpp test_remix_commands.cpp test_remix_w1.cpp test_zones.cpp test_sites.cpp test_names_perf.cpp test_world.cpp test_world_unreal.cpp test_world_fetch.cpp ${_ow}/WorldSpec.cpp ${_ow}/WorldFetch.cpp
+add_executable(lila_openworld_tests main.cpp test_remix.cpp test_remix_look.cpp test_remix_commands.cpp test_remix_w1.cpp test_zones.cpp test_sites.cpp test_names_perf.cpp test_world.cpp test_world_replace.cpp test_world_unreal.cpp test_world_fetch.cpp ${_ow}/WorldSpec.cpp ${_ow}/WorldFetch.cpp
     ${_ow}/OsmDoc.cpp ${_ow}/RemixSpec.cpp ${_ow}/Warp.cpp ${_ow}/Remix.cpp ${_ow}/Features.cpp ${_ow}/Repair.cpp ${_ow}/Check.cpp ${_ow}/Zones.cpp ${_ow}/SitesLayout.cpp ${_ow}/SitesCoast.cpp ${_ow}/SitesLand.cpp ${_ow}/SitesCompound.cpp
     ${_terrain}/Core.cpp ${_terrain}/Erosion.cpp ${_terrain}/Inputs.cpp ${_terrain}/Projection.cpp ${_terrain}/Osm.cpp
     ${_terrain}/Fetch.cpp ${_terrain}/LandCover.cpp ${_terrain}/Stamps.cpp ${_terrain}/Brushes.cpp ${_terrain}/Shaping.cpp ${_terrain}/Painted.cpp

@@ -3,6 +3,8 @@
 #include "ops/Command.h"
 #include "core/PrefStore.h"
 #include "geo/Mesh.h"
+#include "geo/Ops.h"
+#include "geo/Primitives.h"
 #include "scene/Components.h"
 #include "scene/SoftSelect.h"
 
@@ -197,6 +199,53 @@ TEST_CASE("softWeights follows the curve and falloff mode")
     PrefStore::get().set("general", kEnabled, false);
     w = scene::softWeights(m, world, sel);
     CHECK(w[3] == 0.0f);
+    resetPrefs();
+    PrefStore::get().set("general", kEnabled, false);
+}
+
+TEST_CASE("softWeights leaves the base of an unmoved extrude alone")
+{
+    resetPrefs();
+    PrefStore::get().set("general", kRadius, 25.0);
+    geo::Mesh m = geo::makePlane({.width = 50.0, .depth = 50.0, .subdivX = 5, .subdivZ = 5});
+    geo::Index centre = 0;
+    for (geo::Index f = 0; f < m.faceCapacity(); ++f)
+    {
+        glm::dvec3 c(0.0);
+        for (geo::Index p : m.facePoints(f))
+            c += m.position(p) / 4.0;
+        if (m.faceValid(f) && glm::length(c) < 1.0)
+            centre = f;
+    }
+    const std::vector<geo::Index> before = m.facePoints(centre);
+    const glm::dmat4 world(1.0);
+    geo::Index outer = 0;
+    for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && std::abs(m.position(p).x) > 10.0 && std::abs(m.position(p).x) < 20.0 && std::abs(m.position(p).z) < 10.0)
+            outer = p;
+    CHECK(scene::softWeights(m, world, before)[outer] > 0.0f);
+
+    geo::ExtrudeResult r = geo::extrudeFaces(m, std::vector<geo::Index>{centre});
+    const std::vector<geo::Index> cap = m.facePoints(r.faces[0]);
+    auto w = scene::softWeights(m, world, cap);
+    for (geo::Index p : cap)
+        CHECK(w[p] == 1.0f);
+    for (geo::Index p = 0; p < m.pointCapacity(); ++p)
+        if (m.pointValid(p) && std::ranges::find(cap, p) == cap.end())
+            CHECK(w[p] == 0.0f);
+
+    PrefStore::get().set("general", kFalloffMode, "surface");
+    w = scene::softWeights(m, world, cap);
+    for (geo::Index p : before)
+        CHECK(w[p] == 0.0f);
+
+    // Once the cap has moved off its base, falloff reaches the base and the surface around it again.
+    for (geo::Index p : cap)
+        m.setPosition(p, m.position(p) + glm::dvec3(0.0, 5.0, 0.0));
+    PrefStore::get().remove("general", kFalloffMode);
+    w = scene::softWeights(m, world, cap);
+    CHECK(w[before[0]] > 0.0f);
+    CHECK(w[outer] > 0.0f);
     resetPrefs();
     PrefStore::get().set("general", kEnabled, false);
 }

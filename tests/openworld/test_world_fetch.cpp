@@ -420,7 +420,7 @@ TEST_CASE("world fetch: commands estimate and refuse without a terrain or the ne
 
 namespace
 {
-using Kind = FetchEvent::Kind;
+using FetchKind = FetchEvent::Kind;
 
 std::vector<FetchEvent> eventsFor(const std::vector<FetchEvent>& all, const std::string& id)
 {
@@ -480,7 +480,7 @@ TEST_CASE("world fetch: progress events per item in order, with byte counts, ret
     // Items run in plan order, numbered among the four missing; each starts, then ends with Done and the bytes written.
     std::vector<std::string> started;
     for (const FetchEvent& e : events)
-        if (e.kind == Kind::Start)
+        if (e.kind == FetchKind::Start)
             started.push_back(e.id);
     CHECK(started == std::vector<std::string>{"coast.dem", "coast.osm", "coast.landcover", "coast.bathymetry"});
     for (const std::string& id : started)
@@ -488,14 +488,14 @@ TEST_CASE("world fetch: progress events per item in order, with byte counts, ret
         CAPTURE(id);
         const std::vector<FetchEvent> ev = eventsFor(events, id);
         REQUIRE(ev.size() >= 2);
-        CHECK(ev.front().kind == Kind::Start);
-        CHECK(ev.back().kind == Kind::Done);
+        CHECK(ev.front().kind == FetchKind::Start);
+        CHECK(ev.back().kind == FetchKind::Done);
         CHECK(ev.front().count == 4);
         CHECK(ev.back().bytes == written[id]);
         CHECK(ev.back().bytes > 0);
         uint64_t last = 0;
         for (const FetchEvent& e : ev)
-            if (e.kind == Kind::Bytes)
+            if (e.kind == FetchKind::Bytes)
             {
                 CHECK(e.bytes >= last);
                 last = e.bytes;
@@ -505,10 +505,10 @@ TEST_CASE("world fetch: progress events per item in order, with byte counts, ret
 
     // Overpass: unreachable once (a retry naming why and the pause), then its bytes as they arrived, then done.
     const std::vector<FetchEvent> osm = eventsFor(events, "coast.osm");
-    std::vector<Kind> kinds;
+    std::vector<FetchKind> kinds;
     for (const FetchEvent& e : osm)
         kinds.push_back(e.kind);
-    REQUIRE(kinds == std::vector<Kind>{Kind::Start, Kind::Retry, Kind::Bytes, Kind::Bytes, Kind::Bytes, Kind::Done});
+    REQUIRE(kinds == std::vector<FetchKind>{FetchKind::Start, FetchKind::Retry, FetchKind::Bytes, FetchKind::Bytes, FetchKind::Bytes, FetchKind::Done});
     CHECK(osm[1].attempt == 1);
     CHECK(osm[1].waitMs == 2000);
     CHECK(osm[1].why == "connection refused");
@@ -523,7 +523,7 @@ TEST_CASE("world fetch: progress events per item in order, with byte counts, ret
     // Land cover reports the bytes its reads brought.
     bool landcoverBytes = false;
     for (const FetchEvent& e : eventsFor(events, "coast.landcover"))
-        landcoverBytes |= e.kind == Kind::Bytes && e.bytes == 1234;
+        landcoverBytes |= e.kind == FetchKind::Bytes && e.bytes == 1234;
     CHECK(landcoverBytes);
     fs::remove_all(dir);
 
@@ -537,7 +537,7 @@ TEST_CASE("world fetch: progress events per item in order, with byte counts, ret
     o.cache = dir2 / "cache";
     o.onEvent = [&](const FetchEvent& e) {
         events.push_back(e);
-        if (e.kind == Kind::Bytes && e.id == "coast.osm")
+        if (e.kind == FetchKind::Bytes && e.id == "coast.osm")
             stop = true;
     };
     o.cancelled = [&] { return stop; };
@@ -546,7 +546,7 @@ TEST_CASE("world fetch: progress events per item in order, with byte counts, ret
     CHECK(stopped.find("stopped") != std::string::npos);
     CHECK(stopped.find("fetched before it and kept: coast.dem") != std::string::npos);
     REQUIRE_FALSE(events.empty());
-    CHECK(events.back().kind == Kind::Failed);
+    CHECK(events.back().kind == FetchKind::Failed);
     CHECK(events.back().id == "coast.osm");
     CHECK(events.back().why == "stopped");
     CHECK(fs::exists(dir2 / "real" / "coast_dem.tif"));

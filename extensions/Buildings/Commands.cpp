@@ -535,7 +535,8 @@ std::string writeNode(const std::string& group, const std::string& name, const s
 {
     scene::Graph& g = G();
     std::string mesh;
-    if (scene::Node* existing = g.find(group + "|" + name))
+    const std::string conformed = g.namingPolicy().conform(*scene::types::find("mesh"), name);
+    if (scene::Node* existing = g.find(group + "|" + name) ? g.find(group + "|" + name) : g.find(group + "|" + conformed))
         mesh = existing->path();
     else
     {
@@ -610,7 +611,8 @@ json layout(std::vector<Spec> specs, const std::string& groupName, const std::st
     scene::Graph& g = G();
     ensureGroup();
     std::string group;
-    if (scene::Node* n = g.find(groupName))
+    // The workspace's naming rules may have renamed the group this call asked for before (PuertoCentroBuildings).
+    if (scene::Node* n = g.find(groupName) ? g.find(groupName) : g.find(g.namingPolicy().conform(*scene::types::find("transform"), safeName(groupName))))
         group = n->path();
     else
         group = pathOf(ops::execute("group", {{"empty", true}, {"name", safeName(groupName)}}));

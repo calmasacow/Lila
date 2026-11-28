@@ -241,17 +241,66 @@ struct Polys
     }
 };
 
+/** A simple polygon as triangles, counter-clockwise, by ear clipping; what no ear can be cut from goes in as a fan. */
+std::vector<std::array<Vec2, 3>> earClip(std::vector<Vec2> ring)
+{
+    std::vector<std::array<Vec2, 3>> out;
+    if (ring.size() < 3)
+        return out;
+    if (signedArea(ring) < 0.0)
+        std::reverse(ring.begin(), ring.end());
+    auto turn = [](Vec2 a, Vec2 b, Vec2 c) { return cross(b - a, c - a); };
+    for (size_t guard = ring.size() * ring.size(); ring.size() > 3 && guard > 0; --guard)
+    {
+        bool cut = false;
+        const size_t n = ring.size();
+        for (size_t k = 0; k < n && !cut; ++k)
+        {
+            const Vec2 a = ring[(k + n - 1) % n], b = ring[k], c = ring[(k + 1) % n];
+            const double t = turn(a, b, c);
+            // A point that turns neither way (a run back along a cut, a straight side) is dropped without a triangle.
+            if (std::abs(t) <= 1e-9 * (glm::dot(b - a, b - a) + glm::dot(c - b, c - b) + 1.0))
+            {
+                ring.erase(ring.begin() + long(k));
+                cut = true;
+                break;
+            }
+            if (t < 0.0)
+                continue;
+            bool inside = false;
+            for (size_t i = 0; i < n && !inside; ++i)
+            {
+                const Vec2 q = ring[i];
+                if (i == k || i == (k + 1) % n || i == (k + n - 1) % n || q == a || q == b || q == c)
+                    continue;
+                inside = turn(a, b, q) > 0.0 && turn(b, c, q) > 0.0 && turn(c, a, q) > 0.0;
+            }
+            if (inside)
+                continue;
+            out.push_back({a, b, c});
+            ring.erase(ring.begin() + long(k));
+            cut = true;
+        }
+        if (!cut)
+            break;
+    }
+    for (size_t k = 1; k + 1 < ring.size(); ++k)
+        if (turn(ring[0], ring[k], ring[k + 1]) > 0.0)
+            out.push_back({ring[0], ring[k], ring[k + 1]});
+    return out;
+}
+
 /**
- * Adds the polygon as faces cut on a grid of cell, every corner draped by at, so a lot or block follows the ground under
- * it however large it is.
+ * Adds the polygon as faces cut on a grid, every corner draped by at, so a lot or block follows the ground under it
+ * however large it is. The polygon is triangulated first and each triangle cut, so every piece is convex. On a lattice
+ * ground the cuts are its own lines and diagonals: every piece then lies flat on one triangle of the surface drawn and
+ * cannot dip under it; on other ground they are a grid of cell.
  */
-void addDraped(Polys& m, const Polygon& p, double cell, const std::function<glm::dvec3(Vec2)>& at, const FaceTags& tags)
+void addDraped(Polys& m, const Polygon& p, double cell, const Ground::Lattice* grid, const std::function<glm::dvec3(Vec2)>& at,
+               const FaceTags& tags)
 {
     if (p.size() < 3)
         return;
-    Vec2 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
-    for (const Vec2& q : p.pts)
-        lo = glm::min(lo, q), hi = glm::max(hi, q);
     auto add = [&](const Polygon& piece) {
         if (piece.size() < 3 || area(piece) < 1.0)
             return;
@@ -261,30 +310,41 @@ void addDraped(Polys& m, const Polygon& p, double cell, const std::function<glm:
             ids.push_back(m.point(at(*it)));
         m.face(ids, tags);
     };
-    const int nx = std::max(1, int(std::ceil((hi.x - lo.x) / cell))), nz = std::max(1, int(std::ceil((hi.y - lo.y) / cell)));
-    if (nx == 1 && nz == 1)
+    const Vec2 origin = grid ? grid->origin : Vec2(0.0), step = grid ? grid->cell : Vec2(cell);
+    for (const std::array<Vec2, 3>& tri : earClip(p.pts))
     {
-        add(p);
-        return;
-    }
-    const double sx = (hi.x - lo.x) / nx, sz = (hi.y - lo.y) / nz;
-    for (int i = 0; i < nx; ++i)
-    {
-        Polygon col = p;
-        if (i > 0)
-            col = clipHalfPlane(col, {lo.x + i * sx, 0.0}, {1.0, 0.0});
-        if (i + 1 < nx)
-            col = clipHalfPlane(col, {lo.x + (i + 1) * sx, 0.0}, {-1.0, 0.0});
-        if (col.size() < 3)
-            continue;
-        for (int j = 0; j < nz; ++j)
+        Polygon t;
+        t.pts.assign(tri.begin(), tri.end());
+        t.tag.assign(3, -1);
+        const Vec2 lo = glm::min(tri[0], glm::min(tri[1], tri[2])), hi = glm::max(tri[0], glm::max(tri[1], tri[2]));
+        const int i0 = int(std::floor((lo.x - origin.x) / step.x)), i1 = int(std::ceil((hi.x - origin.x) / step.x));
+        const int j0 = int(std::floor((lo.y - origin.y) / step.y)), j1 = int(std::ceil((hi.y - origin.y) / step.y));
+        for (int i = i0; i < i1; ++i)
         {
-            Polygon piece = col;
-            if (j > 0)
-                piece = clipHalfPlane(piece, {0.0, lo.y + j * sz}, {0.0, 1.0});
-            if (j + 1 < nz)
-                piece = clipHalfPlane(piece, {0.0, lo.y + (j + 1) * sz}, {0.0, -1.0});
-            add(piece);
+            const double x0 = origin.x + i * step.x, x1 = x0 + step.x;
+            Polygon col = x0 > lo.x ? clipHalfPlane(t, {x0, 0.0}, {1.0, 0.0}) : t;
+            if (x1 < hi.x && col.size() >= 3)
+                col = clipHalfPlane(col, {x1, 0.0}, {-1.0, 0.0});
+            if (col.size() < 3)
+                continue;
+            for (int j = j0; j < j1; ++j)
+            {
+                const double z0 = origin.y + j * step.y, z1 = z0 + step.y;
+                Polygon piece = z0 > lo.y ? clipHalfPlane(col, {0.0, z0}, {0.0, 1.0}) : col;
+                if (z1 < hi.y && piece.size() >= 3)
+                    piece = clipHalfPlane(piece, {0.0, z1}, {0.0, -1.0});
+                if (piece.size() < 3)
+                    continue;
+                if (!grid)
+                {
+                    add(piece);
+                    continue;
+                }
+                const Vec2 from = grid->mainDiagonal ? Vec2(x0, z0) : Vec2(x1, z0);
+                const Vec2 n = grid->mainDiagonal ? Vec2(-step.y, step.x) : Vec2(-step.y, -step.x);
+                add(clipHalfPlane(piece, from, n));
+                add(clipHalfPlane(piece, from, -n));
+            }
         }
     }
 }
@@ -305,6 +365,61 @@ int32_t lotSurface(Use u)
     case Use::Port: return SurfConcrete;
     default: return -1;
     }
+}
+/** A block some of whose sides are not streets (the settlement's edge, water): open land lies past its lots. */
+bool openBlock(const Block& b)
+{
+    return std::ranges::any_of(b.outline.tag, [](int t) { return t < 0; });
+}
+
+/**
+ * The town ground of an area in an open block: what lies within reach of a street's edge or 2 m of a building, traced
+ * on a grid of cell; not past a dead end, where the street runs out into open land. The area is taken two cells wider so its traced edge stays under the sidewalks it meets.
+ */
+std::vector<Polygon> nearStreets(const Polygon& area, const Layout& l, std::span<const int> degree, double reach,
+                                 std::span<const Polygon* const> buildings, double cell)
+{
+    if (area.size() < 3)
+        return {};
+    Vec2 lo(std::numeric_limits<double>::max()), hi(-std::numeric_limits<double>::max());
+    for (const Vec2& q : area.pts)
+        lo = glm::min(lo, q), hi = glm::max(hi, q);
+    Mask inside = Mask::around(lo, hi, cell, cell), near = inside;
+    inside.fillPolygon(area.pts);
+    inside.dilate(2.0 * cell);
+    const StreetGraph& g = l.graph;
+    for (size_t e = 0; e < g.edges.size(); ++e)
+    {
+        if (!g.isStreet(int(e)))
+            continue;
+        const Vec2 a = g.nodes[size_t(g.edges[e].a)].p, b = g.nodes[size_t(g.edges[e].b)].p;
+        const double r = 0.5 * edgeWidth(l, int(e)) + reach, len = glm::length(b - a);
+        if (len < 1e-6 || glm::min(a, b).x - r > hi.x || glm::max(a, b).x + r < lo.x || glm::min(a, b).y - r > hi.y || glm::max(a, b).y + r < lo.y)
+            continue;
+        const Vec2 d = (b - a) / len, n(-d.y, d.x);
+        const std::array<Vec2, 4> band{a + n * r, a - n * r, b - n * r, b + n * r};
+        near.fillPolygon(band);
+        for (const int nd : {g.edges[e].a, g.edges[e].b})
+        {
+            const Vec2 c = g.nodes[size_t(nd)].p;
+            const double rc = degree[size_t(nd)] > 1 ? r : 0.5 * edgeWidth(l, int(e));
+            std::array<Vec2, 12> disk;
+            for (size_t k = 0; k < disk.size(); ++k)
+                disk[k] = c + Vec2(std::cos(k * kPi / 6.0), std::sin(k * kPi / 6.0)) * rc;
+            near.fillPolygon(disk);
+        }
+    }
+    for (const Polygon* fp : buildings)
+        if (fp && fp->size() >= 3)
+            if (const Polygon around = grow(*fp, 200.0); around.size() >= 3)
+                near.fillPolygon(around.pts);
+    for (size_t k = 0; k < near.on.size(); ++k)
+        near.on[k] = near.on[k] && inside.on[k];
+    std::vector<Polygon> out;
+    for (const Polygon& p : near.outlines(1.5 * cell))
+        if (Polygon q = makePolygon(p.pts); q.size() >= 3)
+            out.push_back(std::move(q));
+    return out;
 }
 } // namespace
 
@@ -762,6 +877,12 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             gap += 2.0 * kPi;
         return gap;
     };
+    // A street that ends within this of the settlement's outline runs on out of it as a dirt track; one ending inside
+    // the town ends at a turning head.
+    constexpr double kEdgeReach = 3000.0;
+    auto runsOut = [&](Vec2 p) { return l.outline.size() >= 3 && (!contains(l.outline.pts, p) || boundaryDistance(l.outline.pts, p) < kEdgeReach); };
+    /** cm: a turning head's carriageway radius on a street of this carriageway half-width. */
+    auto headRadius = [](double inner) { return std::min(std::max(inner + 250.0, 1.6 * inner), inner + 1200.0); };
     // How far each street's strips stop short of its ends: past its curb returns and sidewalk corners.
     std::vector<std::array<double, 2>> trims(g.edges.size(), {0.0, 0.0});
     auto makeTrims = [&] {
@@ -770,6 +891,12 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             for (size_t nd = range.begin(); nd < range.end(); ++nd)
             {
                 const std::vector<NodeEnd>& es = ends[nd];
+                if (es.size() == 1 && !runsOut(g.nodes[nd].p))
+                {
+                    const double r = headRadius(es[0].inner);
+                    trims[size_t(es[0].edge)][size_t(es[0].side)] = std::sqrt(r * r - es[0].inner * es[0].inner);
+                    continue;
+                }
                 if (plain(es))
                     continue;
                 const Vec2 c = g.nodes[nd].p;
@@ -955,6 +1082,15 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
         for (const NodeShape& s : shapes)
             if (s.outline.size() >= 3)
                 areas.push_back({s.outline});
+        for (size_t nd = 0; nd < ends.size(); ++nd)
+            if (ends[nd].size() == 1 && !runsOut(g.nodes[nd].p))
+            {
+                Area head;
+                const double r = headRadius(ends[nd][0].inner);
+                for (int k = 0; k < 24; ++k)
+                    head.ring.push_back(g.nodes[nd].p + Vec2(std::cos(k * kPi / 12.0), std::sin(k * kPi / 12.0)) * r);
+                areas.push_back(std::move(head));
+            }
         for (size_t i = 0; i < areas.size(); ++i)
         {
             Area& ar = areas[i];
@@ -1139,11 +1275,123 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             }
         }
     });
+    /** A fan from c over the outline (counter-clockwise or not), cut in rings no wider than the drape step. */
+    auto fan = [&](Polys& m, Vec2 c, const std::vector<Vec2>& outline, const std::vector<uint32_t>& outlineIds, double lift, const FaceTags& t) {
+        double reach = 0.0;
+        for (const Vec2& p : outline)
+            reach = std::max(reach, glm::length(p - c));
+        const int rings = std::clamp(int(std::ceil(reach / seg)), 1, 8);
+        const uint32_t centre = m.point(at(c, lift));
+        std::vector<std::vector<uint32_t>> spokes(outline.size());
+        for (size_t i = 0; i < outline.size(); ++i)
+        {
+            spokes[i].push_back(centre);
+            for (int r = 1; r < rings; ++r)
+                spokes[i].push_back(m.point(at(glm::mix(c, outline[i], double(r) / rings), lift)));
+            spokes[i].push_back(outlineIds[i]);
+        }
+        for (size_t i = 0; i < outline.size(); ++i)
+        {
+            const std::vector<uint32_t>&p = spokes[i], &q = spokes[(i + 1) % outline.size()];
+            orient(m, {p[0], p[1], q[1]}, Vec2(0.0), t);
+            for (size_t r = 1; r < size_t(rings); ++r)
+                orient(m, {p[r], p[r + 1], q[r + 1], q[r]}, Vec2(0.0), t);
+        }
+    };
+    /**
+     * A street's open end: a dirt track running on out of the settlement, its sidewalks closed across their ends; or, inside
+     * the town, a turning head with its sidewalk round it.
+     */
+    auto deadEnd = [&](Polys& m, size_t nd) {
+        const NodeEnd& x = ends[nd][0];
+        const Vec2 c = g.nodes[nd].p, n(-x.dir.y, x.dir.x);
+        const FaceTags tag{int32_t(x.edge), int32_t(x.cls), -1, x.surface};
+        const FaceTags side{tag[0], tag[1], -1, SurfSidewalk}, curb{tag[0], tag[1], -1, SurfConcrete}, dirt{tag[0], tag[1], -1, SurfDirt};
+        const int across = std::clamp(int(std::ceil(2.0 * x.inner / seg)), 1, 8);
+        auto lifted = [&](Vec2 p, double lift) { return m.point(glm::dvec3(p.x, ground.surfaceHeight(p) + lift, p.y)); };
+        if (runsOut(c))
+        {
+            for (const double s : {1.0, -1.0})
+            {
+                const double reach = s > 0.0 ? x.left : x.right;
+                if (reach - x.inner < 1.0)
+                    continue;
+                const Vec2 pi = c + n * (s * x.inner), po = c + n * (s * reach);
+                orient(m, {lifted(pi, roadLift), lifted(pi, walkLift), lifted(po, walkLift), lifted(po, skirtLift)}, -x.dir, curb);
+            }
+            // The track narrows from the carriageway to a lane and comes down from the road to the ground.
+            const double length = 2000.0, endHalf = std::max(150.0, 0.5 * x.inner);
+            const int steps = std::max(2, int(std::ceil(length / seg)));
+            std::vector<uint32_t> prev, cur;
+            for (int s = 0; s <= steps; ++s)
+            {
+                const double u = double(s) / steps, half = glm::mix(x.inner, endHalf, u), lift = glm::mix(roadLift, o.lift, u);
+                const Vec2 mid = c - x.dir * (length * u);
+                cur.clear();
+                for (int j = 0; j <= across; ++j)
+                {
+                    const Vec2 p = mid + n * (half * (1.0 - 2.0 * j / across));
+                    cur.push_back(j == 0 || j == across ? lifted(p, lift) : m.point(at(p, lift)));
+                }
+                cur.push_back(lifted(mid + n * half, skirtLift));
+                cur.push_back(lifted(mid - n * half, skirtLift));
+                if (s > 0)
+                {
+                    for (size_t j = 0; j < size_t(across); ++j)
+                        orient(m, {prev[j], cur[j], cur[j + 1], prev[j + 1]}, Vec2(0.0), dirt);
+                    orient(m, {prev[0], cur[0], cur[size_t(across) + 1], prev[size_t(across) + 1]}, n, dirt);
+                    orient(m, {prev[size_t(across)], cur[size_t(across)], cur[size_t(across) + 2], prev[size_t(across) + 2]}, -n, dirt);
+                }
+                std::swap(prev, cur);
+            }
+            return;
+        }
+        // The head: a disc round the node meeting the street's strip where its curb lines cross the circle.
+        const double r = headRadius(x.inner), t = trims[size_t(x.edge)][size_t(x.side)];
+        const Vec2 mouth = c + x.dir * t, L = mouth + n * x.inner, R = mouth - n * x.inner;
+        const double a0 = std::atan2(L.y - c.y, L.x - c.x);
+        double turn = std::atan2(R.y - c.y, R.x - c.x) - a0;
+        while (turn <= 0.0)
+            turn += 2.0 * kPi;
+        const int count = std::clamp(int(std::ceil(turn * r / kCornerStep)), 6, 32);
+        std::vector<Vec2> arc, outline;
+        for (int i = 0; i <= count; ++i)
+            arc.push_back(i == 0 ? L : i == count ? R : c + Vec2(std::cos(a0 + turn * i / count), std::sin(a0 + turn * i / count)) * r);
+        outline = arc;
+        for (int j = across - 1; j >= 1; --j)
+            outline.push_back(glm::mix(L, R, double(j) / across));
+        std::vector<uint32_t> ids;
+        for (size_t i = 0; i < outline.size(); ++i)
+            ids.push_back(i == 0 || i == size_t(count) ? lifted(outline[i], roadLift) : m.point(at(outline[i], roadLift)));
+        fan(m, c, outline, ids, roadLift, tag);
+        const double walk = std::max(x.left, x.right) - x.inner;
+        if (walk < 1.0)
+            return;
+        for (int i = 0; i < count; ++i)
+        {
+            const Vec2 in0 = arc[size_t(i)], in1 = arc[size_t(i) + 1];
+            auto outer = [&](int k) {
+                return k == 0 ? mouth + n * x.left : k == count ? mouth - n * x.right : c + glm::normalize(arc[size_t(k)] - c) * (r + walk);
+            };
+            const Vec2 out0 = outer(i), out1 = outer(i + 1);
+            if (pieceOnRoad({in0, out0, out1, in1}))
+                continue;
+            const uint32_t w0 = lifted(in0, walkLift), w1 = lifted(in1, walkLift), o0 = lifted(out0, walkLift), o1 = lifted(out1, walkLift);
+            orient(m, {w0, o0, o1, w1}, Vec2(0.0), side);
+            orient(m, {lifted(in0, roadLift), lifted(in1, roadLift), w1, w0}, c - 0.5 * (in0 + in1), curb);
+            orient(m, {o0, o1, lifted(out1, skirtLift), lifted(out0, skirtLift)}, 0.5 * (out0 + out1) - c, side);
+        }
+    };
     std::vector<Polys> nodePolys(g.nodes.size());
     tbb::parallel_for(tbb::blocked_range<size_t>(0, ends.size()), [&](const tbb::blocked_range<size_t>& range) {
         for (size_t nd = range.begin(); nd < range.end(); ++nd)
         {
             const std::vector<NodeEnd>& es = ends[nd];
+            if (es.size() == 1)
+            {
+                deadEnd(nodePolys[nd], nd);
+                continue;
+            }
             if (plain(es))
                 continue;
             const NodeShape& s = shapes[nd];
@@ -1215,6 +1463,53 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             }
         }
     });
+    // Islands: faces of the street graph too small for a block (between a divided road's carriageways, inside a cluster of
+    // short streets) are raised to the sidewalks out to the curb lines, so no ground shows in the road; planted where they
+    // are 3 m or more across.
+    const std::vector<Face> faces = planarFaces(g);
+    // Just under the sidewalks, so an island's own sidewalk ring draws over its fill.
+    const double islandLift = walkLift - 1.5;
+    std::vector<Polys> islandPolys(faces.size());
+    tbb::parallel_for(tbb::blocked_range<size_t>(0, faces.size()), [&](const tbb::blocked_range<size_t>& range) {
+        for (size_t k = range.begin(); k < range.end(); ++k)
+        {
+            const Polygon& f = faces[k].outline;
+            std::vector<double> full(f.size()), curbs(f.size());
+            bool streets = true;
+            for (size_t i = 0; i < f.size() && streets; ++i)
+            {
+                const int e = f.tag[i];
+                streets = g.isStreet(e);
+                full[i] = streets ? 0.5 * edgeWidth(l, e) : 0.0;
+                curbs[i] = full[i] - (streets ? walkWidth(l, e, 2.0 * full[i], medieval) : 0.0);
+            }
+            if (!streets)
+                continue;
+            if (const Polygon block = inset(f, full); block.size() >= 3 && area(block) >= l.profile.minLot * kM2)
+                continue;
+            const Polygon island = inset(f, curbs);
+            if (island.size() < 3 || area(island) < 0.5 * kM2)
+                continue;
+            const std::vector<double> margin(island.size(), 150.0);
+            const Polygon core = inset(island, margin);
+            const FaceTags top{-1, int32_t(StreetClass::Local), -1, core.size() >= 3 && area(core) > kM2 ? SurfGrass : SurfSidewalk};
+            const FaceTags curb{-1, int32_t(StreetClass::Local), -1, SurfConcrete};
+            Polys& m = islandPolys[k];
+            addDraped(m, island, std::max(2.0 * seg, 400.0), ground.lattice(), [&](Vec2 q) { return at(q, islandLift); }, top);
+            for (size_t i = 0; i < island.size(); ++i)
+            {
+                const Vec2 a = island.pts[i], b = island.pts[(i + 1) % island.size()];
+                const Vec2 d = b - a;
+                const int steps = std::max(1, int(std::ceil(glm::length(d) / seg)));
+                for (int s = 0; s < steps; ++s)
+                {
+                    const Vec2 p = a + d * (double(s) / steps), q = a + d * (double(s + 1) / steps);
+                    const uint32_t p0 = m.point(at(p, roadLift)), q0 = m.point(at(q, roadLift)), p1 = m.point(at(p, islandLift)), q1 = m.point(at(q, islandLift));
+                    orient(m, {p0, q0, q1, p1}, Vec2(d.y, -d.x), curb);
+                }
+            }
+        }
+    });
     std::vector<int32_t> streetId, streetClass, streetPath, streetMat, waterId;
     for (size_t e = 0; e < edgePolys.size(); ++e)
     {
@@ -1240,6 +1535,14 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
             streetMat.push_back(t[3]);
         });
     nodePolys = {};
+    for (const Polys& p : islandPolys)
+        p.appendTo(out.streets, [&](const FaceTags& t) {
+            streetId.push_back(t[0]);
+            streetClass.push_back(t[1]);
+            streetPath.push_back(t[2]);
+            streetMat.push_back(t[3]);
+        });
+    islandPolys = {};
     // Surface paths: ribbons on the walkable surface, level with each point, -1 for the street id.
     for (const SurfacePath& s : l.surfacePaths)
     {
@@ -1274,25 +1577,52 @@ MeshParts toMeshes(const Layout& l, const Ground& ground, const OutputOptions& o
     // plazas, works yards, fields, graveyards), a little above it.
     if (o.ground)
     {
-        const double cell = std::max(4.0 * seg, 1200.0);
+        const Ground::Lattice* grid = ground.lattice();
+        const double cell = ground.isPlane() ? std::max(4.0 * seg, 1200.0) : std::max(2.0 * seg, 400.0);
         auto lay = [&](Polys& m, const Polygon& p, double lift, int32_t block, int32_t mat) {
-            addDraped(m, p, cell, [&](Vec2 q) { return at(q, lift); }, {block, mat, 0, 0});
+            addDraped(m, p, cell, grid, [&](Vec2 q) { return at(q, lift); }, {block, mat, 0, 0});
         };
+        auto blockSurface = [](const Block& b) {
+            return b.use == Use::Park ? SurfGrass : b.use == Use::Plaza ? SurfPaving : b.use == Use::Farm ? SurfField : SurfYard;
+        };
+        // An open block shows town ground only within reach of its streets and buildings: past them is open land.
+        std::vector<std::vector<const Polygon*>> buildingsIn(l.blocks.size());
+        for (const Envelope& env : l.envelopes)
+            if (env.lot >= 0 && size_t(env.lot) < l.lots.size() && size_t(l.lots[size_t(env.lot)].block) < l.blocks.size())
+                buildingsIn[size_t(l.lots[size_t(env.lot)].block)].push_back(&env.footprint);
+        const double reach = std::max(l.profile.lotDepth, 500.0), traceCell = 50.0;
+        std::vector<int> degree(g.nodes.size(), 0);
+        for (size_t e = 0; e < g.edges.size(); ++e)
+            if (g.isStreet(int(e)))
+                ++degree[size_t(g.edges[e].a)], ++degree[size_t(g.edges[e].b)];
         std::vector<Polys> blockPolys(l.blocks.size()), lotPolys(l.lots.size());
         tbb::parallel_for(tbb::blocked_range<size_t>(0, l.blocks.size()), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t k = range.begin(); k < range.end(); ++k)
             {
                 const Block& b = l.blocks[k];
-                lay(blockPolys[k], b.outline, o.lift * 0.5, b.id,
-                    b.use == Use::Park ? SurfGrass : b.use == Use::Plaza ? SurfPaving : b.use == Use::Farm ? SurfField : SurfYard);
+                if (!openBlock(b))
+                    lay(blockPolys[k], b.outline, o.lift, b.id, blockSurface(b));
+                else
+                    for (const Polygon& p : nearStreets(b.outline, l, degree, reach, buildingsIn[k], traceCell))
+                        lay(blockPolys[k], p, o.lift, b.id, blockSurface(b));
             }
         });
         tbb::parallel_for(tbb::blocked_range<size_t>(0, l.lots.size()), [&](const tbb::blocked_range<size_t>& range) {
             for (size_t k = range.begin(); k < range.end(); ++k)
             {
                 const Lot& lot = l.lots[k];
-                if (const int32_t mat = lotSurface(lot.use); mat >= 0 && size_t(lot.block) < l.blocks.size() && lotSurface(l.blocks[size_t(lot.block)].use) != mat)
-                    lay(lotPolys[k], lot.outline, o.lift, lot.block, mat);
+                const int32_t own = lotSurface(lot.use);
+                if (own < 0 || size_t(lot.block) >= l.blocks.size())
+                    continue;
+                const Block& b = l.blocks[size_t(lot.block)];
+                if (!openBlock(b))
+                {
+                    if (lotSurface(b.use) != own)
+                        lay(lotPolys[k], lot.outline, o.lift * 1.5, lot.block, own);
+                    continue;
+                }
+                for (const Polygon& p : nearStreets(lot.outline, l, degree, reach, buildingsIn[size_t(lot.block)], traceCell))
+                    lay(lotPolys[k], p, o.lift * 1.5, lot.block, own);
             }
         });
         std::vector<int32_t> groundBlock, groundMat;
